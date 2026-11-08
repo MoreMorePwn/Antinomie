@@ -389,10 +389,18 @@ pub struct PacketFilterWorker {
 
 impl PacketFilterWorker {
     pub fn new() -> Result<Self, String> {
-        Self::with_program(PathBuf::from("tshark"))
+        Self::with_program(PathBuf::from("tshark"), true)
     }
 
-    fn with_program(program: PathBuf) -> Result<Self, String> {
+    /// A worker that writes nothing beside the capture: the parsed rows stay
+    /// in its scratch folder instead of a `<capture>.view` cache. A cache that
+    /// already exists is still read. For readers of a recording, which must
+    /// never write into it.
+    pub fn read_only() -> Result<Self, String> {
+        Self::with_program(PathBuf::from("tshark"), false)
+    }
+
+    fn with_program(program: PathBuf, save_cache: bool) -> Result<Self, String> {
         let shared = Arc::new(Shared::new(Arc::new(AtomicBool::new(false))));
         let detail = Arc::new(Shared::new(Arc::new(AtomicBool::new(false))));
         let worker = Arc::clone(&shared);
@@ -404,7 +412,7 @@ impl PacketFilterWorker {
             .map_err(|e| format!("packet detail worker: {e}"))?;
         let thread = thread::Builder::new()
             .name("packet-display-filter".into())
-            .spawn(move || filter_loop(&program, &worker))
+            .spawn(move || filter_loop(&program, &worker, save_cache))
             .map_err(|e| format!("packet worker: {e}"))?;
         Ok(Self {
             shared,
@@ -587,7 +595,7 @@ fn detail_loop(program: &Path, worker: &Shared) {
     }
 }
 
-fn filter_loop(program: &Path, worker: &Shared) {
+fn filter_loop(program: &Path, worker: &Shared, save_cache: bool) {
     let fields = discover_fields(program, worker);
     *worker.fields.lock().unwrap_or_else(|e| e.into_inner()) = match fields {
         Ok(fields) => FieldRegistry::Ready(Arc::new(fields)),
@@ -622,7 +630,7 @@ fn filter_loop(program: &Path, worker: &Shared) {
                         )?));
                     }
                     let snapshot = Arc::clone(snapshot.as_ref().ok_or("missing packet snapshot")?);
-                    let rows = ensure_rows(program, &version, &mut open, &snapshot);
+                    let rows = ensure_rows(program, &version, &mut open, &snapshot, save_cache);
                     evaluate(program, snapshot, rows, &expression, worker, generation).map(Arc::new)
                 })();
                 (
@@ -679,12 +687,14 @@ fn ensure_rows(
     version: &str,
     open: &mut Option<OpenCapture>,
     snapshot: &Arc<Snapshot>,
+    save_cache: bool,
 ) -> Arc<RowStore> {
     let job = |rows: &Arc<RowStore>| parse::ParseJob {
         program: program.to_path_buf(),
         store: Arc::clone(rows),
         snapshot: Arc::clone(snapshot),
         version: version.to_owned(),
+        save_cache,
     };
     if let Some(current) = open.as_mut()
         && current.identity.permits_append(&snapshot.identity)
@@ -694,7 +704,8 @@ fn ensure_rows(
         let grown = snapshot.packet_count > rows.total_count();
         if grown && !rows.cached && !rows.running.load(Ordering::Acquire) {
             parse::spawn_parse(job(&rows));
-        } else if !snapshot.live
+        } else if save_cache
+            && !snapshot.live
             && !rows.cached
             && rows.status() == ParseStatus::Complete
             && rows.done_count() == snapshot.packet_count
@@ -1191,7 +1202,7 @@ mod tests {
     /// The packet list of `snapshot`, parsed by the installed TShark.
     fn parsed(snapshot: &Arc<Snapshot>) -> Arc<RowStore> {
         let mut open = None;
-        let rows = ensure_rows(Path::new("tshark"), "test", &mut open, snapshot);
+        let rows = ensure_rows(Path::new("tshark"), "test", &mut open, snapshot, true);
         wait_parsed(&rows);
         rows
     }
@@ -1804,14 +1815,14 @@ mod tests {
         let identity = CaptureIdentity::read(&path).unwrap();
         let snapshot = Arc::new(make_snapshot(&identity, &state, 0, true).unwrap());
         let mut open = None;
-        let rows = ensure_rows(Path::new("tshark"), "test", &mut open, &snapshot);
+        let rows = ensure_rows(Path::new("tshark"), "test", &mut open, &snapshot, true);
         wait_parsed(&rows);
         assert_eq!(rows.done_count(), 5);
         assert!(!rows.cached);
         file.write_all(&first_record[9..]).unwrap();
         let grown = CaptureIdentity::read(&path).unwrap();
         let next = Arc::new(make_snapshot(&grown, &state, 0, true).unwrap());
-        let again = ensure_rows(Path::new("tshark"), "test", &mut open, &next);
+        let again = ensure_rows(Path::new("tshark"), "test", &mut open, &next, true);
         assert!(Arc::ptr_eq(&rows, &again));
         wait_parsed(&again);
         assert_eq!(again.done_count(), 6);
@@ -1831,7 +1842,7 @@ mod tests {
         // A live capture is never cached; the finished one is, once.
         assert!(!cache_dir_of(&path).exists());
         let finished = Arc::new(make_snapshot(&grown, &state, 0, false).unwrap());
-        let done = ensure_rows(Path::new("tshark"), "test", &mut open, &finished);
+        let done = ensure_rows(Path::new("tshark"), "test", &mut open, &finished, true);
         assert!(Arc::ptr_eq(&rows, &done));
         assert!(cache_dir_of(&path).join("meta.json").is_file());
     }
@@ -1843,7 +1854,13 @@ mod tests {
         let identity = CaptureIdentity::read(&path).unwrap();
         let snapshot = Arc::new(make_snapshot(&identity, &state, 0, false).unwrap());
         let mut open = None;
-        let rows = ensure_rows(Path::new("/nonexistent/tshark"), "", &mut open, &snapshot);
+        let rows = ensure_rows(
+            Path::new("/nonexistent/tshark"),
+            "",
+            &mut open,
+            &snapshot,
+            true,
+        );
         wait_parsed(&rows);
         assert!(matches!(rows.status(), ParseStatus::Failed(_)));
         assert_eq!(rows.done_count(), 0);

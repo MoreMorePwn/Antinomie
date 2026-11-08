@@ -111,6 +111,8 @@ pub(super) struct ParseJob {
     pub snapshot: Arc<Snapshot>,
     /// TShark's version line, for the cache.
     pub version: String,
+    /// Keep the parse beside the capture when it finishes.
+    pub save_cache: bool,
 }
 
 /// Run TShark over the snapshot on its own thread, appending rows from frame
@@ -129,7 +131,7 @@ pub(super) fn spawn_parse(job: ParseJob) {
             let cancelled = store.cancel.load(Ordering::Acquire);
             match result {
                 Ok(()) => {
-                    if !job.snapshot.live {
+                    if !job.snapshot.live && job.save_cache {
                         store.cache_saved.store(true, Ordering::Release);
                         let _ = save_cache(store, &job.snapshot.identity, &job.version);
                     }
