@@ -192,7 +192,7 @@ mod tests {
     fn host_paths_are_cut_to_their_last_component() {
         assert_eq!(
             without_host_paths(
-                "tor stuck at 55%. Log: /home/kali/work/network/tor/ant-1/tor.log. Last log lines"
+                "tor stuck at 55%. Log: /home/user/data/network/tor/ant-1/tor.log. Last log lines"
             ),
             "tor stuck at 55%. Log: tor.log. Last log lines"
         );
