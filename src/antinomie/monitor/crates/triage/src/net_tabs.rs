@@ -101,3 +101,43 @@ pub fn stored_column(slot: usize, shown: usize) -> usize {
         std::cmp::Ordering::Greater => shown - 1,
     }
 }
+
+/// Whether the earliest packet of the run is a whole zone offset (a non-zero
+/// multiple of 15 minutes under 15 h, within two minutes) away from the run's
+/// clock anchor: the sign of a capture QEMU stamped in the host zone (runs
+/// recorded before 0.8.2). Uses only what the Endpoints table already holds;
+/// `fallback` is the request's anchor, for an index that recorded none.
+pub fn capture_zone_shift(
+    scan: &ScanData,
+    fallback: Option<antinomie_monitor_core::HostClockAnchor>,
+) -> bool {
+    let Some(clock) = scan.clock_anchor.or(fallback) else {
+        return false;
+    };
+    let first = scan
+        .new_tabs
+        .endpoints
+        .iter()
+        .filter_map(|row| row.first())
+        .filter_map(|cell| files::number(&cell.values, "network.first_us"))
+        .min();
+    let Some(first) = first else {
+        return false;
+    };
+    let seconds = (i128::from(first) - i128::from(clock.host_us)) / 1_000_000;
+    let offset = (seconds as f64 / 900.0).round() as i128 * 900;
+    offset != 0 && offset.abs() < 15 * 3600 && (seconds - offset).abs() <= 120
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_geolocation_columns_are_the_countries_and_organizations() {
+        // The Summary's indicator export reads these two (a shift by one put
+        // the byte count under "country").
+        assert_eq!(ENDPOINT_HEADERS[ENDPOINT_COUNTRY], "Country");
+        assert_eq!(ENDPOINT_HEADERS[ENDPOINT_ORGANIZATION], "Organization");
+    }
+}
