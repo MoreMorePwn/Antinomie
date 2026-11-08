@@ -21,6 +21,16 @@ import sys
 
 ZERO = "0" * 64
 
+# The event kinds Antinomie writes (custody.rs KINDS). A chain may hold others
+# (a newer Antinomie); they are hashed and chained like any entry, and named in
+# a note, never refused.
+KINDS = {
+    "added", "origin_added", "verified", "sent", "seen_in_run", "edited", "removed",
+    "original_deleted", "migrated", "static_analysis", "run_started", "run_ended",
+    "terminal_input", "action", "activity", "exported", "note_added", "note_edited",
+    "note_deleted", "run_deleted", "automation",
+}
+
 
 def digest(fields):
     data = b""
@@ -43,6 +53,9 @@ def index_hash(r):
 def load(text):
     marker = re.search(r'<script type="application/json" id="custody-record">(.*?)</script>', text, re.S)
     return json.loads(marker.group(1) if marker else text)
+
+
+NOTES = []
 
 
 def check(record):
@@ -81,6 +94,7 @@ def check(record):
             break
         previous, expected = e["hash"], expected + 1
     count = entries[-1]["seq"] if entries else 0
+    NOTES[:] = sorted({e["kind"] for e in entries} - KINDS)
 
     heads = []
     for r in sorted(record["index"], key=lambda r: r["seq"]):
@@ -127,6 +141,8 @@ def main(argv):
         print("%d entr%s (%s) name a path on the exporting computer, withheld in this file: "
               "their own hashes are taken as recorded. Export with host paths to check them too."
               % (len(withheld), "y" if len(withheld) == 1 else "ies", ", ".join(map(str, withheld))))
+    for kind in NOTES:
+        print("note: entries of the kind %r are chained but this verifier does not know the kind" % kind)
     print("head %s" % head)
     print("Tamper-evident, not tamper-proof: compare the head with one kept elsewhere.")
     return 0

@@ -37,6 +37,8 @@ mod facts;
 pub use facts::{RunFilterFacts, run_filter_facts};
 mod matching;
 pub use matching::{ArchiveStamp, MatchTotals, MatchingPage};
+mod read_only;
+pub use read_only::{find_run_read_only, list_runs_read_only, open_member, read_only_locations};
 
 pub struct Recording {
     pub directory: PathBuf,
@@ -795,13 +797,36 @@ pub fn list_vm_runs(
 ) -> Result<Vec<RunSummary>, RecordingError> {
     let location = crate::locations::locations(options, vm_id)
         .map_err(|error| RecordingError::Io(std::io::Error::other(error)))?;
+    let mut runs = list_location_runs(&location.recording_directories, vm_id, true)?;
+    let legacy = options.data_dir.join("captures");
+    if legacy.exists() {
+        for run in list_runs(&options.data_dir)?
+            .into_iter()
+            .filter(|run| run.vm_id == vm_id && run.root_task_cookie == 0)
+        {
+            if !runs.iter().any(|existing| existing.id == run.id) {
+                runs.push(run);
+            }
+        }
+    }
+    Ok(newest_runs(runs))
+}
+
+/// The runs recorded under `recording_directories` for `vm_id`, newest first.
+/// `seal` lets the listing repair what a stale analysis left behind (it seals
+/// retained specimens, which writes); a read-only caller passes `false`.
+fn list_location_runs(
+    recording_directories: &[PathBuf],
+    vm_id: &str,
+    seal: bool,
+) -> Result<Vec<RunSummary>, RecordingError> {
     let mut runs = Vec::new();
     let mut scanned = 0usize;
-    for directory in location.recording_directories {
+    for directory in recording_directories {
         if !directory.exists() {
             continue;
         }
-        let root = fs::canonicalize(&directory)?;
+        let root = fs::canonicalize(directory)?;
         // Launched runs live in `runs/`; a run continued after a reconnect or a
         // snapshot restore lives under its new boot in `boots/<boot>/runs/`.
         let mut run_directories = vec![root.join("runs")];
@@ -825,7 +850,7 @@ pub fn list_vm_runs(
                     return Ok(newest_runs(runs));
                 }
                 // One damaged run must not hide the others.
-                let Ok(Some(run)) = saved_run(&root, &entry.path(), vm_id) else {
+                let Ok(Some(run)) = saved_run_with(&root, &entry.path(), vm_id, seal) else {
                     continue;
                 };
                 // A run that lived through a transport reconnect has a record in
@@ -838,17 +863,6 @@ pub fn list_vm_runs(
                     Some(at) if run.segments() > runs[at].segments() => runs[at] = run,
                     Some(_) => {}
                 }
-            }
-        }
-    }
-    let legacy = options.data_dir.join("captures");
-    if legacy.exists() {
-        for run in list_runs(&options.data_dir)?
-            .into_iter()
-            .filter(|run| run.vm_id == vm_id && run.root_task_cookie == 0)
-        {
-            if !runs.iter().any(|existing| existing.id == run.id) {
-                runs.push(run);
             }
         }
     }
@@ -887,6 +901,16 @@ fn saved_run(
     directory: &Path,
     vm_id: &str,
 ) -> Result<Option<RunSummary>, RecordingError> {
+    saved_run_with(root, directory, vm_id, true)
+}
+
+/// [`saved_run`]; `seal` false writes nothing into the run's folder.
+fn saved_run_with(
+    root: &Path,
+    directory: &Path,
+    vm_id: &str,
+    seal: bool,
+) -> Result<Option<RunSummary>, RecordingError> {
     let path = directory.join("run.json");
     if !path.exists() {
         return Ok(None);
@@ -910,7 +934,7 @@ fn saved_run(
             .and_then(|facts| facts.started_ms);
     }
     reopen_analysis_sidecar(root, &mut run)?;
-    settle_stale_analysis(&mut run);
+    settle_stale_analysis(&mut run, seal);
     settle_stale_state(&mut run);
     Ok(Some(run))
 }
@@ -951,7 +975,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
                         .and_then(|facts| facts.started_ms);
             }
             reopen_analysis_sidecar(&data_root, &mut run)?;
-            settle_stale_analysis(&mut run);
+            settle_stale_analysis(&mut run, true);
             settle_stale_state(&mut run);
             runs.push(run);
             if runs.len() > 1024 {
@@ -1033,7 +1057,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
 /// still holds its analysis (the program ended, the analysis did not): an
 /// analysis still acquiring, queued or running that no queue of this process
 /// holds was cut off with the session that owned it.
-fn settle_stale_analysis(run: &mut RunSummary) {
+fn settle_stale_analysis(run: &mut RunSummary, seal: bool) {
     if let Some(report) = run.analysis.as_mut() {
         if crate::analysis::jobs::owned_here(&report.id) {
             return;
@@ -1043,7 +1067,11 @@ fn settle_stale_analysis(run: &mut RunSummary) {
             "the analysis was interrupted before it finished: the app or the VM ended first",
         );
         // A saved run keeps its specimen only encrypted: runs saved before
-        // that, or cut off with a plain copy, are sealed when opened.
+        // that, or cut off with a plain copy, are sealed when opened. A
+        // read-only listing leaves that to the next engine start.
+        if !seal {
+            return;
+        }
         for problem in crate::analysis::seal_retained_specimens(&run.directory.join("analysis")) {
             eprintln!("retained specimen not sealed: {problem}");
         }
@@ -1317,7 +1345,7 @@ mod tests {
                 machine: None,
                 route: None,
             };
-            settle_stale_analysis(&mut run);
+            settle_stale_analysis(&mut run, true);
             let report = run.analysis.unwrap();
             assert_eq!(report.state, expected);
             if expected != state {

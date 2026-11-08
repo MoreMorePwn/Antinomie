@@ -102,7 +102,22 @@ fn every_command_that_got_an_id_gets_exactly_one_result_except_terminal_reads() 
 
 #[test]
 fn a_cycle_runs_through_the_documented_notifications() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/auto-cycle");
     for (name, rows) in fixtures() {
+        // A probe the engine refused (`dm-desktop`: no graphical base) ends
+        // without a summary and without a finished cycle; it must show the
+        // failed command instead.
+        if !dir
+            .join(name.replace(".trace.jsonl", ".summary.json"))
+            .exists()
+        {
+            assert!(
+                rows.iter()
+                    .any(|r| r["kind"] == "command_result" && r["success"] == false),
+                "{name}: no summary and no refused command"
+            );
+            continue;
+        }
         let begins = rows.iter().filter(|r| r["kind"] == "cycle_begin").count();
         let ends = rows.iter().filter(|r| r["kind"] == "cycle_end").count();
         assert_eq!(begins, ends, "{name}");

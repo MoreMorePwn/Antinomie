@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `config path`, `config get` and `config set` over `settings.json` (design
-//! 2.4.1, card P1-2). `config validate` arrives with card P3-3.
+//! 2.4.1, card P1-2), and `config validate` over `service.toml` and
+//! `policies/*.toml` (design 4.4, card P3-3).
 use crate::{
     context::Context,
     error::{CliError, ErrorCode},
@@ -10,6 +11,7 @@ use antinomie_monitor_core::{
     data_owner::{self, OwnerClaim, OwnerKind},
     settings::{self, EngineSettings},
 };
+use antinomie_service::config::{self, DiskVms, Severity};
 use clap::Subcommand;
 use serde_json::{Value, json};
 use std::os::unix::fs::DirBuilderExt;
@@ -24,6 +26,66 @@ pub enum Config {
     /// Change one setting. VALUE is JSON when it parses (`true`, `12`), else
     /// text. Takes the engine lock, so it refuses while a window or daemon runs.
     Set { key: String, value: String },
+    /// Check `service.toml` and `policies/*.toml`: unknown keys, ceilings, the
+    /// v1 routes, and the lane VM (its network and snapshots). Prints each
+    /// problem with its line; exit 4 when there is an error. Reads only.
+    Validate {
+        /// Check this policy's file only (the service file is still checked).
+        #[arg(long)]
+        policy: Option<String>,
+    },
+}
+
+fn validate(policy: Option<&str>, context: &Context) -> Result<Reply, CliError> {
+    let data = context.data_dir();
+    let report = config::validate::load(data, &DiskVms::open(data), policy);
+    let problems: Vec<serde_json::Value> = report
+        .problems
+        .iter()
+        .map(|p| serde_json::to_value(p).unwrap_or_default())
+        .collect();
+    let lines: String = report.problems.iter().map(|p| format!("{p}\n")).collect();
+    if report.has_errors() {
+        let errors = report.errors().count();
+        return Err(CliError::invalid(format!(
+            "{errors} error{} in the configuration",
+            if errors == 1 { "" } else { "s" }
+        ))
+        .with_details(json!({"problems": problems}))
+        .with_human_output(lines));
+    }
+    let mut files = vec![
+        if data.join("service.toml").exists() {
+            "service.toml"
+        } else {
+            "service.toml (not written: the defaults apply)"
+        }
+        .to_owned(),
+    ];
+    files.extend(
+        report
+            .policies
+            .keys()
+            .map(|name| format!("policies/{name}.toml")),
+    );
+    let warnings = report
+        .problems
+        .iter()
+        .filter(|p| p.severity == Severity::Warning)
+        .count();
+    let mut human = lines;
+    human.push_str(&format!(
+        "ok: {} checked, {warnings} warning{}\n",
+        files.join(", "),
+        if warnings == 1 { "" } else { "s" }
+    ));
+    Ok(Reply::value(json!({
+        "ok": true,
+        "files": files,
+        "policies": report.policies.keys().collect::<Vec<_>>(),
+        "problems": problems,
+    }))
+    .with_human(human))
 }
 
 /// The settings in the data directory; the defaults when no front end has
@@ -101,6 +163,7 @@ pub fn run(config: &Config, context: &Context) -> Result<Reply, CliError> {
     match config {
         Config::Get { key } => get(key.as_deref(), context),
         Config::Set { key, value } => set(key, value, context),
+        Config::Validate { policy } => validate(policy.as_deref(), context),
         Config::Path => {
             let data = context.data_dir();
             let paths = [

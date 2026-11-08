@@ -4151,6 +4151,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -4358,6 +4369,83 @@
         "total"
       ],
       "description": "Progress of a running Triage scan."
+    },
+    "PageExtra": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProcessTreeNotes"
+        },
+        {
+          "$ref": "#/$defs/AnalysisPageNotes"
+        }
+      ],
+      "description": "What a few operations add to their first page (design 5.12.3): the process\ntree's issues and the analysis pages' function table. The members of the\ntwo objects differ, so a page's `notes` tells them apart by shape."
+    },
+    "ProcessTreeNotes": {
+      "type": "object",
+      "properties": {
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The engine's issues, host paths removed."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "The 262 144-node limit cut the list."
+        }
+      },
+      "required": [
+        "issues",
+        "truncated"
+      ],
+      "description": "The extras of the first page of `recording.process.tree`."
+    },
+    "AnalysisPageNotes": {
+      "type": "object",
+      "properties": {
+        "functions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/AnalysisFunctionLines"
+          },
+          "description": "Disassembly and decompilation add the functions counted over the whole\nlisting."
+        },
+        "sorted": {
+          "type": "boolean",
+          "description": "False for `disassembly` and `decompilation`: the engine drops `sort`."
+        }
+      },
+      "required": [
+        "sorted"
+      ],
+      "description": "The extras of a page of `analysis.section` and `analysis.ghidra`."
+    },
+    "AnalysisFunctionLines": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "lines": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "name",
+        "address",
+        "lines"
+      ],
+      "description": "One function of a disassembly or decompilation page."
     },
     "Single": {
       "type": "object",
@@ -4864,6 +4952,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -5528,6 +5627,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -5611,27 +5721,6 @@
       ],
       "description": "`recording.process.tree` row (from `CaptureProcess`), ordered by `pid`."
     },
-    "ProcessTreeNotes": {
-      "type": "object",
-      "properties": {
-        "issues": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "The engine's issues, host paths removed."
-        },
-        "truncated": {
-          "type": "boolean",
-          "description": "The 262 144-node limit cut the list."
-        }
-      },
-      "required": [
-        "issues",
-        "truncated"
-      ],
-      "description": "The extras of the first page of `recording.process.tree`."
-    },
     "Page4": {
       "type": "object",
       "properties": {
@@ -5692,6 +5781,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -6159,6 +6259,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -6391,6 +6502,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -7274,6 +7396,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -7472,6 +7605,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -7601,6 +7745,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -7916,6 +8071,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -8108,6 +8274,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -8264,6 +8441,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -8498,6 +8686,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -8637,51 +8836,6 @@
         "len"
       ]
     },
-    "AnalysisPageNotes": {
-      "type": "object",
-      "properties": {
-        "functions": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/AnalysisFunctionLines"
-          },
-          "description": "Disassembly and decompilation add the functions counted over the whole\nlisting."
-        },
-        "sorted": {
-          "type": "boolean",
-          "description": "False for `disassembly` and `decompilation`: the engine drops `sort`."
-        }
-      },
-      "required": [
-        "sorted"
-      ],
-      "description": "The extras of a page of `analysis.section` and `analysis.ghidra`."
-    },
-    "AnalysisFunctionLines": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "address": {
-          "type": "string"
-        },
-        "lines": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "name",
-        "address",
-        "lines"
-      ],
-      "description": "One function of a disassembly or decompilation page."
-    },
     "Page14": {
       "type": "object",
       "properties": {
@@ -8742,6 +8896,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -8861,6 +9026,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [
@@ -8989,6 +9165,17 @@
             "null"
           ],
           "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extras of `recording.process.tree` (first page) and of the analysis\npages."
         }
       },
       "required": [

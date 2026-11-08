@@ -423,6 +423,9 @@ pub struct Library {
     pub(super) root: PathBuf,
     pub(super) connection: Connection,
     custody: Arc<dyn CustodySink>,
+    /// The actor of the custody entries this value writes; `None` takes the
+    /// process's current actor ([`super::actor::current`]).
+    pub(super) actor: Option<String>,
 }
 
 impl std::fmt::Debug for Library {
@@ -485,9 +488,25 @@ impl Library {
             root,
             connection,
             custody,
+            actor: None,
         };
         library.migrate_legacy()?;
         Ok(library)
+    }
+
+    /// Write this library's custody entries under `actor` instead of the
+    /// process's current one. An invalid name is refused.
+    pub fn with_actor(mut self, actor: &str) -> Result<Self, String> {
+        if !super::actor::is_valid(actor) {
+            return Err(format!("{actor:?} is not a custody actor"));
+        }
+        self.actor = Some(actor.to_owned());
+        Ok(self)
+    }
+
+    /// Who this library's entries name.
+    pub(super) fn actor(&self) -> String {
+        self.actor.clone().unwrap_or_else(super::actor::current)
     }
 
     /// Report an event; the change it describes is already saved.
@@ -836,7 +855,7 @@ impl Library {
         transaction.commit().map_err(|e| e.to_string())?;
         let count = added.len();
         for (sha256, vm, run) in added {
-            self.note(&sha256, "app", CustodyEvent::SeenInRun { vm, run })?;
+            self.note(&sha256, &self.actor(), CustodyEvent::SeenInRun { vm, run })?;
         }
         // What the sample did in each run, from the digest Triage left.
         for run in runs {
@@ -957,7 +976,7 @@ impl Library {
             .map_err(|e| e.to_string())?;
         self.record_at(
             &sha256,
-            "app",
+            &self.actor(),
             at_ms,
             &CustodyEvent::Sent {
                 vm: push.vm_name,

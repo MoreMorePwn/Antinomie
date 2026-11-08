@@ -186,6 +186,44 @@ pub(crate) fn locations(options: &BackendOptions, id: &str) -> Result<VmLocation
     })
 }
 
+/// Where every VM the data directory knows keeps its disk and recordings, the
+/// VMs deleted with their recordings retained included. Reads only: the VM
+/// registry, and the folders of the data directory that look like a VM's.
+pub(crate) fn all_locations(options: &BackendOptions) -> Result<Vec<VmLocations>, String> {
+    let mut found: Vec<VmLocations> = registry(options)?
+        .into_iter()
+        .map(|entry| VmLocations {
+            vm_id: entry.id,
+            disk_directory: entry.disk_directory,
+            recording_directory: entry.recording_directory,
+            recording_directories: entry.recording_directories,
+        })
+        .collect();
+    let Ok(entries) = fs::read_dir(&options.data_dir) else {
+        return Ok(found);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir())
+            || found.iter().any(|location| location.vm_id == id)
+            || !(path.join("config.json").is_file() || path.join("runs").is_dir())
+        {
+            continue;
+        }
+        found.push(VmLocations {
+            vm_id: id,
+            disk_directory: path.clone(),
+            recording_directory: path.clone(),
+            recording_directories: vec![path],
+        });
+    }
+    found.sort_by(|a, b| a.vm_id.cmp(&b.vm_id));
+    Ok(found)
+}
+
 pub(crate) fn publish(
     options: &BackendOptions,
     location: &VmLocations,

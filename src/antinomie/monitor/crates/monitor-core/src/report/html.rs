@@ -56,38 +56,16 @@ td a,.facts a{color:var(--accent);text-decoration:none}td a:hover,.facts a:hover
 @media (prefers-color-scheme:dark){.tier.high{color:#ff8a80}.tier.medium{color:#ffb74d}.tier.low{color:#6cb2ff}}\
 caption{caption-side:top;text-align:left;color:var(--muted);font-size:12px;padding:2px 0}\
 @media (min-width:900px){nav{position:sticky;top:0;background:var(--bg);padding:6px 0;z-index:1}}\
-.tac{display:inline-block;margin:1px 3px 1px 0;padding:0 6px;border:1px solid var(--c);border-left-width:6px;border-radius:4px;white-space:nowrap}\
+.tac{display:inline-block;margin:1px 3px 1px 0;padding:0 6px;border:1px solid var(--muted);border-radius:4px;white-space:nowrap}\
 @page{size:landscape;margin:12mm}\
 @media print{body{font-size:11px}main{max-width:none;padding:0}h2{break-after:avoid}tr{break-inside:avoid}.wide{overflow:visible}}";
-
-/// One class per tactic: its colour on a light page, and on a dark one.
-fn tactic_style() -> String {
-    use crate::mitre::Tactic;
-    let hex = |tactic: Tactic, light: bool| {
-        let [r, g, b] = tactic.rgb(light);
-        format!("#{r:02x}{g:02x}{b:02x}")
-    };
-    let mut light = String::new();
-    let mut dark = String::new();
-    for (index, tactic) in Tactic::ALL.into_iter().enumerate() {
-        light.push_str(&format!(".t{index}{{--c:{}}}", hex(tactic, true)));
-        dark.push_str(&format!(".t{index}{{--c:{}}}", hex(tactic, false)));
-    }
-    format!("{light}@media (prefers-color-scheme:dark){{{dark}}}")
-}
 
 /// The cell of the Tactic column: one outlined chip per tactic, named in text
 /// so the colour is never the only cue.
 fn tactic_cell(cell: &str) -> String {
     let chips: Vec<String> = super::cell_tactics(cell)
         .into_iter()
-        .map(|tactic| {
-            format!(
-                "<span class=\"tac t{}\">{}</span>",
-                tactic as usize,
-                escape(tactic.name())
-            )
-        })
+        .map(|tactic| format!("<span class=\"tac\">{}</span>", escape(tactic.name())))
         .collect();
     if chips.is_empty() {
         escape(cell)
@@ -276,10 +254,7 @@ pub(super) fn render(document: &Document) -> String {
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />");
     out.push_str("<meta name=\"generator\" content=\"Antinomie\" />");
     out.push_str(&format!("<title>{}</title>", escape(&document.title)));
-    out.push_str(&format!(
-        "<style>{STYLE}{}</style></head><body><main>\n",
-        tactic_style()
-    ));
+    out.push_str(&format!("<style>{STYLE}</style></head><body><main>\n"));
     out.push_str(&format!(
         "<h1 id=\"top\">{}</h1><p class=\"sub\">{}</p>\n<nav aria-label=\"Sections\"><ul>",
         escape(&document.title),

@@ -2,7 +2,10 @@
 //! `PageRequest`, `Page<T>` and `Single<T>` (design 5.12.1, 5.12.5): the only
 //! two result shapes of version 1.
 
-use super::cursor::Generation;
+use super::{
+    cursor::Generation,
+    types::{AnalysisPageNotes, ProcessTreeNotes},
+};
 use crate::api::{error::ApiError, job::RecordingPhase};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -47,6 +50,16 @@ pub struct Building {
     pub retry_after_ms: u64,
 }
 
+/// What a few operations add to their first page (design 5.12.3): the process
+/// tree's issues and the analysis pages' function table. The members of the
+/// two objects differ, so a page's `notes` tells them apart by shape.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum PageExtra {
+    Process(ProcessTreeNotes),
+    Analysis(AnalysisPageNotes),
+}
+
 /// A page of rows.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Page<T> {
@@ -70,6 +83,10 @@ pub struct Page<T> {
     /// (5.2): escape them on display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub untrusted: Option<bool>,
+    /// The extras of `recording.process.tree` (first page) and of the analysis
+    /// pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<PageExtra>,
 }
 
 impl<T> Page<T> {
@@ -85,6 +102,7 @@ impl<T> Page<T> {
             partial: None,
             building: None,
             untrusted: None,
+            notes: None,
         }
     }
 

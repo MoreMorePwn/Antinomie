@@ -421,13 +421,20 @@ fn run_case(config: &Config) -> Result<Value, String> {
         ..VmConfig::default()
     };
     let vms_before = lab.snapshot.vms.len();
-    let (_, took) = lab.command(
+    let needs_credentials = std::fs::read(config.bundle.join("bundle.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|v| v["guest"]["requires_credentials"].as_bool())
+        .unwrap_or(false);
+    let create = if needs_credentials {
         Command::CreateWithCredentials {
             vm: vm_config,
             credentials: GuestCredentials::new("analyst".into(), "analyst1".into())?,
-        },
-        900,
-    )?;
+        }
+    } else {
+        Command::Create(vm_config)
+    };
+    let (_, took) = lab.command(create, 900)?;
     setup.insert("create_vm_s", took);
     lab.settle(|s| s.vms.len() > vms_before, 30)?;
     let vm_id = lab

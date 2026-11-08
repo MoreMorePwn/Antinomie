@@ -218,7 +218,7 @@ Every result is one of two shapes.
 
 | Shape | Members |
 |---|---|
-| `Page<T>` | `items`, `next_cursor`, `total?`, `total_exact?`, `generation`, `phase`, `partial?`, `building?`, `untrusted?` |
+| `Page<T>` | `items`, `next_cursor`, `total?`, `total_exact?`, `generation`, `phase`, `partial?`, `building?`, `untrusted?`, `notes?` |
 | `Single<T>` | `value?`, `generation`, `phase`, `partial?`, `building?`, `untrusted?` |
 
 `generation` is a decimal string: a token for the recording's content. For a
@@ -226,7 +226,10 @@ Every result is one of two shapes.
 must not use it. `partial` is true when the recording is `interrupted` or an
 engine limit cut the page. `total_exact` is false while the recording or a
 packet parse is still growing. `untrusted` is true when rows carry strings that
-came from the sample or the guest: escape them.
+came from the sample or the guest: escape them. `notes` is on the first page
+of `recording.process.tree` (`issues[]`, `truncated`) and on the pages of
+`recording.analysis.section` and `.ghidra` (`functions[]` for the source
+listings, `sorted`).
 
 `phase` is one of:
 
@@ -236,6 +239,13 @@ came from the sample or the guest: escape them.
 | `finalizing` | The recording is saved and final; the earlier-bytes copy or the disk merge is pending. Everything works; file rows carry `earlier: "pending"` and an earlier version fails `layer_pending` |
 | `complete` | No layer is pending. Full reads; pages are cacheable by `generation` |
 | `interrupted` | The writer is gone. Reads work; pages say `partial: true` |
+
+A read of a recording that is still `live` or `finalizing` answers with its
+phase and never claims a final total: `total_exact` is false while it grows. The
+phase comes from the engine's list (`Snapshot.disk_layers`) when the service owns
+the engine, else from the phase marker `run-layer.json` and the owner test
+(design 5.12.2). A `running` run of a live boot is reported `running`; the same
+saved state with no pending layer and no writer is `interrupted`.
 
 A class T read whose scan is not cached answers at once with `building` (and no
 items, no `next_cursor`, no `total`): a success that a binding maps to HTTP 202
@@ -349,3 +359,25 @@ the read is cancelled.
 `recording.cores.disassemble`, `recording.cores.strings`, `recording.screenshot.*`,
 `recording.export.*` and every write are reserved; the service answers
 `unsupported`.
+
+## Implementation notes (cards Q-2, Q-3 and Q-5)
+
+- `recording.captured.read` takes the `field` string of an `Invocation` event
+  field unchanged. The string is opaque (`<stream>.<task>.<call>.<event_seq>.
+  <object_id>:<key>` today): it names the call, so no other state is needed.
+- `q` on `recording.trace.page` is `unsupported` until the `q` language moves
+  with the Triage crate (card P2-0). Class T operations are `unsupported` until
+  card Q-4.
+- Reads run in two pools (light 16, heavy 2 by default). A full heavy pool is
+  `quota_exceeded` with `details.reason = "heavy_read_limit"` and
+  `retry_after_s`; a read past its deadline (10 s light, 60 s heavy) is
+  `unavailable` with `details.reason = "read_timeout"`; a read whose client went
+  away is `unavailable` with `details.reason = "cancelled"`.
+- A read holds a lease on its run; `QueryService::run_is_open` tells retention to
+  skip it.
+- `network.packets` pages come from TShark (inside bubblewrap) through the
+  engine's packet filter. A display filter TShark rejects is `invalid_argument`
+  naming `filter`. The decoded packet (`network.packet`) is sensitive: its tree
+  spells payload text and it carries the frame bytes.
+- A custody reply carries the file name only in `origin`, `path` and `from` for a
+  caller whose `client_id` does not start with `local:`.

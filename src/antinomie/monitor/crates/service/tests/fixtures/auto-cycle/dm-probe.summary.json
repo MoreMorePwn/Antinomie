@@ -1,0 +1,67 @@
+{
+  "case": "dm-probe",
+  "strategy": "snapshot_disk",
+  "workload": "few",
+  "route_kind": "drop",
+  "headless": true,
+  "setup": {
+    "create_vm_s": 30.410591777,
+    "import_base_s": 20.863648618
+  },
+  "lane_prep": {
+    "create_snapshot_s": 0.091830717,
+    "first_boot_s": 2.89972136
+  },
+  "snapshot_id": "7d61dad5398a1d84abd5f51d5b91dd36",
+  "cycles": [
+    {
+      "cycle": 1,
+      "handoff": {
+        "vm_id": "auto_cycle_f0e721c7572c69d10b01792ade85ff2d",
+        "boot_id": "9d481f2391fabed5363a8f3ea028f354",
+        "run_id": "8bae407a3c19893fa05e7cbeae5914dd",
+        "run_directory": "/work/data-dm-probe/auto_cycle_f0e721c7572c69d10b01792ade85ff2d/runs/8bae407a3c19893fa05e7cbeae5914dd",
+        "recording_directory": "/work/data-dm-probe/auto_cycle_f0e721c7572c69d10b01792ade85ff2d",
+        "sample_sha256": "458e337ac8cc2ab9c040399c983e3622232dde91509a93a479b39220c470cbb9",
+        "digest_file_present": false,
+        "artifacts_json_present": true
+      },
+      "stages": {
+        "artifacts_s": 0.000157349,
+        "collect_s": 0.789054226,
+        "cycle_s": 6.224744375,
+        "flush_done_s": 0.488196125,
+        "kernel_answered_s": 0.261844153,
+        "launch_s": 1.134282619,
+        "layer_wait_after_flush_s": 0.300689852,
+        "provision_upload_total_s": 4.099530702,
+        "revert_s": 2.24965564,
+        "run_design_exit_at_s": 0.201865897,
+        "run_flags_exit_at_s": 0.201865897,
+        "run_s": 0.201868983,
+        "stop_command_s": 0.487776027,
+        "stop_to_layer_settled_s": 0.788890876,
+        "stopped_s": 0.487780876,
+        "upload_s": 1.587988679,
+        "upload_tries": 2.0
+      },
+      "layer_pending_before_stop": true,
+      "layer_pending_at_flush_done": true,
+      "layer_settled": true,
+      "run_state": "Finished",
+      "recording_error": null,
+      "route": "RouteRecord { kind: Drop, label: \"None (drop)\", via: Gateway, checked_ms: Some(1794121787474), stats: None, blocked_ports: [] }",
+      "terminal_has_end_marker": true,
+      "terminal_tail": "CYCLE-START\r\nwork-done\r\nCYCLE-END\r\n",
+      "snapshot_nodes": 1,
+      "qcow2_files_in_snapshots_dir": 2,
+      "backing_chain_depth": 3,
+      "analyze_only_after_stop": "refused: VM is stopped",
+      "vm_disk_dir_bytes": 201408512,
+      "vm_disk_dir_files": 35,
+      "recording_dir_bytes": 201408512,
+      "last_error": "VM is stopped"
+    }
+  ],
+  "data_dir": "/work/data-dm-probe"
+}

@@ -114,6 +114,16 @@ pub enum CustodyEvent {
         run: String,
         detail: String,
     },
+    /// A job of headless mode took this sample: which job, under which policy
+    /// (its file digest), over which route, and who asked. Written once per
+    /// job by the service; the actor of the entry is who caused it.
+    Automation {
+        job: String,
+        policy: String,
+        policy_digest: String,
+        route: String,
+        submitted_by: String,
+    },
     /// Not an event the app writes: the stored text of an entry that no
     /// longer reads as an event (it was edited). Listed so the entry stays
     /// visible; never stored.
@@ -121,7 +131,7 @@ pub enum CustodyEvent {
 }
 
 /// Every kind with its list name, for the filters and the export.
-pub const KINDS: [(&str, &str); 20] = [
+pub const KINDS: [(&str, &str); 21] = [
     ("added", "Added"),
     ("origin_added", "Origin added"),
     ("verified", "Verified"),
@@ -142,6 +152,7 @@ pub const KINDS: [(&str, &str); 20] = [
     ("note_edited", "Note edited"),
     ("note_deleted", "Note deleted"),
     ("run_deleted", "Run deleted"),
+    ("automation", "Automation"),
 ];
 
 impl CustodyEvent {
@@ -177,6 +188,7 @@ impl CustodyEvent {
             Self::NoteEdited { .. } => "note_edited",
             Self::NoteDeleted { .. } => "note_deleted",
             Self::RunDeleted { .. } => "run_deleted",
+            Self::Automation { .. } => "automation",
             Self::Unreadable { .. } => "unreadable",
         }
     }
@@ -249,6 +261,16 @@ impl CustodyEvent {
             Self::RunDeleted { vm, run, detail } => {
                 format!("Run {run} on {vm} deleted: {detail}")
             }
+            Self::Automation {
+                job,
+                policy,
+                policy_digest,
+                route,
+                submitted_by,
+            } => format!(
+                "Job {job}, policy {policy} ({}), route {route}, submitted by {submitted_by}",
+                policy_digest.get(..8).unwrap_or(policy_digest)
+            ),
             Self::Unreadable { text } => {
                 let shown: String = text.chars().take(120).collect();
                 format!("the stored text is no longer a valid event: {shown}")

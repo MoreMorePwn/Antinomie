@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! The PDF writer: a small, deterministic PDF 1.4 file from the laid-out
-//! pages. Standard fonts, Flate-compressed content streams, a bookmark per
-//! section, a named destination (`/Dests`) per anchor of the document and a
-//! `/Link` annotation for each internal link, a document title and a page
-//! number footer. Nothing is fetched and no browser is involved.
+//! pages. Standard fonts, Flate-compressed content streams, a bookmark tree (sections, with
+//! their sub-headings as children), a named destination (`/Dests`) per anchor
+//! of the document and a `/Link` annotation for each internal link, a document
+//! title and a page number footer. Nothing is fetched and no browser is involved.
 use super::page::Document;
 use super::pdf_font::{Font, encode, width};
 use super::pdf_layout::{Laid, Op, PAGE_H, PAGE_W, Rgb, lay_out};
@@ -12,7 +12,7 @@ use flate2::{Compression, write::ZlibEncoder};
 use std::fmt::Write as _;
 use std::io::Write as _;
 
-fn num(value: f32) -> String {
+pub(super) fn num(value: f32) -> String {
     let text = format!("{value:.2}");
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
@@ -250,33 +250,69 @@ pub(super) fn render(document: &Document, generated_ms: u64) -> Result<Vec<u8>, 
     if bookmarks.is_empty() {
         objects.push((8, b"<< /Type /Outlines /Count 0 >>".to_vec()));
     } else {
-        let last = first_item + bookmarks.len() - 1;
+        // The outline is a tree two deep: a section's sub-headings are its
+        // children. Sections are open, so every item is visible.
+        let n = bookmarks.len();
+        let mut parent: Vec<Option<usize>> = vec![None; n];
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut tops: Vec<usize> = Vec::new();
+        let mut section: Option<usize> = None;
+        for (index, bookmark) in bookmarks.iter().enumerate() {
+            match (bookmark.level, section) {
+                (1, Some(top)) => {
+                    parent[index] = Some(top);
+                    children[top].push(index);
+                }
+                _ => {
+                    section = Some(index);
+                    tops.push(index);
+                }
+            }
+        }
+        let obj = |index: usize| first_item + index;
         objects.push((
             8,
             format!(
-                "<< /Type /Outlines /First {first_item} 0 R /Last {last} 0 R /Count {} >>",
-                bookmarks.len()
+                "<< /Type /Outlines /First {} 0 R /Last {} 0 R /Count {n} >>",
+                obj(tops[0]),
+                obj(tops[tops.len() - 1])
             )
             .into_bytes(),
         ));
         for (index, bookmark) in bookmarks.iter().enumerate() {
-            let id = first_item + index;
+            let siblings: &[usize] = match parent[index] {
+                Some(top) => &children[top],
+                None => &tops,
+            };
+            let at = siblings.iter().position(|&s| s == index).unwrap_or(0);
             let mut item = b"<< /Title ".to_vec();
             item.extend(literal(&encode(&bookmark.title)));
+            let up = parent[index].map_or(8, obj);
             let mut tail = format!(
-                " /Parent 8 0 R /Dest [{} 0 R /XYZ 0 {} 0]",
+                " /Parent {up} 0 R /Dest [{} 0 R /XYZ 0 {} 0]",
                 page_obj(bookmark.page),
                 num(bookmark.y)
             );
-            if index > 0 {
-                write!(tail, " /Prev {} 0 R", id - 1).map_err(|e| e.to_string())?;
+            if at > 0 {
+                write!(tail, " /Prev {} 0 R", obj(siblings[at - 1])).map_err(|e| e.to_string())?;
             }
-            if index + 1 < bookmarks.len() {
-                write!(tail, " /Next {} 0 R", id + 1).map_err(|e| e.to_string())?;
+            if at + 1 < siblings.len() {
+                write!(tail, " /Next {} 0 R", obj(siblings[at + 1])).map_err(|e| e.to_string())?;
+            }
+            let kids = &children[index];
+            if let (Some(first), Some(last)) = (kids.first(), kids.last()) {
+                write!(
+                    tail,
+                    " /First {} 0 R /Last {} 0 R /Count {}",
+                    obj(*first),
+                    obj(*last),
+                    kids.len()
+                )
+                .map_err(|e| e.to_string())?;
             }
             tail.push_str(" >>");
             item.extend(tail.bytes());
-            objects.push((id, item));
+            objects.push((obj(index), item));
         }
     }
     for (index, page) in pages.iter().enumerate() {
