@@ -1422,6 +1422,13 @@ copied. The
 appears, so the page ends with "IP geolocation by DB-IP" (linking db-ip.com) and
 "DB-IP Lite databases, CC BY 4.0" (linking the licence).
 
+### Zooming a graph
+
+In every graph (the Relationships graph, the lineage graph, the VM snapshot graph,
+the file activity graph and the Activity graph) the plain mouse wheel scrolls
+the page, also over the graph; Ctrl + wheel or a pinch zooms the graph, and a
+drag moves it.
+
 ### Copy as Mermaid
 
 Every diagram can be copied as a Mermaid flowchart to paste into a README or an

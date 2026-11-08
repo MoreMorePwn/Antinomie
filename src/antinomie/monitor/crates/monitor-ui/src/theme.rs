@@ -550,6 +550,7 @@ pub fn bold(ui: &egui::Ui, text: impl Into<String>) -> egui::RichText {
 
 pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
+    crate::widgets::end_drags_that_lose_their_release(ctx);
     apply(ctx, false);
     text_size(ctx, DEFAULT_TEXT_SIZE);
     // Screenshot fixtures: ANTINOMIE_QA_FONT picks the text size to render at.
