@@ -11,7 +11,7 @@ mod daemon;
 mod init;
 mod jobs;
 mod lanes;
-mod link;
+pub(crate) mod link;
 mod render;
 mod submit;
 

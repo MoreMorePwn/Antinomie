@@ -28,7 +28,7 @@ use std::{
 pub const RUN_HELP: &str = "The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), vm:boot:run, a run key, or the run's folder";
 
 /// Shortest run-id prefix that is looked up.
-const PREFIX: usize = 4;
+pub const RUN_PREFIX: usize = 4;
 
 /// The saved run `text` names. Every VM of the data directory is searched,
 /// deleted ones with kept recordings included.
@@ -82,7 +82,7 @@ pub fn find_run(context: &Context, text: &str) -> Result<RunSummary, CliError> {
             });
     }
     let exact: Vec<&RunSummary> = runs.iter().filter(|run| run.id == text).collect();
-    let found: Vec<&RunSummary> = if exact.is_empty() && text.len() >= PREFIX {
+    let found: Vec<&RunSummary> = if exact.is_empty() && text.len() >= RUN_PREFIX {
         runs.iter().filter(|run| run.id.starts_with(text)).collect()
     } else {
         exact
@@ -92,8 +92,8 @@ pub fn find_run(context: &Context, text: &str) -> Result<RunSummary, CliError> {
         [] => Err(CliError::not_found(format!(
             "no run {text:?} in {}{}",
             context.data_dir().display(),
-            if text.len() < PREFIX {
-                format!(" (give at least {PREFIX} characters of the id)")
+            if text.len() < RUN_PREFIX {
+                format!(" (give at least {RUN_PREFIX} characters of the id)")
             } else {
                 String::new()
             }

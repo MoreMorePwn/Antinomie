@@ -2,7 +2,10 @@
 //! `base list/install/download/build/delete` (design 3.4.2): the installed
 //! bases and the commands that add or remove one. Each is one engine command
 //! run in this process under the data-directory lock.
-use super::machine::{BASES_WAIT, base_value, confirm, find_base, wait_bases};
+use super::{
+    auto::link,
+    machine::{BASES_WAIT, base_value, confirm, find_base, wait_bases},
+};
 use crate::{
     context::Context,
     engine::DirectEngine,
@@ -85,6 +88,13 @@ pub struct Build {
 }
 
 pub fn run(base: &Base, context: &Context) -> Result<Reply, CliError> {
+    // The installed bases come from the daemon when one answers
+    // (`base.list`); the catalog and every change need the lock.
+    if let Base::List(List { remote: false }) = base
+        && let Some(mut client) = link::daemon(context)?
+    {
+        return list_through(&mut client);
+    }
     let mut engine = DirectEngine::start(context)?;
     let outcome = dispatch(base, context, &mut engine);
     engine.finish();
@@ -101,6 +111,33 @@ fn dispatch(base: &Base, context: &Context, engine: &mut DirectEngine) -> Result
         Base::Build(arguments) => build_base(arguments, limit, engine),
         Base::Delete { id, yes } => delete(id, *yes, limit, engine),
     }
+}
+
+/// `base list` from the daemon: the contract's `BaseSummary` objects.
+fn list_through(client: &mut antinomie_service::server::client::Client) -> Result<Reply, CliError> {
+    let reply = link::call(client, "base.list", json!({}))?;
+    let items = reply["bases"].as_array().cloned().unwrap_or_default();
+    let cell = |value: &Value, short: bool| match value.as_str() {
+        Some(text) if short => text.chars().take(12).collect(),
+        Some(text) => text.to_owned(),
+        None => "-".to_owned(),
+    };
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|base| {
+            vec![
+                cell(&base["identity"], true),
+                cell(&base["name"], false),
+                cell(&base["architecture"], false),
+            ]
+        })
+        .collect();
+    let human = if rows.is_empty() {
+        "no bases installed\n".to_owned()
+    } else {
+        table(&["ID", "LABEL", "ARCH"], &rows)
+    };
+    Ok(Reply::list(items, None).with_human(human))
 }
 
 /// A base folder that did not load, as a list item with the reason.

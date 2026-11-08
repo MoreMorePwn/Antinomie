@@ -2,14 +2,25 @@
 //! `sample add/list/show/tag/verify/remove` (design 3.4.3). The commands work
 //! on the library directly and need no engine lock, so they run beside a
 //! window or a daemon. Results use the `Sample` object of design 5.4.7.
-use super::library::{library_error, open_existing, open_for_write, parse_sha256};
+//!
+//! `list`, `show` and `tag` go to the daemon when one answers at the socket
+//! (`sample.list`, `sample.get`, `sample.tag`) and run the same library code
+//! in this process otherwise. `add`, `verify` and `remove` stay in this
+//! process: `add` reads files by path and `--delete-original` deletes one,
+//! which the daemon never does for a client.
+use super::{
+    auto::link,
+    library::{library_error, open_existing, open_for_write, parse_sha256},
+};
 use crate::{
     context::Context,
     error::{CliError, ErrorCode},
     output::{Reply, block, table},
 };
-use antinomie_monitor_core::samples::{
-    Library, NewOrigin, NewSample, SampleRecord, Tag, TagKind, Verification, arch_label,
+use antinomie_monitor_core::samples::{Library, NewOrigin, NewSample, Tag, TagKind, Verification};
+use antinomie_service::{
+    api::ops::{SampleGetParams, SampleListParams},
+    library as service_library,
 };
 use clap::{Args, Subcommand};
 use serde_json::{Value, json};
@@ -104,9 +115,12 @@ pub fn run(sample: &Sample, context: &Context) -> Result<Reply, CliError> {
     let data = context.data_dir();
     match sample {
         Sample::Add(arguments) => add(arguments, open_for_write(data)?),
-        Sample::List(arguments) => list(arguments, open_existing(data)?),
-        Sample::Show(arguments) => show(arguments, open_existing(data)?),
-        Sample::Tag(arguments) => tag(arguments, open_for_write(data)?),
+        Sample::List(arguments) => list(arguments, context),
+        Sample::Show(arguments) => show(arguments, context),
+        Sample::Tag(arguments) => match link::daemon(context)? {
+            Some(mut client) => tag_through(arguments, &mut client),
+            None => tag(arguments, open_for_write(data)?),
+        },
         Sample::Verify { sha256 } => verify(sha256.as_deref(), open_existing(data)?),
         Sample::Remove { sha256, yes } => remove(sha256, *yes, open_existing(data)?),
     }
@@ -135,28 +149,6 @@ pub fn parse_tag(text: &str) -> Result<Tag, CliError> {
 
 fn tag_value(tag: &Tag) -> Value {
     json!({"kind": tag.kind, "value": tag.value})
-}
-
-/// The `Sample` object of design 5.4.7. `last_job` is null until Auto mode
-/// records jobs; `custody_ok` is null when no chain check was made.
-pub fn sample_value(
-    record: &SampleRecord,
-    tags: &[Tag],
-    run_count: usize,
-    custody_ok: Option<bool>,
-) -> Value {
-    json!({
-        "sha256": record.sha256,
-        "size": record.size,
-        "type": record.file_type.to_ascii_lowercase(),
-        "architecture": (!record.arch.is_empty()).then(|| arch_label(&record.arch)),
-        "name": record.name,
-        "tags": tags.iter().map(tag_value).collect::<Vec<_>>(),
-        "first_seen_ms": record.added_ms,
-        "run_count": run_count,
-        "last_job": Value::Null,
-        "custody_ok": custody_ok,
-    })
 }
 
 fn add(arguments: &Add, mut library: Library) -> Result<Reply, CliError> {
@@ -231,94 +223,31 @@ fn add(arguments: &Add, mut library: Library) -> Result<Reply, CliError> {
     }
 }
 
-fn matches_query(value: &Value, query: &str) -> bool {
-    let needle = query.to_ascii_lowercase();
-    let mut texts = vec![
-        value["sha256"].as_str().unwrap_or("").to_owned(),
-        value["name"].as_str().unwrap_or("").to_owned(),
-        value["type"].as_str().unwrap_or("").to_owned(),
-        value["architecture"].as_str().unwrap_or("").to_owned(),
-    ];
-    if let Some(tags) = value["tags"].as_array() {
-        texts.extend(
-            tags.iter()
-                .filter_map(|t| t["value"].as_str())
-                .map(str::to_owned),
-        );
-    }
-    texts
-        .iter()
-        .any(|text| text.to_ascii_lowercase().contains(&needle))
-}
-
-fn has_tags(tags: &[Tag], wanted: &[Tag]) -> bool {
-    wanted.iter().all(|want| {
-        tags.iter()
-            .any(|tag| tag.kind == want.kind && tag.value == want.value)
-    })
-}
-
-/// `v1.<offset>`: where the next page starts in the newest-first order.
-fn parse_cursor(cursor: Option<&str>) -> Result<usize, CliError> {
-    match cursor {
-        None => Ok(0),
-        Some(text) => text
-            .strip_prefix("v1.")
-            .and_then(|offset| offset.parse().ok())
-            .ok_or_else(|| {
-                CliError::invalid("the cursor is not one this command returned")
-                    .with_field("cursor")
-            }),
-    }
-}
-
-fn list(arguments: &List, library: Option<Library>) -> Result<Reply, CliError> {
-    if arguments.limit == 0 || arguments.limit > 1000 {
-        return Err(CliError::invalid("--limit is 1 to 1000").with_field("limit"));
-    }
-    let wanted: Vec<Tag> = arguments
-        .tags
-        .iter()
-        .map(|text| parse_tag(text))
-        .collect::<Result<_, _>>()?;
-    let offset = parse_cursor(arguments.cursor.as_deref())?;
-    let Some(library) = library else {
+/// `sample.list` through the daemon or from the library in this process.
+fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
+    let params = SampleListParams {
+        q: arguments.q.clone(),
+        tag: None,
+        tags: (!arguments.tags.is_empty()).then(|| arguments.tags.clone()),
+        all: arguments.all.then_some(true),
+        custody: arguments.custody.then_some(true),
+        limit: Some(arguments.limit.try_into().unwrap_or(u32::MAX)),
+        cursor: arguments.cursor.clone(),
+    };
+    let reply = match link::daemon(context)? {
+        Some(mut client) => {
+            let value = serde_json::to_value(&params)
+                .map_err(|error| CliError::internal(error.to_string()))?;
+            link::call(&mut client, "sample.list", value)?
+        }
+        None => service_library::list(open_existing(context.data_dir())?.as_ref(), &params)
+            .map_err(link::api)?,
+    };
+    let page: Vec<Value> = reply["samples"].as_array().cloned().unwrap_or_default();
+    let next = reply["next_cursor"].as_str().map(str::to_owned);
+    if page.is_empty() && next.is_none() && arguments.cursor.is_none() {
         return Ok(Reply::list(Vec::new(), None).with_human("No samples.\n".into()));
-    };
-    let tags = library.all_tags().map_err(library_error)?;
-    let runs = library.run_stats().map_err(library_error)?;
-    let checks = if arguments.custody {
-        Some(library.custody_check_all().map_err(library_error)?)
-    } else {
-        None
-    };
-    let mut matching = Vec::new();
-    for record in library.list().map_err(library_error)? {
-        if record.removed_ms.is_some() && !arguments.all {
-            continue;
-        }
-        let own = tags.get(&record.sha256).map_or(&[][..], Vec::as_slice);
-        if !has_tags(own, &wanted) {
-            continue;
-        }
-        let custody_ok = checks.as_ref().map(|all| {
-            all.samples
-                .get(&record.sha256)
-                .is_none_or(|check| check.ok())
-        });
-        let count = runs.get(&record.sha256).map_or(0, |stats| stats.count);
-        let value = sample_value(&record, own, count, custody_ok);
-        if arguments
-            .q
-            .as_deref()
-            .is_none_or(|q| matches_query(&value, q))
-        {
-            matching.push(value);
-        }
     }
-    let end = (offset + arguments.limit).min(matching.len());
-    let page: Vec<Value> = matching.get(offset..end).unwrap_or_default().to_vec();
-    let next = (end < matching.len()).then(|| format!("v1.{end}"));
     let rows: Vec<Vec<String>> = page.iter().map(row).collect();
     let mut text = table(&["sha256", "size", "type", "arch", "runs", "name"], &rows);
     if let Some(next) = &next {
@@ -342,88 +271,109 @@ fn missing_library(sha256: &str) -> CliError {
     CliError::not_found(format!("sample {sha256} is not in the library")).with_field("sha256")
 }
 
-fn show(arguments: &Show, library: Option<Library>) -> Result<Reply, CliError> {
+fn show(arguments: &Show, context: &Context) -> Result<Reply, CliError> {
     let sha256 = parse_sha256(&arguments.sha256)?;
-    let library = library.ok_or_else(|| missing_library(&sha256))?;
-    let record = library
-        .get(&sha256)
-        .map_err(library_error)?
-        .ok_or_else(|| missing_library(&sha256))?;
-    let tags = library.tags(&sha256).map_err(library_error)?;
-    let runs = library.runs_of(&sha256).map_err(library_error)?;
-    let check = library.custody_check(&sha256).map_err(library_error)?;
-    let mut value = sample_value(&record, &tags, runs.len(), Some(check.ok()));
-    value["sha1"] = record.sha1.clone().into();
-    value["md5"] = record.md5.clone().into();
-    value["description"] = record.description.clone().into();
-    value["removed_ms"] = record.removed_ms.into();
-    if arguments.origins {
-        let origins = library.origins(&sha256).map_err(library_error)?;
-        value["origins"] = origins
-            .iter()
-            .map(|o| {
-                json!({
-                    "kind": o.kind.as_str(), "source": o.source, "detail": o.detail,
-                    "name": o.name, "path": o.path, "vm_id": o.vm_id, "vm_name": o.vm_name,
-                    "run_id": o.run_id, "parent": o.parent, "at_ms": o.at_ms,
-                    "before_custody": o.before_custody,
-                })
-            })
-            .collect();
-    }
-    if arguments.events {
-        let events = library.events(&sha256).map_err(library_error)?;
-        value["events"] = events
-            .iter()
-            .map(|e| {
-                json!({
-                    "seq": e.seq, "at_ms": e.at_ms, "by": e.by, "kind": e.event.key(),
-                    "label": e.event.label(), "detail": e.event.detail(),
-                    "before_chain": e.before_chain, "hash": e.hash,
-                })
-            })
-            .collect();
-    }
-    if arguments.runs {
-        value["runs"] = runs
-            .iter()
-            .map(|r| {
-                json!({
-                    "vm_id": r.vm_id, "vm_name": r.vm_name, "run_id": r.run_id,
-                    "started_ms": r.started_ms, "exit": r.exit,
-                })
-            })
-            .collect();
-    }
+    let params = SampleGetParams {
+        sha256: antinomie_service::api::ids::Sha256Hex::try_from(sha256.clone())
+            .map_err(|e| CliError::invalid(e.to_string()).with_field("sha256"))?,
+        origins: arguments.origins.then_some(true),
+        events: arguments.events.then_some(true),
+        runs: arguments.runs.then_some(true),
+    };
+    let value = match link::daemon(context)? {
+        Some(mut client) => {
+            let value = serde_json::to_value(&params)
+                .map_err(|error| CliError::internal(error.to_string()))?;
+            link::call(&mut client, "sample.get", value)?
+        }
+        None => service_library::get(open_existing(context.data_dir())?.as_ref(), &params)
+            .map_err(link::api)?,
+    };
     let human = block(&[
-        ("sha256", record.sha256.clone()),
-        ("name", record.name.clone()),
-        ("size", record.size.to_string()),
-        ("type", value["type"].as_str().unwrap_or("").to_owned()),
+        ("sha256", text_of(&value["sha256"])),
+        ("name", text_of(&value["name"])),
+        ("size", text_of(&value["size"])),
+        ("type", text_of(&value["type"])),
         (
             "architecture",
             value["architecture"].as_str().unwrap_or("-").to_owned(),
         ),
         (
             "tags",
-            tags.iter()
-                .map(|t| t.value.clone())
+            value["tags"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|t| text_of(&t["value"]))
                 .collect::<Vec<_>>()
                 .join(", "),
         ),
-        ("runs", runs.len().to_string()),
-        ("custody", check.summary()),
+        ("runs", text_of(&value["run_count"])),
+        ("custody", text_of(&value["custody"])),
         (
             "archive",
-            if record.removed_ms.is_some() {
-                "removed"
-            } else {
+            if value["removed_ms"].is_null() {
                 "present"
+            } else {
+                "removed"
             }
             .to_owned(),
         ),
     ]);
     Ok(Reply::value(value).with_human(human))
+}
+
+fn text_of(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// `sample tag` through the daemon: the tags become the current ones with the
+/// changes applied (`sample.tag` sets the whole list).
+fn tag_through(
+    arguments: &TagArgs,
+    client: &mut antinomie_service::server::client::Client,
+) -> Result<Reply, CliError> {
+    let sha256 = parse_sha256(&arguments.sha256)?;
+    let changes: Vec<Tag> = arguments
+        .tags
+        .iter()
+        .map(|text| parse_tag(text))
+        .collect::<Result<_, _>>()?;
+    let current = link::call(client, "sample.get", json!({"sha256": sha256}))?;
+    let mut tags: Vec<Tag> = current["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            let kind = serde_json::from_value::<TagKind>(t["kind"].clone()).ok()?;
+            Some(Tag::new(kind, t["value"].as_str()?))
+        })
+        .collect();
+    for change in changes {
+        if arguments.remove {
+            tags.retain(|tag| !(tag.kind == change.kind && tag.value == change.value));
+        } else if !tags
+            .iter()
+            .any(|tag| tag.kind == change.kind && tag.value == change.value)
+        {
+            tags.push(change);
+        }
+    }
+    let answer = link::call(
+        client,
+        "sample.tag",
+        json!({"sha256": sha256, "tags": tags.iter().map(tag_value).collect::<Vec<_>>()}),
+    )?;
+    let tags = answer["tags"].as_array().cloned().unwrap_or_default();
+    let human = tags
+        .iter()
+        .map(|t| format!("{}={}\n", text_of(&t["kind"]), text_of(&t["value"])))
+        .collect::<String>();
+    Ok(Reply::value(json!({"sha256": sha256, "tags": tags})).with_human(human))
 }
 
 fn tag(arguments: &TagArgs, mut library: Library) -> Result<Reply, CliError> {

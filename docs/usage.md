@@ -1651,7 +1651,7 @@ global flags may also follow the command.
 | `--data-dir PATH` | Data directory (default `$HOME/antinomie`; `~` is expanded). Use a directory of its own for automation, never the one the window uses |
 | `--bundle PATH`, `--qemu PATH`, `--qemu-img PATH`, `--tcg`, `--no-headless` | Engine options, as in the window. The CLI is headless unless `--no-headless` is given |
 | `--socket PATH` | The daemon's socket (default `<data>/run/antinomie.sock`) |
-| `--daemon`, `--direct` | For the `auto` commands: `--daemon` requires a running daemon (exit 21 when none answers), `--direct` never uses one. Without either, an `auto` command uses the daemon when one answers. The other commands always run in the calling process (`--direct` and `--daemon` conflict) |
+| `--daemon`, `--direct` | `--daemon` requires a running daemon (exit 21 when none answers), `--direct` never uses one. Without either, the `auto` commands and the reads (`run list`, `run show`, `run export`, `triage`, `sample list`, `sample show`, `sample tag`, `custody verify` without `--export`, `vm list`, `base list`) use the daemon when one answers and work in the calling process when none does. The other commands always run in the calling process and take the lock (`--direct` and `--daemon` conflict) |
 | `-o, --format human\|json\|ndjson` | Output format; `human` on a terminal, `json` otherwise |
 | `--color auto\|always\|never` | Colour of human output; `NO_COLOR` is honoured |
 | `-q`, `-v`, `-vv`, `--log-format text\|json` | Log lines on standard error |
@@ -1789,7 +1789,9 @@ layer are not shipped yet.
   and `artifacts` (default: all) as `*.ndjson` files, one row per line, and the
   retained evidence files of `artifacts` into `DIR` and nowhere else; the bytes the
   sample produced (captured packets, memory and core dumps, file copies, the contents
-  of changed files) are written only with `--sensitive`. `RUN` is as for `triage`.
+  of changed files) are written only with `--sensitive`; `--no-triage` leaves out the
+  parts that need the Triage index (findings, indicators, files, network, timeline), so
+  a very large recording is not indexed in full. `RUN` is as for `triage`.
   These commands are the read-only query API of the job API (`docs/job-api-1.md`,
   "Recording queries"): they take no engine lock and write nothing into a recording,
   so they work while the window is open. A recording that is still being written
@@ -1798,6 +1800,17 @@ layer are not shipped yet.
   until it is saved. The first Triage part of a run indexes it, with progress lines
   on standard error; Ctrl-C stops (exit 130) and `--timeout SECONDS` limits the wait
   (exit 14).
+  **With a daemon** (`auto daemon`) at the socket these commands, `triage`, `sample
+  list|show|tag`, `custody verify` (without `--export`), `vm list` and `base list`
+  ask the daemon and print the same objects; `--direct` keeps them in the command and
+  `--daemon` insists on the daemon. `run export` still writes only under `--out`: the
+  command asks the daemon for the rows and the bytes and writes the files itself, so no
+  path is sent to the daemon. `triage --parts` builds its report parts in the command
+  from the recording folder (no lock is needed). `vm list` and `base list` from the
+  daemon print the contract's summaries (id, name, base, lane; identity, name,
+  architecture), fewer columns than direct mode, which needs the lock and so cannot
+  run beside a daemon. `sample add`, `sample verify`, `sample remove` and `custody
+  verify --export` work in the command: they read or write files by path.
 - **A VM lives as long as the command.** In direct mode the engine runs inside the
   command and stops the VM when the command ends, so `vm start` boots the guest, waits
   until it answers, reports how long that took and stops it again; `--hold` keeps it
@@ -1847,8 +1860,7 @@ layer are not shipped yet.
   without starting anything (see [service configuration](service-config.md)); it
   prints each problem as `file:line:column` and exits 4 when there is an error.
 - Not shipped yet: watch folders, retention (`auto gc`), result files and
-  notifications, and listing or exporting recordings from the command line (`run
-  list`, `run show`, `run export`). The job contract is written down in [Job API,
+  notifications. The job contract is written down in [Job API,
   version 1](job-api-1.md).
 
 ### Auto mode (0.9.0)

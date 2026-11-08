@@ -3,10 +3,7 @@
 //! recordings of the data directory through the read-only query API, the one
 //! the web pages use. No engine lock, nothing written into a recording; the
 //! export writes only under `--out`.
-use super::{
-    query::Client,
-    recording::{RUN_HELP, find_run},
-};
+use super::{query::Client, recording::RUN_HELP};
 use crate::{
     context::Context,
     error::{CliError, ErrorCode},
@@ -33,6 +30,11 @@ pub const PARTS: [&str; 10] = [
     "custody",
     "artifacts",
 ];
+
+/// The parts that need the Triage index of the run (the window's tables):
+/// building it reads the whole recording, which for a very large one takes
+/// long. `--no-triage` leaves them out.
+pub const TRIAGE_PARTS: [&str; 5] = ["findings", "indicators", "files", "network", "timeline"];
 
 /// Bytes of one file version or artifact an export fetches.
 const BYTES_CAP: u64 = 64 << 20;
@@ -85,6 +87,11 @@ pub struct Export {
     /// core dumps, file copies and the contents of changed files.
     #[arg(long)]
     pub sensitive: bool,
+    /// Leave out the parts that need the Triage index (findings, indicators,
+    /// files, network, timeline), so a very large recording is not indexed
+    /// in full. Naming one of them with --part is an error.
+    #[arg(long)]
+    pub no_triage: bool,
     /// The folder to write into; created when missing. Nothing is written
     /// anywhere else.
     #[arg(long, value_name = "DIR")]
@@ -143,7 +150,7 @@ pub fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
     );
     put("limit", arguments.limit.map(|v| json!(v)));
     put("cursor", arguments.cursor.as_ref().map(|v| json!(v)));
-    let page = Client::new(context).call("recording.run.list", Value::Object(params))?;
+    let page = Client::new(context)?.call("recording.run.list", Value::Object(params))?;
     let items = page["items"].as_array().cloned().unwrap_or_default();
     let next = page["next_cursor"].as_str().map(str::to_owned);
     let rows: Vec<Vec<String>> = items
@@ -170,8 +177,8 @@ pub fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
 }
 
 pub fn show(arguments: &Show, context: &Context) -> Result<Reply, CliError> {
-    let client = Client::new(context);
-    let key = client.key_of(&find_run(context, &arguments.run)?)?;
+    let client = Client::new(context)?;
+    let key = client.resolve(&arguments.run)?;
     let params = json!({"run_key": key});
     let reply = client.call("recording.run.get", params.clone())?;
     let mut value = reply["value"].clone();
@@ -306,12 +313,26 @@ fn all_pages(
 ) -> Result<Vec<Value>, CliError> {
     let mut items = Vec::new();
     let mut cursor: Option<String> = None;
+    // A page that does not fit a socket line (2 MiB) is asked again with a
+    // quarter of the rows; the cursor stays valid because the limit is not part of it.
+    let mut limit: Option<u64> = None;
     loop {
         let mut request = params.clone();
-        if let (Some(cursor), Some(object)) = (&cursor, request.as_object_mut()) {
-            object.insert("cursor".into(), json!(cursor));
+        if let Some(object) = request.as_object_mut() {
+            if let Some(cursor) = &cursor {
+                object.insert("cursor".into(), json!(cursor));
+            }
+            if let Some(limit) = limit {
+                object.insert("limit".into(), json!(limit));
+            }
         }
-        let page = client.call(op, request)?;
+        let page = match client.call(op, request) {
+            Err(error) if error.code == ErrorCode::PayloadTooLarge && limit != Some(1) => {
+                limit = Some(limit.map_or(100, |limit| (limit / 4).max(1)));
+                continue;
+            }
+            other => other?,
+        };
         if page["partial"] == json!(true) {
             *partial = true;
         }
@@ -374,11 +395,21 @@ mod base64_lite {
 pub fn export(arguments: &Export, context: &Context) -> Result<Reply, CliError> {
     let mut parts: Vec<&str> = Vec::new();
     if arguments.part.is_empty() {
-        parts.extend(PARTS);
+        parts.extend(
+            PARTS
+                .iter()
+                .filter(|part| !(arguments.no_triage && TRIAGE_PARTS.contains(part))),
+        );
     }
     for name in &arguments.part {
         let name = name.trim();
         match PARTS.iter().find(|part| **part == name) {
+            Some(part) if arguments.no_triage && TRIAGE_PARTS.contains(part) => {
+                return Err(CliError::invalid(format!(
+                    "--no-triage leaves the part {part:?} out; it needs the Triage index"
+                ))
+                .with_field("part"));
+            }
             Some(part) => {
                 if !parts.contains(part) {
                     parts.push(part);
@@ -400,9 +431,8 @@ pub fn export(arguments: &Export, context: &Context) -> Result<Reply, CliError> 
         ))
         .with_field("out"));
     }
-    let client = Client::new(context);
-    let run = find_run(context, &arguments.run)?;
-    let key = client.key_of(&run)?;
+    let client = Client::new(context)?;
+    let key = client.resolve(&arguments.run)?;
     fs::create_dir_all(&arguments.out).map_err(|e| CliError::io(&arguments.out, &e))?;
     let mut out = Out {
         root: arguments.out.clone(),
@@ -424,6 +454,7 @@ pub fn export(arguments: &Export, context: &Context) -> Result<Reply, CliError> 
         "run_key": key,
         "out": arguments.out,
         "parts": parts,
+        "triage": !arguments.no_triage,
         "files": out.files,
         "partial": partial,
     });

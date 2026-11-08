@@ -38,7 +38,7 @@ impl DirectEngine {
         if context.mode() == crate::args::Mode::Daemon {
             return Err(CliError::new(
                 ErrorCode::Unsupported,
-                "the daemon serves the `auto` commands only; this command runs in its own process (leave out --daemon, and stop the daemon or use another --data-dir while it owns this one)",
+                "the daemon serves the `auto` commands, the reads (`run list/show/export`, `triage`, `sample list/show/tag`, `custody verify`) and `vm list` and `base list`; this command runs in its own process (leave out --daemon, and stop the daemon or use another --data-dir while it owns this one)",
             ));
         }
         let mut options = context.options.clone();
