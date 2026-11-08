@@ -2,7 +2,10 @@
 //! `triage`, `detect` and `report` through the built binary, on a saved run
 //! of a scratch data directory (design 3.4.3, card P2-4).
 use antinomie_monitor_core::{ExecRequest, RunState, RunSummary, report::Choices};
-use antinomie_triage::{SavedRun, report_export, tests::write_rwx_calls};
+use antinomie_triage::{
+    SavedRun, report_export,
+    tests::{http_pcap, write_rwx_calls},
+};
 use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
@@ -71,6 +74,52 @@ impl Data {
         };
         std::fs::write(dir.join("run.json"), serde_json::to_vec(&run).unwrap()).unwrap();
         Self { root }
+    }
+
+    /// The run of a library sample with an HTTP capture its artifact list
+    /// names and one YARA match in its digest: the recording
+    /// `tests/monitor/test-report-export.py` is written for.
+    fn with_capture(name: &str) -> Self {
+        let data = Self::new(name);
+        let dir = data.run_dir();
+        let mut run: RunSummary =
+            serde_json::from_slice(&std::fs::read(dir.join("run.json")).unwrap()).unwrap();
+        run.request.sample = Some(antinomie_monitor_core::samples::SampleRef {
+            sha256: "ab".repeat(32),
+            name: "fixture.elf".into(),
+        });
+        std::fs::write(dir.join("run.json"), serde_json::to_vec(&run).unwrap()).unwrap();
+        let pcap = dir.join("network.pcap");
+        std::fs::write(&pcap, http_pcap()).unwrap();
+        let artifacts = antinomie_monitor_core::RunArtifacts {
+            run_id: RUN.into(),
+            vm_id: "vm-1".into(),
+            boot_id: "boot-1".into(),
+            network_captures: vec![pcap],
+            network_state: antinomie_monitor_core::RunArtifactState::Complete,
+            ..Default::default()
+        };
+        std::fs::write(
+            dir.join("artifacts.json"),
+            serde_json::to_vec(&artifacts).unwrap(),
+        )
+        .unwrap();
+        antinomie_monitor_core::run_digest::RunDigest::update(&dir, |digest| {
+            digest.detections = Some(vec![antinomie_monitor_core::run_digest::DetectionHit {
+                engine: "YARA".into(),
+                rule_id: "fixture_rule".into(),
+                title: "fixture_rule".into(),
+                severity: "high".into(),
+                count: 2,
+                author: "Jane Rule".into(),
+                license: "DRL 1.1".into(),
+                source: "Example Pack".into(),
+                reference: "https://example.org/rule".into(),
+                ..Default::default()
+            }]);
+        })
+        .unwrap();
+        data
     }
 
     fn data(&self) -> PathBuf {
@@ -214,4 +263,64 @@ fn detect_without_save_writes_nothing_into_the_recording() {
     assert!(!fixture.run_dir().join("triage-digest.json").exists());
     let (code, _) = cli(&fixture.args(data, &["detect", RUN, "--engine", "clamav"]));
     assert_eq!(code, 4);
+}
+
+/// The command's files for `tests/monitor/test-report-export.py`: with
+/// `ANTINOMIE_REPORT_OUT=DIR`, every format and the evidence bundle go to DIR
+/// and an HTML and JSON export without the Network and Files parts to
+/// DIR/limited-defanged, the exports the script checks (it is run as
+/// `test-report-export.py DIR`). Without the variable the exports go to a
+/// scratch folder and only their exit codes are checked.
+#[test]
+fn report_writes_what_the_report_checks_read() {
+    let fixture = Data::with_capture("report-checks");
+    let data = fixture.data();
+    let data = data.to_str().unwrap();
+    let out = std::env::var("ANTINOMIE_REPORT_OUT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| fixture.root.join("checks"));
+    let limited = out.join("limited-defanged");
+    let (code, value) = cli(&fixture.args(
+        data,
+        &[
+            "report",
+            RUN,
+            "--formats",
+            "all",
+            "--evidence-bundle",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(code, 0, "{value}");
+    assert!(
+        value["result"]["files"].as_array().unwrap().len() >= 6,
+        "{value}"
+    );
+    let (code, value) = cli(&fixture.args(
+        data,
+        &[
+            "report",
+            RUN,
+            "--formats",
+            "html,json",
+            "--parts",
+            "summary,indicators,attack,processes,findings,file_activity,detections,evidence,custody",
+            "--defang",
+            "--out",
+            limited.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(code, 0, "{value}");
+    let json = value["result"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["format"] == "JSON")
+        .and_then(|file| file["path"].as_str())
+        .map(PathBuf::from)
+        .unwrap();
+    let doc: Value = serde_json::from_slice(&std::fs::read(json).unwrap()).unwrap();
+    assert!(doc["network"].is_null() && doc["files"].is_null());
+    assert_eq!(doc["detections"][0]["rule_id"], "fixture_rule");
 }

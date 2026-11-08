@@ -8,8 +8,11 @@ and pdftotext for the PDF, xmllint for the HTML, 7z for the password zip.
 
 usage: test-report-export.py [DIR]
 
-DIR is a folder the Rust fixture tests filled (ANTINOMIE_REPORT_OUT=DIR). With
-no DIR the script runs those tests into a scratch folder first.
+DIR is a folder the Rust fixture tests filled (ANTINOMIE_REPORT_OUT=DIR): the
+export job's tests of antinomie-triage, or antinomie-cli's
+`--test triage_report`, which writes the same exports with `antinomie-cli
+report`. With no DIR the script runs the antinomie-triage tests into a scratch
+folder first.
 """
 import hashlib
 import json

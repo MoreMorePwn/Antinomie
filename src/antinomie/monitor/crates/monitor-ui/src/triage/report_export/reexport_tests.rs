@@ -341,6 +341,10 @@ fn rerender_exported_reports() {
 /// window until its worker is done. For comparing with `antinomie-cli report`
 /// (card P2-4). `ANTINOMIE_DIALOG_DATA` is the data directory,
 /// `ANTINOMIE_DIALOG_RUN` the run id and `ANTINOMIE_DIALOG_OUT` the folder.
+/// The scan reads the guest's user names from the base disk through the disk
+/// reader, a worker role of the running program, which this test binary does
+/// not host: `ANTINOMIE_DIALOG_WORKER` names a program that does (the built
+/// `antinomie-monitor`), and the names are read with it, as the window would.
 #[test]
 #[ignore = "exports a saved run; set ANTINOMIE_DIALOG_DATA, ANTINOMIE_DIALOG_RUN and ANTINOMIE_DIALOG_OUT"]
 fn export_a_saved_run_as_the_dialog_does() {
@@ -384,6 +388,21 @@ fn export_a_saved_run_as_the_dialog_does() {
     view.set_rebuild_limits(DEFAULT_REBUILD_FILE_MIB, DEFAULT_REBUILD_RUN_MIB);
     view.set_launch(Some(&run));
     view.set_kernel_revision(ScanRequest::kernel_revision_of(&run));
+    if let Ok(worker) = std::env::var("ANTINOMIE_DIALOG_WORKER") {
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(run.directory.join("manifest.json")).unwrap())
+                .unwrap();
+        let base = data
+            .join("bases")
+            .join(manifest["disk_base_identity"].as_str().unwrap());
+        let image = antinomie_monitor_core::storage::Bundle::load(&base)
+            .unwrap()
+            .base_disk;
+        let names =
+            antinomie_monitor_core::guest_names::read_base(&image, Some(PathBuf::from(worker)))
+                .unwrap();
+        view.scan_request.guest_names = Some(Arc::new(names));
+    }
     let frame = |view: &mut TriageView, input: TriageInput<'_>| {
         let _ = ctx.run_ui(egui::RawInput::default(), |root| {
             view.tick(root.ctx(), input);
