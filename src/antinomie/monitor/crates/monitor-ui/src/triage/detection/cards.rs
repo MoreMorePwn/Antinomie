@@ -3,6 +3,7 @@
 //! short summary, a facts row and a Details button.
 use super::finding::{pack_name, parse_details};
 use super::*;
+use crate::triage::Tone;
 use antinomie_monitor_core::analysis::detection::MatchSort;
 
 /// Widest MITRE chip list on a card; the rest is counted.
@@ -402,31 +403,36 @@ fn row_text<'a>(row: &'a [Cell], key: &str) -> Option<&'a str> {
     })
 }
 
-/// The colour of a rule score (Elastic's 0 to 100): red from 90, orange from
-/// 70, amber from 40 and muted below.
-pub(crate) fn score_color(score: u32) -> egui::Color32 {
+/// The colour role of a rule score (Elastic's 0 to 100): red (Bad) from 90,
+/// orange (Elevated) from 70, amber (Warn) from 40 and muted below.
+pub(crate) fn score_tone(score: u32) -> Tone {
     match score {
-        90.. => theme::error(),
-        70..=89 => theme::orange(),
-        40..=69 => theme::warn(),
-        _ => theme::muted(),
+        90.. => Tone::Bad,
+        70..=89 => Tone::Elevated,
+        40..=69 => Tone::Warn,
+        _ => Tone::Muted,
     }
 }
 
 /// The colour of a rule's severity tag: a named level, Suricata's priority
 /// 1 to 4, or (any other whole number) a rule score.
 pub(super) fn severity_color(severity: &str) -> egui::Color32 {
+    theme::tone(severity_tone(severity))
+}
+
+/// The colour role of a detection's severity.
+pub(super) fn severity_tone(severity: &str) -> Tone {
     let trimmed = severity.trim();
     if let Ok(score) = trimmed.parse::<u32>() {
         if score > 4 {
-            return score_color(score);
+            return score_tone(score);
         }
     }
     match trimmed.to_ascii_lowercase().as_str() {
-        "1" | "critical" | "high" => theme::error(),
-        "2" | "medium" | "indicator" => theme::warn(),
-        "3" | "4" | "low" | "informational" | "info" => theme::blue(),
-        _ => theme::muted(),
+        "1" | "critical" | "high" => Tone::Bad,
+        "2" | "medium" | "indicator" => Tone::Warn,
+        "3" | "4" | "low" | "informational" | "info" => Tone::Info,
+        _ => Tone::Muted,
     }
 }
 

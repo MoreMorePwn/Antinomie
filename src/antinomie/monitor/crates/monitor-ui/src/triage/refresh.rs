@@ -1,103 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! When the index of the selected run is read again, and what a read costs.
+//! The refresh of the index on screen: when it is read again, and the row of
+//! controls. What makes an index out of date is in `antinomie_triage::refresh`.
 use super::*;
+
+pub(super) use antinomie_triage::refresh::*;
 
 /// How often a live run is read while its pane is hidden and the HIGH toast is on.
 pub(super) const HIDDEN_POLL: Duration = Duration::from_secs(15);
-
-/// The answer of an index thread that found the recording as the last index saw it.
-pub(super) const UNCHANGED: &str = "unchanged";
-
-const HOST_TIME_NOTE: &str = "Times use the host timezone. ~ marks a guest event time estimated from a host receipt/start anchor, including transport latency.";
-const NETWORK_TIME_NOTE: &str = "Packet timestamps use QEMU's capture clock, displayed in the host timezone. They may differ from the host run clock; capture ownership determines which run is indexed.";
-
-/// Format of the file indexes built from a recording: which tabs exist and
-/// what their rows and counts mean. It is part of the source stamp, so an
-/// index made by an older format is never mistaken for current and is
-/// rebuilt from the recording.
-pub(super) const FILE_INDEX_VERSION: u32 = 4;
-
-/// What an index of the recording depends on, as a string: size and
-/// modification time of the files it reads, and the request facts that
-/// change its meaning. Equal strings mean a new index would be the same.
-pub(super) fn source_stamp(
-    directory: &Path,
-    pcap: Option<&Path>,
-    pcap_open: bool,
-    request: &ScanRequest,
-) -> String {
-    use std::os::unix::fs::MetadataExt;
-    let file = |path: &Path| {
-        std::fs::metadata(path).map_or_else(
-            |_| "-".to_owned(),
-            |meta| {
-                format!(
-                    "{}.{}.{}.{}",
-                    meta.len(),
-                    meta.mtime(),
-                    meta.mtime_nsec(),
-                    meta.ino()
-                )
-            },
-        )
-    };
-    let page_rows = request.rows();
-    let mut stamp = format!(
-        "files-v{FILE_INDEX_VERSION}|rows={}|{pcap_open}|{}|{}|{:?}|{}|{:?}|{}/{}|rebuild={}/{}|rev={:?}",
-        page_rows,
-        request.run_finished,
-        request.recording_open,
-        request.started_ms,
-        request.root_cookie,
-        request
-            .clock_anchor
-            .map(|clock| (clock.guest_ns, clock.host_us)),
-        request.write_limits.per_file,
-        request.write_limits.per_run,
-        request.retention.per_file,
-        request.retention.per_run,
-        request.kernel_revision,
-    );
-    for name in [
-        "telemetry.raw",
-        "artifacts.json",
-        "run.json",
-        "manifest.json",
-    ] {
-        stamp.push('|');
-        stamp.push_str(&file(&directory.join(name)));
-    }
-    // What the IOC list depends on besides the recording: the datasets, the
-    // false positives, the online answers kept with the run and the sample.
-    if let Some(dir) = &request.data_dir {
-        stamp.push_str(&format!(
-            "|ioc={}|{}",
-            ioc_scan::signature(dir),
-            file(&dir.join("known-false-positives.json"))
-        ));
-    }
-    stamp.push_str(&format!(
-        "|{}|{}",
-        file(&directory.join("ioc-online.json")),
-        request
-            .report
-            .as_ref()
-            .map_or_else(String::new, |report| format!(
-                "{}.{:?}.{}",
-                report.id,
-                report.state,
-                report
-                    .sections
-                    .iter()
-                    .map(|s| s.entries.len())
-                    .sum::<usize>()
-            ))
-    ));
-    if let Some(pcap) = pcap {
-        stamp.push_str(&format!("|{}={}", pcap.display(), file(pcap)));
-    }
-    stamp
-}
 
 impl TriageView {
     /// A new index for the user's query, page or Refresh button: always read in full.

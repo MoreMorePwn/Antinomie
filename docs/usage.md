@@ -1622,6 +1622,9 @@ colour as a chip in HTML and a bar in PDF).
 
 `antinomie-cli` is the headless front end: the same engine as the window, with no
 display. It ships beside `antinomie-monitor` and does not link the GUI libraries.
+It links the same Triage scan (the `antinomie-triage` library), so a recording
+made from the command line also keeps the earlier bytes of the files a run
+changed: the program that ran the VM copies them when the boot ends.
 The grammar is `antinomie-cli [GLOBAL FLAGS] GROUP COMMAND [FLAGS] [ARGS]`; the
 global flags may also follow the command.
 

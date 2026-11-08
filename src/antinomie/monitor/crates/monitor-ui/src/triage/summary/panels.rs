@@ -98,7 +98,7 @@ fn key_row(
     key: &super::insight::Key,
     acts: &mut Vec<Act>,
 ) {
-    let color = key.tier.color();
+    let color = theme::tone(key.tier.tone());
     let more_id = ui.id().with(("summary-key-more", key.index));
     let mut head = egui::Rect::NOTHING;
     let response = egui::Frame::new()
@@ -530,7 +530,7 @@ pub(super) fn interest_row(
         // of them: the rest is "+N more", which opens the Process tree.
         for item in interest.iter().take(INTEREST_SHOWN) {
             let (color, count) = match item.tier {
-                Some(tier) => (tier.color(), format!("\u{d7}{}", item.findings)),
+                Some(tier) => (theme::tone(tier.tone()), format!("\u{d7}{}", item.findings)),
                 None => (theme::muted(), "argv".to_owned()),
             };
             ui.add(crate::widgets::dot::DotLabel::new(color, count).text_color(color));

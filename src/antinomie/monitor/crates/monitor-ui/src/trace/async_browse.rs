@@ -60,18 +60,6 @@ fn grouped(count: u64) -> String {
     grouped
 }
 
-/// What a row says about its async observations when the preview is partial.
-pub(super) fn partial_note(invocation: &InvocationSummary) -> Option<String> {
-    let omitted = invocation.async_omitted();
-    (omitted > 0).then(|| {
-        format!(
-            "{} of {} async observations shown",
-            grouped(invocation.async_events.len() as u64),
-            grouped(invocation.async_saved)
-        )
-    })
-}
-
 impl Inspector {
     /// A page the app should read now, if the user asked for one.
     pub(crate) fn take_async_read(&mut self) -> Option<AsyncRead> {

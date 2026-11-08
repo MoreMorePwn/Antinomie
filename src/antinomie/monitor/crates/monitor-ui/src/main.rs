@@ -5,7 +5,6 @@ mod api_keys_window;
 mod app;
 mod archive;
 mod background;
-mod bpf;
 mod branding;
 mod build_wizard;
 mod code_listing;
@@ -56,7 +55,6 @@ mod summary;
 mod table_sort;
 mod terminal;
 mod theme;
-mod time_format;
 mod title_bar;
 mod toasts;
 mod tools_page;
@@ -64,13 +62,13 @@ mod trace;
 mod tree_lines;
 mod triage;
 mod typing;
-mod tzone;
 mod ui_performance;
 mod update_window;
-mod values;
 mod vm_screen;
 mod widgets;
 mod workspace;
+
+pub(crate) use antinomie_triage::{bpf, time_format, tzone, values};
 
 use antinomie_monitor_core::BackendOptions;
 use clap::Parser;
@@ -180,9 +178,7 @@ fn main() -> eframe::Result<()> {
     if let Some(code) = antinomie_monitor_core::disks::reader::worker_main_if_requested() {
         std::process::exit(code);
     }
-    if let Some(code) = antinomie_monitor_core::file_before_store::worker_main_if_requested(
-        triage::copy_earlier_bytes,
-    ) {
+    if let Some(code) = antinomie_triage::copier::host_copier() {
         std::process::exit(code);
     }
     let args = Arguments::parse();

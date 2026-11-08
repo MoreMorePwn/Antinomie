@@ -1060,7 +1060,7 @@ fn trace_cell(
         job.append(
             &text,
             0.0,
-            egui::TextFormat::simple(font.clone(), tone.color()),
+            egui::TextFormat::simple(font.clone(), crate::trace::tone_color(tone)),
         );
     }
     if column == 0 {

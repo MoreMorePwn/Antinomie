@@ -36,7 +36,7 @@ _spec.loader.exec_module(layouts)
 
 # Host sources whose string literals name the constants they decode.
 SOURCES = ["crates/monitor-core/src/syscalls.rs", "crates/monitor-core/src/syscalls/selectors.rs",
-           "crates/monitor-core/src/syscalls/socket_options.rs", "crates/monitor-ui/src/values.rs",
+           "crates/monitor-core/src/syscalls/socket_options.rs", "crates/triage/src/values.rs",
            "crates/monitor-core/src/typed_fields/signals.rs"]
 NAME = re.compile(r'"([A-Z][A-Z0-9_]{2,})"')
 # Identity and data model per architecture (ELF e_machine, audit AUDIT_ARCH_*),

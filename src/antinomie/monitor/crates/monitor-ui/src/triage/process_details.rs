@@ -102,7 +102,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, values: &[(&str, Ro
     for finding in &listed {
         ui.horizontal_wrapped(|ui| {
             let tone = rules::Tier::from_tag(&finding.cells[1].text)
-                .map_or(Tone::Neutral, rules::Tier::tone);
+                .map_or(Tone::Neutral, |tier| tier.tone().into());
             widgets::chip(ui, finding.cells[1].text.clone(), tone);
             let rule = egui::Label::new(RichText::new(&finding.cells[0].text).monospace())
                 .sense(egui::Sense::click());

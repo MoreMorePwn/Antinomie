@@ -210,7 +210,7 @@ fn the_wheel_scrolls_the_files_tables() {
     let template = scan.opened.first().cloned().unwrap_or_else(|| {
         let mut row: Vec<Cell> = file_category::EVENT_HEADERS
             .iter()
-            .map(|header| cell(*header, theme::text(), false))
+            .map(|header| cell(*header, tone::text(), false))
             .collect();
         row[0].values = vec![("event.id", RowValue::Number(1))];
         row
@@ -235,7 +235,7 @@ fn the_wheel_scrolls_the_network_tables() {
         .map(|at| {
             let mut row: Vec<Cell> = net_tabs::ENDPOINT_HEADERS
                 .iter()
-                .map(|header| cell(*header, theme::text(), false))
+                .map(|header| cell(*header, tone::text(), false))
                 .collect();
             row[0].text = format!("host-{at}");
             row[0].values = vec![("frame.number", RowValue::Number(at))];

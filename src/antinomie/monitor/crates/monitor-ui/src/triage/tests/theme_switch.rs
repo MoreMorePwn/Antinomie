@@ -9,18 +9,18 @@ const SIZE: egui::Vec2 = egui::vec2(900.0, 400.0);
 fn rows() -> Vec<Vec<Cell>> {
     vec![
         vec![
-            table::cell("rundll", theme::text(), false),
-            table::cell("blocked", theme::error(), false),
-            table::cell("slow", theme::warn(), true),
-            table::cell("seen", theme::muted(), false),
-            table::cell("done", theme::good(), false),
+            table::cell("rundll", tone::text(), false),
+            table::cell("blocked", tone::error(), false),
+            table::cell("slow", tone::warn(), true),
+            table::cell("seen", tone::muted(), false),
+            table::cell("done", tone::good(), false),
         ],
         vec![
-            table::cell("hidden", theme::warn(), false),
-            table::cell("0x7f", theme::value(ValueKind::Pointer), true),
-            table::cell("12", theme::value(ValueKind::Number), true),
-            table::cell("name", theme::value(ValueKind::Name), false),
-            table::cell("tree", theme::tree_branch(2), false),
+            table::cell("hidden", tone::warn(), false),
+            table::cell("0x7f", tone::value(ValueKind::Pointer), true),
+            table::cell("12", tone::value(ValueKind::Number), true),
+            table::cell("name", tone::value(ValueKind::Name), false),
+            table::cell("tree", Tone::Accent, false),
         ],
     ]
 }
@@ -91,35 +91,6 @@ fn rows_built_in_one_theme_are_painted_in_the_palette_now_active() {
         let fresh = colors(&ctx, &self::rows());
         assert_eq!(switched, fresh, "{from:?} -> {to:?}");
         assert_ne!(built, switched, "{from:?} and {to:?} differ");
-    }
-}
-
-#[test]
-fn a_color_outside_the_palette_is_left_as_it_is() {
-    let ctx = egui::Context::default();
-    theme::install(&ctx);
-    let odd = egui::Color32::from_rgb(1, 2, 3);
-    let cell = table::cell("odd", odd, false);
-    theme::apply_theme(&ctx, Theme::Light);
-    assert_eq!(cell.color(), odd);
-}
-
-#[test]
-fn every_slot_of_a_palette_translates_to_the_same_slot_of_another() {
-    for (from, to) in [(Theme::Dark, Theme::Light), (Theme::Light, Theme::Blue)] {
-        let (a, b) = (from.palette(), to.palette());
-        for (old, new) in [
-            (a.text, b.text),
-            (a.muted, b.muted),
-            (a.error, b.error),
-            (a.warn, b.warn),
-            (a.good, b.good),
-            (a.number, b.number),
-            (a.pointer, b.pointer),
-        ] {
-            assert_eq!(theme::translate(old, from, to), new, "{from:?} -> {to:?}");
-        }
-        assert_eq!(theme::translate(a.text, from, from), a.text);
     }
 }
 

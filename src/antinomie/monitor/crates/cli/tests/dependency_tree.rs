@@ -42,7 +42,7 @@ fn tree(package: &str) -> Vec<String> {
 
 #[test]
 fn headless_crates_do_not_depend_on_the_gui_stack() {
-    for package in ["antinomie-cli", "antinomie-service"] {
+    for package in ["antinomie-cli", "antinomie-service", "antinomie-triage"] {
         let crates = tree(package);
         assert!(
             crates.iter().any(|name| name == "antinomie-monitor-core"),

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Bounded evidence tables and the jump from a row to its evidence.
 use super::*;
+
 use crate::widgets::fit_table;
+pub(super) use antinomie_triage::table::*;
 
 /// An outcome cell "failed (EACCES)" gets the errno number on hover.
 fn hover_errno(response: egui::Response, text: &str) {
@@ -13,19 +15,7 @@ fn hover_errno(response: egui::Response, text: &str) {
 /// The pills of a cell, before its text.
 fn cell_badges(ui: &mut egui::Ui, cell: &Cell) {
     for badge in &cell.badges {
-        crate::widgets::chip(ui, badge.text.clone(), badge.tone).on_hover_text(&badge.hover);
-    }
-}
-
-pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) -> Cell {
-    Cell {
-        text: text.into(),
-        color,
-        theme: theme::theme(),
-        mono,
-        values: Vec::new(),
-        badges: Vec::new(),
-        note: None,
+        crate::widgets::chip(ui, badge.text.clone(), badge.tone.into()).on_hover_text(&badge.hover);
     }
 }
 
@@ -33,33 +23,6 @@ pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) ->
 /// fill the pane leaves less than this under them; the page scrolls (see
 /// `TriageView::show`) instead of squeezing the table out of reach.
 pub(super) const MIN_TABLE_HEIGHT: f32 = 160.0;
-
-/// Characters a table cell shows. A cut cell's hover text is its shown text,
-/// so this also bounds the hover box; Details keeps the whole value.
-const CELL_TEXT_MAX: usize = 240;
-
-/// Keep the unresolved directory reason in Details while shortening table text.
-pub(super) fn display_text(text: &str) -> String {
-    text.replace("(relative, cwd not recorded)", "(relative)")
-        .replace("(relative, dirfd not recorded)", "(relative)")
-}
-
-fn display_cell(text: &str) -> String {
-    bounded_cell(&display_text(text))
-}
-
-fn bounded_cell(text: &str) -> String {
-    match text.char_indices().nth(CELL_TEXT_MAX) {
-        Some((end, _)) => format!("{}… (full value in Details)", &text[..end]),
-        None => text.to_owned(),
-    }
-}
-
-#[cfg(test)]
-pub(super) fn push_limited(limited: &mut LimitedRows, row: Vec<Cell>) -> bool {
-    limited.rows.push(row);
-    true
-}
 
 pub(super) fn column_widths<'a>(
     ui: &egui::Ui,
@@ -177,44 +140,6 @@ fn row_extras(
             })
     };
     run.extras(reference)
-}
-
-pub(super) fn evidence_key(row: &[Cell]) -> String {
-    let identity = evidence_values_key(
-        row.first()
-            .map(|cell| cell.values.as_slice())
-            .unwrap_or_default(),
-    );
-    if identity.is_empty() {
-        row.iter()
-            .map(|cell| cell.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        identity
-    }
-}
-
-pub(super) fn evidence_values_key(values: &[(&str, RowValue)]) -> String {
-    values
-        .iter()
-        .filter(|(name, _)| {
-            matches!(
-                *name,
-                "event.id"
-                    | "stream.id"
-                    | "frame.number"
-                    | "dns.name"
-                    | "http.uri"
-                    | "process.cookie"
-                    | "finding.rule"
-                    | "finding.engine"
-                    | "capture.path"
-            )
-        })
-        .map(|(name, value)| format!("{name}:{value:?}"))
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 pub(super) fn request_evidence_jump(ctx: &egui::Context, values: &[(&str, RowValue)]) {
@@ -425,7 +350,9 @@ fn table_rows_with(
                                         }
                                         _ => None,
                                     })
-                                    .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
+                                    .map_or(crate::widgets::Tone::Neutral, |tier| {
+                                        tier.tone().into()
+                                    });
                                 let chip = crate::widgets::chip(ui, count.to_string(), tone);
                                 let chip = ui.interact(
                                     chip.rect,

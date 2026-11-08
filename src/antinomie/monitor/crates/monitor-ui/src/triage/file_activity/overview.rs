@@ -7,6 +7,7 @@ use super::window::Window;
 use super::{Activity, FileActivity, Kind};
 use crate::theme;
 use crate::triage::file_shown::{self, Notes};
+use crate::triage::tone;
 use crate::triage::{details, file_location, file_type, process_cells, table, Cell, RowValue};
 use crate::widgets;
 use eframe::egui;
@@ -186,7 +187,7 @@ pub(in crate::triage) fn cells(
         .collect();
     let hash = file.sha256();
     let kind = type_of(file);
-    let mut path = table::cell(&file.path, theme::text(), true);
+    let mut path = table::cell(&file.path, tone::text(), true);
     let tags = file_shown::tags_cell(file_shown::path_tags(
         &locations,
         &names,
@@ -219,7 +220,7 @@ pub(in crate::triage) fn cells(
                 process_cells::relative(Some(file.last_ns), notes.start)
             )
         },
-        theme::text(),
+        tone::text(),
         true,
     );
     span.note = Some(format!(
@@ -231,18 +232,18 @@ pub(in crate::triage) fn cells(
         hash.as_deref()
             .map(file_shown::short_hash)
             .unwrap_or_default(),
-        theme::text(),
+        tone::text(),
         true,
     );
     digest.note = hash;
     vec![
         path,
         tags,
-        table::cell(chain(file), theme::text(), false),
-        table::cell(by(activity, file), theme::text(), false),
+        table::cell(chain(file), tone::text(), false),
+        table::cell(by(activity, file), tone::text(), false),
         span,
-        table::cell(size_change(file), theme::text(), true),
-        table::cell(kind, theme::text(), false),
+        table::cell(size_change(file), tone::text(), true),
+        table::cell(kind, tone::text(), false),
         digest,
     ]
 }

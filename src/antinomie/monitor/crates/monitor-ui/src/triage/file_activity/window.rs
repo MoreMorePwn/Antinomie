@@ -4,8 +4,9 @@
 //! what is known of the bytes the run changed.
 use super::graph::{self, Layout};
 use super::reconstruct;
-use super::{Activity, ByteRun, Event, FileActivity};
+use super::{Activity, ByteRun, Event, FileActivity, NameChoice};
 use crate::theme;
+use crate::triage::tone;
 use crate::triage::{details, Cell, RowValue};
 use crate::widgets::{self, Tone};
 use antinomie_monitor_core::file_writes::{Piece, Tally};
@@ -30,70 +31,6 @@ impl Order {
             Self::Last => "Last touched",
             Self::Calls => "Most calls",
             Self::Path => "Path",
-        }
-    }
-}
-
-/// Which name a file renamed during the run is listed, searched and
-/// sorted by.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum NameChoice {
-    /// The name it had last (`web01.vswp.INC`).
-    #[default]
-    Last,
-    /// The name it was first reached by (`web01.vswp`).
-    First,
-}
-
-impl NameChoice {
-    const ALL: [Self; 2] = [Self::Last, Self::First];
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Last => "Last name",
-            Self::First => "First name",
-        }
-    }
-}
-
-impl FileActivity {
-    /// The file's SHA-256: the guest's hash of it, else the last one it took
-    /// in the run, else the starting disk's for a file the run only read.
-    pub(in crate::triage) fn sha256(&self) -> Option<String> {
-        use antinomie_monitor_core::file_before::StartHash;
-        self.contents
-            .hash
-            .as_ref()
-            .and_then(|hash| hash.sha256_hex())
-            .or_else(|| {
-                self.hashes
-                    .iter()
-                    .rev()
-                    .find_map(|note| note.sha256.clone())
-            })
-            .or_else(|| match &self.start_hash {
-                Some(StartHash::Hashed { sha256, .. }) => Some(sha256.clone()),
-                _ => None,
-            })
-    }
-
-    /// The name the file had after its last successful rename, if it was
-    /// renamed.
-    pub(super) fn last_name(&self) -> Option<&str> {
-        self.events
-            .iter()
-            .filter(|event| event.kind == super::Kind::Rename && event.success != Some(false))
-            .filter_map(|event| event.other_path.as_deref())
-            .next_back()
-            .filter(|name| *name != self.path)
-    }
-
-    /// The name the list shows under `choice`, and the other one, if any.
-    pub(super) fn names_by(&self, choice: NameChoice) -> (&str, Option<&str>) {
-        match (choice, self.last_name()) {
-            (NameChoice::Last, Some(last)) => (last, Some(self.path.as_str())),
-            (NameChoice::First, Some(last)) => (self.path.as_str(), Some(last)),
-            (_, None) => (self.path.as_str(), None),
         }
     }
 }
@@ -750,7 +687,7 @@ pub(super) fn call_cells(
     let (stream, task, call) = event.key;
     let mut time = cell(
         crate::time_format::guest_ns(clock, Some(event.time)),
-        theme::text(),
+        tone::text(),
         true,
     );
     time.values = vec![
@@ -760,16 +697,16 @@ pub(super) fn call_cells(
     ];
     vec![
         time,
-        cell(activity.process_label(event.process), theme::text(), false),
-        cell(&event.operation, graph::tint(event.kind), false),
-        cell(result, theme::text(), false),
-        cell(offset, theme::text(), true),
+        cell(activity.process_label(event.process), tone::text(), false),
+        cell(&event.operation, graph::tone_of(event.kind), false),
+        cell(result, tone::text(), false),
+        cell(offset, tone::text(), true),
         cell(
             event.len.map(|len| len.to_string()).unwrap_or_default(),
-            theme::text(),
+            tone::text(),
             true,
         ),
-        cell(content_text(event), theme::text(), true),
+        cell(content_text(event), tone::text(), true),
     ]
 }
 
@@ -795,24 +732,24 @@ pub(in crate::triage) fn file_cells(
     let calls = file.events.len() as u64 + file.omitted;
     let hash = file.sha256().unwrap_or_default();
     vec![
-        cell(&file.path, theme::text(), true),
-        cell(file.names.join(", "), theme::text(), true),
+        cell(&file.path, tone::text(), true),
+        cell(file.names.join(", "), tone::text(), true),
         cell(
             crate::time_format::guest_ns(clock, Some(file.first_ns)),
-            theme::text(),
+            tone::text(),
             true,
         ),
         cell(
             crate::time_format::guest_ns(clock, Some(file.last_ns)),
-            theme::text(),
+            tone::text(),
             true,
         ),
-        cell(calls.to_string(), theme::text(), true),
-        cell(file.summary(), theme::text(), false),
-        cell(state.join(", "), theme::text(), false),
-        cell(super::overview::size_change(file), theme::text(), true),
-        cell(super::overview::type_of(file), theme::text(), false),
-        cell(hash, theme::text(), true),
+        cell(calls.to_string(), tone::text(), true),
+        cell(file.summary(), tone::text(), false),
+        cell(state.join(", "), tone::text(), false),
+        cell(super::overview::size_change(file), tone::text(), true),
+        cell(super::overview::type_of(file), tone::text(), false),
+        cell(hash, tone::text(), true),
     ]
 }
 
@@ -1066,7 +1003,7 @@ fn contents(
         ui.weak("More differences exist than are listed; Trace has the calls.");
     }
     for gap in &known.gaps {
-        crate::triage::files::gap_note(ui, gap);
+        crate::triage::change_view::gap_note(ui, gap);
     }
 }
 

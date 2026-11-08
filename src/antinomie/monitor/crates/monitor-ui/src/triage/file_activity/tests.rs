@@ -674,7 +674,7 @@ fn a_file_the_run_created_starts_empty_whatever_the_starting_disk_says() {
 
 #[test]
 fn a_renamed_file_is_listed_and_sorted_by_its_last_name_unless_the_first_is_chosen() {
-    use super::window::NameChoice;
+    use super::NameChoice;
     let mut activity = activity();
     // /tmp/payload is renamed to /tmp/payload.locked, as an INC-like sample does.
     let index = activity

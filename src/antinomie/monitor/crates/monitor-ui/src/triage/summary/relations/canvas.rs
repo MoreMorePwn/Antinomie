@@ -141,7 +141,7 @@ fn kind_color(kind: EdgeKind) -> Color32 {
 }
 
 fn tier_color(tier: crate::triage::rules::Tier) -> Color32 {
-    tier.color()
+    theme::tone(tier.tone())
 }
 
 fn glyph(kind: &NodeKind) -> &'static str {

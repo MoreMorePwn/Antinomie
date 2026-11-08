@@ -1,0 +1,1502 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! The scan of recorded runs: process tree, files, network and findings.
+use super::*;
+use antinomie_monitor_core::{EventSummary, FieldSummary, InvocationSummary};
+
+// x86-64 numbers of the calls the process-tree fixtures build by number.
+pub const CLONE: u64 = 56;
+pub const FORK: u64 = 57;
+pub const CLONE3: u64 = 435;
+
+#[test]
+pub fn saved_run_scope_excludes_another_root_in_the_same_raw_archive() {
+    let temp = PacketSpool::new().unwrap();
+    let mut raw = Vec::new();
+    write_rwx_calls(&mut raw, 0..2);
+    // Rewrite only the second invocation's inherited root cookie.
+    let mut at = 0;
+    while at < raw.len() {
+        let size = u32::from_le_bytes(raw[at..at + 4].try_into().unwrap()) as usize;
+        if u64::from_le_bytes(raw[at + 4 + 40..at + 4 + 48].try_into().unwrap()) == 1 {
+            raw[at + 4 + 128..at + 4 + 136].copy_from_slice(&99u64.to_le_bytes());
+        }
+        at += 4 + size;
+    }
+    std::fs::write(temp.directory.join("telemetry.raw"), raw).unwrap();
+    let request = ScanRequest {
+        root_cookie: 55,
+        ..Default::default()
+    };
+    let scan = scan_archive_query(
+        &temp.directory,
+        None,
+        false,
+        &Arc::new(AtomicBool::new(false)),
+        &request,
+    )
+    .unwrap();
+    assert_eq!(scan.findings.len(), 1);
+    assert_eq!(scan.findings[0].key, (1, 55, 0));
+    assert_eq!(scan.process.len(), 1);
+}
+
+#[test]
+pub fn network_rows_are_bounded_to_the_run_host_time_window() {
+    let temp = PacketSpool::new().unwrap();
+    let path = temp.directory.join("dns.pcap");
+    std::fs::write(&path, dns_pcap()).unwrap();
+    let request = ScanRequest {
+        started_ms: Some(u64::MAX / 1000),
+        ..Default::default()
+    };
+    let scan = scan_pcap_query(&path, false, &Arc::new(AtomicBool::new(false)), &request).unwrap();
+    assert!(
+        scan.http.is_empty()
+            && scan
+                .counts
+                .is_some_and(|counts| counts.1 == 0 && counts.2 == 0)
+    );
+}
+
+#[test]
+pub fn network_field_stream_without_geoip_preserves_dns_and_original_frames() {
+    use std::io::{BufRead, BufReader};
+    let temp = PacketSpool::new().unwrap();
+    let path = temp.directory.join("dns.pcap");
+    std::fs::write(&path, dns_pcap()).unwrap();
+    let identity = antinomie_monitor_core::packet_filter::CaptureIdentity::read(&path).unwrap();
+    let (spool, _) =
+        spool_packet_fields(&identity, false, &Arc::new(AtomicBool::new(false)), false).unwrap();
+    let state = spool.lock().unwrap();
+    let file = std::fs::File::open(state.directory.join("rows.tsv")).unwrap();
+    let rows: Vec<_> = BufReader::new(file)
+        .lines()
+        .map(|line| tsv_fields(&line.unwrap()).unwrap())
+        .collect();
+    assert!(!rows.is_empty());
+    assert!(rows.iter().all(|row| row.len() == TSHARK_FIELDS.len()));
+    assert_eq!(rows[0][0], "1");
+    assert_eq!(rows[0][19], "example.com");
+    assert!(rows[0][31..35].iter().all(String::is_empty));
+}
+
+#[test]
+pub fn tshark_boolean_formats_preserve_missing_and_reject_malformed_or_mixed_values() {
+    for text in ["False", "false", "FALSE", "0", "False\u{1f}0"] {
+        assert_eq!(tshark_boolean(text), Some(false));
+    }
+    for text in ["True", "true", "TRUE", "1", "True\u{1f}1"] {
+        assert_eq!(tshark_boolean(text), Some(true));
+    }
+    for text in ["", "2", "Falsehood", " True ", "False\u{1f}True", "0\u{1f}"] {
+        assert_eq!(tshark_boolean(text), None, "{text:?}");
+    }
+}
+
+#[test]
+pub fn real_tshark_dns_ipv4_ipv6_and_retry_rows_preserve_original_frames_and_responses() {
+    if !std::process::Command::new("tshark")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        return;
+    }
+    let temp = PacketSpool::new().unwrap();
+    let path = temp.directory.join("dns.pcap");
+    std::fs::write(&path, dns_pcap()).unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    for live in [false, true] {
+        // The DNS rows reach the observer, which feeds the detection rules,
+        // the Domains tab and the journal; no table lists them on their own.
+        let mut dns: Vec<Vec<Cell>> = Vec::new();
+        let index = scan_pcap_query_observed(
+            &path,
+            live,
+            &cancel,
+            &ScanRequest::default(),
+            &mut network::Inventory::default(),
+            &mut |kind, row, _, _| {
+                if kind == RowKind::Dns {
+                    dns.push(row.to_vec());
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(dns.len(), 3, "{}", index.coverage);
+        assert_eq!(
+            dns.iter()
+                .map(|row| row[0].text.as_str())
+                .collect::<Vec<_>>(),
+            ["#1", "#2", "#4"]
+        );
+        // The rows keep the v0.6.2 columns: no Time column.
+        assert_eq!(DNS_HEADERS[..2], ["Frame", "Endpoint"]);
+        assert!(!DNS_HEADERS.contains(&"Time"));
+        assert!(dns.iter().all(|row| row.len() == DNS_HEADERS.len()));
+        assert!(dns.iter().all(|row| row[2].text == "example.com"));
+        assert_eq!(dns[0][6].text, "3");
+        assert_eq!(dns[2][6].text, "5");
+        assert!(dns[0][5].text.contains("93.184.216.34"));
+        assert!(dns[2][1].text.contains("::1"));
+        assert_eq!(dns[0][3].text, "A");
+        let counts = index.counts.expect("the capture's counts");
+        assert!(counts.1 > 0, "destination IPs");
+        assert_eq!(counts.2, 1, "one hostname");
+        assert!(dns[1][0]
+            .values
+            .iter()
+            .any(|(name, value)| *name == "dns.retry" && matches!(value, RowValue::Bool(true))));
+    }
+}
+
+pub fn dns_pcap() -> Vec<u8> {
+    fn message(response: bool) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for word in [
+            0x1234u16,
+            if response { 0x8180 } else { 0x0100 },
+            1,
+            u16::from(response),
+            0,
+            0,
+        ] {
+            bytes.extend(word.to_be_bytes());
+        }
+        bytes.extend(b"\x07example\x03com\0");
+        bytes.extend(1u16.to_be_bytes());
+        bytes.extend(1u16.to_be_bytes());
+        if response {
+            bytes.extend([0xc0, 0x0c]);
+            bytes.extend(1u16.to_be_bytes());
+            bytes.extend(1u16.to_be_bytes());
+            bytes.extend(60u32.to_be_bytes());
+            bytes.extend(4u16.to_be_bytes());
+            bytes.extend([93, 184, 216, 34]);
+        }
+        bytes
+    }
+    fn frame(response: bool, ipv6: bool) -> Vec<u8> {
+        let payload = message(response);
+        let mut udp = Vec::new();
+        udp.extend(if response { 53u16 } else { 5353u16 }.to_be_bytes());
+        udp.extend(if response { 5353u16 } else { 53u16 }.to_be_bytes());
+        udp.extend(((payload.len() + 8) as u16).to_be_bytes());
+        udp.extend([0; 2]);
+        udp.extend(payload);
+        let mut bytes = vec![0; 12];
+        if ipv6 {
+            bytes.extend(0x86ddu16.to_be_bytes());
+            let local = "::1".parse::<std::net::Ipv6Addr>().unwrap().octets();
+            let remote = "2001:db8::53"
+                .parse::<std::net::Ipv6Addr>()
+                .unwrap()
+                .octets();
+            bytes.extend(0x60000000u32.to_be_bytes());
+            bytes.extend((udp.len() as u16).to_be_bytes());
+            bytes.extend([17, 64]);
+            bytes.extend(if response { remote } else { local });
+            bytes.extend(if response { local } else { remote });
+        } else {
+            bytes.extend(0x0800u16.to_be_bytes());
+            bytes.extend([0x45, 0]);
+            bytes.extend(((udp.len() + 20) as u16).to_be_bytes());
+            bytes.extend([0; 4]);
+            bytes.extend([64, 17]);
+            bytes.extend([0; 2]);
+            bytes.extend(if response {
+                [8, 8, 8, 8]
+            } else {
+                [10, 0, 2, 15]
+            });
+            bytes.extend(if response {
+                [10, 0, 2, 15]
+            } else {
+                [8, 8, 8, 8]
+            });
+        }
+        bytes.extend(udp);
+        bytes
+    }
+    let frames = [
+        frame(false, false),
+        frame(false, false),
+        frame(true, false),
+        frame(false, true),
+        frame(true, true),
+    ];
+    let mut bytes = http_pcap()[..24].to_vec();
+    for (index, frame) in frames.iter().enumerate() {
+        bytes.extend((1_700_000_000u32 + index as u32).to_le_bytes());
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend((frame.len() as u32).to_le_bytes());
+        bytes.extend((frame.len() as u32).to_le_bytes());
+        bytes.extend(frame);
+    }
+    bytes
+}
+
+#[test]
+pub fn quoted_packet_fields_and_epoch_times_preserve_exact_values() {
+    assert_eq!(
+        tsv_fields("\"GET\"\t\"/a\tb\"\"c\"\t\"\"").unwrap(),
+        ["GET", "/a\tb\"c", ""]
+    );
+    assert!(tsv_fields("\"truncated").is_err());
+    assert_eq!(epoch_us("123.123456789"), Some(123_123456));
+    assert_eq!(epoch_us("0.000001"), Some(1));
+    assert_eq!(epoch_us("18446744073709551615.999999"), None);
+    assert_eq!(epoch_us("1.bad"), None);
+}
+
+pub fn write_rwx_calls(raw: &mut dyn std::io::Write, calls: std::ops::Range<u64>) {
+    write_rwx_tasks(raw, calls, |_| 55);
+}
+
+/// The same calls, each made by the task `task(call)`; the run's root stays 55.
+pub fn write_rwx_tasks(
+    raw: &mut dyn std::io::Write,
+    calls: std::ops::Range<u64>,
+    task: impl Fn(u64) -> u32,
+) {
+    for call in calls {
+        let who = task(call);
+        for phase in [1u8, 2] {
+            for fragment in [1u8, 5] {
+                let mut body = vec![0u8; if fragment == 1 { 120 } else { 32 }];
+                if fragment == 1 {
+                    body[16..24].copy_from_slice(&7u64.to_le_bytes());
+                    body[24..32].copy_from_slice(&(MAP_PRIVATE | MAP_ANONYMOUS).to_le_bytes());
+                    if phase == 2 {
+                        body[49] = 1;
+                        body[56..64].copy_from_slice(&4096u64.to_le_bytes());
+                    }
+                }
+                let mut packet = vec![0u8; 136];
+                packet[..4].copy_from_slice(b"ANTT");
+                packet[4..6].copy_from_slice(&1u16.to_le_bytes());
+                packet[6..8].copy_from_slice(&1u16.to_le_bytes());
+                packet[8..10].copy_from_slice(&136u16.to_le_bytes());
+                packet[10..12].copy_from_slice(&1u16.to_le_bytes());
+                packet[12..16].copy_from_slice(&(136u32 + body.len() as u32).to_le_bytes());
+                packet[20..24].copy_from_slice(&1u32.to_le_bytes());
+                packet[24..32].copy_from_slice(&1u64.to_le_bytes());
+                packet[32..40].copy_from_slice(&u64::from(who).to_le_bytes());
+                packet[40..48].copy_from_slice(&call.to_le_bytes());
+                packet[48..56].copy_from_slice(&(call * 2 + u64::from(phase)).to_le_bytes());
+                packet[56..64].copy_from_slice(
+                    &(call * 4 + u64::from(phase) + u64::from(fragment)).to_le_bytes(),
+                );
+                packet[64..72].copy_from_slice(&(call * 10 + u64::from(phase)).to_le_bytes());
+                packet[72..76].copy_from_slice(&who.to_le_bytes());
+                packet[76..80].copy_from_slice(&who.to_le_bytes());
+                packet[88..96].copy_from_slice(&9u64.to_le_bytes());
+                packet[96..98].copy_from_slice(&1u16.to_le_bytes());
+                packet[98] = phase;
+                packet[99] = fragment;
+                packet[120..124].copy_from_slice(&(body.len() as u32).to_le_bytes());
+                packet[128..136].copy_from_slice(&55u64.to_le_bytes());
+                packet.extend(body);
+                raw.write_all(&(packet.len() as u32).to_le_bytes()).unwrap();
+                raw.write_all(&packet).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+pub fn caps_keep_two_thousand_rows_per_rule_and_count_the_rest_in_an_overflow_row() {
+    let temp = PacketSpool::new().unwrap();
+    let mut raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
+    // 2051 tasks, one call each: one row per task, so the per-rule cap applies.
+    write_rwx_tasks(&mut raw, 0..2051, |call| 1000 + call as u32);
+    raw.sync_all().unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut request = ScanRequest {
+        root_cookie: 55,
+        ..ScanRequest::default()
+    };
+    let first = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
+    assert_eq!(first.findings.len(), STORED_ROWS);
+    assert_eq!(first.findings_omitted, 1);
+    assert_eq!(
+        first.counts.findings, 2051,
+        "the badge counts the capped rows"
+    );
+    assert_eq!(first.counts.findings_capped, 51);
+    request.offsets[0] = STORED_ROWS;
+    request.filters[0] = "finding.rule == \"memory.rwx\" && finding.success == true".into();
+    let second = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
+    assert_eq!(second.findings.len(), 1);
+    assert_eq!(second.findings_omitted, STORED_ROWS as u64);
+    assert_eq!(
+        second.findings[0].cells[rules::COL_SUMMARY].text,
+        "+51 more not stored (cap)"
+    );
+    assert_eq!(second.findings[0].cells[5].text, "\u{d7}51");
+    let journal = std::fs::read_to_string(temp.directory.join("triage-findings-v2.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 2001);
+    let fact: serde_json::Value = serde_json::from_str(journal.lines().next().unwrap()).unwrap();
+    assert_eq!(fact["format_version"], 2);
+    assert_eq!(fact["facts"]["finding.rule"], "memory.rwx");
+    assert_eq!(fact["facts"]["finding.version"], 2);
+    assert_eq!(fact["facts"]["finding.tier"], "high");
+    assert_eq!(fact["facts"]["finding.category"], "evasion");
+    assert_eq!(fact["facts"]["finding.success"], true);
+}
+
+#[test]
+pub fn repeats_of_one_task_are_one_row_with_a_count_and_a_time_span() {
+    let temp = PacketSpool::new().unwrap();
+    let mut raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
+    write_rwx_calls(&mut raw, 0..40);
+    raw.sync_all().unwrap();
+    let request = ScanRequest {
+        root_cookie: 55,
+        ..ScanRequest::default()
+    };
+    let scan = scan_archive_query(
+        &temp.directory,
+        None,
+        false,
+        &Arc::new(AtomicBool::new(false)),
+        &request,
+    )
+    .unwrap();
+    assert_eq!(scan.findings.len(), 1);
+    let row = &scan.findings[0];
+    assert!(
+        row.cells[5].text.starts_with("\u{d7}40"),
+        "{}",
+        row.cells[5].text
+    );
+    assert_eq!(files::number(&row.values, "finding.count"), Some(40));
+    assert!(
+        files::number(&row.values, "finding.last_ns")
+            > files::number(&row.values, "finding.first_ns")
+    );
+    assert_eq!(scan.counts.findings, 1);
+    assert_eq!(scan.suspicious.get(&(55, 55)).map(|found| found.0), Some(1));
+}
+
+#[test]
+pub fn relative_chdir_retains_symlink_components_and_unknown_fchdir_invalidates_cwd() {
+    let start = path_call(1, 80, "chdir", 0, "/tmp/link");
+    let relative = path_call(1, 80, "chdir", 0, "../child");
+    let mut opened = path_call(1, 257, "openat", 4, "note");
+    opened.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0, 0, 0, 0]);
+    let rows = file_rows(&[start.clone(), relative, opened.clone()], OPEN_NAMES);
+    assert_eq!(
+        rows.rows[0][0].text,
+        "/tmp/link/../child/note (lexical cwd path; symlinks unknown)"
+    );
+    let mut moved = call(1, 81, "fchdir", 0);
+    moved.entry.as_mut().unwrap().args = Some([99, 0, 0, 0, 0, 0]);
+    let rows = file_rows(&[start, moved, opened], OPEN_NAMES);
+    assert_eq!(rows.rows[0][0].text, "note (relative, cwd not recorded)");
+}
+
+#[test]
+pub fn exec_cloexec_and_shared_tables_keep_parent_descriptor_provenance_separate() {
+    let mut opened = path_call(1, 257, "openat", 7, "/etc/test");
+    opened.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0x80000, 0, 0, 0]);
+    let mut clone = call(1, CLONE, "clone", 42);
+    clone.entry.as_mut().unwrap().args = Some([CLONE_FILES, 0, 0, 0, 0, 0]);
+    let exec = path_call(42, 59, "execve", 0, "/bin/true");
+    let mut child = call(42, 1, "write", 3);
+    child.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
+    let mut parent = call(1, 1, "write", 3);
+    parent.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
+    let rows = file_rows(&[opened, clone, exec, child, parent], &["write"]);
+    assert_eq!(rows.rows[0][0].text, "—");
+    assert_eq!(rows.rows[1][0].text, "/etc/test");
+    assert_eq!(rows.rows[1][8].text, "3");
+}
+
+#[test]
+fn a_clone3_without_readable_flags_still_hands_its_child_the_parents_descriptors() {
+    use crate::process_tree_tests::{clone3_with_args, with_child_record};
+    let mut opened = path_call(1, 257, "openat", 7, "/etc/test");
+    opened.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0x80000, 0, 0, 0]);
+    // A process: the guest's record says so, and the child gets its own copy.
+    let clone = with_child_record(clone3_with_args(1, 42, None), 42, 42);
+    let mut child = call(42, 1, "write", 3);
+    child.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
+    let rows = file_rows(&[opened, clone, child], &["write"]);
+    assert_eq!(rows.rows[0][0].text, "/etc/test");
+}
+
+#[test]
+pub fn encrypted_and_binary_sessions_h2c_requests_and_quic_hosts_come_from_tshark() {
+    if std::process::Command::new("tshark")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_err()
+    {
+        return;
+    }
+    let temp = PacketSpool::new().unwrap();
+    let path = temp.directory.join("protocols.pcap");
+    std::fs::write(
+        &path,
+        include_bytes!("../../monitor-core/src/packet_filter/testdata/protocols.pcap"),
+    )
+    .unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut inventory = network::Inventory::default();
+    let mut kinds = Vec::new();
+    let mut sessions: Vec<Vec<Cell>> = Vec::new();
+    let index = scan_pcap_query_observed(
+        &path,
+        false,
+        &cancel,
+        &ScanRequest::default(),
+        &mut inventory,
+        &mut |kind, row, _, _| {
+            kinds.push(kind);
+            if kind == RowKind::Session {
+                sessions.push(row.to_vec());
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+    let rows: Vec<Vec<String>> = sessions
+        .iter()
+        .map(|row| row.iter().map(|cell| cell.text.clone()).collect())
+        .collect();
+    let find = |protocol: &str, kind: &str| {
+        rows.iter()
+            .find(|row| row[3] == format!("{protocol} {kind}"))
+            .unwrap_or_else(|| panic!("{protocol} {kind} in {rows:?}"))
+    };
+    // Preserve the protocol column produced by the installed TShark. Older
+    // versions label the TLS 1.0 record envelope, newer ones the TLS 1.2 hello.
+    let tls = rows
+        .iter()
+        .find(|row| {
+            matches!(
+                row[3].as_str(),
+                "TLSv1 client hello" | "TLSv1.2 client hello"
+            )
+        })
+        .expect("TLS client hello session");
+    assert_eq!(tls[4], "secure.example.test");
+    assert_eq!(tls[5], "h2, http/1.1");
+    assert!(tls[6].contains("3 cipher suites"), "{tls:?}");
+    let quic = find("QUIC", "client hello");
+    assert_eq!(
+        (quic[4].as_str(), quic[5].as_str()),
+        ("quic.example.test", "h3")
+    );
+    assert!(find("TLSv1.3", "server hello")[6].contains("0x1301"));
+    assert!(
+        rows.iter()
+            .any(|row| row[3] == "SSHv2 banner" && row[6].starts_with("SSH-2.0-")),
+        "{rows:?}"
+    );
+    // Cleartext HTTP/2 is listed with the HTTP requests, by authority.
+    assert!(index
+        .http
+        .iter()
+        .any(|row| row[3].text == "GET" && row[4].text == "www.example.com" && row[5].text == "/"));
+    let (_, hosts) = inventory.rows();
+    let sources: Vec<String> = hosts
+        .iter()
+        .map(|row| format!("{} {}", row[0].text, row[5].text))
+        .collect();
+    assert!(
+        sources.iter().any(|h| h == "quic.example.test QUIC SNI"),
+        "{sources:?}"
+    );
+    assert!(
+        sources.iter().any(|h| h == "secure.example.test TLS SNI"),
+        "{sources:?}"
+    );
+    assert!(
+        sources.iter().any(|h| h == "www.example.com HTTP/2"),
+        "{sources:?}"
+    );
+    assert!(kinds.contains(&RowKind::Session));
+}
+
+#[test]
+pub fn tshark_saved_and_live_prefix_index_use_all_capture_frames() {
+    if std::process::Command::new("tshark")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_err()
+    {
+        return;
+    }
+    let temp = PacketSpool::new().unwrap();
+    let path = temp.directory.join("capture.pcap");
+    std::fs::write(&path, http_pcap()).unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    for live in [false, true] {
+        let index = scan_pcap_query(&path, live, &cancel, &ScanRequest::default()).unwrap();
+        assert_eq!(index.http.len(), 1);
+        assert_eq!(index.http[0][3].text, "GET");
+        assert_eq!(index.http[0][4].text, "example.com");
+        assert_eq!(index.http[0][5].text, "/");
+        // TShark parses everything it knows; the coverage says what stays
+        // encrypted, and HTTP/2 and session fields are requested from it.
+        assert!(index.coverage.contains(
+            "the content of HTTPS, HTTP/3 and encrypted DNS stays encrypted, and cleartext HTTP/2 requests are listed without their responses"
+        ));
+        assert!(TSHARK_FIELDS.contains(&"tls.handshake.extensions_server_name"));
+        assert!(TSHARK_FIELDS.contains(&"http2.headers.method"));
+        assert!(TSHARK_FIELDS.contains(&"ssh.protocol"));
+    }
+}
+
+pub fn page_notes(invocations: &[InvocationSummary]) -> Vec<BpfNote> {
+    bpf_notes(&TriageInput::page(invocations))
+}
+
+#[test]
+#[ignore = "requires an actual recorded sample run in ANTINOMIE_TRIAGE_SAMPLE"]
+pub fn recorded_triage_sample_populates_every_evidence_table() {
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("ANTINOMIE_TRIAGE_SAMPLE").expect("set recorded sample run directory"),
+    );
+    let run: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("run.json")).unwrap()).unwrap();
+    let identity = (
+        run["vm_id"].as_str().unwrap().to_owned(),
+        run["boot_id"].as_str().unwrap().to_owned(),
+        run["id"].as_str().unwrap().to_owned(),
+    );
+    let request = ScanRequest {
+        root_cookie: run["root_task_cookie"].as_u64().unwrap(),
+        identity: Some(identity),
+        run_finished: true,
+        ..Default::default()
+    };
+    let artifacts = antinomie_monitor_core::RunArtifacts::load(&directory)
+        .unwrap()
+        .expect("sample artifacts");
+    let scan = scan_archive_query(
+        &directory,
+        artifacts
+            .network_captures
+            .first()
+            .map(|path| path.as_path()),
+        false,
+        &Arc::new(AtomicBool::new(false)),
+        &request,
+    )
+    .unwrap();
+    assert!(scan.event_error.is_none(), "{:?}", scan.event_error);
+    assert!(scan.event_journal.is_some());
+    let rows = |table: &[Vec<Cell>]| {
+        table
+            .iter()
+            .map(|row| row.iter().map(|cell| cell.text.clone()).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    };
+    let value = serde_json::json!({
+        "coverage": scan.coverage, "partial": scan.partial,
+        "calls": scan.counts.calls, "tasks": scan.process.len(),
+        "findings": scan.findings.iter().map(|finding| finding.cells.iter()
+            .map(|cell| cell.text.clone()).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        "opened": rows(&scan.opened), "read": rows(&scan.read), "changed": rows(&scan.changed),
+        "http": rows(&scan.http),
+        "bpf_observations": scan.bpf.len(), "network_warning": scan.network_warning,
+        "journal": scan.event_journal,
+    });
+    std::fs::write(
+        directory.join("sample-triage.json"),
+        serde_json::to_vec_pretty(&value).unwrap(),
+    )
+    .unwrap();
+    assert!(scan.process.len() >= 4, "{value}");
+    for key in ["findings", "opened", "read", "changed", "http"] {
+        assert!(
+            !value[key].as_array().unwrap().is_empty(),
+            "empty {key}: {value}"
+        );
+    }
+    assert!(!scan.bpf.is_empty(), "{value}");
+}
+
+#[test]
+pub fn saved_recording_from_env_is_indexed_when_present() {
+    let Ok(dir) = std::env::var("ANTINOMIE_RECORDING") else {
+        return;
+    };
+    let scan = scan_archive(Path::new(&dir), None, false, &AtomicBool::new(false))
+        .unwrap_or_else(|error| panic!("index failed: {error}"));
+    assert!(scan.coverage.contains("indexed "), "{}", scan.coverage);
+    assert!(
+        scan.coverage.contains(" of ") || scan.coverage.contains("saved total unavailable"),
+        "{}",
+        scan.coverage
+    );
+    let _ = std::fs::write("/tmp/antinomie-index-coverage.txt", &scan.coverage);
+    let files = scan
+        .opened
+        .iter()
+        .chain(scan.changed.iter())
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write("/tmp/antinomie-fd-rows.txt", files);
+    let findings = scan
+        .findings
+        .iter()
+        .map(|finding| {
+            finding
+                .cells
+                .iter()
+                .map(|cell| cell.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write("/tmp/antinomie-findings.txt", findings);
+    let recording = antinomie_monitor_core::recording::Recording {
+        directory: std::fs::canonicalize(&dir).unwrap(),
+        manifest: serde_json::Value::Null,
+        events: Vec::new(),
+    };
+    let mut offset = 0u64;
+    let mut bpf = String::new();
+    loop {
+        let page = recording.invocation_page(offset, 256).unwrap();
+        for invocation in &page.invocations {
+            let Some(event) = invocation.entry.as_ref().or(invocation.exit.as_ref()) else {
+                continue;
+            };
+            if event.syscall_name.contains("bpf")
+                || event.syscall_name.contains("seccomp")
+                || event.syscall_name == "setsockopt"
+            {
+                bpf.push_str(&format!(
+                    "{} result {:?} args {:?}\n",
+                    event.syscall_name,
+                    invocation.exit.as_ref().and_then(|exit| exit.result),
+                    event.args
+                ));
+            }
+        }
+        match page.next_offset {
+            Some(next) if next > offset => offset = next,
+            _ => break,
+        }
+    }
+    if bpf.is_empty() {
+        bpf.push_str("no bpf, seccomp, or setsockopt call in this recording\n");
+    }
+    let _ = std::fs::write("/tmp/antinomie-bpf-scan.txt", bpf);
+}
+
+pub fn http_pcap() -> Vec<u8> {
+    let payload = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    let mut tcp = Vec::new();
+    tcp.extend(40000u16.to_be_bytes());
+    tcp.extend(80u16.to_be_bytes());
+    tcp.extend(1u32.to_be_bytes());
+    tcp.extend(0u32.to_be_bytes());
+    tcp.push(0x50);
+    tcp.push(0x18);
+    tcp.extend(0u16.to_be_bytes());
+    tcp.extend(0u16.to_be_bytes());
+    tcp.extend(0u16.to_be_bytes());
+    tcp.extend(payload);
+    let total = (20 + tcp.len()) as u16;
+    let mut ip = vec![
+        0x45, 0, 0, 0, 0, 0, 0, 0, 64, 6, 0, 0, 10, 0, 2, 15, 93, 184, 216, 34,
+    ];
+    ip[2..4].copy_from_slice(&total.to_be_bytes());
+    ip.extend(tcp);
+    let mut frame = vec![0; 12];
+    frame.extend(0x0800u16.to_be_bytes());
+    frame.extend(ip);
+    let mut pcap = vec![
+        0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 1, 0, 0, 0,
+    ];
+    let len = frame.len() as u32;
+    pcap.extend(0u32.to_le_bytes());
+    pcap.extend(0u32.to_le_bytes());
+    pcap.extend(len.to_le_bytes());
+    pcap.extend(len.to_le_bytes());
+    pcap.extend(frame);
+    pcap
+}
+
+#[test]
+pub fn missing_raw_archive_is_not_treated_as_a_whole_run() {
+    let dir = std::env::temp_dir().join(format!("antinomie-triage-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let Err(error) = scan_archive(&dir, None, false, &AtomicBool::new(false)) else {
+        panic!("a directory without telemetry.raw must not count as a whole-run index");
+    };
+    assert!(error.contains("telemetry.raw"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+pub fn call(pid: u32, nr: u64, name: &str, result: i64) -> InvocationSummary {
+    InvocationSummary {
+        stream_id: 1,
+        task_cookie: u64::from(pid),
+        call_id: 1,
+        entry: Some(EventSummary {
+            root_task_cookie: 1,
+            stream_id: 1,
+            task_cookie: u64::from(pid),
+            call_id: 1,
+            event_seq: 1,
+            phase: 1,
+            syscall_nr: nr,
+            syscall_name: name.into(),
+            pid,
+            tid: pid,
+            cpu: 0,
+            timestamp_ns: 0,
+            args: Some([0; 6]),
+            result: None,
+            complete: true,
+            issues: Vec::new(),
+            fields: Vec::new(),
+        }),
+        exit: Some(EventSummary {
+            root_task_cookie: 1,
+            stream_id: 1,
+            task_cookie: u64::from(pid),
+            call_id: 1,
+            event_seq: 2,
+            phase: 2,
+            syscall_nr: nr,
+            syscall_name: name.into(),
+            pid,
+            tid: pid,
+            cpu: 0,
+            timestamp_ns: 1,
+            args: None,
+            result: Some(result),
+            complete: true,
+            issues: Vec::new(),
+            fields: Vec::new(),
+        }),
+        async_events: Vec::new(),
+        async_saved: 0,
+        task_exit: None,
+        kernel_notes: Vec::new(),
+    }
+}
+
+pub fn captured(key: &str, layout: &str, data: &[u8]) -> FieldSummary {
+    let len = data.len() as u64;
+    FieldSummary {
+        arg: None,
+        object_id: 1,
+        key: key.into(),
+        layout: layout.into(),
+        logical_len: Some(len),
+        captured_len: len,
+        status: Some(0),
+        capture_error: 0,
+        complete: true,
+        preview: data.to_vec(),
+        raw_path: None,
+        ranges: vec![(0, len)],
+        recapture: None,
+        encoding: None,
+    }
+}
+
+#[test]
+pub fn fork_indents_the_child_under_its_parent() {
+    let lines = process_tree_lines(&[call(1, FORK, "fork", 42), call(42, 59, "execve", 0)]);
+    assert_eq!(
+        lines,
+        vec![
+            "PID 1 · TID 1 (main)  ?".to_string(),
+            "  PID 42 · TID 42 (main)  ?".to_string()
+        ]
+    );
+}
+
+pub fn with_cookie(pid: u32, cookie: u64) -> InvocationSummary {
+    let mut row = call(pid, 1, "write", 0);
+    row.task_cookie = cookie;
+    for event in row.entry.iter_mut().chain(row.exit.iter_mut()) {
+        event.task_cookie = cookie;
+    }
+    row
+}
+
+#[test]
+pub fn same_pid_two_cookies_are_two_process_nodes() {
+    let lines = process_tree_lines(&[with_cookie(7, 100), with_cookie(7, 200)]);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("cookie 100") || line.contains("PID 7")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|line| line.contains("PID 7")), "{lines:?}");
+}
+
+#[test]
+pub fn triage_keeps_cookie_scoped_terminal_facts_after_a_late_parent_fork_and_pid_reuse() {
+    let mut ended = with_cookie(42, 200);
+    let mut terminal = ended.entry.as_ref().unwrap().clone();
+    terminal.phase = 3;
+    terminal.timestamp_ns = 120;
+    terminal.fields = vec![captured("lifecycle.task_exit", "u64", &0_u64.to_le_bytes())];
+    ended.task_exit = Some(terminal);
+    let mut nodes = std::collections::BTreeMap::new();
+    observe_processes(&mut nodes, &[ended]);
+    let mut fork = call(1, FORK, "fork", 42);
+    for event in fork.entry.iter_mut().chain(fork.exit.iter_mut()) {
+        event.timestamp_ns = 100;
+    }
+    observe_processes(&mut nodes, &[fork, with_cookie(42, 201)]);
+    let result = finish_processes(nodes);
+    let old = result.iter().find(|node| node.cookie == 200).unwrap();
+    assert!(old.state.contains("task exit"));
+    assert_eq!(old.parent.unwrap().pid, 1);
+    let current = result.iter().find(|node| node.cookie == 201).unwrap();
+    assert_eq!(current.state, "exit not recorded");
+}
+
+#[test]
+pub fn failed_exec_does_not_replace_the_program() {
+    let mut started = call(3, 59, "execve", 0);
+    started
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg0.pathname", "", b"/bin/old\0"));
+    let mut failed = call(3, 59, "execve", -2);
+    failed
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg0.pathname", "", b"/bin/new\0"));
+    let lines = process_tree_lines(&[started, failed]);
+    assert!(
+        lines.iter().any(|line| line.contains("/bin/old")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("/bin/new")),
+        "{lines:?}"
+    );
+
+    let mut again = call(3, 59, "execve", 0);
+    again
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg0.pathname", "", b"/bin/old\0"));
+    let mut pending = call(3, 322, "execveat", 0);
+    pending.exit = None;
+    pending
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg1.pathname", "", b"/bin/pending\0"));
+    let lines = process_tree_lines(&[again, pending]);
+    assert!(
+        lines.iter().any(|line| line.contains("/bin/old")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("/bin/pending")),
+        "{lines:?}"
+    );
+
+    let mut rejected = call(4, 59, "execve", -13);
+    rejected
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg0.pathname", "", b"/bin/rejected\0"));
+    let lines = process_tree_lines(&[rejected]);
+    assert!(
+        lines.iter().all(|line| !line.contains("/bin/rejected")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+pub fn exec_commit_without_syscall_exit_names_image_and_fork_inherits_it() {
+    let mut exec = call(3, 59, "execve", 0);
+    exec.entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg0.pathname", "", b"/bin/old\0"));
+    let mut commit = exec.exit.take().unwrap();
+    commit.phase = 3;
+    commit
+        .fields
+        .push(captured("lifecycle.exec_commit", "", &[0; 8]));
+    exec.async_events.push(commit);
+    let fork = call(3, FORK, "fork", 42);
+    let child = call(42, 0, "read", 0);
+    let nodes = process_nodes(&[exec.clone(), fork, child]);
+    assert_eq!(
+        nodes.iter().find(|node| node.pid == 3).unwrap().comm,
+        "/bin/old"
+    );
+    assert_eq!(
+        nodes.iter().find(|node| node.pid == 42).unwrap().comm,
+        "/bin/old"
+    );
+    exec.async_events[0].fields[0].complete = false;
+    assert_eq!(process_nodes(&[exec])[0].comm, "?");
+}
+
+#[test]
+pub fn file_process_labels_follow_exec_time_without_guessing_unknown_or_reused_pid() {
+    let mut files = FdState::default();
+    let mut first = call(3, 59, "execve", 0);
+    first
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg0.pathname", "", b"/bin/old\0"));
+    observe_processes(&mut files.process_images, &[first]);
+    let read = call(3, 0, "read", 0);
+    let event = trace::representative(&read).unwrap();
+    assert_eq!(
+        process_cells::task_label(event.pid, event.tid, process_image(&files, event)),
+        "old (3 · 3)"
+    );
+    let mut next = call(3, 59, "execve", 0);
+    next.entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg0.pathname", "", b"/bin/new\0"));
+    observe_processes(&mut files.process_images, &[next]);
+    assert_eq!(
+        process_cells::task_label(event.pid, event.tid, process_image(&files, event)),
+        "new (3 · 3)"
+    );
+    let mut reused = event.clone();
+    reused.task_cookie += 100;
+    assert!(process_image(&files, &reused).is_none());
+}
+
+#[test]
+pub fn a_worker_thread_is_named_by_its_process_in_file_labels() {
+    let mut files = FdState::default();
+    let mut first = call(3, 59, "execve", 0);
+    first
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg0.pathname", "", b"/bin/locker\0"));
+    observe_processes(&mut files.process_images, &[first]);
+    let read = call(3, 0, "read", 0);
+    let mut worker = trace::representative(&read).unwrap().clone();
+    worker.tid = 4;
+    worker.task_cookie = 4;
+    assert_eq!(
+        process_cells::task_label(worker.pid, worker.tid, process_image(&files, &worker)),
+        "locker (3 · 4)"
+    );
+}
+
+#[test]
+pub fn clone3_thread_flags_create_no_child() {
+    let mut threaded = call(1, CLONE3, "clone3", 99);
+    threaded.entry.as_mut().unwrap().args = Some([0x1000, 88, 0, 0, 0, 0]);
+    threaded.entry.as_mut().unwrap().fields.push(captured(
+        "arg0.clone_args.flags",
+        "u64",
+        &CLONE_THREAD.to_le_bytes(),
+    ));
+    let lines = process_tree_lines(&[threaded]);
+    assert!(
+        lines.iter().all(|line| !line.contains("PID 99")),
+        "{lines:?}"
+    );
+
+    let mut spawned = call(1, CLONE3, "clone3", 77);
+    spawned.entry.as_mut().unwrap().args = Some([CLONE_THREAD, 88, 0, 0, 0, 0]);
+    spawned.entry.as_mut().unwrap().fields.push(captured(
+        "arg0.clone_args.flags",
+        "u64",
+        &0u64.to_le_bytes(),
+    ));
+    let lines = process_tree_lines(&[spawned]);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("PID 77") && line.starts_with("  ")),
+        "{lines:?}"
+    );
+
+    let mut missing = call(1, CLONE3, "clone3", 66);
+    missing.entry.as_mut().unwrap().args = Some([0, 88, 0, 0, 0, 0]);
+    let lines = process_tree_lines(&[missing]);
+    assert!(
+        lines.iter().all(|line| !line.contains("PID 66")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+pub fn child_whose_parent_pid_is_absent_contains_parent_not_in_this_trace() {
+    let lines = process_tree_lines(&[call(42, 1, "write", 0)]);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].contains("parent not in this trace"),
+        "{}",
+        lines[0]
+    );
+    assert!(lines[0].starts_with("PID 42"), "{}", lines[0]);
+}
+
+#[test]
+pub fn write_fd_argument_is_shown_not_the_return() {
+    let mut write = call(9, 1, "write", 100);
+    write.entry.as_mut().unwrap().args = Some([5, 0x1000, 100, 0, 0, 0]);
+    let rows = file_rows(&[write], &["write"]);
+    assert_eq!(rows.rows.len(), 1);
+    assert!(!rows.stopped_early);
+    assert_eq!(rows.rows[0][2].text, "5");
+    assert_eq!(rows.rows[0][4].text, "100");
+    assert_ne!(rows.rows[0][0].text, "100");
+
+    let mut opened = call(9, 257, "openat", 7);
+    opened
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg1.path", "", b"/etc/passwd\0"));
+    let rows = file_rows(&[opened], &["openat"]);
+    assert_eq!(rows.rows[0][0].text, "/etc/passwd");
+    assert_eq!(rows.rows[0][2].text, "7");
+
+    let failed = call(9, 2, "open", -2);
+    assert_eq!(file_rows(&[failed], &["open"]).rows[0][2].text, "—");
+
+    let unlinked = call(9, 87, "unlink", 0);
+    assert_eq!(file_rows(&[unlinked], &["unlink"]).rows[0][2].text, "—");
+}
+
+#[test]
+pub fn bpf_program_finding_skips_maps_and_requires_socket_level() {
+    let mut load = call(1, 321, "bpf", 3);
+    load.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
+    let mut create = call(1, 321, "bpf", -1);
+    create.entry.as_mut().unwrap().args = Some([0, 0, 0, 0, 0, 0]);
+    let mut attached = call(1, 54, "setsockopt", 0);
+    attached.entry.as_mut().unwrap().args = Some([4, 1, 26, 0, 0, 0]);
+    let mut other = call(1, 54, "setsockopt", 0);
+    other.entry.as_mut().unwrap().args = Some([4, 6, 26, 0, 0, 0]);
+    let rules: Vec<_> = suspicious_rows(&[load, create, attached, other])
+        .into_iter()
+        .map(|row| row.cells[0].text.clone())
+        .collect();
+    assert_eq!(rules, ["bpf.program", "bpf.socket_filter"]);
+
+    let mut bytes = call(1, 321, "bpf", 0);
+    bytes.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
+    bytes.entry.as_mut().unwrap().fields.push(captured(
+        "buf",
+        "linux-6.12.94/x86_64/bpf_insn[]",
+        &[0xb7, 0, 0, 0, 0, 0, 0, 0],
+    ));
+    let notes = page_notes(&[bytes]);
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].heading.contains("BPF_PROG_LOAD"));
+    // The Observation column is a sentence: the step, then the call and thread.
+    assert_eq!(
+        notes[0].summary,
+        "Loaded program fd 0 · bpf(BPF_PROG_LOAD) in tid 1"
+    );
+    assert!(notes[0].translation.is_none());
+    assert_eq!(notes[0].outcome, "returned 0");
+    assert_eq!(notes[0].lifecycle.as_deref(), Some("loaded program fd 0"));
+
+    let mut image = call(1, 321, "bpf", 0);
+    image.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
+    image.entry.as_mut().unwrap().fields.push(captured(
+        "arg1.attr.insns",
+        "linux-6.12.94/x86_64/bpf_insn[]",
+        &[0xb7, 0, 0, 0, 0, 0, 0, 0],
+    ));
+    let notes = page_notes(&[image]);
+    let text = notes[0].translation.as_deref().unwrap_or("");
+    assert!(text.contains("mov64 r0, 0"), "{text}");
+
+    let mut filter = call(1, 317, "seccomp", 0);
+    filter.entry.as_mut().unwrap().args = Some([1, 0, 0, 0, 0, 0]);
+    let notes = page_notes(&[filter]);
+    assert!(notes[0].heading.contains("SECCOMP_SET_MODE_FILTER"));
+    assert!(notes[0].translation.is_none());
+    assert_eq!(
+        notes[0].lifecycle.as_deref(),
+        Some("seccomp installation successful")
+    );
+
+    let mut prctl = call(1, 157, "prctl", 0);
+    prctl.entry.as_mut().unwrap().args = Some([22, 2, 0, 0, 0, 0]);
+    assert!(page_notes(&[prctl])[0]
+        .heading
+        .contains("SECCOMP_MODE_FILTER"));
+
+    let mut lookup = call(1, 321, "bpf", 0);
+    lookup.entry.as_mut().unwrap().args = Some([1, 0, 0, 0, 0, 0]);
+    assert!(page_notes(&[lookup.clone()])[0]
+        .heading
+        .contains("BPF_MAP_LOOKUP_ELEM"));
+    assert!(page_notes(&[lookup.clone()])[0].lifecycle.is_none());
+    assert!(suspicious_rows(&[lookup]).is_empty());
+
+    let mut denied = call(1, 321, "bpf", -13);
+    denied.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        page_notes(&[denied])[0].lifecycle.as_deref(),
+        Some("load failed (EACCES)")
+    );
+    let mut pending = call(1, 321, "bpf", 4);
+    pending.exit = None;
+    pending.entry.as_mut().unwrap().args = Some([8, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        page_notes(&[pending])[0].lifecycle.as_deref(),
+        Some("attach attempted; exit not recorded")
+    );
+    let mut attached_prog = call(1, 321, "bpf", 7);
+    attached_prog.entry.as_mut().unwrap().args = Some([8, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        page_notes(&[attached_prog])[0].lifecycle.as_deref(),
+        Some("attach returned 7; interpretation depends on recorded flags")
+    );
+    let mut detach = call(1, 321, "bpf", 0);
+    detach.entry.as_mut().unwrap().args = Some([9, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        page_notes(&[detach])[0].lifecycle.as_deref(),
+        Some("detach successful")
+    );
+    let mut socket = call(1, 54, "setsockopt", 0);
+    socket.entry.as_mut().unwrap().args = Some([4, 1, 26, 0, 0, 0]);
+    assert_eq!(
+        page_notes(&[socket])[0].lifecycle.as_deref(),
+        Some("socket attachment successful")
+    );
+}
+
+#[test]
+pub fn write_fd_copied_at_fork_is_not_shared_with_parent() {
+    let mut opened = call(1, 257, "openat", 7);
+    opened
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg1.path", "", b"/etc/passwd\0"));
+    let forked = call(1, FORK, "fork", 42);
+    let mut child_write = call(42, 1, "write", 3);
+    child_write.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
+    let rows = file_rows(
+        &[opened.clone(), forked.clone(), child_write.clone()],
+        &["write"],
+    );
+    assert_eq!(rows.rows[0][0].text, "/etc/passwd");
+    assert_eq!(rows.rows[0][2].text, "7");
+
+    let mut child_close = call(42, 3, "close", 0);
+    child_close.entry.as_mut().unwrap().args = Some([7, 0, 0, 0, 0, 0]);
+    let mut parent_write = call(1, 1, "write", 3);
+    parent_write.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
+    let rows = file_rows(
+        &[
+            opened.clone(),
+            forked,
+            child_close,
+            child_write,
+            parent_write,
+        ],
+        &["write"],
+    );
+    assert_eq!(rows.rows.len(), 2);
+    assert!(!rows.rows[0][0].text.contains("/etc/passwd"));
+    assert_eq!(rows.rows[1][0].text, "/etc/passwd");
+
+    let mut thread = call(1, CLONE, "clone", 99);
+    thread.entry.as_mut().unwrap().args = Some([CLONE_THREAD, 0, 0, 0, 0, 0]);
+    let mut thread_write = call(99, 1, "write", 3);
+    thread_write.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
+    let rows = file_rows(&[opened.clone(), thread, thread_write], &["write"]);
+    assert_eq!(rows.rows[0][0].text, "/etc/passwd");
+
+    let mut missing = call(1, CLONE3, "clone3", 77);
+    missing.entry.as_mut().unwrap().args = Some([0, 88, 0, 0, 0, 0]);
+    let mut missing_write = call(77, 1, "write", 3);
+    missing_write.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
+    let rows = file_rows(&[opened, missing, missing_write], &["write"]);
+    assert!(!rows.rows[0][0].text.contains("/etc/passwd"));
+}
+
+pub fn path_call(pid: u32, nr: u64, name: &str, result: i64, path: &str) -> InvocationSummary {
+    let mut row = call(pid, nr, name, result);
+    let mut bytes = path.as_bytes().to_vec();
+    bytes.push(0);
+    row.entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg0.pathname", "", &bytes));
+    row
+}
+
+#[test]
+pub fn an_exec_is_info_a_shell_is_an_interpreter_and_sigsuspend_is_not_privilege() {
+    let calls = [
+        path_call(1, 59, "execve", 0, "/bin/ls"),
+        path_call(1, 59, "execve", 0, "/bin/sh"),
+        call(1, 130, "rt_sigsuspend", 0),
+        call(1, 105, "setuid", 0),
+    ];
+    let text = |row: &Finding, key: &str| -> String {
+        row.values
+            .iter()
+            .find_map(|(name, value)| match (*name, value) {
+                (name, RowValue::Text(text)) if name == key => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+    // The default view lists LOW and above: only the shell.
+    let rows = suspicious_rows(&calls);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(text(&rows[0], "finding.rule"), "process.interpreter");
+    assert_eq!(
+        text(&rows[0], "finding.source"),
+        "MITRE ATT&CK T1059.004 · DET0384"
+    );
+    assert_eq!(text(&rows[0], "finding.tier"), "low");
+    // Show INFO builds the exec rows; they are counted either way.
+    let counted = suspicious_output(&calls, rules::Options::default());
+    assert_eq!(counted.tiers[rules::Tier::Info.index()], 2);
+    assert_eq!(counted.badge, 1, "an exec does not count in the badge");
+    let all = suspicious_output(
+        &calls,
+        rules::Options {
+            show_info: true,
+            capture_all: false,
+            ..Default::default()
+        },
+    );
+    let ls = all
+        .rows
+        .iter()
+        .find(|row| {
+            text(row, "finding.rule") == "process.exec"
+                && text(row, "finding.summary").contains("/bin/ls")
+        })
+        .unwrap();
+    assert_eq!(
+        text(ls, "finding.source"),
+        "Observed behaviour; no ATT&CK technique"
+    );
+    assert!(all
+        .rows
+        .iter()
+        .all(|row| text(row, "finding.rule") != "privilege.change"));
+}
+
+#[test]
+pub fn clone_files_does_not_share_cwd_and_relative_chdir_is_applied() {
+    let start = path_call(1, 80, "chdir", 0, "/tmp");
+    let mut files_only = call(1, CLONE, "clone", 42);
+    files_only.entry.as_mut().unwrap().args = Some([CLONE_FILES, 0, 0, 0, 0, 0]);
+    let parent_move = path_call(1, 80, "chdir", 0, "later");
+    let mut child_open = call(42, 257, "openat", 3);
+    child_open.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0, 0, 0, 0]);
+    child_open
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg1.path", "", b"note\0"));
+    let rows = file_rows(&[start, files_only, parent_move, child_open], &["openat"]);
+    assert_eq!(rows.rows.len(), 1, "{}", rows.rows.len());
+    assert_eq!(
+        rows.rows[0][0].text,
+        "/tmp/note (lexical cwd path; symlinks unknown)"
+    );
+
+    let start = path_call(1, 80, "chdir", 0, "/tmp");
+    let relative = path_call(1, 80, "chdir", 0, "sub");
+    let mut opened = call(1, 257, "openat", 4);
+    opened.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0, 0, 0, 0]);
+    opened
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg1.path", "", b"note\0"));
+    let rows = file_rows(&[start, relative, opened], &["openat"]);
+    assert_eq!(
+        rows.rows[0][0].text,
+        "/tmp/sub/note (lexical cwd path; symlinks unknown)"
+    );
+
+    let start = path_call(1, 80, "chdir", 0, "/tmp");
+    let mut shared = call(1, CLONE, "clone", 42);
+    shared.entry.as_mut().unwrap().args = Some([CLONE_FILES | CLONE_FS, 0, 0, 0, 0, 0]);
+    let parent_move = path_call(1, 80, "chdir", 0, "/var");
+    let mut child_open = call(42, 257, "openat", 3);
+    child_open.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0, 0, 0, 0]);
+    child_open
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg1.path", "", b"note\0"));
+    let rows = file_rows(&[start, shared, parent_move, child_open], &["openat"]);
+    assert_eq!(
+        rows.rows[0][0].text,
+        "/var/note (lexical cwd path; symlinks unknown)"
+    );
+}
+
+#[test]
+pub fn private_writable_mmap_is_not_a_changed_file() {
+    let mut private = call(1, 9, "mmap", 0x1000);
+    private.entry.as_mut().unwrap().args = Some([0, 4096, 2, MAP_PRIVATE, 3, 0]);
+    let mut shared = call(1, 9, "mmap", 0x2000);
+    shared.entry.as_mut().unwrap().args = Some([0, 4096, 2, 1, 3, 0]);
+    let rows = file_rows(&[private, shared], &["mmap"]);
+    assert_eq!(rows.rows.len(), 1, "{}", rows.rows.len());
+    assert_eq!(rows.rows[0][3].text, "mmap");
+}
+
+#[test]
+pub fn bpf_program_attach_uses_the_loaded_fd() {
+    let mut load = call(1, 321, "bpf", 6);
+    load.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
+    let mut attach = call(1, 321, "bpf", 0);
+    attach.entry.as_mut().unwrap().args = Some([8, 6, 0, 0, 0, 0]);
+    let notes = page_notes(&[load.clone(), attach]);
+    assert_eq!(notes[0].lifecycle.as_deref(), Some("loaded program fd 6"));
+    assert_eq!(notes[1].lifecycle.as_deref(), Some("attach successful"));
+    assert_eq!(suspicious_rows(&[load])[0].cells[10].text, "1");
+
+    let mut other = call(1, 321, "bpf", 7);
+    other.entry.as_mut().unwrap().args = Some([8, 4, 0, 0, 0, 0]);
+    assert_eq!(
+        page_notes(&[other])[0].lifecycle.as_deref(),
+        Some("attach returned 7; interpretation depends on recorded flags")
+    );
+
+    let mut denied = call(1, 321, "bpf", -13);
+    denied.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
+    let mut attach_exit = call(1, 321, "bpf", 3);
+    attach_exit.entry.as_mut().unwrap().args = Some([8, 3, 0, 0, 0, 0]);
+    assert_eq!(
+        page_notes(&[denied, attach_exit])[1].lifecycle.as_deref(),
+        Some("attach returned 3; interpretation depends on recorded flags")
+    );
+}
+
+#[test]
+pub fn bpf_attr_members_come_from_the_branch_of_the_command() {
+    // The guest captures `union bpf_attr` whole as `arg1.attr`: the load's
+    // instruction count and the attach's program descriptor are its members.
+    let mut attr = [0u8; 64];
+    attr[..4].copy_from_slice(&2u32.to_le_bytes());
+    attr[4..8].copy_from_slice(&30u32.to_le_bytes());
+    attr[48..53].copy_from_slice(b"probe");
+    let mut load = call(1, 321, "bpf", 6);
+    let entry = load.entry.as_mut().unwrap();
+    entry.args = Some([5, 0x1000, 64, 0, 0, 0]);
+    entry.fields.push(captured(
+        "arg1.attr",
+        "linux-6.12.94/x86_64/bpf_attr",
+        &attr,
+    ));
+    // Two instructions (mov r0, 0; exit) of the 30 the attr declares.
+    let mut image = [0u8; 16];
+    image[0] = 0xb7;
+    image[8] = 0x95;
+    entry.fields.push(captured(
+        "arg1.attr.insns",
+        "linux-6.12.94/x86_64/bpf_insn[]",
+        &image,
+    ));
+    let mut attach_attr = [0u8; 16];
+    attach_attr[..4].copy_from_slice(&9u32.to_le_bytes());
+    attach_attr[4..8].copy_from_slice(&6u32.to_le_bytes());
+    attach_attr[8..12].copy_from_slice(&2u32.to_le_bytes());
+    let mut attach = call(1, 321, "bpf", 0);
+    let entry = attach.entry.as_mut().unwrap();
+    entry.args = Some([8, 0x2000, 16, 0, 0, 0]);
+    entry.fields.push(captured(
+        "arg1.attr",
+        "linux-6.12.94/x86_64/bpf_attr",
+        &attach_attr,
+    ));
+    let notes = page_notes(&[load, attach]);
+    assert_eq!(notes[0].identity.declared_instruction_count, Some(30));
+    assert_eq!(notes[0].attributes[0], "prog_type = BPF_PROG_TYPE_KPROBE");
+    assert_eq!(notes[0].attributes[1], "insn_cnt = 30");
+    assert!(notes[0].attributes.contains(&"log_buf = NULL".to_owned()));
+    assert!(notes[0]
+        .attributes
+        .contains(&"prog_name = \"probe\"".to_owned()));
+    assert_eq!(
+        notes[1].lifecycle.as_deref(),
+        Some("attached of observed loaded fd 6")
+    );
+    assert!(notes[1]
+        .attributes
+        .contains(&"attach_type = BPF_CGROUP_INET_SOCK_CREATE".to_owned()));
+}
+
+#[test]
+pub fn bpf_rows_without_an_image_each_have_their_own_key() {
+    let calls: Vec<InvocationSummary> = (1..=4)
+        .map(|id| {
+            let mut load = call(1, 321, "bpf", 3);
+            load.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
+            load.call_id = id;
+            load
+        })
+        .collect();
+    let notes = page_notes(&calls);
+    assert_eq!(notes.len(), 4);
+    let rows: Vec<Vec<Cell>> = notes.iter().map(|note| bpf_row(note, None)).collect();
+    let keys: Vec<String> = rows.iter().map(|row| evidence_key(row)).collect();
+    // Selecting one row matches exactly that row.
+    for (at, key) in keys.iter().enumerate() {
+        assert_eq!(
+            keys.iter().filter(|other| *other == key).count(),
+            1,
+            "row {at} shares its key"
+        );
+    }
+}

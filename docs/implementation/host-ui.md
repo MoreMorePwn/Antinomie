@@ -311,11 +311,15 @@ run is in `docs/usage.md`, "Command line (0.9.0)"; this section is the contract
 behind it.
 
 * **Crates and dependency direction.** `antinomie-cli` (binary `antinomie-cli`,
-  `crates/cli/`) depends on `antinomie-service` (`crates/service/`) and
-  `antinomie-monitor-core`. The service depends on core. Neither links egui,
-  eframe, winit or `antinomie-monitor-ui`; `crates/cli/tests/dependency_tree.rs`
-  runs `cargo tree` and fails if one of them appears. The window depends on core
-  only. The CLI is not a second implementation: every engine step it takes
+  `crates/cli/`) depends on `antinomie-service` (`crates/service/`),
+  `antinomie-triage` (`crates/triage/`) and `antinomie-monitor-core`. The service
+  and the triage crate depend on core. None of them links egui, eframe, winit or
+  `antinomie-monitor-ui`; `crates/cli/tests/dependency_tree.rs` runs `cargo tree`
+  and fails if one of them appears. The window depends on core and triage. Every
+  binary hosts the earlier-bytes copier: `antinomie_triage::copier::host_copier()`
+  first thing in `main` serves `--copy-earlier-bytes` or registers the running
+  program with `file_before_store::register_copier_host()` (`ANTINOMIE_COPIER`
+  still overrides it). The CLI is not a second implementation: every engine step it takes
   (`Command::AnalyzeSample`, the rule registry, the sample library, custody) is a
   core function the window calls too.
 * **Data-folder owner (`data_owner.rs`).** The lock on `.app-owner.lock` stays the

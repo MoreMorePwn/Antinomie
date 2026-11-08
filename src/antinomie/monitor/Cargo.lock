@@ -170,6 +170,7 @@ version = "0.9.0"
 dependencies = [
  "antinomie-monitor-core",
  "antinomie-service",
+ "antinomie-triage",
  "clap",
  "rusqlite",
  "rustix 1.1.5",
@@ -211,6 +212,7 @@ name = "antinomie-monitor-ui"
 version = "0.9.0"
 dependencies = [
  "antinomie-monitor-core",
+ "antinomie-triage",
  "chrono",
  "clap",
  "eframe",
@@ -239,6 +241,18 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.21",
  "toml",
+]
+
+[[package]]
+name = "antinomie-triage"
+version = "0.9.0"
+dependencies = [
+ "antinomie-monitor-core",
+ "chrono",
+ "rusqlite",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

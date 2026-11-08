@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 antinomie-monitor-core = { path = "../monitor-core" }
+antinomie-triage = { path = "../triage" }
 eframe = { version = "0.36", default-features = false, features = ["glow", "x11", "wayland", "default_fonts", "persistence"] }
 egui_extras = "0.36"
 egui_dock = { version = "=0.21.1", features = ["serde"] }
@@ -25,6 +26,7 @@ rusqlite = { version = "0.41.0", features = ["hooks"] }
 rustix = { version = "1", features = ["fs", "process", "pty", "termios", "time"] }
 
 [dev-dependencies]
+antinomie-triage = { path = "../triage", features = ["test-support"] }
 winit = { version = "=0.30.13", default-features = false, features = ["x11"] }
 
 [lints.clippy]

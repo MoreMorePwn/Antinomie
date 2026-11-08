@@ -4,7 +4,7 @@
 use super::phases::Span;
 
 /// `spans` as a left-to-right Mermaid flowchart.
-pub(in crate::triage) fn phases(spans: &[Span]) -> String {
+pub fn phases(spans: &[Span]) -> String {
     let mut chart = crate::mermaid::Flowchart::new("LR");
     let key = |at: usize, span: &Span| format!("{at}:{}", span.phase.label());
     for (at, span) in spans.iter().enumerate() {

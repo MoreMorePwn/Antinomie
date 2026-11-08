@@ -92,7 +92,7 @@ fn tooltip_ui(ui: &mut egui::Ui, tip: &input::Tip) {
     ui.set_max_width(380.0);
     ui.horizontal(|ui| {
         let (tier, category) = tip.heading.split_once(" · ").unwrap_or((&tip.heading, ""));
-        crate::widgets::chip(ui, tier, tip.tier.tone());
+        crate::widgets::chip(ui, tier, tip.tier.tone().into());
         ui.label(RichText::new(category).small().color(theme::muted()));
     });
     if !tip.title.is_empty() {

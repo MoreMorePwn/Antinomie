@@ -44,7 +44,7 @@ fn node(
 fn finding(rule: &str, tier: &str, ns: u64, pid: u32, cookie: u64, object: &str) -> Finding {
     let mut cells: Vec<Cell> = rules::HEADERS
         .iter()
-        .map(|header| table::cell(*header, theme::text(), false))
+        .map(|header| table::cell(*header, tone::text(), false))
         .collect();
     cells[0].text = rule.into();
     cells[rules::COL_TIER].text = tier.into();
@@ -1709,7 +1709,8 @@ fn native_interest_row_fixture() {
                             for item in long_interest() {
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 10.0;
-                                    let color = item.tier.map_or(theme::muted(), |t| t.color());
+                                    let color =
+                                        item.tier.map_or(theme::muted(), |t| theme::tone(t.tone()));
                                     ui.add(
                                         crate::widgets::dot::DotLabel::new(
                                             color,

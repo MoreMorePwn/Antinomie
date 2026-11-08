@@ -748,7 +748,7 @@ fn names_chevrons_the_axis_the_phase_band_and_fit_are_told_apart() {
 #[test]
 fn zoom_pan_and_the_window_stay_inside_the_run() {
     let bounds = view::bounds((0, 10 * S));
-    let fit = view::fitted((0, 10 * S));
+    let fit = axis::fitted((0, 10 * S));
     let zoomed = view::zoomed(fit, 5.0 * SF, 4.0, bounds);
     assert!(((zoomed.1 - zoomed.0) * 4.0 - (fit.1 - fit.0)).abs() < 1e-6);
     // The anchor stays where it was on the screen.
@@ -762,7 +762,7 @@ fn zoom_pan_and_the_window_stay_inside_the_run() {
     assert_eq!(panned.0, bounds.0);
     // The shortest window is a microsecond.
     let tiny = view::zoomed(zoomed, 5.0 * SF, 1e12, bounds);
-    assert!((tiny.1 - tiny.0 - view::MIN_SPAN_NS).abs() < 1e-6);
+    assert!((tiny.1 - tiny.0 - axis::MIN_SPAN_NS).abs() < 1e-6);
     assert_eq!(view::tick_step(1_000_000.0, 100.0), 100_000_000.0);
 }
 

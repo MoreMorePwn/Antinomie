@@ -125,32 +125,9 @@ impl Default for Dialog {
     }
 }
 
-/// The request has no filter, sort, page or toggle: it reads the run whole,
-/// as a report does.
-pub(super) fn is_whole_run(request: &ScanRequest) -> bool {
-    request.filters.iter().all(String::is_empty)
-        && request.offsets == [0; SLOTS]
-        && request.sorts.iter().all(Option::is_none)
-        && request.file_visibility == Default::default()
-        && request.finding_view == Default::default()
-}
-
-/// The scan's request as the screen has it, with every filter, sort, page and
-/// toggle back to the default: the report is of the whole run, not of what
-/// the tables are showing.
-pub(super) fn whole_run_request(screen: &ScanRequest) -> ScanRequest {
-    let mut request = screen.clone();
-    request.filters = Default::default();
-    request.offsets = [0; SLOTS];
-    request.sorts = Default::default();
-    request.file_visibility = Default::default();
-    request.finding_view = Default::default();
-    request.unchanged_since = None;
-    request.before_copy = None;
-    request.event_cache = None;
-    request.ioc_cache = None;
-    request
-}
+// Whether a request reads the run whole, and the whole-run request of the
+// screen's: in `antinomie_triage`, where the scan marks its index with it.
+use antinomie_triage::whole_run_request;
 
 impl Dialog {
     /// The dialog open on `archive`, for the screenshots.
@@ -426,7 +403,7 @@ impl TriageView {
             // The index Triage made of the whole run, when the recording is
             // as it saw it: the export builds from it and reads nothing again.
             // That is the hour a large run's second index took.
-            let current = source_stamp(
+            let current = antinomie_triage::refresh::source_stamp(
                 &target.archive,
                 target.pcap.as_deref(),
                 target.pcap_open,

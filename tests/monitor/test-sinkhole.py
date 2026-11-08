@@ -29,7 +29,7 @@ spec.loader.exec_module(sink_module)
 
 HEADER = (HERE / "behavior-samples" / "samples.h").read_text()
 REGISTRY = (HERE / "behavior-samples" / "main.c").read_text()
-RULES_TABLE = ROOT / "src/antinomie/monitor/crates/monitor-ui/src/triage/rules/table.rs"
+RULES_TABLE = ROOT / "src/antinomie/monitor/crates/triage/src/rules/table.rs"
 
 
 def define(name):

@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 antinomie-monitor-core = { path = "../monitor-core" }
 antinomie-service = { path = "../service" }
+antinomie-triage = { path = "../triage" }
 clap = { version = "4", features = ["derive"] }
 serde.workspace = true
 # Result objects print their members in the order a command built them.

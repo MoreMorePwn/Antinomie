@@ -18,6 +18,23 @@ pub enum Tone {
     Plain,
 }
 
+impl From<crate::triage::Tone> for Tone {
+    /// The chip for a row's colour role.
+    fn from(tone: crate::triage::Tone) -> Self {
+        use crate::triage::Tone as Role;
+        match tone {
+            Role::Good => Tone::Good,
+            Role::Warn | Role::Elevated => Tone::Warn,
+            Role::Bad => Tone::Error,
+            Role::Info => Tone::Info,
+            Role::Muted => Tone::Neutral,
+            Role::Accent | Role::Primary | Role::BrightBlue => Tone::Accent,
+            Role::Notice => Tone::Info,
+            Role::Text | Role::Value(_) => Tone::Plain,
+        }
+    }
+}
+
 impl Tone {
     #[cfg(test)]
     pub const ALL: [Tone; 8] = [

@@ -185,3 +185,11 @@ fn a_blob_name_cannot_leave_the_folder() {
     assert!(Store::open(&dir).unwrap().read("/x", 0, 1).is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_registered_host_is_the_program_serving_the_copy_role() {
+    register_copier_host();
+    assert_eq!(COPIER_HOST.get(), std::env::current_exe().ok().as_ref());
+    // The role is chosen by the argument, not by the program's file name.
+    assert_eq!(COPY_FLAG, "--copy-earlier-bytes");
+}

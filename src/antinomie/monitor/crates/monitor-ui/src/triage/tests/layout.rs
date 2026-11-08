@@ -205,7 +205,7 @@ fn file_categories_are_tabs_with_counts() {
     view.scan.as_mut().unwrap().counts.tabs[1] = 8;
     let columns = file_category::EVENT_HEADERS.len();
     let mut row: Vec<Cell> = (0..columns)
-        .map(|_| cell("x", theme::text(), false))
+        .map(|_| cell("x", tone::text(), false))
         .collect();
     row[0].values = vec![("frame.number", RowValue::Number(1))];
     view.scan.as_mut().unwrap().opened = vec![row];
@@ -287,7 +287,7 @@ fn file_toggles_are_chips_in_the_filter_bar_with_their_defaults() {
 }
 
 fn row_with_location(tags: &[&str]) -> Vec<Cell> {
-    let mut row = vec![cell("12:00:00", theme::text(), true)];
+    let mut row = vec![cell("12:00:00", tone::text(), true)];
     row[0].values = vec![(
         "file.location",
         RowValue::List(tags.iter().map(|tag| (*tag).to_owned()).collect()),
@@ -309,12 +309,12 @@ fn flagged_file_rows_get_a_warn_bar_and_a_warn_location() {
         ));
     }
     assert_eq!(
-        file_category::location_cell(&[Location::Hidden]).color,
-        theme::warn()
+        file_category::location_cell(&[Location::Hidden]).tone,
+        Tone::Warn
     );
     assert_eq!(
-        file_category::location_cell(&[Location::Temp]).color,
-        theme::text()
+        file_category::location_cell(&[Location::Temp]).tone,
+        Tone::Text
     );
     // The bar is 3 px wide, in the warn color, on the flagged row only.
     let bars = |tags: &[&str]| {
@@ -354,7 +354,7 @@ fn rows_of(headers: &[&str], count: usize) -> Vec<Vec<Cell>> {
         .map(|at| {
             let mut row: Vec<Cell> = headers
                 .iter()
-                .map(|header| cell(*header, theme::text(), false))
+                .map(|header| cell(*header, tone::text(), false))
                 .collect();
             row[0].values = vec![("frame.number", RowValue::Number(at as i128 + 3))];
             row
@@ -628,7 +628,7 @@ fn numeric_columns_sit_at_the_right_edge_of_their_cells() {
         let scan = view.scan.as_mut().unwrap();
         scan.network_counts = Some((10, 1, 1));
         let mut rows = rows_of(net_tabs::URL_HEADERS, 1);
-        rows[0][0] = cell("#3", theme::text(), true);
+        rows[0][0] = cell("#3", tone::text(), true);
         rows[0][0].values = vec![("frame.number", RowValue::Number(3))];
         scan.new_tabs.urls = rows;
     }
@@ -829,7 +829,10 @@ fn the_details_of_an_evasion_row_list_each_check_the_answer_and_why_it_has_its_t
 #[test]
 fn tier_tones_follow_the_tier_colours() {
     use crate::widgets::Tone;
-    let tones: Vec<Tone> = rules::Tier::ALL.iter().map(|tier| tier.tone()).collect();
+    let tones: Vec<Tone> = rules::Tier::ALL
+        .iter()
+        .map(|tier| tier.tone().into())
+        .collect();
     assert_eq!(tones, [Tone::Error, Tone::Warn, Tone::Info, Tone::Neutral]);
     assert_eq!(rules::Tier::from_tag("medium"), Some(rules::Tier::Medium));
     assert_eq!(rules::Tier::from_tag("nope"), None);

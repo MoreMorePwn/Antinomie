@@ -1,0 +1,309 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Looking up the earlier bytes of the files a run changed on the run's
+//! starting disk (see `antinomie_monitor_core::file_before`). Only the files
+//! the run wrote to or changed are asked, up to a bound; each answer is a
+//! small sandboxed read of the disk's inode and size, and the bytes
+//! themselves are read later, on demand.
+use super::{Activity, Earlier};
+use antinomie_monitor_core::file_before::{Before, Resolver, Wanted};
+use antinomie_monitor_core::file_before_store::Writer;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// Files asked at most per run; the rest show "not looked up".
+pub const LOOKUP_LIMIT: usize = 300;
+
+/// Ask the starting disk about the changed files of `activity`. `segments`
+/// are the run's recording folders, oldest first; `executable` serves the
+/// disk reader (`None`: this program). With `copy`, the earlier bytes are
+/// read from the starting disk only and added to the boot's recording.
+pub fn resolve(
+    activity: &mut Activity,
+    segments: &[(PathBuf, String)],
+    executable: Option<PathBuf>,
+    copy: Option<&Mutex<Writer>>,
+) {
+    let mut resolver = Resolver::new(segments, executable);
+    if copy.is_some() {
+        resolver = resolver.disk_only();
+    }
+    let mut asked = 0;
+    for file in &mut activity.files {
+        let wrote = file.writes.tally.kept + file.writes.tally.skipped() > 0;
+        if !(wrote || file.changed()) || file.failed_only {
+            continue;
+        }
+        if asked >= LOOKUP_LIMIT {
+            file.earlier = Some(Earlier {
+                before: Before::Unavailable(format!(
+                    "not looked up: only the first {LOOKUP_LIMIT} changed files are"
+                )),
+                file: None,
+            });
+            continue;
+        }
+        asked += 1;
+        let (before, source) = resolver.resolve(&Wanted {
+            path: &file.path,
+            names: &file.names,
+            key: file.identity,
+            created: file.created,
+            first_segment: file.first_segment,
+            last_segment: file.last_segment,
+        });
+        if let Some(copy) = copy
+            && let Ok(mut writer) = copy.lock()
+        {
+            writer.record(
+                &file.path,
+                &file.names,
+                file.identity,
+                &before,
+                source.as_ref(),
+            );
+        }
+        file.earlier = Some(Earlier {
+            before,
+            file: source,
+        });
+    }
+}
+
+/// What hashing the read-only files from the starting disk did, for the
+/// IOC list's notes.
+#[derive(Clone, Debug, Default)]
+pub struct ReadHashes {
+    /// Files not hashed because of the count or total size cap.
+    pub left_out: usize,
+    /// Files hashed.
+    pub hashed: usize,
+    /// Each file asked: its path, whether the run executed it, and the answer.
+    pub files: Vec<(String, bool, antinomie_monitor_core::file_before::StartHash)>,
+}
+
+/// Cached answers of the last runs: a refresh of a finished run's scan must
+/// not read the disk again for the same files.
+pub static HASHED: Mutex<Vec<(String, antinomie_monitor_core::file_before::StartHashed)>> =
+    Mutex::new(Vec::new());
+
+/// Hash the files the run only read or ran from its starting disk, for the
+/// IOC and lineage lists. Bounded: at most
+/// [`antinomie_monitor_core::file_before::START_HASH_COUNT_CAP`] files, none
+/// over [`antinomie_monitor_core::file_before::START_HASH_SIZE_CAP`] bytes and
+/// [`antinomie_monitor_core::file_before::START_HASH_TOTAL_CAP`] bytes in all.
+/// Programs the run executed come first, then other files outside the
+/// library directories. Runs in the scan's worker thread, never the UI's.
+pub fn hash_read(
+    activity: &mut Activity,
+    segments: &[(PathBuf, String)],
+    executable: Option<PathBuf>,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> ReadHashes {
+    use super::Kind;
+    use antinomie_monitor_core::file_before::{StartHashed, ToHash, START_HASH_COUNT_CAP};
+    let mut chosen: Vec<(bool, usize)> = Vec::new();
+    for (index, file) in activity.files.iter().enumerate() {
+        if file.changed()
+            || file.created
+            || file.deleted
+            || file.failed_only
+            || file.standard_io
+            || !file.path.starts_with('/')
+        {
+            continue;
+        }
+        let done = |kind: Kind| {
+            file.events
+                .iter()
+                .any(|event| event.kind == kind && event.success != Some(false))
+        };
+        let executed = done(Kind::Exec);
+        if executed || ((done(Kind::Read) || done(Kind::Map)) && !file.library()) {
+            chosen.push((executed, index));
+        }
+    }
+    // Programs first; the order of first use otherwise.
+    chosen.sort_by_key(|(executed, index)| (!executed, *index));
+    let left_over = chosen.len().saturating_sub(START_HASH_COUNT_CAP);
+    chosen.truncate(START_HASH_COUNT_CAP);
+    let wanted: Vec<ToHash> = chosen
+        .iter()
+        .map(|(_, index)| {
+            let file = &activity.files[*index];
+            ToHash {
+                path: file.path.clone(),
+                key: file.identity,
+                first_segment: file.first_segment,
+                last_segment: file.last_segment,
+            }
+        })
+        .collect();
+    if wanted.is_empty() {
+        return ReadHashes::default();
+    }
+    let key = format!(
+        "{}|{}",
+        segments
+            .iter()
+            .map(|(dir, boot)| format!("{}@{boot}", dir.display()))
+            .collect::<Vec<_>>()
+            .join(","),
+        wanted
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let cached = HASHED.lock().ok().and_then(|cache| {
+        cache
+            .iter()
+            .find(|(known, _)| *known == key)
+            .map(|(_, done)| done.clone())
+    });
+    let done: StartHashed = match cached {
+        Some(done) => done,
+        None => {
+            let mut resolver = Resolver::new(segments, executable).disk_only();
+            let done = resolver.hash_files(&wanted, &|| {
+                cancel.load(std::sync::atomic::Ordering::Relaxed)
+            });
+            // A cut-short answer is not kept: the next scan finishes it.
+            if !done.cancelled {
+                if let Ok(mut cache) = HASHED.lock() {
+                    cache.retain(|(known, _)| *known != key);
+                    cache.push((key, done.clone()));
+                    if cache.len() > 8 {
+                        cache.remove(0);
+                    }
+                }
+            }
+            done
+        }
+    };
+    let mut hashed = 0;
+    let mut files = Vec::new();
+    for (executed, index) in &chosen {
+        let file = &mut activity.files[*index];
+        if let Some(found) = done.files.get(&file.path) {
+            if matches!(
+                found,
+                antinomie_monitor_core::file_before::StartHash::Hashed { .. }
+            ) {
+                hashed += 1;
+            }
+            file.start_hash = Some(found.clone());
+            files.push((file.path.clone(), *executed, found.clone()));
+        }
+    }
+    ReadHashes {
+        left_out: done.left_out + left_over,
+        hashed,
+        files,
+    }
+}
+
+/// One line for the window: where the file's earlier bytes stand.
+pub fn describe(earlier: &Earlier) -> String {
+    use antinomie_monitor_core::byte_size::file_size;
+    match &earlier.before {
+        Before::Created => {
+            "Earlier bytes: none, the run created this file (it started empty)".into()
+        }
+        Before::OnDisk { size, exact } => format!(
+            "Earlier bytes: {} on the starting disk, read when asked{}",
+            file_size(*size),
+            if *exact {
+                " (the file's inode was checked against the disk)"
+            } else {
+                " (matched by path only: the guest recorded no inode)"
+            }
+        ),
+        Before::TooLarge(size) => format!(
+            "Earlier bytes: not offered, the file was {} on the starting disk (limit {})",
+            file_size(*size),
+            file_size(antinomie_monitor_core::file_before::SIZE_CAP)
+        ),
+        Before::Recorded { size, exact } => format!(
+            "Earlier bytes: {} kept in this recording{}",
+            file_size(*size),
+            if *exact {
+                " (the file's inode was checked against the disk)"
+            } else {
+                " (matched by path only: the guest recorded no inode)"
+            }
+        ),
+        Before::NotCopied { size, sha256, why } => format!(
+            "Earlier bytes: not captured, the file was {} ({why}){}",
+            file_size(*size),
+            sha256
+                .as_ref()
+                .map(|sha| format!("; SHA-256 {sha}"))
+                .unwrap_or_default()
+        ),
+        Before::Elsewhere(why) => format!("Earlier bytes: not on the starting disk: {why}"),
+        Before::Unavailable(why) => format!("Earlier bytes: unavailable: {why}"),
+    }
+}
+
+/// Copy the earlier bytes of the files a finished boot's runs changed into
+/// the boot's recording (see `antinomie_monitor_core::file_before_store`).
+/// The core calls this once per boot, before the sealed layer is merged; it
+/// reads each run of the boot as the window would and asks the starting disk
+/// about every changed file.
+pub fn copy_boot(job: &antinomie_monitor_core::file_before_store::Job) -> Result<(), String> {
+    use crate::{archive_scan::scan_archive_query, ScanRequest};
+    use std::sync::{atomic::AtomicBool, Arc};
+    let writer = Arc::new(Mutex::new(Writer::open(
+        &job.boot_dir,
+        &job.boot_id,
+        antinomie_monitor_core::file_before_store::limits(),
+    )));
+    // The boot's runs: in its own folder or, as the app lays them out, in the
+    // recording's `runs` folder next to `boots`.
+    let mut folders = vec![job.boot_dir.join("runs")];
+    if let Some(root) = job.boot_dir.parent().and_then(Path::parent) {
+        folders.push(root.join("runs"));
+    }
+    let mut runs: Vec<PathBuf> = folders
+        .iter()
+        .filter_map(|folder| std::fs::read_dir(folder).ok())
+        .flat_map(|dir| dir.filter_map(Result::ok).map(|entry| entry.path()))
+        .collect();
+    runs.sort();
+    let (mut complete, mut note) = (true, None);
+    let cancel = Arc::new(AtomicBool::new(false));
+    for run_dir in runs {
+        let summary = std::fs::read(run_dir.join("run.json"))
+            .ok()
+            .and_then(|bytes| {
+                serde_json::from_slice::<antinomie_monitor_core::RunSummary>(&bytes).ok()
+            });
+        let Some(summary) = summary else {
+            complete = false;
+            note = Some(format!("{} has no readable run record", run_dir.display()));
+            continue;
+        };
+        if summary.boot_id != job.boot_id {
+            continue;
+        }
+        let request = ScanRequest {
+            root_cookie: summary.root_task_cookie,
+            clock_anchor: summary.clock_anchor,
+            started_ms: summary.started_ms,
+            run_finished: true,
+            identity: Some((
+                summary.vm_id.clone(),
+                summary.boot_id.clone(),
+                summary.id.clone(),
+            )),
+            before_copy: Some(Arc::clone(&writer)),
+            ..Default::default()
+        };
+        if let Err(why) = scan_archive_query(&run_dir, None, false, &cancel, &request) {
+            complete = false;
+            note = Some(format!("{}: {why}", run_dir.display()));
+        }
+    }
+    let mut writer = writer.lock().map_err(|_| "copy state".to_owned())?;
+    writer.finish(complete, note)
+}
