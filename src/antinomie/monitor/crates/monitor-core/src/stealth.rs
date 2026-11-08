@@ -598,8 +598,40 @@ impl Default for StealthProfile {
     }
 }
 
+/// Texts a guest compares against to find a QEMU machine. A generated
+/// identity string or serial never contains one, in any letter case.
+pub(crate) const TELLS: &[&str] = &["QEMU", "pc-q35", "pc-i440fx", "Standard PC", "Bochs"];
+
+/// Whether `text` contains a [`TELLS`] entry, ignoring letter case.
+pub(crate) fn has_tell(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    TELLS
+        .iter()
+        .any(|tell| lower.contains(&tell.to_ascii_lowercase()))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test sets this to draw identities from a fixed stream (splitmix64).
+    pub(crate) static TEST_SEED: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
 /// Random bytes from the same source as other identifiers.
 fn random_bytes(count: usize) -> Vec<u8> {
+    #[cfg(test)]
+    if let Some(mut state) = TEST_SEED.get() {
+        let mut bytes = Vec::with_capacity(count);
+        while bytes.len() < count {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            bytes.extend((z ^ (z >> 31)).to_le_bytes());
+        }
+        bytes.truncate(count);
+        TEST_SEED.set(Some(state));
+        return bytes;
+    }
     let mut bytes = Vec::with_capacity(count);
     while bytes.len() < count {
         let id = unique_id();
@@ -612,11 +644,29 @@ fn random_bytes(count: usize) -> Vec<u8> {
     bytes
 }
 
+/// `make()`, drawn again until the result holds no tell: a serial built from
+/// several draws can spell one across the joins.
+fn untold(mut make: impl FnMut() -> String) -> String {
+    loop {
+        let text = make();
+        if !has_tell(&text) {
+            return text;
+        }
+    }
+}
+
+/// Random text from `alphabet`. A draw that spells a [`TELLS`] entry is drawn
+/// again: a serial number "…QEMU…" would give the machine away.
 pub(crate) fn random_text(alphabet: &[u8], len: usize) -> String {
-    random_bytes(len)
-        .into_iter()
-        .map(|byte| alphabet[byte as usize % alphabet.len()] as char)
-        .collect()
+    loop {
+        let text: String = random_bytes(len)
+            .into_iter()
+            .map(|byte| alphabet[byte as usize % alphabet.len()] as char)
+            .collect();
+        if !has_tell(&text) {
+            return text;
+        }
+    }
 }
 
 const UPPER_DIGITS: &[u8] = b"0123456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -747,11 +797,13 @@ impl MachineIdentity {
         if let Some(nvme) = catalog::facade::of(&self.profile).and_then(|facade| facade.nvme) {
             self.disk_model = nvme.model.into();
             self.disk_firmware = nvme.firmware.into();
-            self.disk_serial = format!(
-                "{}{}",
-                nvme.serial_prefix,
-                random_text(nvme.serial_alphabet, nvme.serial_tail)
-            );
+            self.disk_serial = untold(|| {
+                format!(
+                    "{}{}",
+                    nvme.serial_prefix,
+                    random_text(nvme.serial_alphabet, nvme.serial_tail)
+                )
+            });
             self.disk_wwn = String::new();
             self.disk_rotation = 1;
         }
@@ -786,7 +838,7 @@ impl MachineIdentity {
         disk: &DiskModel,
         ram: &RamPart,
     ) -> Self {
-        let system_serial = serial(machine.serial);
+        let system_serial = untold(|| serial(machine.serial));
         let fields = &machine.fields;
         let subsystem = match &machine.nic_subsystem {
             Subsystem::None => String::new(),
@@ -810,7 +862,7 @@ impl MachineIdentity {
             system_sku: unit.sku.into(),
             board_manufacturer: machine.board_manufacturer.into(),
             board_product: unit.board.into(),
-            board_serial: board_serial(machine.serial, &system_serial),
+            board_serial: untold(|| board_serial(machine.serial, &system_serial)),
             board_version: with_digits(pick(fields.board_versions), &random_text(DIGITS, 16)),
             board_location: fields.board_location.into(),
             chassis_type: unit.chassis,
@@ -836,7 +888,7 @@ impl MachineIdentity {
             acpi_oem_id: machine.acpi.0.into(),
             acpi_table_id: machine.acpi.1.into(),
             cdrom_model: machine.cdrom_model.into(),
-            disk_serial: disk_serial(disk),
+            disk_serial: untold(|| disk_serial(disk)),
             disk_model: disk.model.into(),
             disk_firmware: disk.firmware.into(),
             disk_wwn: disk_wwn(disk),
