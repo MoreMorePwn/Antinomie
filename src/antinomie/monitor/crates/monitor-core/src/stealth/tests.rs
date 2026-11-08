@@ -1943,3 +1943,139 @@ fn the_giveaways_say_what_the_resolved_clock_model_costs() {
     assert!(has(&desktop, true, "the boot age is a sleep"));
     assert!(!has(&desktop, true, SLEPT));
 }
+
+/// Draws come from a fixed stream while the guard lives.
+struct Seeded;
+
+impl Seeded {
+    fn new(seed: u64) -> Self {
+        TEST_SEED.set(Some(seed));
+        Self
+    }
+    fn again(&self, seed: u64) {
+        TEST_SEED.set(Some(seed));
+    }
+}
+
+impl Drop for Seeded {
+    fn drop(&mut self) {
+        TEST_SEED.set(None);
+    }
+}
+
+fn strings_of(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => out.push(text.clone()),
+        serde_json::Value::Array(items) => items.iter().for_each(|v| strings_of(v, out)),
+        serde_json::Value::Object(map) => map.values().for_each(|v| strings_of(v, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn a_tell_is_found_in_any_letter_case() {
+    for text in [
+        "QEMU",
+        "qemu",
+        "QemU HARDDISK",
+        "x-pc-Q35-9",
+        "PC-I440FX",
+        "standard pc",
+        "bOcHs",
+        "serial QEMUX9",
+    ] {
+        assert!(has_tell(text), "{text}");
+    }
+    for text in [
+        "",
+        "5CGQEM",
+        "HP EliteDesk",
+        "/CND1234567/",
+        "pc-q3",
+        "Standard",
+    ] {
+        assert!(!has_tell(text), "{text}");
+    }
+}
+
+#[test]
+fn random_text_is_drawn_again_when_it_spells_a_tell() {
+    let seeded = Seeded::new(1);
+    // Four letters: one draw in 256 spells the word, so a few thousand draws
+    // would show it if nothing redrew.
+    for alphabet in [&b"QEMU"[..], b"qemu", b"QqEeMmUu"] {
+        seeded.again(7);
+        let raw_hits = (0..4000)
+            .filter(|_| {
+                let raw: String = random_bytes(4)
+                    .into_iter()
+                    .map(|byte| alphabet[byte as usize % alphabet.len()] as char)
+                    .collect();
+                has_tell(&raw)
+            })
+            .count();
+        assert!(
+            raw_hits > 0,
+            "{alphabet:?}: the test must be able to see a tell"
+        );
+        seeded.again(7);
+        for _ in 0..4000 {
+            let text = random_text(alphabet, 4);
+            assert_eq!(text.len(), 4);
+            assert!(!has_tell(&text), "{text}");
+        }
+    }
+}
+
+#[test]
+fn a_serial_built_from_pieces_is_drawn_again_across_the_joins() {
+    let _seeded = Seeded::new(3);
+    let mut draws = 0;
+    // The prefix "QE" and a tail of "MU" and "XY" letters: the join spells it
+    // in about one draw of eight.
+    let text = untold(|| {
+        draws += 1;
+        format!("QE{}", random_text(b"MUXY", 2))
+    });
+    assert!(!has_tell(&text), "{text}");
+    assert!(draws >= 1);
+}
+
+#[test]
+fn generated_identities_never_hold_a_tell_over_many_seeds() {
+    let seeded = Seeded::new(0);
+    let mut strings = Vec::new();
+    let mut checked = 0;
+    for seed in 0..300u64 {
+        seeded.again(seed);
+        for machine in MACHINES {
+            let identity = MachineIdentity::from_machine(machine);
+            strings.clear();
+            strings_of(&serde_json::to_value(&identity).unwrap(), &mut strings);
+            assert!(strings.len() > 20, "{}", machine.id);
+            for text in &strings {
+                assert!(
+                    !has_tell(text),
+                    "seed {seed}, {}: {text:?} gives the machine away",
+                    machine.id
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 300 * MACHINES.len());
+}
+
+#[test]
+fn the_same_seed_draws_the_same_identity() {
+    let seeded = Seeded::new(5);
+    let machine = &MACHINES[0];
+    let first = MachineIdentity::from_machine(machine);
+    seeded.again(5);
+    assert_eq!(first, MachineIdentity::from_machine(machine));
+    seeded.again(6);
+    assert_ne!(
+        first.system_serial,
+        MachineIdentity::from_machine(machine).system_serial
+    );
+}
