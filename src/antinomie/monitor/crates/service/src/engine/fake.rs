@@ -44,6 +44,9 @@ pub enum Change {
     Snapshot(Mutation),
     /// Any other notification, as it is.
     Notify(Box<Notification>),
+    /// Run this when the time comes (a test cancels a job, or arms a fault, at
+    /// a chosen moment of the script). No notification follows.
+    Call(Arc<dyn Fn() + Send + Sync>),
 }
 
 impl Change {
@@ -160,6 +163,19 @@ impl FakeEngine {
         self
     }
 
+    /// `call` runs `delay` from now, with no command behind it.
+    pub fn call_after(
+        &mut self,
+        delay: Duration,
+        call: impl Fn() + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.schedule(
+            ms(delay),
+            Item::Change(Box::new(Change::Call(Arc::new(call)))),
+        );
+        self
+    }
+
     pub fn unscripted(&mut self, behaviour: Unscripted) -> &mut Self {
         self.unscripted = behaviour;
         self
@@ -257,6 +273,10 @@ impl FakeEngine {
                     edit(&mut self.snapshot);
                     Some(Notification::Snapshot(self.snapshot.clone()))
                 }
+                Change::Call(call) => {
+                    call();
+                    None
+                }
             },
         }
     }
@@ -284,6 +304,14 @@ impl<'a> StepBuilder<'a> {
         edit: impl Fn(&mut Snapshot) + Send + Sync + 'static,
     ) -> Self {
         self.step.changes.push((delay, Change::snapshot(edit)));
+        self
+    }
+
+    /// `call` runs `delay` after the command.
+    pub fn call(mut self, delay: Duration, call: impl Fn() + Send + Sync + 'static) -> Self {
+        self.step
+            .changes
+            .push((delay, Change::Call(Arc::new(call))));
         self
     }
 

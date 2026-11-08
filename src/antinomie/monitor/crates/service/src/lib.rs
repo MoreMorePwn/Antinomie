@@ -34,9 +34,11 @@ pub mod lane;
 pub mod query;
 /// The JSON Schema generated from the types above.
 pub mod schema;
-/// The lane stages `prechecks` to `launch` (card P3-4b).
+/// The lane stages `prechecks` to `collect`, retries and the watchdog (cards P3-4b, P3-4c).
 pub mod stages;
 /// The job store: SQLite, the state machine and the queue (card P3-2).
 pub mod store;
 /// The engine waiter: commands, results and the waits a headless caller needs.
 pub mod waiter;
+/// The watchdog of a lane job (design 4.7.1).
+pub mod watchdog;

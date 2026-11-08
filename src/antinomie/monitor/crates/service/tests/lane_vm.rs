@@ -26,14 +26,14 @@ use antinomie_service::{
     api::{
         failure::FailureCode,
         ids::{LaneId, Sha256Hex},
-        job::{JobSample, JobState},
+        job::{EndReason, JobSample, JobState, RecordingPhase},
         ops::{Caller, Scope},
         spec::{JobSpec, SampleSource},
     },
     clock::SystemClock,
     config::{LoadedPolicy, Policy, PolicySet},
     lane::{LaneDir, LaneFile, ProcFs, Processes},
-    stages::{LaneEnv, LaneStages, NoHostChecks},
+    stages::{Driven, LaneEnv, LaneStages, NoHostChecks},
     store::{Eligibility, IntakeError, SampleAdmission, Store, SubmitContext, SubmitLimits},
     waiter::{Phase, Waiter, phase},
 };
@@ -72,15 +72,15 @@ fn settle(
         .unwrap_or_else(|e| panic!("{what}: {e}"));
 }
 
-#[test]
-#[ignore = "needs KVM, a base bundle and a private data directory"]
-fn the_stages_prechecks_to_launch_on_a_real_vm() {
-    let bundle = env_path("ANTINOMIE_LANE_VM_BUNDLE");
-    let data = env_path("ANTINOMIE_LANE_VM_DATA");
-    std::fs::create_dir_all(&data).unwrap();
-
+/// The engine, an imported base, the lane VM and its `auto-clean` snapshot, as
+/// `auto init` will make them. Returns the waiter, the VM id, the snapshot id
+/// and the base identity.
+fn setup_lane(
+    bundle: PathBuf,
+    data: &std::path::Path,
+) -> (Waiter<Backend>, String, String, Option<String>) {
     let backend = Backend::new(BackendOptions {
-        data_dir: data.clone(),
+        data_dir: data.to_path_buf(),
         headless: true,
         force_tcg: std::env::var_os("ANTINOMIE_FORCE_TCG").is_some(),
         ..BackendOptions::default()
@@ -150,6 +150,17 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
     let clean = waiter.snapshot().vm_snapshot_trees[&vm_id].nodes[0]
         .id
         .clone();
+
+    (waiter, vm_id, clean, base)
+}
+
+#[test]
+#[ignore = "needs KVM, a base bundle and a private data directory"]
+fn the_stages_prechecks_to_launch_on_a_real_vm() {
+    let bundle = env_path("ANTINOMIE_LANE_VM_BUNDLE");
+    let data = env_path("ANTINOMIE_LANE_VM_DATA");
+    std::fs::create_dir_all(&data).unwrap();
+    let (mut waiter, vm_id, clean, base) = setup_lane(bundle, &data);
 
     let service = data.join("service");
     let lanes = LaneDir::new(&service);
@@ -234,6 +245,7 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
                 policies: &policies,
                 procs: &procs,
                 host: &NoHostChecks,
+                evidence: &antinomie_service::waiter::load_artifacts,
             },
             lane: LaneId::new(1),
         };
@@ -303,5 +315,185 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
         lanes.update(&LaneId::new(1), |f| f.end_work(now)).unwrap();
     }
     let _ = (FailureCode::Internal, BTreeMap::<u8, u8>::new());
+    waiter.into_engine().shutdown().expect("shutdown");
+}
+
+/// A benign shell script in the library; the sample record for a job.
+fn add_script(data: &std::path::Path, name: &str, script: &str) -> JobSample {
+    let mut library = Library::open(data).expect("library");
+    let added = library
+        .add_bytes(
+            script.as_bytes(),
+            NewSample {
+                name: name.into(),
+                ..NewSample::default()
+            },
+        )
+        .expect("add sample");
+    JobSample {
+        sha256: Sha256Hex::try_from(added.sha256).unwrap(),
+        size: script.len() as u64,
+        kind: "sh".into(),
+        architecture: None,
+        name: name.into(),
+    }
+}
+
+#[test]
+#[ignore = "needs KVM, a base bundle and a private data directory"]
+fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
+    let bundle = env_path("ANTINOMIE_LANE_VM_BUNDLE");
+    let data = env_path("ANTINOMIE_LANE_VM_DATA");
+    std::fs::create_dir_all(&data).unwrap();
+    let (mut waiter, vm_id, clean, base) = setup_lane(bundle, &data);
+    let service = data.join("service");
+    let lanes = LaneDir::new(&service);
+    lanes
+        .save(&LaneFile::new(
+            LaneId::new(1),
+            &vm_id,
+            &clean,
+            base.as_deref().unwrap_or("base"),
+            1_794_000_000_000,
+        ))
+        .unwrap();
+    let mut policy = Policy::default();
+    policy.vm.lane_vm = Some(vm_id.clone());
+    policy.sample.accept_types = vec!["sh".into()];
+    policy.run.timeout_s = 60;
+    let policies = PolicySet::single(LoadedPolicy {
+        name: "default".into(),
+        digest: "test".into(),
+        policy,
+    });
+    let store = Store::open(&service).expect("store");
+    let caller = Caller {
+        client_id: "local:1000".into(),
+        scopes: vec![Scope::Read, Scope::Submit],
+        policies: vec![],
+    };
+    let procs = ProcFs;
+
+    // job name, script, timeout_s, what must happen
+    let jobs: [(&str, &str, u32); 3] = [
+        (
+            "ends.sh",
+            "#!/bin/sh\necho whole-job\nsleep 2\necho done\nexit 3\n",
+            60,
+        ),
+        ("limit.sh", "#!/bin/sh\necho limit\nsleep 300\n", 15),
+        ("cancel.sh", "#!/bin/sh\necho cancel\nsleep 300\n", 120),
+    ];
+    for (round, (name, script, timeout_s)) in jobs.iter().enumerate() {
+        let sample = add_script(&data, name, script);
+        let sha = sample.sha256.to_string();
+        let spec: JobSpec = serde_json::from_value(serde_json::json!({
+            "sample": {"sha256": sha},
+            "overrides": {"timeout_s": timeout_s},
+        }))
+        .unwrap();
+        let admit = Admit { sample };
+        let submitted = store
+            .submit(
+                &caller,
+                spec,
+                &SubmitContext {
+                    policies: &policies,
+                    intake: &admit,
+                    limits: SubmitLimits::default(),
+                    on_duplicate: None,
+                },
+            )
+            .expect("submit");
+        assert_eq!(
+            submitted.job.state,
+            JobState::Queued,
+            "{:?}",
+            submitted.job.failure
+        );
+        let job = store
+            .claim_next(&LaneId::new(1), &mut |_| Eligibility::Ready)
+            .unwrap()
+            .expect("the job is claimed");
+        let began = std::time::Instant::now();
+        let driven = std::thread::scope(|scope| {
+            if *name == "cancel.sh" {
+                // A user cancels the job while the program runs.
+                scope.spawn(|| {
+                    std::thread::sleep(Duration::from_secs(75));
+                    store
+                        .cancel(
+                            &job.id,
+                            Some("vm test"),
+                            &Caller {
+                                client_id: "local:1000".into(),
+                                scopes: vec![Scope::Read, Scope::Submit],
+                                policies: vec![],
+                            },
+                        )
+                        .expect("cancel");
+                });
+            }
+            let mut stages = LaneStages {
+                waiter: &mut waiter,
+                env: LaneEnv {
+                    store: &store,
+                    lanes: &lanes,
+                    policies: &policies,
+                    procs: &procs,
+                    host: &NoHostChecks,
+                    evidence: &antinomie_service::waiter::load_artifacts,
+                },
+                lane: LaneId::new(1),
+            };
+            let driven = stages.drive(&job);
+            if let Driven::Collected(end) = &driven {
+                stages.finish_collected(&job, end).expect("finish");
+            }
+            driven
+        });
+        let stored = store.get(&job.id).unwrap();
+        let run = stored.run.clone().expect("a run");
+        println!(
+            "job {round} ({name}): {:.1} s, {:?}, state {:?}, run end {:?} exit {:?}, recording {:?}",
+            began.elapsed().as_secs_f64(),
+            std::mem::discriminant(&driven),
+            stored.state,
+            run.end_reason,
+            run.exit,
+            stored.recording.as_ref().map(|r| r.phase)
+        );
+        match *name {
+            "ends.sh" => {
+                assert!(matches!(driven, Driven::Collected(_)), "{driven:?}");
+                assert_eq!(stored.state, JobState::Succeeded);
+                assert_eq!(run.end_reason, Some(EndReason::Exited));
+                assert_eq!(run.exit, Some(3));
+            }
+            "limit.sh" => {
+                assert!(matches!(driven, Driven::Collected(_)), "{driven:?}");
+                assert_eq!(stored.state, JobState::Succeeded);
+                assert_eq!(run.end_reason, Some(EndReason::TimeLimit));
+            }
+            _ => {
+                assert!(matches!(driven, Driven::Cancelled), "{driven:?}");
+                assert_eq!(stored.state, JobState::Cancelled);
+                assert_eq!(run.end_reason, Some(EndReason::Stopped));
+            }
+        }
+        if *name != "cancel.sh" {
+            assert_eq!(
+                stored.recording.as_ref().map(|r| r.phase),
+                Some(RecordingPhase::Complete)
+            );
+        }
+        // The lane is free, the VM stopped, nothing pending, no process left.
+        let snapshot = waiter.snapshot();
+        assert_eq!(snapshot.state, VmState::Stopped);
+        assert!(snapshot.disk_layers.iter().all(|l| l.vm_id != vm_id));
+        assert!(snapshot.recording_flush.is_none());
+        let file = lanes.load(&LaneId::new(1)).unwrap().unwrap();
+        assert!(file.current.is_none() && file.collected.is_empty() && file.qemu.is_none());
+    }
     waiter.into_engine().shutdown().expect("shutdown");
 }

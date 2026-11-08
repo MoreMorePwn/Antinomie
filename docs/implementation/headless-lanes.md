@@ -1,6 +1,6 @@
 # Implementation record: Headless lanes
 
-The lane state file, the engine seam, the recovery of a lane after a crash, and the lane stages `prechecks` to `launch`. Host only; part of the headless mode in `antinomie-service` (`crates/service/src/{engine,lane,stages}/`). The stages `run` and `collect`, retries and the watchdog come in the next card. Part of the [implementation record](../implementation.md).
+The lane state file, the engine seam, the recovery of a lane after a crash, and the lane stages `prechecks` to `launch`. Host only; part of the headless mode in `antinomie-service` (`crates/service/src/{engine,lane,stages}/`). The stages `run` and `collect`, cancellation, retries, quarantine and the watchdog close the lane cycle (crates `antinomie-service`, `stages/{run,collect,cleanup,drive,retry}.rs`, `watchdog.rs`). The host stages `analyse`, `report` and `cleanup` are a later card. Part of the [implementation record](../implementation.md).
 
 ### The engine seam
 
@@ -79,3 +79,46 @@ Revert by policy `vm.revert`: `snapshot_disk` is `RestoreVmSnapshot { boot_from_
 **The launch request.** `path` is the guest path; `args` and `env` come from the spec (a default `PATH` is added when the spec has none, as `run exec` does); `cwd` is the policy's `run.guest_dir`; `uid`/`gid` 1000 for a user run, 0 for root, or the ids given; guest-side analysis disabled; `run_in` from the spec or the policy; `capture_network`, `memory_dump_on_exit`, `core_dump_on_exit` with `core_max_size` (policy `core_max_mib` in bytes) and `core_timeout_ms` (5000 unless the spec gives one); `debug_on_start` false; `route` set; `host_copy` none; `sample` set, so the run is linked to the library sample. `ExecRequest::validate` refuses a core dump in a desktop run: `launch_failed` before the engine is asked.
 
 **Finding the QEMU process.** The engine exposes no pid. After the guest answers, `provision` scans `/proc` for `qemu-system*` processes whose command line holds the VM's folder (from the snapshot's `vm_locations`, else the VM id). Exactly one match is recorded in the lane file (`pid`, `start_ticks`, `marker`); any other count is a `qemu_pid_unknown` job warning and the record is cleared. `lane::clear_for_reset` is the bookkeeping of `auto lane reset`: it clears `failures` and `qemu` only after the recorded QEMU is confirmed gone with the test recovery uses.
+
+### The stages `run` and `collect`
+
+| Stage | What it does | Failure codes |
+|---|---|---|
+| `run` | Reads the run's state and terminal every 200 ms. The run ends when its state is `Finished`, `Stopped`, `TerminalClosed` or `Finalized` and no task is live. At the run limit (`run_s`, the spec's `timeout_s`) it sends `StopRun` once; the run then ends with `end_reason = time_limit` and **the job is not failed**. A run still going 120 s after `StopRun` is lost | `launch_failed` (`FailedToStart`, `LaunchUnconfirmed`), `guest_lost` (`Interrupted`, a run that vanished, a VM that stopped or failed under the program, no end after `StopRun`), `internal` (60 s with nothing from the engine) |
+| `collect` | Waits until network, memory and core evidence are no longer being written (`collect_s` 300 s), then `Stop` (answered within `stop_s` 120 s), then waits until the VM is stopped, the recording flush is over and the VM has no pending disk layer (`layer_s` 1800 s). Only then does the lane write `collected` and become free | `recording_failed` (evidence not complete in time, an unreadable `artifacts.json`, an unanswered `Stop`, a layer that does not settle), `guest_lost` (the VM failed meanwhile). Evidence left `Partial`, `Interrupted` or `Failed` is not a failure: the job outcome is `partial` with a warning each |
+
+The run record of the job (`job.run`) gets `ended_ms`, `end_reason` (`exited`, `signaled`, `time_limit`, `stopped`, `guest_lost`), the exit code or the signal and the core flag from the root task's wait status; the recording phase goes `live`, `finalizing` (run over), `complete` (settled) or `interrupted` (the guest was lost).
+
+**The lane file at `collect`.** `collect started` is a normal checkpoint. The end of `collect` is **one** write that moves the work into `collected` (and clears the QEMU record), instead of a `collect finished` checkpoint, so a crash leaves either "collect started" (recovery makes a new attempt) or "collected" (the job resumes at `analyse`), never both. The store's `stage` row is closed after that write; a crash between the two is the "collected" case.
+
+### Driving a job: `LaneStages::drive`
+
+`drive(job)` runs `prechecks` to `collect` with the store's stage records and the lane checkpoints, and ends or requeues the job:
+
+| The cycle ends with | The lane | The job |
+|---|---|---|
+| `collect` finished | `collected` entry, free | stays `running`; `finish_collected` ends it with the outcome until the host stages exist |
+| a failure the policy retries | VM stopped and settled, work ended, QEMU record cleared | `queued` with `waiting_for: backoff` and `job.requeued`; the failure is kept on the attempt |
+| any other failure | the same | `failed` with the failure |
+| a cancel | the same; the recording is kept | `cancelled` (back in the queue when the cancel is the daemon's shutdown) |
+| the job limit (`job_hard_s`) | the same | `failed`, `internal`, detail `watchdog`; never retried |
+| a wait from `prechecks` | untouched | `queued` with `waiting_for`; no attempt is used |
+| a signal or a dead engine | untouched | untouched; recovery at the next start finishes it |
+
+**Cancellation** is polled inside every wait of every stage: `drive` gives the waiter a cancel hook (a subscription to the store's `job.state` events) and a wait that sees the cancel ends with `WaitError::Cancelled` within one pump (100 to 200 ms). The run and collect stages turn that off and act on the cancel themselves: `run` sends `StopRun`, waits up to 120 s for the run to end and returns `Cancelled`; `collect` skips the rest of the evidence wait. In every case the cleanup then waits for any command that was given up (a restore the engine is still doing), stops the lane VM if it runs and waits for the recording and the layer, so the recording is kept and the VM is never left running. A cancel that arrives while the VM stops is honoured after the stop.
+
+**Retry** (design 4.7.2, `stages/retry.rs`). A failure is retried when its code is in the policy's `retry_on` (default `vm_start_failed`, `guest_unreachable`, `upload_failed`, `guest_lost`) **and** it is not permanent **and** the job has an attempt left (`max_attempts`, the store decides). Permanent, whatever the policy lists: `sample_*`, `duplicate_denied`, `policy_denied`, `no_base`, `no_vm`, `revert_failed` (the lane is quarantined instead), `lane_changed`, `cancelled`, and the waits `quota_exceeded`, `dependency_missing`, `host_resources`. `launch_failed` is permanent (the desktop run with a core dump is refused before the engine is asked) unless the engine's words name a transient cause (`capacity`, `too many terminals`, `terminal limit`). `guest_lost` and `recording_failed` happen at most once per job: a sample that ends the guest twice is final and the job gets the warning `crashes_guest`. The wait before the next attempt is the policy's `backoff_s` (the n-th entry after the n-th failure, the last one repeated), plus or minus 20 percent from a hash of the job id and the attempt. Every attempt starts with a full revert. Each failed attempt is recorded with its code in the store (`attempts.failure_code`).
+
+**Quarantine** (design 4.5.3) keeps the rules of the previous stages: `revert_failed` after one retry of the restore, `lane_changed` when the clean snapshot is gone, and `QUARANTINE_AFTER` (3) consecutive `vm_start_failed` or `guest_unreachable`; a boot that reaches the guest resets the count. A job that fails because of the third failure is still requeued (if the policy retries it) and then waits `queued` with `waiting_for: lane_quarantined` until `auto lane reset` or `unquarantine`.
+
+**The watchdog** (`watchdog.rs`, design 4.7.1):
+
+| Trigger | Rule | Result |
+|---|---|---|
+| the whole job | `job_hard_s` = run limit plus 1800 s from the start of `drive`, enforced through the waiter so it ends any wait | cleanup, `failed` (`internal`, `watchdog`) |
+| the engine, during `run` | 60 s with nothing from it (the lane reads the terminal every 200 ms, so it answers all the time) | `internal`, then cleanup |
+| a quiet `collect` | `stall_s` 120 s with nothing heard is a job warning (`collect_stalled`); twice that ends the wait | `recording_failed` |
+| a stage | the deadlines of 4.1 (`boot_s` 180, `upload_s`, `launch_s` 30, `collect_s` 300, `stop_s` 120, `layer_s` 1800) | the stage's failure code |
+| a hung `Stop` | no answer in `stop_s`: the **hard path** kills the QEMU recorded in the lane file, only if its `/proc/<pid>/cmdline` and start time still match, and gives the engine 30 s to notice; the job gets the warning `vm_hard_stop` | `recording_failed` |
+
+`FakeEngine` can run a callback at a point of its script (`StepBuilder::call`, `FakeEngine::call_after`), which the tests use to cancel a job or arm a lane-file fault at an exact moment.

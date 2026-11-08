@@ -258,7 +258,7 @@ impl<E: Engine> Waiter<E> {
         self.results.clear();
     }
 
-    fn run_of(&self, run_id: &str) -> Option<RunSummary> {
+    pub(crate) fn run_of(&self, run_id: &str) -> Option<RunSummary> {
         self.snapshot
             .runs
             .iter()
