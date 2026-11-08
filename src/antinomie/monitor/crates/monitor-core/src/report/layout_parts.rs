@@ -563,7 +563,7 @@ impl Builder {
             blocks.push(Block::Note(note));
         }
         blocks.push(Block::Note(
-            "Process reads name (pid \u{b7} tid); a leading - per level shows the tree, and \
+            "Process reads name (pid \u{b7} tid); a child is indented under its parent (+-), and \
              \"fork\" marks a child that has not run a program of its own."
                 .into(),
         ));
