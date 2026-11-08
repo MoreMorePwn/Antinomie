@@ -4,8 +4,8 @@
 CHANGELOG.md, CONTRIBUTING.md, AGENTS.md and SECURITY.md.
 
 A link is a missing file, or a `#anchor` that is not a heading of the target
-Markdown file (GitHub's slug rules). Links inside code fences and absolute URLs
-are skipped. Exit status 1 when anything is reported.
+Markdown file (GitHub's slug rules). Links inside code fences, inline code spans
+and absolute URLs are skipped. Exit status 1 when anything is reported.
 """
 import os
 import re
@@ -33,6 +33,11 @@ def strip_fences(text):
     return re.sub(r"^```.*?^```", "", text, flags=re.S | re.M)
 
 
+def strip_code(text):
+    """Fences and inline code spans: an example link there is not a link."""
+    return re.sub(r"`[^`\n]*`", "", strip_fences(text))
+
+
 _anchors = {}
 
 
@@ -57,7 +62,7 @@ def main():
     files = doc_files()
     for path in files:
         with open(path, encoding="utf-8") as handle:
-            text = strip_fences(handle.read())
+            text = strip_code(handle.read())
         shown = os.path.relpath(path, ROOT)
         for match in re.finditer(r"\]\(([^)\s]+)\)", text):
             target = match.group(1)
