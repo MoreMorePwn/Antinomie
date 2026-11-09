@@ -724,6 +724,16 @@ The network capture is the guest's own view on every route.
   the clock times are on hover). The category, confidence, evidence, version,
   source and flags are in Details; every filter key still works. A row has a
   tier (HIGH, MEDIUM, LOW; INFO is only counted unless **Show INFO** is on).
+  **Retries a dead command server** (`network.dead_c2`, Medium) is the loop of a bot
+  whose command server is gone: ten or more connects to one public address and port
+  failed (refused, timed out, network or host unreachable) and none ever succeeded,
+  counted over the whole run and across the processes that made them. Fewer tries are
+  ordinary retry noise. DNS (port 53), NTP, DHCP and mDNS, loopback and private
+  addresses, and the base image's own programs (time sync, DHCP, apt) are never counted,
+  and one successful connect to the address clears it. The row appears at the tenth
+  failure and counts the failures from there on (**Count** and **Result** read
+  `all failed`), with the last error in Details. A non-blocking connect that only
+  reports "in progress" is neither a failure nor a success.
   Repeats fold into one row with a count.
 
   The tiers mean: **High**, something ordinary software essentially never does
@@ -879,7 +889,9 @@ The network capture is the guest's own view on every route.
   MassHunt, IoT or Unique, and a rule pack's vendor or author in a rule name such as
   `SEKOIA_` or `ESET_`, are never a family; a family is the one family word of the
   rule, so `SEKOIA_Backdoor_Lin_Bpfdoor` and `MIRAI_OHSHIT_payload` name BPFDoor and
-  Mirai); and behaviour tags), **Key findings** (the six worst by tier and
+  Mirai; a family named only by a layer Static analysis unpacked from a packed
+  sample says "in the unpacked payload", and a signature fetched for a file you
+  imported says "looked up by hash"); and behaviour tags), **Key findings** (the six worst by tier and
   then first time, each with its description on a line below, cut to its first sentence
   with "…" when there is more: a click on the description shows all of it and another
   folds it; a click on the row opens the finding's Details, **all N** opens Suspicious activity, **Show more** turns
@@ -1639,6 +1651,15 @@ first choice: TShark needs `.mmdb` databases to fill Country and Organization.
 Older `GeoIP.dat` files (such as `/usr/share/GeoIP` on Debian) do not work with
 TShark 4. Antinomie hands its databases to its own TShark runs only and never
 changes your Wireshark settings.
+
+**Imported files** on the same page has **Look imported files up at MalwareBazaar**,
+off by default. When it is on and you have set your own abuse.ch key (Tools > API
+keys), **Add file** sends the new sample's SHA-256, and nothing else, to
+MalwareBazaar. If it knows the file, the sample keeps the record (signature and tags),
+the custody log notes where it came from, and the signature is a family candidate
+shown as "MalwareBazaar signature (looked up by hash)". A sample that already has a
+record, or that MalwareBazaar does not list, is left as it is; with the setting off,
+or without a key, nothing is sent.
 
 **Database status.** While it looks, the page says "Looking for databases…". Then
 **Country / city** and **Organization (AS)** each show **Database found** or **No

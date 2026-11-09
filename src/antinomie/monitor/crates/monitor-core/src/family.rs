@@ -47,6 +47,9 @@ pub fn rule_family(hit: &DetectionHit) -> Option<String> {
 pub struct Bazaar<'a> {
     pub signature: Option<&'a str>,
     pub tags: &'a [String],
+    /// The record was fetched by the sample's hash after the sample was
+    /// imported from a file; the sources say so.
+    pub looked_up: bool,
 }
 
 /// Fragments of rule names that never are a family, kept in this one place:
@@ -670,7 +673,11 @@ pub fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candi
                 60
             },
             strong: true,
-            source: source.into(),
+            source: if bazaar.looked_up {
+                format!("{source} (looked up by hash)")
+            } else {
+                source.into()
+            },
         });
     }
     merge(mentions)
@@ -678,6 +685,14 @@ pub fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candi
 
 /// What one YARA or IDS match says of the family.
 fn mention(hit: &DetectionHit) -> Option<Mention> {
+    let mut found = mention_of(hit)?;
+    if hit.layer {
+        found.source.push_str(" (in the unpacked payload)");
+    }
+    Some(found)
+}
+
+fn mention_of(hit: &DetectionHit) -> Option<Mention> {
     if hit.engine.eq_ignore_ascii_case("ids") {
         let title = hit.title.to_ascii_lowercase();
         let word = IDS_FAMILIES
@@ -1004,6 +1019,7 @@ mod tests {
             Bazaar {
                 signature: Some("Mirai"),
                 tags: &tags,
+                ..Bazaar::default()
             },
         );
         assert_eq!(names(&found), ["Mirai", "Prometei"], "{found:?}");
@@ -1014,11 +1030,47 @@ mod tests {
             Bazaar {
                 signature: Some("Gafgyt"),
                 tags: &["Mirai".to_owned()],
+                ..Bazaar::default()
             },
         );
         assert_eq!(names(&other), ["Gafgyt", "Mirai"]);
         assert_eq!(other[0].source, "MalwareBazaar signature");
         assert_eq!(other[1].source, "MalwareBazaar tag");
+    }
+
+    #[test]
+    fn a_looked_up_signature_says_how_it_was_found_and_ranks_the_same() {
+        let tags = ["P2PInfect".to_owned()];
+        let record = |looked_up| Bazaar {
+            signature: Some("P2PInfect"),
+            tags: &tags,
+            looked_up,
+        };
+        let plain = family_candidates(&[], record(false));
+        let looked = family_candidates(&[], record(true));
+        assert_eq!(looked.len(), plain.len());
+        assert_eq!(looked[0].name, "P2PInfect");
+        assert_eq!(looked[0].points, plain[0].points);
+        assert_eq!(
+            looked[0].source,
+            "MalwareBazaar signature (looked up by hash)"
+        );
+        assert_eq!(plain[0].source, "MalwareBazaar signature");
+    }
+
+    #[test]
+    fn a_family_named_only_in_the_unpacked_payload_says_so() {
+        let mut in_layer = hit("YARA", "Linux_Trojan_Gafgyt_28a2fe0c", "80", "", "Elastic");
+        in_layer.layer = true;
+        let found = family_candidates(&[in_layer], Bazaar::default());
+        assert_eq!(names(&found), ["Gafgyt"]);
+        assert!(
+            found[0].source.ends_with("(in the unpacked payload)"),
+            "{found:?}"
+        );
+        let on_file = hit("YARA", "Linux_Trojan_Gafgyt_28a2fe0c", "80", "", "Elastic");
+        let found = family_candidates(&[on_file], Bazaar::default());
+        assert!(!found[0].source.contains("unpacked"));
     }
 
     #[test]

@@ -831,6 +831,8 @@ pub const SPECS: &[Spec] = &[
     ),
     rule("c2.bind_shell", 1, T::High, C::Command, &["T1059.004"]),
     rule("network.listen_any", 1, T::Medium, C::Command, &[]),
+    // The failing is the signal: every call of the row failed.
+    rule("network.dead_c2", 1, T::Medium, C::Command, &[]).signal(),
     rule(
         "network.raw_socket",
         1,

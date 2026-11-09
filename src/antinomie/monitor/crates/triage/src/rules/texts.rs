@@ -145,6 +145,7 @@ pub const TEXTS: &[(&str, &str, &str)] = &[
     ("bpf.seccomp_filter", "Restricting own system calls: seccomp filter", "A classic seccomp filter was installed. Services sandbox themselves this way, and so can a program that wants to stop a tracer."),
     ("c2.bind_shell", "Bind shell", "A shell or interpreter was started with an accepted client connection as its input and output. Someone connected in and got a command line."),
     ("network.listen_any", "Listening on all interfaces", "A TCP listen or a UDP bind on a non-loopback address and a fixed port, other than DHCP, NTP, mDNS and LLMNR. The program waits for outside connections."),
+    ("network.dead_c2", "Retries a dead command server", "Ten or more connects to one public address and port failed (refused, timed out, or the network or host unreachable) and none ever succeeded. A bot whose command server is gone keeps trying. Local addresses, DNS, NTP, DHCP and the base image's own programs are not counted; a few failed tries are ordinary."),
     ("collection.tty_inject", "Keystrokes injected into a terminal", "ioctl TIOCSTI pushed characters into a terminal's input. It runs commands in another session."),
     ("impact.ransom_note", "Same note in many directories", "The same file name was created in three or more directories, as a ransom note is. Ordinary project files are excluded."),
 ];

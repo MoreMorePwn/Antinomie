@@ -102,6 +102,12 @@ fn get_and_set_reach_nested_keys_and_refuse_bad_values() {
 fn a_daemon_never_looks_symbols_up_online() {
     assert!(EngineSettings::default().memory_online_symbols);
     assert!(!EngineSettings::default().for_daemon().memory_online_symbols);
+    let lookup = EngineSettings {
+        sample_hash_lookup: true,
+        ..EngineSettings::default()
+    };
+    assert!(!EngineSettings::default().sample_hash_lookup);
+    assert!(!lookup.for_daemon().sample_hash_lookup);
 }
 
 #[test]

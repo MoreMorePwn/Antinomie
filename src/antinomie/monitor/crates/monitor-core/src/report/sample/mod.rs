@@ -211,6 +211,10 @@ pub struct RuleHit {
     pub license: String,
     pub source: String,
     pub reference: String,
+    /// Every match was in a layer static analysis unpacked from the sample,
+    /// not in the packed file.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub layer: bool,
 }
 
 /// One run of the sample.
@@ -620,6 +624,7 @@ impl SampleReport {
             }) {
                 Some(known) => {
                     known.in_static_scan |= from_static || hit.in_static_scan;
+                    known.layer &= hit.layer && !from_static;
                     if !from_static {
                         // The run's report has the pack id, the title and the source.
                         known.rule_id.clone_from(&hit.rule_id);
@@ -679,6 +684,7 @@ impl SampleReport {
                 family: hit.family.clone(),
                 source: hit.source.clone(),
                 count: hit.count,
+                layer: hit.layer,
                 ..Default::default()
             })
             .collect();

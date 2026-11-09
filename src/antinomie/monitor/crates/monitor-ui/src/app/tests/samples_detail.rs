@@ -906,6 +906,53 @@ fn the_family_field_shows_what_triage_named_and_aliases_show_no_host_path() {
 }
 
 #[test]
+fn a_looked_up_signature_is_the_family_of_an_imported_file_with_its_source_shown() {
+    use antinomie_monitor_core::samples::{Library, SampleInfo};
+    let root = super::samples_list::temp("detail-lookup-family");
+    let (script, _, _) = super::samples_list::fixture(&root);
+    // Before the lookup the file has no family.
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    app.options.data_dir = root.clone();
+    app.snapshot.vms.push(VmConfig {
+        id: "vm".into(),
+        name: "Debian".into(),
+        ..VmConfig::default()
+    });
+    app.rules_ui.set_packs_for_test(Vec::new());
+    Library::open(&root)
+        .unwrap()
+        .record_lookup(
+            &script,
+            SampleInfo {
+                signature: Some("P2PInfect".into()),
+                ..SampleInfo::default()
+            },
+        )
+        .unwrap();
+    app.open_library(crate::workspace::LibraryPage::Samples);
+    until(&mut app, &ctx, |app| app.samples_page.is_loaded());
+    app.samples_page.open_detail(&script);
+    until(&mut app, &ctx, |app| {
+        app.samples_page.detail_rollup().is_some()
+    });
+    let mut texts = Vec::new();
+    for _ in 0..4 {
+        texts = page_texts(&mut app, &ctx);
+    }
+    let at = texts.iter().position(|text| text == "Family").unwrap();
+    assert_eq!(texts[at + 1], "P2PInfect", "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("MalwareBazaar signature, looked up by hash")),
+        "the source is shown: {texts:?}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_run_that_preloads_a_library_sample_is_listed_under_that_sample_with_its_role() {
     let root = super::samples_list::temp("detail-preload");
     let (_, _, library) = super::samples_list::fixture(&root);

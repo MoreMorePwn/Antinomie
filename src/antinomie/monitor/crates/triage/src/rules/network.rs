@@ -159,6 +159,7 @@ pub fn connect(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     if ip.is_loopback() {
         return;
     }
+    dead_server(cx, st, (ip, port), &target, out);
     let task = st.task(cx);
     task.connects.push(time, LOGINS.0, (ip, port));
     if !task.scan_done {
@@ -223,6 +224,78 @@ pub fn connect(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
             format!("connect to {target} after reading known hosts or keys"),
         ));
     }
+}
+
+/// Failed connects to one public address and port that never succeeded: the
+/// row starts at the tenth failure and counts the ones after it.
+pub const DEAD_MIN: u32 = 10;
+/// Refused, timed out, network unreachable, host unreachable.
+const DEAD_ERRORS: &[i64] = &[-111, -110, -101, -113];
+
+fn error_name(ret: i64) -> &'static str {
+    match ret {
+        -111 => "ECONNREFUSED (connection refused)",
+        -110 => "ETIMEDOUT (timed out)",
+        -101 => "ENETUNREACH (network unreachable)",
+        _ => "EHOSTUNREACH (host unreachable)",
+    }
+}
+
+/// `network.dead_c2`: [`DEAD_MIN`] failed connects to one address and port
+/// with no success. Local and housekeeping addresses (DNS, NTP, DHCP, mDNS)
+/// and the base image's own programs are never counted, and one success
+/// clears the address for good. A non-blocking connect that reports
+/// `EINPROGRESS` is neither a failure nor a success here.
+fn dead_server(
+    cx: &Ctx,
+    st: &mut State,
+    (ip, port): (IpAddr, u16),
+    target: &str,
+    out: &mut Vec<Hit>,
+) {
+    if private(ip) || port == 53 || HOUSEKEEPING_PORTS.contains(&port) {
+        return;
+    }
+    if st.dead_servers.len() >= 4096 && !st.dead_servers.contains_key(&(ip, port)) {
+        return;
+    }
+    if cx.ok {
+        st.dead_servers.entry((ip, port)).or_default().reached = true;
+        return;
+    }
+    let Some(error) = cx.ret.filter(|ret| DEAD_ERRORS.contains(ret)) else {
+        return;
+    };
+    let base = antinomie_monitor_core::ioc::indicator::Process {
+        pid: cx.event.pid,
+        cookie: cx.call.task_cookie,
+        name: cx.image_name().to_owned(),
+    };
+    if antinomie_monitor_core::ioc::baseline::base_program(&base) {
+        return;
+    }
+    let server = st.dead_servers.entry((ip, port)).or_default();
+    if server.reached {
+        return;
+    }
+    server.failed = server.failed.saturating_add(1);
+    if server.failed < DEAD_MIN {
+        return;
+    }
+    let mut hit = Hit::new(
+        "network.dead_c2",
+        target,
+        format!("failed to connect to {target} at least {DEAD_MIN} times and never succeeded"),
+    );
+    if server.failed == DEAD_MIN {
+        hit = hit
+            .detail(format!("Last error: {}.", error_name(error)))
+            .detail(format!(
+                "Reported from the {DEAD_MIN}th failed connect to the same public address and port, with no successful connect to it; the count and pace of this row cover the failures from then on."
+            ))
+            .detail("DNS, NTP, DHCP, mDNS, local addresses and the base image's own programs are not counted.");
+    }
+    out.push(hit);
 }
 
 pub fn bind(cx: &Ctx, out: &mut Vec<Hit>) {

@@ -176,6 +176,22 @@ pub fn yara_family(
         .unwrap_or_default()
 }
 
+/// Whether a match was found only in layers static analysis unpacked from the
+/// sample: its evidence is bytes of an unpacked layer and nothing else.
+fn only_in_layers(evidence: &[antinomie_monitor_core::analysis::detection::Evidence]) -> bool {
+    use antinomie_monitor_core::analysis::detection::{Evidence, InputKind};
+    !evidence.is_empty()
+        && evidence.iter().all(|item| {
+            matches!(
+                item,
+                Evidence::Bytes {
+                    input: Some(InputKind::UnpackedLayer),
+                    ..
+                }
+            )
+        })
+}
+
 /// The matches of the engines whose reports are complete.
 pub fn detections(
     results: &[Option<Result<antinomie_monitor_core::analysis::detection::Report, String>>; 3],
@@ -201,6 +217,7 @@ pub fn detections(
                 license: finding.license.clone(),
                 source: detection::pack_name(report, finding),
                 reference: finding.reference(report.engine),
+                layer: only_in_layers(&finding.evidence),
             });
         }
     }
@@ -332,6 +349,27 @@ mod tests {
         assert_eq!(yara_family(Engine::Yara, rule), "XMRig");
         assert_eq!(yara_family(Engine::Ids, rule), "");
         assert_eq!(yara_family(Engine::Yara, "rule a { condition: true }"), "");
+    }
+
+    #[test]
+    fn a_match_only_in_an_unpacked_layer_is_marked_as_the_payload() {
+        use antinomie_monitor_core::analysis::detection::{Evidence, InputKind};
+        let bytes = |input| Evidence::Bytes {
+            path: "layer-1.bin".into(),
+            offset: Some(0),
+            address: None,
+            report_id: None,
+            block: None,
+            input,
+        };
+        assert!(only_in_layers(&[bytes(Some(InputKind::UnpackedLayer))]));
+        assert!(!only_in_layers(&[]));
+        assert!(!only_in_layers(&[bytes(Some(InputKind::Executable))]));
+        assert!(!only_in_layers(&[bytes(None)]));
+        assert!(!only_in_layers(&[
+            bytes(Some(InputKind::UnpackedLayer)),
+            bytes(Some(InputKind::Executable))
+        ]));
     }
 }
 

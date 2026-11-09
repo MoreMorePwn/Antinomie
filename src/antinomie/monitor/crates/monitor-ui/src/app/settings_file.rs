@@ -35,6 +35,7 @@ impl Settings {
             bundle: self.bundle.clone(),
             analysis_limits: self.analysis_limits,
             memory_online_symbols: self.memory_online_symbols,
+            sample_hash_lookup: self.sample_hash_lookup,
             disks: self.disks.clone(),
             start: Some(self.start),
             extra: self.engine_extra.clone(),
@@ -63,6 +64,7 @@ impl Settings {
         self.bundle = file.bundle;
         self.analysis_limits = file.analysis_limits;
         self.memory_online_symbols = file.memory_online_symbols;
+        self.sample_hash_lookup = file.sample_hash_lookup;
         self.disks = file.disks;
         // A file no front end wrote them to keeps the window's own.
         if let Some(start) = file.start {

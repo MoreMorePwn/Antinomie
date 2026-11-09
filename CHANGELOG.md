@@ -14,6 +14,27 @@ x86 programs by their own table.
 
 ### Host
 
+- **A packed sample gets its family, imported files get MalwareBazaar's signature, and a
+  dead command server is a finding (ANT-T0399).**
+  - A family named only by a layer static analysis unpacked from the sample (UPX and
+    the like, scanned with YARA since T0398) is a family candidate of the sample
+    like any other, on the Summary, the sample page and the sample report, and its
+    source says "in the unpacked payload". A match is marked as the payload's when
+    all its evidence is in unpacked layers.
+  - **Settings > Lookup > Imported files > Look imported files up at MalwareBazaar**
+    (off by default; a daemon or container never turns it on). After **Add file**, and only
+    with your own abuse.ch key (Tools > API keys), the file's SHA-256 (nothing else)
+    is sent to MalwareBazaar. A record with a signature or tags is kept with the
+    sample, noted in its custody log, and its signature is a family candidate with the
+    source "MalwareBazaar signature (looked up by hash)". A sample that already has a
+    record is not asked about. With the setting off, or no key, nothing is sent.
+  - **Retries a dead command server** (`network.dead_c2`, Medium, Command & control): ten or
+    more failed connects (refused, timed out, network or host unreachable) to one public
+    address and port that never once succeeded, in the whole run and whatever process
+    made them. DNS, NTP, DHCP, mDNS, local addresses and base image programs are not
+    counted, and one success clears the address. The row counts the failures from the
+    tenth on and shows their pace.
+
 - **A slow TCG boot no longer fails the VM Start at 180 s (ANT-T0442).** The service's
   180 s limit on the VM `Start` command was fixed, so on a busy host the engine's own
   TCG wait for the guest to connect could outlast it and the job failed with "the VM did

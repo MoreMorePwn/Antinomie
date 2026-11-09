@@ -33,6 +33,7 @@ fn customised() -> Settings {
         file_before_run_mib: 44,
         timeout: 45,
         memory_online_symbols: false,
+        sample_hash_lookup: true,
         automatic_detection: false,
         outbound_catalog: true,
         address_lookup: AddressLookup::TsharkThenWhois,
@@ -72,6 +73,7 @@ fn the_first_start_writes_every_stored_shared_value_into_the_file() {
     assert_eq!(written.triage_detection.sigma_python, "/opt/py/bin/python");
     assert_eq!(written.address_lookup, AddressLookup::TsharkThenWhois);
     assert!(!written.memory_online_symbols);
+    assert!(written.sample_hash_lookup);
     assert!(written.disks.hide_dotfiles && written.disks.extract_cap_mib == 17);
 }
 
@@ -91,6 +93,10 @@ fn a_settings_blob_from_before_any_of_this_migrates_with_defaults_for_what_it_la
         settings::EngineSettings::default().core_budget_mib
     );
     assert!(written.memory_online_symbols);
+    assert!(
+        !written.sample_hash_lookup,
+        "off unless the user turns it on"
+    );
 }
 
 #[test]

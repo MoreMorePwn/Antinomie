@@ -357,3 +357,115 @@ pub fn files_pushed_to_another_host_are_medium() {
         "lateral.tool_transfer"
     ));
 }
+
+fn connect_result(pid: u32, ip: [u8; 4], port: u16, result: i64) -> InvocationSummary {
+    with_entry(
+        sys(pid, 42, "connect", [3, 0x1000, 16, 0, 0, 0], result),
+        "arg1.address",
+        &address(2, ip, port),
+    )
+}
+
+fn tries(count: usize, ip: [u8; 4], port: u16, result: i64) -> Calls {
+    let mut calls = vec![socket(1, 2, 1, 3)];
+    calls.extend((0..count).map(|n| {
+        at(
+            connect_result(1, ip, port, result),
+            (n as u64 + 1) * 3_000_000_000,
+        )
+    }));
+    calls
+}
+
+#[test]
+pub fn ten_failed_connects_to_one_public_address_are_a_retry_loop() {
+    let out = run(tries(34, [203, 0, 113, 9], 4444, -111));
+    let row = rows(&out, "network.dead_c2");
+    assert_eq!(row.len(), 1);
+    assert_eq!(
+        text(row[0], "finding.tier"),
+        "medium",
+        "a failed call keeps it"
+    );
+    assert_eq!(
+        text(row[0], "finding.title"),
+        "Retries a dead command server"
+    );
+    assert!(text(row[0], "finding.summary").contains("203.0.113.9:4444"));
+    assert!(
+        text(row[0], "finding.summary").contains("at least 10 times"),
+        "{}",
+        text(row[0], "finding.summary")
+    );
+    // Counted from the tenth failure on, all failed.
+    assert_eq!(count(row[0]), 25);
+    assert!(list(row[0], "finding.detail")
+        .iter()
+        .any(|line| line.contains("ECONNREFUSED")));
+}
+
+#[test]
+pub fn a_few_failed_connects_are_ordinary_retry_noise() {
+    assert!(!has(
+        &run(tries(9, [203, 0, 113, 9], 4444, -111)),
+        "network.dead_c2"
+    ));
+    // Unreachable network and timeouts count like a refusal.
+    for result in [-101, -110, -113] {
+        assert!(has(
+            &run(tries(12, [203, 0, 113, 9], 4444, result)),
+            "network.dead_c2"
+        ));
+    }
+    // A pending non-blocking connect is not a failure.
+    assert!(!has(
+        &run(tries(40, [203, 0, 113, 9], 4444, -115)),
+        "network.dead_c2"
+    ));
+}
+
+#[test]
+pub fn one_success_keeps_an_address_from_being_dead() {
+    let mut calls = vec![
+        socket(1, 2, 1, 3),
+        connect_result(1, [203, 0, 113, 9], 443, 0),
+    ];
+    calls.extend(tries(30, [203, 0, 113, 9], 443, -111).into_iter().skip(1));
+    assert!(!has(&run(calls), "network.dead_c2"));
+    // The count is per address and port: ten tries spread over ten ports are
+    // not one dead server.
+    let mut spread = vec![socket(1, 2, 1, 3)];
+    spread.extend((0..30).map(|at| connect_result(1, [203, 0, 113, 9], 4000 + at % 10, -111)));
+    assert!(!has(&run(spread), "network.dead_c2"));
+}
+
+#[test]
+pub fn name_servers_housekeeping_local_addresses_and_the_base_do_not_count() {
+    for (ip, port) in [
+        ([8, 8, 8, 8], 53),
+        ([203, 0, 113, 9], 123),
+        ([203, 0, 113, 9], 67),
+        ([10, 0, 2, 3], 8080),
+        ([192, 168, 1, 1], 8080),
+        ([127, 0, 0, 1], 8080),
+    ] {
+        assert!(
+            !has(&run(tries(40, ip, port, -111)), "network.dead_c2"),
+            "{ip:?}:{port}"
+        );
+    }
+    // A base image program (the time client) retrying is the base's noise.
+    let mut calls = vec![exec(1, "/usr/sbin/chronyd", &["chronyd"])];
+    calls.extend(tries(40, [203, 0, 113, 9], 4444, -111));
+    assert!(!has(&run(calls), "network.dead_c2"));
+}
+
+#[test]
+pub fn a_retry_loop_across_forked_processes_is_still_one_dead_server() {
+    let mut calls = vec![socket(1, 2, 1, 3)];
+    for at in 0..12u32 {
+        calls.push(connect_result(1 + at % 3, [203, 0, 113, 9], 8080, -101));
+    }
+    let out = run(calls);
+    assert!(has(&out, "network.dead_c2"));
+}

@@ -102,6 +102,11 @@ pub struct DetectionHit {
     pub source: String,
     /// The rule's own reference link, when it names one.
     pub reference: String,
+    /// Every place the rule matched was a layer static analysis unpacked from
+    /// the sample, not the packed file itself (a packed sample's family is
+    /// then named by its payload).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub layer: bool,
 }
 
 impl DetectionHit {

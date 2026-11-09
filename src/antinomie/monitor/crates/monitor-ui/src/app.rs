@@ -182,6 +182,8 @@ struct Settings {
     minimal_toolbar: bool,
     /// Memory tab: look up symbol tables online for dumps without one.
     memory_online_symbols: bool,
+    /// Look an imported file's hash up at MalwareBazaar (Settings > Lookup).
+    sample_hash_lookup: bool,
     /// Disks tab: extraction and hash limits, tree toggles.
     disks: crate::disk_view::DiskSettings,
     /// Public destination country and organization. Local addresses are never queried.
@@ -333,6 +335,7 @@ impl Default for Settings {
             compact: true,
             minimal_toolbar: false,
             memory_online_symbols: true,
+            sample_hash_lookup: false,
             disks: Default::default(),
             address_lookup: antinomie_monitor_core::settings::AddressLookup::Tshark,
             automatic_detection: true,

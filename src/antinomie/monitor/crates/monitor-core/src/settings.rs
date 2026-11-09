@@ -117,6 +117,10 @@ pub struct EngineSettings {
     /// Look up symbol tables online for memory dumps without one. A daemon or
     /// container forces this off ([`EngineSettings::for_daemon`]).
     pub memory_online_symbols: bool,
+    /// Ask MalwareBazaar for the record of a sample imported from a file,
+    /// sending its SHA-256 with the user's own abuse.ch key. Off by default; a
+    /// daemon or container forces it off.
+    pub sample_hash_lookup: bool,
     /// The Disks tab's settings.
     pub disks: DiskSettings,
     /// How long a VM start and a launch wait (the boot wait, the TCG
@@ -149,6 +153,7 @@ impl Default for EngineSettings {
             bundle: String::new(),
             analysis_limits: AnalysisLimits::default(),
             memory_online_symbols: true,
+            sample_hash_lookup: false,
             disks: DiskSettings::default(),
             start: None,
             extra: Map::new(),
@@ -205,6 +210,7 @@ impl EngineSettings {
     /// traffic, whatever the file says (decided B-H16).
     pub fn for_daemon(mut self) -> Self {
         self.memory_online_symbols = false;
+        self.sample_hash_lookup = false;
         self
     }
 

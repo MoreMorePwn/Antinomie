@@ -157,6 +157,7 @@ impl Built {
                 .map(|info| family::Bazaar {
                     signature: info.signature.as_deref(),
                     tags: &info.tags,
+                    looked_up: info.looked_up,
                 })
                 .unwrap_or_default(),
         );
