@@ -24,7 +24,7 @@ use crate::{
         job::{Job, Outcome, RecordingPhase, Stage},
     },
     engine::Engine,
-    waiter::{EVIDENCE_WAIT, Warning, incomplete_parts, pending_parts},
+    waiter::{EVIDENCE_WAIT, Warning, incomplete_parts, pending_parts, trigger},
     watchdog::{Trigger, Watchdog},
 };
 use antinomie_monitor_core::{RunArtifacts, VmState};
@@ -46,6 +46,22 @@ fn fail(code: FailureCode, message: &str, detail: Option<&str>) -> StageStop {
 }
 
 impl<E: Engine> LaneStages<'_, E> {
+    /// What the policy's dump trigger did goes into the job's run and on the
+    /// event stream (best effort: the evidence itself is already kept).
+    fn record_triggers(&self, job: &Job, run_id: &str, artifacts: Option<&RunArtifacts>) {
+        let Some(run) = self.waiter.run_of(run_id) else {
+            return;
+        };
+        let Some(report) = trigger::report(&run, artifacts) else {
+            return;
+        };
+        let _ = self.patch_run(job, |job_run| {
+            job_run.triggers = report.records.clone();
+            job_run.trigger_notes = report.notes.clone();
+        });
+        let _ = self.env.store.emit_triggers(&job.id, &report);
+    }
+
     pub fn collect(&mut self, job: &Job, launched: &Launched) -> Result<CollectEnd, StageStop> {
         let run_id = launched.run.id.clone();
         let vm = launched.run.vm_id.clone();
@@ -141,6 +157,7 @@ impl<E: Engine> LaneStages<'_, E> {
                 ));
             }
         }
+        self.record_triggers(job, &run_id, artifacts.as_ref());
         self.set_recording_phase(job, RecordingPhase::Complete)
             .map_err(|e| self.store_error(Stage::Collect, e))?;
         for warning in &warnings {

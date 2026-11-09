@@ -5,7 +5,7 @@
 use super::{
     catalog::{VmCatalog, VmFacts, VmNet},
     locate::Locator,
-    policy::{LoadedPolicy, Policy, RevertMode},
+    policy::{LoadedPolicy, Policy, RevertMode, TriggerKind, TriggerSetting},
     service::ServiceConfig,
 };
 use crate::api::{
@@ -383,8 +383,20 @@ fn check_policy(policy: &Policy, catalog: &dyn VmCatalog, sink: &mut Sink<'_>) {
             format!("above the engine maximum of {MAX_CORE_MIB} MiB"),
         );
     }
-    if policy.evidence.core_max_mib == 0 && policy.evidence.core_dump {
-        sink.error("evidence.core_max_mib", "must be at least 1 with core_dump");
+    let trigger_core = policy.evidence.trigger().is_some_and(|plan| plan.core);
+    if policy.evidence.core_max_mib == 0 && (policy.evidence.core_dump || trigger_core) {
+        sink.error(
+            "evidence.core_max_mib",
+            "must be at least 1 with core_dump or a core dump_trigger",
+        );
+    }
+    if policy.evidence.dump_trigger == TriggerSetting::Off
+        && policy.evidence.dump_trigger_kind != TriggerKind::default()
+    {
+        sink.warn(
+            "evidence.dump_trigger_kind",
+            "has no effect while evidence.dump_trigger is off",
+        );
     }
     if policy.analysis.static_time_limit_min > MAX_STATIC_MINUTES {
         sink.error(

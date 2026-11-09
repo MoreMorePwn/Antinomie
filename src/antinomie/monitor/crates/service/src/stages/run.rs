@@ -294,7 +294,7 @@ impl<E: Engine> LaneStages<'_, E> {
         let _ = self.set_recording_phase(job, RecordingPhase::Interrupted);
     }
 
-    fn patch_run(
+    pub(super) fn patch_run(
         &self,
         job: &Job,
         change: impl FnOnce(&mut JobRun),

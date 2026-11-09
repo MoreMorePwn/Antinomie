@@ -90,6 +90,20 @@ pub fn redact_remote(job: &mut Job) {
     for warning in &mut job.warnings {
         warning.text = strip_paths(&warning.text);
     }
+    if let Some(run) = &mut job.run {
+        for trigger in &mut run.triggers {
+            for dump in [&mut trigger.memory, &mut trigger.core]
+                .into_iter()
+                .flatten()
+            {
+                dump.path = None;
+                dump.error = dump.error.as_deref().map(strip_paths);
+            }
+        }
+        for note in &mut run.trigger_notes {
+            *note = strip_paths(note);
+        }
+    }
     if let Some(failure) = &mut job.failure {
         failure.message = strip_paths(&failure.message);
         failure.detail = failure.detail.as_deref().map(strip_paths);

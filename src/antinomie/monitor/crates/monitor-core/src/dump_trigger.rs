@@ -56,6 +56,13 @@ impl TriggerTier {
             Self::High => "High",
         }
     }
+
+    /// The tier spelled `low`, `medium` or `high` in any case.
+    pub fn from_name(text: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|tier| tier.label().eq_ignore_ascii_case(text.trim()))
+    }
 }
 
 /// What a run does when suspicious activity is seen. Part of the run plan
@@ -190,6 +197,12 @@ pub fn set_judge(factory: JudgeFactory) {
 /// True when no rule engine was registered.
 pub(crate) fn judge_missing() -> bool {
     FACTORY.get().is_none()
+}
+
+/// True once a rule engine was registered (by the UI at start, or by the
+/// service's run lane before a launch that asks for a dump trigger).
+pub fn judge_registered() -> bool {
+    !judge_missing()
 }
 
 /// What became of one dump of a trigger.

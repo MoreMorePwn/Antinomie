@@ -101,6 +101,38 @@ impl Store {
         })
     }
 
+    /// What the run's dump trigger did: one `job.trigger` event per dump and
+    /// one per note (no host paths).
+    pub fn emit_triggers(
+        &self,
+        id: &JobId,
+        report: &crate::waiter::trigger::TriggerReport,
+    ) -> R<()> {
+        self.write(|tx| {
+            let cur = current(tx, id)?;
+            live(id, cur.state, "report a dump trigger")?;
+            for record in &report.records {
+                tx.emit(
+                    Some(id),
+                    EventBody::JobTrigger {
+                        trigger: Some(Box::new(crate::waiter::trigger::without_paths(record))),
+                        note: None,
+                    },
+                )?;
+            }
+            for note in &report.notes {
+                tx.emit(
+                    Some(id),
+                    EventBody::JobTrigger {
+                        trigger: None,
+                        note: Some(note.clone()),
+                    },
+                )?;
+            }
+            Ok(())
+        })
+    }
+
     /// A non-fatal note: appended to `warnings` and sent as `job.warning`.
     pub fn add_warning(&self, id: &JobId, code: &str, text: &str) -> R<()> {
         self.write(|tx| {

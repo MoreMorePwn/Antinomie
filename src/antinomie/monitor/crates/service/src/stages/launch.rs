@@ -100,6 +100,8 @@ impl<E: Engine> LaneStages<'_, E> {
                         exit: None,
                         signal: None,
                         core_dumped: false,
+                        triggers: Vec::new(),
+                        trigger_notes: Vec::new(),
                     }),
                     recording: Some(JobRecording {
                         vm_id: run.vm_id.clone(),

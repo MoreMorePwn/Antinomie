@@ -143,6 +143,7 @@ for engine scope), `gseq` (across the service, persisted, never reused), `ts_ms`
 | `job.run` | `{run_id, pid?, route}` |
 | `job.warning` | `{code, text}` |
 | `job.artifact` | `{artifact}` |
+| `job.trigger` | `{trigger?, note?}`: the policy's dump trigger took a dump (`trigger`: rule, tier, summary, syscall, pid, at_ms, and the `memory` and `core` dump with state, size, capture_id, error; no host path) or did less than asked (`note`) |
 | `job.assessment` | `{assessment}` |
 | `job.requeued` | `{attempt, reason}`; a `job.state` event with `state: queued` follows |
 | `job.finished` | `{outcome, failure?}`; the last event of a job |

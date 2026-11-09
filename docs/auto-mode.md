@@ -62,6 +62,18 @@ checks and detection engines, the report formats, how failures are retried and
 who may submit. `auto init` writes `default.toml` when the folder has none; a
 copy with comments is in `packaging/policies/default.toml.example`.
 
+* **Dump on suspicious activity.** `evidence.dump_trigger = "off"` (default),
+  `"low"`, `"medium"` or `"high"` makes every job under the policy take a dump
+  while the program runs, when the live Triage rules match at that tier or above;
+  `evidence.dump_trigger_kind` is `"core"` (default; a core of the process that
+  made the call, within `evidence.core_max_mib`, needs a revision-16 base, which
+  `auto init` asks for), `"memory"` or `"both"`. One dump per run, 30 seconds
+  apart, as the window's defaults. The program is not stopped. The job's
+  `run.triggers` lists each match (rule, tier, process, call, and the state and
+  size of each dump; the path only for a local caller), `run.trigger_notes` says
+  when it was armed and nothing matched, and `job.trigger` events report them as
+  they are known. A job cannot turn the trigger on or off; only the policy does.
+
 * **A job asks within the policy's ceiling.** `--timeout-run`, `--args`,
   `--env`, `--as`, `--route`, `--static`, `--formats` and the other flags of `auto
   submit` can lower or choose among what the policy allows, never exceed it. A

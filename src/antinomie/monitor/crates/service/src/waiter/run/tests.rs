@@ -838,3 +838,173 @@ fn the_stop_waits_for_the_disk_layer_before_the_report_says_settled() {
     assert!(clock.now_ms() >= 45_000, "{}", clock.now_ms());
     assert_eq!(report.outcome, Outcome::Succeeded);
 }
+
+mod dump_trigger {
+    use super::*;
+    use antinomie_monitor_core::dump_trigger::{
+        self, DumpTrigger, LiveFinding, TriggerDump, TriggerLog, TriggerRecord, TriggerTier,
+    };
+
+    const ARMED: &str = "Dump trigger armed (core at High or higher), but no rule of that tier matched while the program ran: no dump was taken.";
+
+    fn finding() -> LiveFinding {
+        LiveFinding {
+            rule: "persistence.cron".into(),
+            summary: "writes /etc/cron.d/x".into(),
+            tier: TriggerTier::High,
+            pid: 750,
+            tid: 750,
+            task_cookie: 7,
+            stream_id: 1,
+            call_id: 3,
+            guest_ns: 5,
+            syscall: "openat".into(),
+        }
+    }
+
+    fn core(state: RunArtifactState) -> TriggerRecord {
+        TriggerRecord {
+            at_ms: 42,
+            finding: finding(),
+            memory: None,
+            core: Some(TriggerDump {
+                state,
+                path: Some("/runs/r1/cores/c1".into()),
+                capture_id: Some("c1".into()),
+                size: Some(4096),
+                error: None,
+            }),
+        }
+    }
+
+    fn asked() -> RunPlan {
+        let mut plan = plan();
+        plan.request.dump_trigger = Some(DumpTrigger::default());
+        plan
+    }
+
+    /// The fake engine with the run's summary changed by `change`.
+    fn engine_with(clock: &Arc<ManualClock>, change: fn(&mut RunSummary)) -> Fake {
+        let mut fake = happy(clock, 2_000);
+        let mut finished = run_summary("r1", "Finished", 0);
+        change(&mut finished);
+        fake.timed = vec![(3_000, Notification::Snapshot(running_vm(vec![finished])))];
+        fake
+    }
+
+    #[test]
+    fn a_launch_that_asks_for_a_trigger_registers_the_live_judge() {
+        let clock = Arc::new(ManualClock::new(0));
+        let (mut waiter, _) = make(happy(&clock, 2_000));
+        let (report, _) = exec(&mut waiter, &asked(), |_| Ok(Some(complete())));
+        assert!(report.is_ok());
+        assert!(dump_trigger::judge_registered());
+    }
+
+    #[test]
+    fn a_fired_trigger_is_in_the_report_and_on_the_stream_without_a_path() {
+        let clock = Arc::new(ManualClock::new(0));
+        let (mut waiter, _) = make(engine_with(&clock, |run| {
+            run.request.dump_trigger = Some(DumpTrigger::default());
+            run.triggers = Some(TriggerLog {
+                records: vec![core(RunArtifactState::Partial)],
+                ..TriggerLog::default()
+            });
+        }));
+        let (report, events) = exec(&mut waiter, &asked(), |_| {
+            Ok(Some(RunArtifacts {
+                trigger_dumps: vec![core(RunArtifactState::Partial)],
+                ..complete()
+            }))
+        });
+        let report = report.unwrap();
+        let triggers = report.triggers.expect("a trigger report");
+        assert!(triggers.fired && triggers.notes.is_empty());
+        assert_eq!(
+            (
+                triggers.armed.tier.as_str(),
+                triggers.armed.core,
+                triggers.armed.memory
+            ),
+            ("high", true, false)
+        );
+        let record = &triggers.records[0];
+        assert_eq!(
+            (record.rule.as_str(), record.tier.as_str(), record.pid),
+            ("persistence.cron", "high", 750)
+        );
+        let dump = record.core.as_ref().unwrap();
+        assert_eq!(dump.state, "partial");
+        assert_eq!(dump.path.as_deref(), Some("/runs/r1/cores/c1"));
+        let streamed: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                EventBody::JobTrigger { trigger, note } => Some((trigger.clone(), note.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(streamed.len(), 1);
+        let streamed = streamed[0].0.as_ref().unwrap();
+        assert_eq!(streamed.core.as_ref().unwrap().path, None);
+        assert_eq!(
+            streamed.core.as_ref().unwrap().capture_id.as_deref(),
+            Some("c1")
+        );
+    }
+
+    #[test]
+    fn a_trigger_dump_still_being_written_holds_the_evidence_wait() {
+        let clock = Arc::new(ManualClock::new(0));
+        let (mut waiter, _) = make(engine_with(&clock, |run| {
+            run.request.dump_trigger = Some(DumpTrigger::default());
+        }));
+        let reads = Arc::new(Mutex::new(0u32));
+        let counted = reads.clone();
+        let (report, _) = exec(&mut waiter, &asked(), move |_| {
+            let mut reads = counted.lock().unwrap();
+            *reads += 1;
+            let state = if *reads < 4 {
+                RunArtifactState::InProgress
+            } else {
+                RunArtifactState::Complete
+            };
+            Ok(Some(RunArtifacts {
+                trigger_dumps: vec![core(state)],
+                ..complete()
+            }))
+        });
+        let report = report.unwrap();
+        assert!(*reads.lock().unwrap() >= 4);
+        let dump = report.triggers.unwrap().records[0].core.clone().unwrap();
+        assert_eq!(dump.state, "complete");
+    }
+
+    #[test]
+    fn an_armed_trigger_that_never_matched_says_so() {
+        let clock = Arc::new(ManualClock::new(0));
+        let (mut waiter, _) = make(engine_with(&clock, |run| {
+            run.request.dump_trigger = Some(DumpTrigger::default());
+            run.notes.push(ARMED.into());
+        }));
+        let (report, events) = exec(&mut waiter, &asked(), |_| Ok(Some(complete())));
+        let triggers = report.unwrap().triggers.unwrap();
+        assert!(!triggers.fired && triggers.records.is_empty());
+        assert_eq!(triggers.notes, [ARMED]);
+        assert!(events.iter().any(
+            |e| matches!(e, EventBody::JobTrigger { trigger: None, note: Some(n) } if n == ARMED)
+        ));
+    }
+
+    #[test]
+    fn a_run_without_a_trigger_has_no_trigger_report() {
+        let clock = Arc::new(ManualClock::new(0));
+        let (mut waiter, _) = make(happy(&clock, 2_000));
+        let (report, events) = exec(&mut waiter, &plan(), |_| Ok(Some(complete())));
+        assert!(report.unwrap().triggers.is_none());
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, EventBody::JobTrigger { .. }))
+        );
+    }
+}

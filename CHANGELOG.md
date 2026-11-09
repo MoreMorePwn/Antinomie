@@ -14,6 +14,25 @@ x86 programs by their own table.
 
 ### Host
 
+- **Headless runs can take a dump on suspicious activity (ANT-T0439).** The
+  live Triage judge was registered only by the window, so `run exec` and Auto
+  jobs could not use the dump trigger. The run lane of the service now registers
+  the same rule engine before a launch that asks for a trigger (one set of rules;
+  the service and the CLI still do not depend on the window's crate).
+  `run exec --dump-trigger low|medium|high` (default off) with `--dump-kind
+  core|memory|both` (default `core`) and the Auto policy keys
+  `evidence.dump_trigger` (`off`, `low`, `medium`, `high`) and
+  `evidence.dump_trigger_kind` (checked by `config validate`; a core uses
+  `evidence.core_max_mib` and needs a revision-16 base, which `auto init` asks
+  for) turn it on; both default to off, so nothing changes until asked. The
+  result of `run exec` has a `triggers` object (what was armed, whether it fired,
+  each match with its rule, tier, process and call, and the state, size and path
+  of its core or memory dump, or the note that it was armed and nothing matched).
+  An Auto job's `run.triggers` and `run.trigger_notes` say the same (no host
+  paths for a remote caller), and `job.trigger` events report each match and each
+  note as it is known. The collect stage now waits for a trigger dump that is still
+  being written.
+
 - **`run exec --start` no longer loses Debian arm64 launches under TCG
   (ANT-T0425).** About 30% of launches failed with "the engine did not answer
   Execute within 60 seconds": the launch waits for a Debian guest to finish booting
