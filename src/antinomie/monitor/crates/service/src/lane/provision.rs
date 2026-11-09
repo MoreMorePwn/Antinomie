@@ -191,11 +191,11 @@ pub fn init_lane<E: Engine>(
     progress("first boot: waiting for the guest to answer");
     let began = waiter.now_ms();
     waiter
-        .command(
+        .start_command(
             Command::Start {
                 vm_id: vm_id.clone(),
             },
-            Some(BOOT_WAIT),
+            BOOT_WAIT,
         )
         .map_err(|e| left(engine_error(e, "the lane VM did not start")))?;
     let id = vm_id.clone();

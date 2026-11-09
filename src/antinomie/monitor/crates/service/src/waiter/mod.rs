@@ -329,6 +329,52 @@ impl<E: Engine> Waiter<E> {
         }
     }
 
+    /// `Start` (or any command that boots the VM): `silence` is a silence
+    /// limit, not a total. Under TCG the engine publishes a note while it
+    /// waits for the guest to connect (`Snapshot::start_note`, from its own
+    /// scaled wait), so while that note stands the engine is working and the
+    /// silence counts from its end; the accelerator is only known once the
+    /// engine has published it, so the stretch needs no multiplier of ours.
+    /// Under KVM, and before the VM is up, nothing is stretched: `silence`
+    /// passes as it would for [`command`](Self::command). A stuck engine still
+    /// fails: [`START_HARD_WAIT`] bounds the whole command. Both ends are
+    /// [`WaitError::TimedOut`].
+    pub fn start_command(
+        &mut self,
+        command: Command,
+        silence: Duration,
+    ) -> Result<String, WaitError> {
+        let name = command_name(&command);
+        let id = self.send(command)?;
+        let began = self.now_ms();
+        let mut quiet_from = began;
+        loop {
+            if let Some(result) = self.take_result(id) {
+                return result;
+            }
+            let now = self.now_ms();
+            if self.guest_wait_factor() > 1.0 && self.snapshot.start_note.is_some() {
+                quiet_from = now;
+            }
+            if now.saturating_sub(quiet_from) >= millis(silence)
+                || now.saturating_sub(began) >= millis(START_HARD_WAIT)
+            {
+                // The engine still works on it: a cleanup waits for it.
+                self.abandoned.push(id);
+                return Err(WaitError::TimedOut { what: name });
+            }
+            if let Err(error) = self.pump(Duration::from_millis(200)) {
+                if matches!(
+                    error,
+                    WaitError::Interrupted | WaitError::Cancelled | WaitError::DeadlineExceeded
+                ) {
+                    self.abandoned.push(id);
+                }
+                return Err(error);
+            }
+        }
+    }
+
     /// Wait for the results of commands a cancel, a signal or the job limit
     /// made the caller stop waiting for. The engine finishes them anyway (a
     /// restore starts the VM after we gave up), so a cleanup that looks at the
@@ -481,6 +527,10 @@ impl<E: Engine> Waiter<E> {
         }
     }
 }
+
+/// The hard bound of a `Start` whose progress keeps its silence limit from
+/// running out ([`Waiter::start_command`]).
+pub const START_HARD_WAIT: Duration = Duration::from_secs(1800);
 
 /// Longest a stop, its recording flush and the disk layer behind it may take
 /// (design 4.1, `layer_s`).

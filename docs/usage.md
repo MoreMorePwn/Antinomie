@@ -1894,7 +1894,10 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   waits, and the minute after which an unanswered guest command is `internal`, are
   stretched by the same factor as the engine's own waits: the TCG multiplier times the host
   load factor. The time the engine reports waiting for a Debian guest to finish booting
-  does not count as silence. If the engine still answers a launch after the job gave up
+  does not count as silence. The `Start` of the VM is the same: its 180 s is a limit on
+  silence, and under TCG the time the engine reports waiting for the guest to connect does
+  not count against it (at most 30 minutes in all); under KVM it is 180 s as before.
+  If the engine still answers a launch after the job gave up
   on it, the VM is stopped (which ends the program), the result names that run and a
   `late_launch` warning says what happened.
 - **Triage, detection and reports of a saved run.** `triage RUN [--parts LIST]`,

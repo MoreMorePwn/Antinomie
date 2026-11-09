@@ -222,6 +222,107 @@ fn the_engines_boot_wait_is_work_not_silence() {
     );
 }
 
+/// A start the engine reports progress on: the snapshot of a booting VM with
+/// the accelerator it uses and the note of its guest-connect wait.
+fn booting(factor: f64, note: bool) -> Snapshot {
+    Snapshot {
+        start_note: note.then(|| "Waiting for a slow TCG boot".to_owned()),
+        ..on_tcg(factor)
+    }
+}
+
+fn start() -> Command {
+    Command::Start { vm_id: "v".into() }
+}
+
+#[test]
+fn a_tcg_start_that_reports_progress_past_the_silence_limit_succeeds() {
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = Fake::new(clock.clone());
+    // The engine says at once what it waits for, goes on for 400 s, then answers.
+    fake.on_send = vec![VecDeque::from([Notification::Snapshot(booting(
+        12.5, true,
+    ))])];
+    fake.timed = vec![(400_000, result(1, true, "started"))];
+    let (mut waiter, _) = make(fake);
+    assert_eq!(
+        waiter.start_command(start(), Duration::from_secs(180)),
+        Ok("started".to_owned())
+    );
+    assert!(clock.now_ms() >= 400_000);
+}
+
+#[test]
+fn a_tcg_start_that_goes_silent_fails_after_the_limit() {
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = Fake::new(clock.clone());
+    // Progress for 100 s, then the note is gone and nothing comes.
+    fake.on_send = vec![VecDeque::from([Notification::Snapshot(booting(
+        12.5, true,
+    ))])];
+    fake.timed = vec![(100_000, Notification::Snapshot(booting(12.5, false)))];
+    let (mut waiter, _) = make(fake);
+    let error = waiter
+        .start_command(start(), Duration::from_secs(180))
+        .unwrap_err();
+    assert_eq!(
+        error,
+        WaitError::TimedOut {
+            what: "Start".into()
+        }
+    );
+    // 180 s from the last progress, not from the command.
+    assert!(
+        (279_000..282_000).contains(&clock.now_ms()),
+        "{}",
+        clock.now_ms()
+    );
+}
+
+#[test]
+fn a_start_with_no_progress_at_all_fails_at_the_limit() {
+    let clock = Arc::new(ManualClock::new(0));
+    let (mut waiter, _) = make(Fake::new(clock.clone()));
+    assert!(matches!(
+        waiter.start_command(start(), Duration::from_secs(180)),
+        Err(WaitError::TimedOut { .. })
+    ));
+    assert!((180_000..181_000).contains(&clock.now_ms()));
+}
+
+#[test]
+fn a_kvm_start_keeps_its_limit_whatever_the_note_says() {
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = Fake::new(clock.clone());
+    fake.on_send = vec![VecDeque::from([Notification::Snapshot(booting(1.0, true))])];
+    fake.timed = vec![(400_000, result(1, true, "started"))];
+    let (mut waiter, _) = make(fake);
+    assert!(matches!(
+        waiter.start_command(start(), Duration::from_secs(180)),
+        Err(WaitError::TimedOut { .. })
+    ));
+    assert!((180_000..181_000).contains(&clock.now_ms()));
+}
+
+#[test]
+fn endless_progress_still_ends_at_the_hard_bound() {
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = Fake::new(clock.clone());
+    fake.on_send = vec![VecDeque::from([Notification::Snapshot(booting(
+        12.5, true,
+    ))])];
+    let (mut waiter, _) = make(fake);
+    assert!(matches!(
+        waiter.start_command(start(), Duration::from_secs(180)),
+        Err(WaitError::TimedOut { .. })
+    ));
+    assert!(
+        (1_800_000..1_801_000).contains(&clock.now_ms()),
+        "{}",
+        clock.now_ms()
+    );
+}
+
 #[test]
 fn wait_until_follows_the_latest_snapshot() {
     use antinomie_monitor_core::VmState;

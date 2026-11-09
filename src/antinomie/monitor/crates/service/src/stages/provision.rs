@@ -261,11 +261,11 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 
     fn start_vm(&mut self, vm: &str) -> Result<(), StageStop> {
-        match self.waiter.command(
+        match self.waiter.start_command(
             Command::Start {
                 vm_id: vm.to_owned(),
             },
-            Some(BOOT_WAIT),
+            BOOT_WAIT,
         ) {
             Ok(_) => Ok(()),
             Err(WaitError::Failed(message)) => Err(self.start_failure(

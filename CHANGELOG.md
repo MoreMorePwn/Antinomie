@@ -14,6 +14,14 @@ x86 programs by their own table.
 
 ### Host
 
+- **A slow TCG boot no longer fails the VM Start at 180 s (ANT-T0442).** The service's
+  180 s limit on the VM `Start` command was fixed, so on a busy host the engine's own
+  TCG wait for the guest to connect could outlast it and the job failed with "the VM did
+  not start in time". The limit is now a silence limit: under TCG, while the engine
+  reports that it waits for the guest to connect, it does not run, and a Start still
+  ends at 30 minutes at the latest or 180 s after the engine goes quiet. KVM keeps its
+  180 s, and a QEMU that exits still fails the start at once.
+
 - **Snapshots restore works every time, and other fixes from the ARM evaluation
   (ANT-T0437).** In the Snapshots window, **Restore disk and boot…** and **Resume
   disk + memory…** did nothing from the second use in a session: the question opened

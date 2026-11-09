@@ -563,11 +563,11 @@ impl<E: Engine> Waiter<E> {
                 text: "starting the VM".into(),
                 fraction: None,
             });
-            self.command(
+            self.start_command(
                 Command::Start {
                     vm_id: plan.vm_id.clone(),
                 },
-                Some(plan.boot_limit),
+                plan.boot_limit,
             )
             .map_err(|error| match error {
                 WaitError::Failed(message) => Stop::Failed(Failure::new(

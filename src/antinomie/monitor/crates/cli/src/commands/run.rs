@@ -713,6 +713,7 @@ mod tests {
             warnings: Vec::new(),
             run: None,
             artifacts: None,
+            triggers: None,
             end_reason: None,
             timings: Default::default(),
             settled: true,
