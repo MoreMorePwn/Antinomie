@@ -244,7 +244,9 @@ impl Session {
                 self.snapshot.runs.iter().any(|r| {
                     r.id == run_id && r.execution.as_ref().is_some_and(|e| e.flags & 2 != 0)
                 });
-            if exited && self.terminals.get(run_id).is_some_and(|d| !d.is_empty()) {
+            // A program that printed nothing (one that exits at once) has
+            // its tree's exit as its only end.
+            if exited {
                 // One more read collects output written just before the exit.
                 self.backend.send(Command::TerminalRead {
                     run_id: run_id.into(),
