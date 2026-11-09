@@ -343,6 +343,11 @@ impl Worker {
             source_run_id: (pid == root_pid).then(|| run_id.to_owned()),
             max_size: max_size.unwrap_or(64 << 20),
             timeout_ms: timeout_ms.unwrap_or(5000),
+            read_nonresident: session
+                .runs
+                .values()
+                .find(|run| run.summary.id == run_id)
+                .is_some_and(|run| run.summary.request.core_nonresident),
         };
         match session.queue_manual_core(request) {
             Ok(id) => {

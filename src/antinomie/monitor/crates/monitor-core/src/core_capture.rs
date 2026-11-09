@@ -53,6 +53,7 @@ pub fn load(directory: &Path) -> Result<ProcessCoreCapture, String> {
         source_run_id: record.source_run_id.clone(),
         max_size: record.max_size,
         timeout_ms: record.timeout_ms,
+        read_nonresident: record.read_nonresident,
     })?;
     if record.format != 1
         || record.id.is_empty()
@@ -243,6 +244,8 @@ mod tests {
             expected_size: None,
             allocated_size: None,
             reason: None,
+            read_nonresident: false,
+            coverage: None,
         }
     }
     #[test]

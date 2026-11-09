@@ -67,6 +67,9 @@ pub(super) struct CoreStatus {
     pub(super) thread_count: u32,
     /// Bytes the guest holds, from the extended status; None without it.
     pub(super) stored: Option<u64>,
+    /// What the core lacks, from a COVERAGE status of a terminal core.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) coverage: Option<crate::core_limits::CoreCoverage>,
 }
 impl CoreStatus {
     fn parse(
@@ -76,7 +79,7 @@ impl CoreStatus {
         tgid: u32,
         extended: bool,
     ) -> Result<Self, String> {
-        Self::parse_mode(reply, id, cookie, tgid, false, extended)
+        Self::parse_mode(reply, id, cookie, tgid, false, extended, false)
     }
     pub(super) fn parse_manual(
         reply: &[u8],
@@ -85,7 +88,17 @@ impl CoreStatus {
         tgid: u32,
         extended: bool,
     ) -> Result<Self, String> {
-        Self::parse_mode(reply, id, cookie, tgid, true, extended)
+        Self::parse_mode(reply, id, cookie, tgid, true, extended, false)
+    }
+    /// [`parse_manual`](Self::parse_manual) of a status asked with COVERAGE.
+    pub(super) fn parse_manual_coverage(
+        reply: &[u8],
+        id: u64,
+        cookie: u64,
+        tgid: u32,
+        extended: bool,
+    ) -> Result<Self, String> {
+        Self::parse_mode(reply, id, cookie, tgid, true, extended, true)
     }
     fn parse_mode(
         reply: &[u8],
@@ -94,12 +107,16 @@ impl CoreStatus {
         tgid: u32,
         manual: bool,
         extended: bool,
+        coverage: bool,
     ) -> Result<Self, String> {
-        // A lookup by identity answers with the 80 bytes whatever was asked.
-        if reply.len() != 80 && !(extended && reply.len() == 96) {
+        // A lookup by identity answers with the 80 bytes whatever was asked;
+        // COVERAGE's 16 bytes follow STORED's when both were asked.
+        let asked = 80 + 16 * usize::from(extended) + 16 * usize::from(coverage);
+        if reply.len() != 80 && reply.len() != asked {
             return Err("invalid process-core status length".into());
         }
-        let extended = reply.len() == 96;
+        let extended = extended && reply.len() == asked;
+        let coverage_at = (coverage && reply.len() == asked).then_some(asked - 16);
         let u64 = |offset| u64_at(reply, offset).map_err(|error| error.to_string());
         let u32 = |offset| u32_at(reply, offset).map_err(|error| error.to_string());
         let result = Self {
@@ -117,7 +134,17 @@ impl CoreStatus {
             tgid: u32(68)?,
             thread_count: u32(72)?,
             stored: if extended { Some(u64(80)?) } else { None },
+            coverage: None,
         };
+        let mut result = result;
+        // All zero until the core is terminal.
+        if let Some(at) = coverage_at
+            && (3..=6).contains(&result.state)
+        {
+            result.coverage = Some(crate::core_limits::CoreCoverage::parse(
+                &reply[at..at + 16],
+            )?);
+        }
         if id == 0
             || cookie == 0
             || tgid == 0
@@ -128,11 +155,12 @@ impl CoreStatus {
             || result.size > LOGICAL_LIMIT
             // 0x100: revision 21's ELF32 core of an AArch32 task (COMPAT_ELF32).
             // 0x200: revision 22's core of a process held at its exit
-            // (EXIT_HELD), written by the exit writer: not resident-only.
-            || result.flags & if manual { !0x37f } else { !0x10f } != 0
+            // (EXIT_HELD), written by the exit writer: not resident-only;
+            // 0x400: revision 22's NONRESIDENT policy, which reads pages in.
+            || result.flags & if manual { !0x77f } else { !0x10f } != 0
             || if manual {
                 result.flags & 0x11 != 0x10
-                    || result.flags & (0x40 | 0x200) == 0
+                    || result.flags & (0x40 | 0x200 | 0x400) == 0
                     || result.wait_status != 0
                     || result.signal != 0
                     || (result.state >= 3 && result.flags & 0x20 == 0)

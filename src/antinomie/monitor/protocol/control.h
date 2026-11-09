@@ -43,7 +43,9 @@
  * CORE_EXIT_HELD), offered in TRACER_CAPS; the compat structures of readlink,
  * get/setsockopt, sigaltstack, clone, prlimit64, ugetrlimit, setrlimit,
  * _llseek, set_robust_list, utimensat, sched_get/setaffinity and a tty's
- * terminal ioctls, and the terminal ioctls of every tty (fields only). */
+ * terminal ioctls, and the terminal ioctls of every tty (fields only); the
+ * non-resident core policy (CORE_CAPTURE policy 2, CORE_NONRESIDENT) and the
+ * coverage counts of CORE_STATUS COVERAGE, offered in CORE_CAPS. */
 #define ANTC_REVISION 22
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
@@ -153,6 +155,24 @@
  * the process itself with the exit core's writer: every page, resident or
  * not; RESIDENT_ONLY is clear. */
 #define ANTC_CORE_EXIT_HELD 0x200
+/* Revision 22: CORE_CAPTURE policy word (at 36). RESIDENT (1) copies the pages
+ * in memory only; NONRESIDENT (2, CORE_CAPS NONRESIDENT) reads a page that is
+ * not in memory in, from swap or the page cache, as the exit core's writer
+ * does, bounded by the budget and the deadline; a page never touched stays
+ * out. Its core has CORE_NONRESIDENT instead of RESIDENT_ONLY. */
+#define ANTC_CORE_POLICY_RESIDENT 1
+#define ANTC_CORE_POLICY_NONRESIDENT 2
+#define ANTC_CORE_NONRESIDENT 0x400
+#define ANTC_CORE_CAPS_COVERAGE 64
+#define ANTC_CORE_CAPS_NONRESIDENT 128
+/* CORE_STATUS header flag COVERAGE (CORE_CAPS COVERAGE): 16 more bytes, after
+ * STORED's part when both are asked: u32 thread contexts lost (threads of the
+ * process whose registers are not in the core's notes), u32 pages selected
+ * but not kept (0xffffffff: not counted, an exit core), u32 pages read in
+ * under the non-resident policy, u32 reserved=0; all zero until the state is
+ * terminal. */
+#define ANTC_CORE_STATUS_COVERAGE 2
+#define ANTC_CORE_STATUS_COVERAGE_SIZE 16
 /* EXIT_HOLD (revision 22, with EXEC_EXIT_HOLD): header flags=0, u64 cookie
  * at 8, u32 action at 16, u32 reserved=0 at 20; empty reply.
  * ARM / DISARM: cookie is a run's root cookie (-ESRCH: no such run); DISARM

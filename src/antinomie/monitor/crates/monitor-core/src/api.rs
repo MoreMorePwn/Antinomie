@@ -605,6 +605,10 @@ pub struct ExecRequest {
     /// core uses `core_max_size` and `core_timeout_ms`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dump_trigger: Option<crate::dump_trigger::DumpTrigger>,
+    /// The cores the dump trigger takes read the pages that are not in
+    /// memory too ("Read non-resident pages", revision 22).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub core_nonresident: bool,
     /// Debug on start: the guest parks the new program before its first user
     /// instruction and the app opens the debugger on it (a revision-17 base with
     /// the Phase 2 debugger; the run starts "Stopped at entry").
@@ -851,6 +855,11 @@ pub struct ProcessCoreRequest {
     pub source_run_id: Option<String>,
     pub max_size: u32,
     pub timeout_ms: u32,
+    /// Read the pages that are not in memory too (CORE_CAPTURE policy
+    /// NONRESIDENT, revision 22); a guest that does not offer it reads
+    /// resident pages only, and the core says so.
+    #[serde(default)]
+    pub read_nonresident: bool,
 }
 impl Default for ProcessCoreRequest {
     fn default() -> Self {
@@ -865,6 +874,7 @@ impl Default for ProcessCoreRequest {
             source_run_id: None,
             max_size: 64 * 1024 * 1024,
             timeout_ms: 5000,
+            read_nonresident: false,
         }
     }
 }
@@ -926,6 +936,12 @@ pub struct ProcessCoreCapture {
     pub allocated_size: Option<u64>,
     #[serde(default)]
     pub reason: Option<crate::core_limits::CoreReason>,
+    /// The capture was asked to read pages that are not in memory too.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_nonresident: bool,
+    /// What the guest says the core lacks (CORE_STATUS COVERAGE, revision 22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::core_limits::CoreCoverage>,
 }
 
 impl RunArtifacts {
@@ -2246,6 +2262,7 @@ impl Default for ExecRequest {
             core_max_size: None,
             core_timeout_ms: None,
             dump_trigger: None,
+            core_nonresident: false,
             debug_on_start: false,
             route: None,
             host_copy: None,

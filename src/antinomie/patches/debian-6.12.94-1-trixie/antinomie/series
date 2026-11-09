@@ -95,3 +95,4 @@
 0054-antinomie-give-a-specimen-copy-s-sha-256-in-its-acquisition-reply.patch
 0055-antinomie-hold-an-exiting-process-of-a-dump-trigger-run-until-the-host-has-judged-it.patch
 0056-antinomie-capture-the-compat-structures-the-aarch32-evaluation-found-recorded-by-address-only.patch
+0057-antinomie-read-non-resident-pages-into-a-live-core-on-request-and-count-what-a-core-lacks.patch

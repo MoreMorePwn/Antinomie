@@ -397,15 +397,21 @@ fn a_held_process_is_judged_at_once_and_let_go_only_without_a_match() {
     watch.event(event(1, 1, openat));
     assert!(watch.queue.is_empty());
     watch.hold(7, 0x77);
-    assert_eq!(watch.queue.len(), 1, "the pending openat is judged at the hold");
+    assert_eq!(
+        watch.queue.len(),
+        1,
+        "the pending openat is judged at the hold"
+    );
     assert!(watch.pending.is_empty());
     // A match is queued for it: no release, however long it waits.
     assert!(watch.releases(Duration::ZERO).is_empty());
     assert!(watch.held.contains_key(&7));
     // Once the worker took the match, a held process with none is let go.
     watch.queue.clear();
-    assert!(watch.releases(Duration::from_secs(60)).is_empty(), "inside the grace");
+    assert!(
+        watch.releases(Duration::from_secs(60)).is_empty(),
+        "inside the grace"
+    );
     assert_eq!(watch.releases(Duration::ZERO), vec![0x77]);
     assert!(watch.held.is_empty());
 }
-

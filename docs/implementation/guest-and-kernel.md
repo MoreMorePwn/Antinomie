@@ -1235,6 +1235,48 @@ this host without the features, and an older host refuses a revision-22 base.
   path is the host copy), `"expect_refused": true`, `"no_evidence_wait": true`
   and `"saved_analysis_wait"` (the saved analyses after the VM stopped).
 
+### Contract revision 22: non-resident pages in live cores, coverage counts (0.9.0)
+
+Board card ANT-T0343 (from T0334: the Rekoobe and RotaJakiro trigger cores were
+partial, "thread contexts lost / pages unavailable under resident-only", and the
+host had to open the core file to count).
+
+* **Policy (patch 57).** CORE_CAPTURE's policy word (at 36) takes NONRESIDENT
+  (2) besides RESIDENT (1). `pin_resident_ranges()` (`manual_core.c`), in the
+  owner thread's own context while the others are parked, retries a page the
+  no-fault probe (`get_user_pages_fast_only()`) does not find with
+  `get_dump_page()`, which takes the mmap lock itself and reads the page in from
+  swap or its file, as the exit core's writer reads every page; it returns
+  nothing for a page never touched (an anonymous `pte_none`, the zero page),
+  which stays out. The probe budget, the page budget (`max_size` pages) and the
+  capture's deadline bound it as before. The core has `CORE_NONRESIDENT` (0x400)
+  instead of `RESIDENT_ONLY` (0x40); the host's manual status accepts either (or
+  EXIT_HELD).
+* **Counts.** The live writer counts the pages it left out (a probe that found
+  nothing, and the tail past the probe or page budget) and the pages it read in
+  (`struct ant_coredump_live` `unavailable`, `faulted`); `ant_core_live_finish()`
+  and the exit core's path keep the thread contexts lost (expected less retained
+  notes). CORE_STATUS header flag COVERAGE (2) appends them (16 bytes after
+  STORED's part: lost, left out or 0xffffffff for a core the exit writer wrote,
+  read in, zero), all zero until the state is terminal. CORE_CAPS offers
+  COVERAGE (64) and NONRESIDENT (128).
+* **Host.** `ProcessCoreRequest::read_nonresident` (and the record's
+  `read_nonresident`) sends policy 2; `ExecRequest::core_nonresident` is the
+  dump trigger's box. A guest without CORE_CAPS NONRESIDENT gets policy 1 and the
+  record an issue (`NO_NONRESIDENT`). The manual status asks for COVERAGE where
+  offered (`CoreStatus::parse_manual_coverage()`), keeps it in the record
+  (`ProcessCoreCapture::coverage`), and a partial core's message is
+  `CoreCoverage::text()` instead of parsing the file (`coverage_detail()` stays for
+  older guests and exit cores).
+* **UI.** Run program > Dumps: **Read non-resident pages** under the trigger's
+  core; the Dump core dialog has the same box. Both are disabled on a base that
+  does not offer it.
+* **Check.** `core-coverage-check BUNDLE DATA FIXTURE` with
+  `tests/monitor/nonresident-core-fixture.c` (a 256-page file mapped, read, then
+  reclaimed with MADV_PAGEOUT): a resident-only core counts those pages as left
+  out and reads none in; a non-resident one reads them in, has flag 0x400 and
+  holds every page's bytes.
+
 ### Contract revision 22: the compat structures of the AArch32 evaluation (0.9.0)
 
 Board card ANT-T0443 (split from ANT-T0429, finding A1). Patch 56 changes only

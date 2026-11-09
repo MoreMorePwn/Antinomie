@@ -26,6 +26,18 @@ x86 programs by their own table.
   stopped run and a process whose Core dump on exit is armed are never held. An older
   base keeps the old behaviour and the run's notes say so.
 
+- **Read non-resident pages into a live core, and the counts of what a core lacks
+  (ANT-T0343).** A core taken while the process runs (the dump trigger's, or **Dump
+  core**) had only the pages that were in memory, so it was usually Partial
+  ("pages unavailable under resident-only"). On a revision-22 base the new **Read
+  non-resident pages** box (Run program > Dumps, under the trigger's core, and in the
+  Dump core dialog) has the guest read swapped-out and dropped file pages in, as a
+  core on exit does, within the budget and the deadline; the core's record says
+  which policy it used. The guest now counts what a core lacks (thread contexts
+  lost, pages left out, pages read in) and the partial core's message gives those
+  counts without opening the file. On an older base the box is disabled and a
+  request for it is taken resident-only with an issue that says so.
+
 - **Fewer schema gaps in 32-bit ARM runs (ANT-T0443).** On a revision-22 arm64 base
   the structures of readlink, getsockopt and setsockopt, sigaltstack, clone's TID
   pointers, prlimit64, ugetrlimit, setrlimit, _llseek, set_robust_list, utimensat
@@ -801,6 +813,11 @@ x86 programs by their own table.
   header flag `DIGEST`, 56-byte reply, offered in TRACER_CAPS); the digest may use
   half the copy's time limit and a slower copy is kept without one. Only
   `kernel/antinomie/` changes.
+- Patch 57 (contract revision 22): CORE_CAPTURE's policy word takes NONRESIDENT (2),
+  which reads a page the no-fault probe does not find in with `get_dump_page()`
+  (core flag `NONRESIDENT` 0x400 instead of `RESIDENT_ONLY`); CORE_STATUS header
+  flag `COVERAGE` (2) appends the thread contexts lost, the pages left out and the
+  pages read in; CORE_CAPS offers both (64, 128). Only `kernel/antinomie/` changes.
 - Patch 56 (contract revision 22): the compat structures of readlink, getsockopt
   and setsockopt, sigaltstack, clone, prlimit64, ugetrlimit, setrlimit, _llseek,
   set_robust_list, utimensat and sched_get/setaffinity, and the terminal ioctls of a

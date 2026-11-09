@@ -1,0 +1,283 @@
+From 3e7b2ea7bb08c0172fc3673d7af374259b5728a4 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Tue, 10 Nov 2026 02:45:44 +0700
+Subject: [PATCH] antinomie: read non-resident pages into a live core on
+ request, and count what a core lacks
+
+A live core (CORE_CAPTURE) copies only the pages that are in memory
+when it reads them: a page in swap, or a file page the kernel has
+reclaimed, stays out, and the core is marked partial. The host could
+say why only by opening the core file and counting.
+
+CORE_CAPTURE's policy word now takes NONRESIDENT (2) as well as
+RESIDENT (1): a page the no-fault probe does not find is read in with
+get_dump_page(), as the exit core's writer reads every page (swap, the
+page cache), bounded by the page budget and the capture's deadline; a
+page never touched stays out (it holds nothing). The core then has
+CORE_NONRESIDENT (0x400) instead of RESIDENT_ONLY.
+
+CORE_STATUS takes a second header flag, COVERAGE: 16 more bytes after
+STORED's part, the thread contexts the core's notes lack, the pages it
+selected but did not keep (not counted for an exit core's writer) and
+the pages it read in. CORE_CAPS offers both (COVERAGE, NONRESIDENT).
+
+Only kernel/antinomie changes: manual_core.c reads the pages and
+counts them, process_core.c keeps and reports the counts,
+process_core.h and control_wire.h define them.
+
+Contract: revision 22. Policy 1 and the 80- and 96-byte statuses are
+unchanged; the new policy and flag are offered in CORE_CAPS.
+---
+ kernel/antinomie/control_wire.h | 22 ++++++++++++++-
+ kernel/antinomie/manual_core.c  | 19 ++++++++++++-
+ kernel/antinomie/process_core.c | 47 ++++++++++++++++++++++++++++-----
+ kernel/antinomie/process_core.h |  5 ++++
+ 4 files changed, 84 insertions(+), 9 deletions(-)
+
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 762d015cb..f69436f9c 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -43,7 +43,9 @@
+  * CORE_EXIT_HELD), offered in TRACER_CAPS; the compat structures of readlink,
+  * get/setsockopt, sigaltstack, clone, prlimit64, ugetrlimit, setrlimit,
+  * _llseek, set_robust_list, utimensat, sched_get/setaffinity and a tty's
+- * terminal ioctls, and the terminal ioctls of every tty (fields only). */
++ * terminal ioctls, and the terminal ioctls of every tty (fields only); the
++ * non-resident core policy (CORE_CAPTURE policy 2, CORE_NONRESIDENT) and the
++ * coverage counts of CORE_STATUS COVERAGE, offered in CORE_CAPS. */
+ #define ANTC_REVISION 22
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+@@ -153,6 +155,24 @@
+  * the process itself with the exit core's writer: every page, resident or
+  * not; RESIDENT_ONLY is clear. */
+ #define ANTC_CORE_EXIT_HELD 0x200
++/* Revision 22: CORE_CAPTURE policy word (at 36). RESIDENT (1) copies the pages
++ * in memory only; NONRESIDENT (2, CORE_CAPS NONRESIDENT) reads a page that is
++ * not in memory in, from swap or the page cache, as the exit core's writer
++ * does, bounded by the budget and the deadline; a page never touched stays
++ * out. Its core has CORE_NONRESIDENT instead of RESIDENT_ONLY. */
++#define ANTC_CORE_POLICY_RESIDENT 1
++#define ANTC_CORE_POLICY_NONRESIDENT 2
++#define ANTC_CORE_NONRESIDENT 0x400
++#define ANTC_CORE_CAPS_COVERAGE 64
++#define ANTC_CORE_CAPS_NONRESIDENT 128
++/* CORE_STATUS header flag COVERAGE (CORE_CAPS COVERAGE): 16 more bytes, after
++ * STORED's part when both are asked: u32 thread contexts lost (threads of the
++ * process whose registers are not in the core's notes), u32 pages selected
++ * but not kept (0xffffffff: not counted, an exit core), u32 pages read in
++ * under the non-resident policy, u32 reserved=0; all zero until the state is
++ * terminal. */
++#define ANTC_CORE_STATUS_COVERAGE 2
++#define ANTC_CORE_STATUS_COVERAGE_SIZE 16
+ /* EXIT_HOLD (revision 22, with EXEC_EXIT_HOLD): header flags=0, u64 cookie
+  * at 8, u32 action at 16, u32 reserved=0 at 20; empty reply.
+  * ARM / DISARM: cookie is a run's root cookie (-ESRCH: no such run); DISARM
+diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
+index 409048273..d4be27c7a 100644
+--- a/kernel/antinomie/manual_core.c
++++ b/kernel/antinomie/manual_core.c
+@@ -403,6 +403,7 @@ static int pin_resident_ranges(struct ant_manual *session)
+ 			    session->extent_count +
+ 			    session->original_count - i + 1 >= LIVE_EXTENTS) {
+ 				session->live.incomplete = true;
++				session->live.unavailable += (selected - addr) >> PAGE_SHIFT;
+ 				error = append_extent(session, meta, addr, selected, false);
+ 				if (error)
+ 					return error;
+@@ -411,6 +412,20 @@ static int pin_resident_ranges(struct ant_manual *session)
+ 			}
+ 			probes++;
+ 			resident = get_user_pages_fast_only(addr, 1, FOLL_FORCE, &page) == 1;
++			/* The non-resident policy reads the page in as the exit
++			 * core's writer does (swap, page cache), bounded by the
++			 * page budget above and the capture's deadline. A page that
++			 * was never touched stays out: it holds nothing.
++			 */
++			if (!resident &&
++			    session->identity.policy == ANTC_CORE_POLICY_NONRESIDENT) {
++				page = get_dump_page(addr);
++				resident = page != NULL;
++				if (resident)
++					session->live.faulted++;
++			}
++			if (!resident)
++				session->live.unavailable++;
+ 			error = append_extent(session, meta, addr, addr + PAGE_SIZE, resident);
+ 			if (error) {
+ 				if (resident)
+@@ -604,6 +619,7 @@ static void manual_work(struct work_struct *work)
+ 		manual_error(session, error);
+ 	for (i = 0; i < session->live.page_count; i++)
+ 		put_page(session->live.pages[i]);
++	ant_core_live_coverage(session->core, session->live.unavailable, session->live.faulted);
+ 	ant_core_live_finish(session->core, error, session->task_count, session->live.incomplete);
+ 	WRITE_ONCE(session->done, true);
+ 	manual_put(session);
+@@ -663,7 +679,8 @@ int ant_manual_command(u32 opcode, const u8 *args, size_t args_len,
+ 		identity.policy = get_unaligned_le32(args + 36);
+ 		if (!identity.max_size || identity.max_size > ant_core_max_bytes() ||
+ 		    !identity.timeout_ms || identity.timeout_ms > ant_core_max_timeout_ms() ||
+-		    identity.policy != 1)
++		    (identity.policy != ANTC_CORE_POLICY_RESIDENT &&
++		     identity.policy != ANTC_CORE_POLICY_NONRESIDENT))
+ 			return -EINVAL;
+ 	}
+ 	error = ant_core_live_lookup(&identity, admission, &core);
+diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
+index e8743e3e4..5e87bab30 100644
+--- a/kernel/antinomie/process_core.c
++++ b/kernel/antinomie/process_core.c
+@@ -72,6 +72,10 @@ struct ant_core {
+ 	size_t size, stored, max_size;
+ 	unsigned long touched, deadline;
+ 	u32 timeout_ms, state, flags, tgid, thread_count;
++	/* CORE_STATUS COVERAGE: thread contexts not in the notes, pages not kept
++	 * (U32_MAX: not counted, the exit writer's), pages read in.
++	 */
++	u32 threads_lost, pages_unavailable, pages_faulted;
+ 	int status, wait_status, signal, sink_error;
+ 	bool canceled;
+ 	struct ant_core_identity identity;
+@@ -147,8 +151,8 @@ int ant_core_caps(const u8 *args, size_t args_len, void *reply, size_t capacity,
+ 	put_unaligned_le32(1, reply);
+ 	put_unaligned_le32(ANTC_CORE_CAPS_BUDGET | ANTC_CORE_CAPS_STORED |
+ 			   ANTC_CORE_CAPS_LONG_TIMEOUT | ANTC_CORE_CAPS_CHUNKED |
+-			   ANTC_CORE_CAPS_FAST_READ |
+-			   CORE_CAPS_COMPAT,
++			   ANTC_CORE_CAPS_FAST_READ | ANTC_CORE_CAPS_COVERAGE |
++			   ANTC_CORE_CAPS_NONRESIDENT | CORE_CAPS_COMPAT,
+ 			   reply + 4);
+ 	put_unaligned_le64(ant_core_max_bytes(), reply + 8);
+ 	put_unaligned_le64(ant_core_pool_bytes(), reply + 16);
+@@ -282,6 +286,7 @@ static struct ant_core *core_create(u32 max_size, u32 timeout_ms, bool allocate)
+ 		return ERR_PTR(-ENOMEM);
+ 	}
+ 	core->timeout_ms = timeout_ms;
++	core->pages_unavailable = U32_MAX;
+ 	core->state = ANTC_CORE_ARMED;
+ 	core->flags = ANTC_CORE_ROOT_ONLY | ANTC_CORE_FILTERED_MEMORY;
+ 	core->touched = jiffies;
+@@ -309,7 +314,10 @@ struct ant_core *ant_core_live_create(const struct ant_core_identity *identity)
+ 	core->root_cookie = identity->cookie;
+ 	core->tgid = identity->tgid;
+ 	core->deadline = jiffies + msecs_to_jiffies(identity->timeout_ms);
+-	core->flags = ANTC_CORE_MANUAL | ANTC_CORE_RESIDENT_ONLY | ANTC_CORE_FILTERED_MEMORY;
++	/* The non-resident policy reads pages in: not resident-only. */
++	core->flags = ANTC_CORE_MANUAL | ANTC_CORE_FILTERED_MEMORY |
++		(identity->policy == ANTC_CORE_POLICY_NONRESIDENT ? ANTC_CORE_NONRESIDENT :
++		 ANTC_CORE_RESIDENT_ONLY);
+ 	mutex_unlock(&core_lock);
+ 	return core;
+ }
+@@ -325,7 +333,8 @@ struct ant_core *ant_core_held_create(const struct ant_core_identity *identity)
+ 	if (IS_ERR(core))
+ 		return core;
+ 	mutex_lock(&core_lock);
+-	core->flags = (core->flags & ~ANTC_CORE_RESIDENT_ONLY) | ANTC_CORE_EXIT_HELD;
++	core->flags = (core->flags & ~(ANTC_CORE_RESIDENT_ONLY | ANTC_CORE_NONRESIDENT)) |
++		ANTC_CORE_EXIT_HELD;
+ 	mutex_unlock(&core_lock);
+ 	return core;
+ }
+@@ -827,6 +836,7 @@ void ant_core_live_finish(struct ant_core *core, int error, u32 thread_count, bo
+ 		error = -ENODATA;
+ 	mutex_lock(&core_lock);
+ 	core->expected_size = expected;
++	core->threads_lost = thread_count > retained ? thread_count - retained : 0;
+ 	core->thread_count = retained;
+ 	core->flags |= ANTC_CORE_PAUSE_RELEASED;
+ 	if (expected)
+@@ -859,6 +869,15 @@ void ant_core_held_write(struct ant_core *core, int wait_status,
+ 	ant_core_live_finish(core, error, threads, false);
+ }
+ 
++/* The page counts of a live core, before ant_core_live_finish(). */
++void ant_core_live_coverage(struct ant_core *core, u32 unavailable, u32 faulted)
++{
++	mutex_lock(&core_lock);
++	core->pages_unavailable = unavailable;
++	core->pages_faulted = faulted;
++	mutex_unlock(&core_lock);
++}
++
+ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+ {
+ 	struct ant_core *core, *selected = NULL;
+@@ -920,8 +939,10 @@ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+ 	mutex_lock(&core_lock);
+ 	if (core->expected_size)
+ 		core->flags |= core_format_flag(core);
+-	if (thread_count < core->thread_count)
++	if (thread_count < core->thread_count) {
+ 		core->flags |= ANTC_CORE_COVERAGE_GAP;
++		core->threads_lost = core->thread_count - thread_count;
++	}
+ 	core->thread_count = thread_count;
+ 	core->status = error;
+ 	core->finish_ns = ktime_get_ns();
+@@ -996,9 +1017,12 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+ 
+ 	if (args_len != (opcode == ANTC_CORE_READ ? 32 : 16))
+ 		return -EINVAL;
+-	/* STATUS alone takes a header flag: STORED asks for the longer reply. */
++	/* STATUS alone takes header flags: STORED and COVERAGE ask for the
++	 * longer replies, STORED's part first.
++	 */
+ 	flags = get_unaligned_le32(args + 4);
+-	if (flags & ~(opcode == ANTC_CORE_STATUS ? ANTC_CORE_STATUS_STORED : 0U))
++	if (flags & ~(opcode == ANTC_CORE_STATUS ?
++		      ANTC_CORE_STATUS_STORED | ANTC_CORE_STATUS_COVERAGE : 0U))
+ 		return -EINVAL;
+ 	extended = flags & ANTC_CORE_STATUS_STORED;
+ 	id = get_unaligned_le64(args + 8);
+@@ -1025,6 +1049,10 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+ 		removed = true;
+ 	} else if (opcode == ANTC_CORE_STATUS) {
+ 		size_t reply_size = extended ? ANTC_CORE_STATUS_STORED_SIZE : ANTC_CORE_STATUS_SIZE;
++		size_t coverage = reply_size;
++
++		if (flags & ANTC_CORE_STATUS_COVERAGE)
++			reply_size += ANTC_CORE_STATUS_COVERAGE_SIZE;
+ 
+ 		if (capacity < reply_size) {
+ 			error = -EMSGSIZE;
+@@ -1050,6 +1078,11 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+ 		put_unaligned_le32(core->flags, reply + 64);
+ 		put_unaligned_le32(core->tgid, reply + 68);
+ 		put_unaligned_le32(core->thread_count, reply + 72);
++		if ((flags & ANTC_CORE_STATUS_COVERAGE) && core->state >= ANTC_CORE_READY) {
++			put_unaligned_le32(core->threads_lost, reply + coverage);
++			put_unaligned_le32(core->pages_unavailable, reply + coverage + 4);
++			put_unaligned_le32(core->pages_faulted, reply + coverage + 8);
++		}
+ 		*reply_len = reply_size;
+ 	} else if (opcode == ANTC_CORE_READ) {
+ 		offset = get_unaligned_le64(args + 16);
+diff --git a/kernel/antinomie/process_core.h b/kernel/antinomie/process_core.h
+index 5b82bc330..4cb0fe426 100644
+--- a/kernel/antinomie/process_core.h
++++ b/kernel/antinomie/process_core.h
+@@ -49,6 +49,10 @@ struct ant_coredump_live {
+ 	void *arena, *scratch;
+ 	size_t arena_size, arena_used;
+ 	unsigned long deadline;
++	/* Pages selected but not kept, and pages read in from swap or the page
++	 * cache under the non-resident policy (CORE_STATUS COVERAGE).
++	 */
++	unsigned int unavailable, faulted;
+ 	bool incomplete;
+ 	bool (*aborted)(void *context);
+ 	void *context;
+@@ -90,6 +94,7 @@ void ant_core_put(struct ant_core *core);
+ int ant_core_live_prepare(struct ant_core *core, struct file **file);
+ void ant_core_live_begin(struct ant_core *core);
+ void ant_core_live_finish(struct ant_core *core, int error, u32 thread_count, bool gap);
++void ant_core_live_coverage(struct ant_core *core, u32 unavailable, u32 faulted);
+ bool ant_core_live_canceled(struct ant_core *core);
+ bool ant_core_live_terminal(struct ant_core *core);
+ void ant_core_live_cancel(struct ant_core *core);
+-- 
+2.53.0
+

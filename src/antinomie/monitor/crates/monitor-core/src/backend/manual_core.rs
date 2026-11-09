@@ -30,6 +30,9 @@ fn new_id() -> String {
     format!("{time:020}-{}", storage::unique_id())
 }
 
+/// The issue of a core asked to read non-resident pages on a guest that cannot.
+pub(super) const NO_NONRESIDENT: &str = "Read non-resident pages needs a base of guest contract revision 22: this guest copied only the pages that were in memory.";
+
 pub(super) struct Owner {
     pub summary: ProcessCoreCapture,
     sink: Sink,
@@ -96,6 +99,8 @@ impl Owner {
                 expected_size: None,
                 allocated_size: None,
                 reason: None,
+                read_nonresident: request.read_nonresident,
+                coverage: None,
             },
             sink: Sink::new(directory),
             initialized: false,
@@ -146,6 +151,18 @@ impl Owner {
             return;
         }
         let threads = self.status.as_ref().map_or(0, |status| status.thread_count);
+        // The guest counted it (revision 22): no need to open the file.
+        if let Some(coverage) = self
+            .status
+            .as_ref()
+            .and_then(|status| status.coverage.as_ref())
+        {
+            reason.text = coverage.text(threads, self.summary.read_nonresident);
+            if let Some(issue) = self.summary.issue.as_mut() {
+                *issue = reason.text.clone();
+            }
+            return;
+        }
         if let Some(file) = &self.summary.file
             && let Some(detail) = crate::core_dump::coverage_detail(file, threads)
         {
@@ -230,8 +247,12 @@ impl Owner {
             .copy_started
             .map(|started| started.elapsed().as_millis() as u64)
             .into();
-        value["policy"] =
-            "native x86-64 or arm64 (AArch32 on arm64); resident-only no-fault pages; Linux filtered mappings".into();
+        value["policy"] = if self.summary.read_nonresident {
+            "native x86-64 or arm64 (AArch32 on arm64); every page read, non-resident ones read in; Linux filtered mappings"
+        } else {
+            "native x86-64 or arm64 (AArch32 on arm64); resident-only no-fault pages; Linux filtered mappings"
+        }
+        .into();
         value["progress_limit"] =
             "in-progress metadata is a checkpoint prefix; final size/hash require the durable seal"
                 .into();
@@ -283,6 +304,7 @@ impl Owner {
             source_run_id: run_id,
             max_size: saved.max_size,
             timeout_ms: saved.timeout_ms,
+            read_nonresident: saved.read_nonresident,
         };
         request.target.boot_id = boot_id.into();
         let id = new_id();
@@ -306,6 +328,7 @@ pub(super) fn validate_saved(saved: &ProcessCoreCapture) -> Result<(), String> {
         source_run_id: saved.source_run_id.clone(),
         max_size: saved.max_size,
         timeout_ms: saved.timeout_ms,
+        read_nonresident: saved.read_nonresident,
     })?;
     if saved.format != 1
         || saved.id.is_empty()
@@ -345,6 +368,10 @@ impl Session {
             request.timeout_ms,
         )?;
         let limits = self.core_limits.unwrap_or(CoreLimits::LEGACY);
+        // An older guest reads resident pages only: the core still is taken,
+        // and says so.
+        let downgraded = request.read_nonresident && !limits.nonresident;
+        request.read_nonresident &= limits.nonresident;
         if request.vm_id != self.vm.id || request.target.boot_id != self.boot_id {
             return Err("manual core target belongs to another VM or boot".into());
         }
@@ -422,6 +449,9 @@ impl Session {
         );
         owner.summary.guest_max_size = Some(limits.max_size);
         owner.summary.provenance = Some(provenance);
+        if downgraded {
+            owner.issue(NO_NONRESIDENT);
+        }
         self.manual_record_count += 1;
         self.manual_cores.insert(id.clone(), owner);
         Ok(id)
@@ -460,15 +490,17 @@ impl Session {
         };
         // Only a status by handle can carry the stored byte count.
         let extended = opcode == STATUS && self.core_limits.is_some_and(|l| l.stored_status);
+        let coverage = opcode == STATUS && self.core_limits.is_some_and(|l| l.coverage);
         let args = if opcode == control::CORE_LOOKUP {
             control::core_lookup(&owner.summary.target, owner.summary.nonce)
         } else {
-            control::core_status(
+            control::core_status_with(
                 owner
                     .summary
                     .guest_handle
                     .ok_or("manual core handle missing")?,
                 extended,
+                coverage,
             )
         };
         let reply = match self.request_typed(opcode, &args, snapshot, sender, IO_TIMEOUT) {
@@ -493,13 +525,20 @@ impl Session {
         {
             return Err("manual core lookup returned a different accepted handle".into());
         }
-        let status = CoreStatus::parse_manual(
+        let status = if coverage {
+            CoreStatus::parse_manual_coverage
+        } else {
+            CoreStatus::parse_manual
+        }(
             &reply,
             id,
             owner.summary.target.task_cookie,
             owner.summary.target.tgid,
             extended,
         )?;
+        if status.coverage.is_some() {
+            owner.summary.coverage = status.coverage.clone();
+        }
         if status.size > core_capture::LOGICAL_LIMIT {
             return Err("manual core exceeded the longest extent a guest may report".into());
         }
@@ -600,6 +639,7 @@ impl Session {
                 source_run_id: owner.summary.source_run_id.clone(),
                 max_size: owner.summary.max_size,
                 timeout_ms: owner.summary.timeout_ms,
+                read_nonresident: owner.summary.read_nonresident,
             };
             let args = control::core_capture(&request, owner.summary.nonce)?;
             owner.admission_sent = true;
@@ -1172,6 +1212,55 @@ mod tests {
         invalid.max_size = 64 << 20;
         invalid.timeout_ms = 60_001;
         assert!(control::core_capture(&invalid, [11, 12]).is_err());
+    }
+    #[test]
+    fn the_nonresident_policy_and_the_coverage_counts_travel_on_the_wire() {
+        let mut nonresident = request();
+        nonresident.read_nonresident = true;
+        let encoded = control::core_capture(&nonresident, [11, 12]).unwrap();
+        assert_eq!(u32_at(&encoded, 36).unwrap(), 2, "policy NONRESIDENT");
+        assert_eq!(
+            u32_at(&control::core_status_with(5, true, true), 4).unwrap(),
+            3,
+            "STORED and COVERAGE"
+        );
+        // A partial NONRESIDENT core: 0x400 instead of 0x40, with its counts
+        // after the stored part (96 + 16 bytes).
+        let mut wire = status(4, 0x10 | 0x20 | 0x400 | 4 | 8);
+        wire[32..40].copy_from_slice(&64u64.to_le_bytes());
+        wire[40..48].copy_from_slice(&128u64.to_le_bytes());
+        wire[52..56].copy_from_slice(&(-61i32).to_le_bytes());
+        wire.extend(32u64.to_le_bytes());
+        wire.extend(0u64.to_le_bytes());
+        for word in [1u32, 3, 250, 0] {
+            wire.extend(word.to_le_bytes());
+        }
+        let parsed = CoreStatus::parse_manual_coverage(&wire, 5, 6, 7, true).unwrap();
+        let coverage = parsed.coverage.unwrap();
+        assert_eq!(
+            (
+                coverage.threads_lost,
+                coverage.pages_unavailable,
+                coverage.pages_read_in
+            ),
+            (1, Some(3), 250)
+        );
+        let text = coverage.text(1, true);
+        assert!(
+            text.contains("1 of 2 thread contexts") && text.contains("250 pages"),
+            "{text}"
+        );
+        // An older guest's 80-byte lookup still parses, without counts.
+        assert!(
+            CoreStatus::parse_manual_coverage(&wire[..80], 5, 6, 7, true)
+                .unwrap()
+                .coverage
+                .is_none()
+        );
+        // A manual core must say how it read its pages.
+        let mut neither = status(3, 0x10 | 0x20 | 2);
+        neither.truncate(80);
+        assert!(CoreStatus::parse_manual(&neither, 5, 6, 7, false).is_err());
     }
     #[test]
     fn a_core_the_guest_could_not_take_is_explained_in_plain_words() {

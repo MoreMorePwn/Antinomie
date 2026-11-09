@@ -1609,8 +1609,15 @@ milliseconds can be gone before the guest can pause it.
 A core is partial when the guest could not read every page: it copies only the
 pages that are in memory when it reads them (never swapped-out or untouched
 pages) and the thread contexts it could park. The core's message says which part
-is missing, thread contexts or pages, with the counts. There is no setting for
-this policy; reading pages that are not resident needs a guest change.
+is missing, thread contexts or pages, with the counts. On a base of contract
+revision 22, **Read non-resident pages** (under the trigger's core, and in the
+**Dump core** dialog of a running process) reads the pages that are not in memory
+in as well, from swap or from the file a page belongs to, as a core on exit does;
+it takes longer and stays within the core's budget and deadline. Pages the
+process never touched hold nothing and stay out. On such a base the guest also
+counts what the core lacks, and the message gives its counts (thread contexts
+lost, pages left out, pages read in) without opening the core file. On an older
+base the box is disabled: the guest reads resident pages only.
 
 The dumps a trigger took are listed in the run's `artifacts.json` under
 `trigger_dumps` (the same records as `triggers` in `run.json`); `core_state`

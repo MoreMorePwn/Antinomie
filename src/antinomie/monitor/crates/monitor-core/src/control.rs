@@ -83,10 +83,24 @@ pub(crate) const CORE_CANCEL: u32 = 0x1065;
 pub(crate) const CORE_CAPS: u32 = 0x1066;
 /// `CORE_STATUS` header flag: append the stored byte count (reply of 96 bytes).
 pub(crate) const CORE_STATUS_STORED: u32 = 1;
+/// `CORE_STATUS` header flag (revision 22, CORE_CAPS COVERAGE): append what
+/// the core lacks, 16 bytes after the stored count's part.
+pub(crate) const CORE_STATUS_COVERAGE: u32 = 2;
+/// CORE_CAPTURE policies: the pages in memory only, or every page read in
+/// (revision 22, CORE_CAPS NONRESIDENT).
+pub(crate) const CORE_POLICY_RESIDENT: u32 = 1;
+pub(crate) const CORE_POLICY_NONRESIDENT: u32 = 2;
 /// `CORE_STATUS` for a handle; `extended` asks for the stored byte count, which
 /// only a guest that advertised it understands.
 pub(crate) fn core_status(id: u64, extended: bool) -> Vec<u8> {
-    let mut args = header(u32::from(extended) * CORE_STATUS_STORED);
+    core_status_with(id, extended, false)
+}
+/// [`core_status`], also asking for the coverage counts when `coverage` (only
+/// a guest whose CORE_CAPS offers them).
+pub(crate) fn core_status_with(id: u64, extended: bool, coverage: bool) -> Vec<u8> {
+    let mut args = header(
+        u32::from(extended) * CORE_STATUS_STORED + u32::from(coverage) * CORE_STATUS_COVERAGE,
+    );
     args.extend(id.to_le_bytes());
     args
 }
@@ -101,7 +115,14 @@ pub(crate) fn core_capture(
     args.extend(request.target.tgid.to_le_bytes());
     args.extend(request.max_size.to_le_bytes());
     args.extend(request.timeout_ms.to_le_bytes());
-    args.extend(1u32.to_le_bytes());
+    args.extend(
+        if request.read_nonresident {
+            CORE_POLICY_NONRESIDENT
+        } else {
+            CORE_POLICY_RESIDENT
+        }
+        .to_le_bytes(),
+    );
     args.extend(nonce[0].to_le_bytes());
     args.extend(nonce[1].to_le_bytes());
     Ok(args)
@@ -1155,6 +1176,9 @@ mod tests {
             ("ANTC_EXIT_HOLD", EXIT_HOLD),
             ("ANTC_EXIT_HOLD_RELEASE", EXIT_HOLD_RELEASE),
             ("ANTC_EXIT_HOLD_MS", EXIT_HOLD_MS as u32),
+            ("ANTC_CORE_STATUS_COVERAGE", CORE_STATUS_COVERAGE),
+            ("ANTC_CORE_POLICY_RESIDENT", CORE_POLICY_RESIDENT),
+            ("ANTC_CORE_POLICY_NONRESIDENT", CORE_POLICY_NONRESIDENT),
             ("ANTC_EXEC_DEBUG", EXEC_DEBUG),
             ("ANTC_REVISION", REVISION),
             ("ANTC_PROCESS_LIST", PROCESS_LIST),

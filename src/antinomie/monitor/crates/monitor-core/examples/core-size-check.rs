@@ -426,6 +426,7 @@ fn manual_case(
             source_run_id: Some(run.id.clone()),
             max_size: options.budget << 20,
             timeout_ms: timeout,
+            read_nonresident: false,
         },
     })?;
     let mut canceled_at = None;
