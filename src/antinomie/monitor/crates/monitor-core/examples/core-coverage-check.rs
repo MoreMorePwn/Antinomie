@@ -222,11 +222,8 @@ fn check(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
     d.command(
         Command::Execute(ExecRequest {
             path: "/root/nonresident-core-fixture".into(),
-            args: vec![
-                "nonresident-core-fixture".into(),
-                "/root".into(),
-                PAGES.to_string(),
-            ],
+            // The program's arguments after its name.
+            args: vec!["/root".into(), PAGES.to_string()],
             uid: 0,
             gid: 0,
             cwd: "/root".into(),
