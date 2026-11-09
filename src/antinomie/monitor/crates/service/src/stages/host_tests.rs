@@ -250,6 +250,8 @@ pub(super) fn attach(w: &W, job: &Job, dir: &std::path::Path, end: EndReason) {
                     exit: Some(0),
                     signal: None,
                     core_dumped: false,
+                    triggers: Vec::new(),
+                    trigger_notes: Vec::new(),
                 }),
                 recording: Some(JobRecording {
                     vm_id: "vm-1".into(),

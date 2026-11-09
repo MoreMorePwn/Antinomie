@@ -31,6 +31,10 @@ pub const CORE_TIMEOUT_MS: u32 = 5000;
 /// Guest revision that takes a core dump on exit (`worker_guest.rs:170-180`).
 pub const CORE_REVISION: u32 = 15;
 
+/// Guest revision that takes a core when the live rules match
+/// (`worker_launch.rs`, the dump trigger's core).
+pub const TRIGGER_CORE_REVISION: u32 = 16;
+
 /// The job's settings after the spec's overrides met the policy.
 #[derive(Clone, Debug)]
 pub struct Effective {
@@ -85,6 +89,8 @@ pub fn effective(job: &Job, policy: &Policy) -> Effective {
         Some(CoreDump::Switch(on)) => (on, policy.evidence.core_max_mib, CORE_TIMEOUT_MS),
         Some(CoreDump::Limits(limits)) => (true, limits.max_mib, limits.timeout_ms),
     };
+    let trigger = policy.evidence.trigger();
+    let trigger_core = trigger.as_ref().is_some_and(|plan| plan.core);
     let request = ExecRequest {
         path: String::new(),
         args: o.args.clone().unwrap_or_default(),
@@ -98,9 +104,9 @@ pub fn effective(job: &Job, policy: &Policy) -> Effective {
         capture_network: o.network_capture.unwrap_or(policy.network.capture),
         memory_dump_on_exit: o.memory_dump.unwrap_or(policy.evidence.memory_dump),
         core_dump_on_exit: core,
-        core_max_size: core.then(|| core_max_mib.saturating_mul(1 << 20)),
-        core_timeout_ms: core.then_some(core_timeout_ms),
-        dump_trigger: None,
+        core_max_size: (core || trigger_core).then(|| core_max_mib.saturating_mul(1 << 20)),
+        core_timeout_ms: (core || trigger_core).then_some(core_timeout_ms),
+        dump_trigger: trigger,
         debug_on_start: false,
         route: Some(core_kind(o.route.unwrap_or(policy.network.route))),
         host_copy: None,

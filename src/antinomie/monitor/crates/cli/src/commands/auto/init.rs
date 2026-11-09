@@ -101,8 +101,15 @@ pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
     let need_revision = report
         .policies
         .values()
-        .any(|p| p.policy.evidence.core_dump)
-        .then_some(15);
+        .any(|p| p.policy.evidence.trigger().is_some_and(|plan| plan.core))
+        .then_some(16)
+        .or_else(|| {
+            report
+                .policies
+                .values()
+                .any(|p| p.policy.evidence.core_dump)
+                .then_some(15)
+        });
     let mut engine = DirectEngine::start(context)?;
     let made = (|| {
         wait_bases(&mut engine, context.timeout())?;

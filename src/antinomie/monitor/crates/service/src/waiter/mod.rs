@@ -24,6 +24,7 @@ use std::{
 mod run;
 #[cfg(test)]
 mod tests;
+pub mod trigger;
 
 pub use run::{
     BOOT_WAIT, EVIDENCE_WAIT, EndReason, Evidence, LAUNCH_WAIT, Phase, RunPlan, RunReport,

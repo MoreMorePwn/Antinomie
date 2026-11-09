@@ -543,3 +543,116 @@ fn policy_names_must_be_safe() {
             .any(|p| p.message.contains("not a valid policy name"))
     );
 }
+
+fn warnings(text: &str) -> Vec<String> {
+    let (_, problems) = parse_policy("p", "policies/p.toml", text, &NoVms);
+    problems
+        .iter()
+        .filter(|p| p.severity == Severity::Warning)
+        .map(|p| p.to_string())
+        .collect()
+}
+
+#[test]
+fn the_dump_trigger_is_off_by_default_and_takes_a_tier_and_a_kind() {
+    use antinomie_service::config::policy::{TriggerKind, TriggerSetting};
+    let (loaded, found) = parse_policy("p", "policies/p.toml", DEFAULT_POLICY, &NoVms);
+    assert!(
+        found.iter().all(|p| p.severity != Severity::Error),
+        "{found:?}"
+    );
+    let evidence = loaded.unwrap().policy.evidence;
+    assert_eq!(evidence.dump_trigger, TriggerSetting::Off);
+    assert!(evidence.trigger().is_none());
+    for (tier, kind) in [("low", "core"), ("medium", "memory"), ("high", "both")] {
+        let text = with(
+            DEFAULT_POLICY,
+            "dump_trigger      = \"off\"",
+            &format!("dump_trigger = \"{tier}\""),
+        );
+        let text = with(
+            &text,
+            "dump_trigger_kind = \"core\"",
+            &format!("dump_trigger_kind = \"{kind}\""),
+        );
+        assert_eq!(
+            problems(&text, &NoVms),
+            Vec::<String>::new(),
+            "{tier} {kind}"
+        );
+        let (loaded, _) = parse_policy("p", "policies/p.toml", &text, &NoVms);
+        let evidence = loaded.unwrap().policy.evidence;
+        let plan = evidence.trigger().expect("armed");
+        assert_eq!(plan.min_tier.label().to_ascii_lowercase(), tier);
+        assert_eq!(
+            (plan.memory, plan.core),
+            match evidence.dump_trigger_kind {
+                TriggerKind::Core => (false, true),
+                TriggerKind::Memory => (true, false),
+                TriggerKind::Both => (true, true),
+            }
+        );
+    }
+}
+
+#[test]
+fn a_bad_dump_trigger_value_or_budget_is_an_error() {
+    for (value, wanted) in [
+        ("urgent", "unknown variant `urgent`"),
+        ("", "unknown variant"),
+    ] {
+        let text = with(
+            DEFAULT_POLICY,
+            "dump_trigger      = \"off\"",
+            &format!("dump_trigger = \"{value}\""),
+        );
+        let found = problems(&text, &NoVms);
+        assert!(
+            found.iter().any(|p| p.contains(wanted)),
+            "{value:?}: {found:?}"
+        );
+    }
+    let text = with(
+        DEFAULT_POLICY,
+        "dump_trigger_kind = \"core\"",
+        "dump_trigger_kind = \"disk\"",
+    );
+    assert!(
+        problems(&text, &NoVms)
+            .iter()
+            .any(|p| p.contains("unknown variant `disk`"))
+    );
+    // A core trigger needs a core budget; a memory trigger does not.
+    let armed = with(
+        DEFAULT_POLICY,
+        "dump_trigger      = \"off\"",
+        "dump_trigger = \"high\"",
+    );
+    let no_budget = with(&armed, "core_max_mib = 64", "core_max_mib = 0");
+    assert!(
+        problems(&no_budget, &NoVms)
+            .iter()
+            .any(|p| p.contains("core_max_mib") && p.contains("at least 1"))
+    );
+    let memory = with(
+        &no_budget,
+        "dump_trigger_kind = \"core\"",
+        "dump_trigger_kind = \"memory\"",
+    );
+    assert_eq!(problems(&memory, &NoVms), Vec::<String>::new());
+}
+
+#[test]
+fn a_dump_kind_without_a_trigger_is_only_a_warning() {
+    let text = with(
+        DEFAULT_POLICY,
+        "dump_trigger_kind = \"core\"",
+        "dump_trigger_kind = \"both\"",
+    );
+    assert_eq!(problems(&text, &NoVms), Vec::<String>::new());
+    assert!(
+        warnings(&text)
+            .iter()
+            .any(|w| w.contains("dump_trigger_kind") && w.contains("no effect"))
+    );
+}

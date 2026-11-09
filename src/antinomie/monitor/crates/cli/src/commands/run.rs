@@ -21,6 +21,7 @@ use crate::{
 };
 use antinomie_monitor_core::{
     AnalysisSelection, Command, ExecRequest, RunIn, RunSummary, Snapshot, WaitStatus,
+    dump_trigger::DumpTrigger,
     route::RouteKind,
     samples::{NewOrigin, NewSample, SampleRecord, SampleRef},
 };
@@ -30,7 +31,8 @@ use antinomie_service::{
         failure::Failure,
         job::Outcome,
     },
-    waiter::{BOOT_WAIT, EndReason, RunPlan, RunReport, load_artifacts},
+    config::policy::{TriggerKind, TriggerSetting, trigger_plan},
+    waiter::{BOOT_WAIT, EndReason, RunPlan, RunReport, load_artifacts, trigger::TriggerReport},
 };
 use clap::{Args, Subcommand};
 use serde_json::{Value, json};
@@ -101,6 +103,18 @@ pub struct Exec {
     /// Take a core of the program before its address space exits.
     #[arg(long)]
     pub core_dump: bool,
+    /// Take a dump while the program runs, when the live Triage rules match
+    /// at this tier or above (low, medium or high; default off). What it takes
+    /// is --dump-kind. The program is not stopped. The result's `triggers`
+    /// says what fired (rule, tier, dump state and path) or that it was armed
+    /// and nothing matched. Needs a revision-16 base for a core.
+    #[arg(long = "dump-trigger", value_name = "TIER")]
+    pub dump_trigger: Option<String>,
+    /// What --dump-trigger takes: core (the process that made the call, the
+    /// default), memory (the VM's RAM) or both. Bounded by the core budget
+    /// and the memory cap of the UI's defaults.
+    #[arg(long = "dump-kind", value_name = "KIND", requires = "dump_trigger")]
+    pub dump_kind: Option<String>,
     /// Run the guest-side static analysis too, with these checks (comma
     /// separated; see `analyze --help`).
     #[arg(long = "static", value_delimiter = ',', value_name = "CHECKS")]
@@ -194,6 +208,7 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
             ..AnalysisSelection::default()
         }
     };
+    let dump_trigger = trigger_for(arguments)?;
     let mut args = arguments.args.clone();
     args.extend(arguments.trailing.iter().cloned());
     let request = ExecRequest {
@@ -209,10 +224,48 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
         memory_dump_on_exit: arguments.memory_dump,
         core_dump_on_exit: arguments.core_dump,
         route: arguments.route.as_deref().map(parse_route).transpose()?,
+        core_max_size: dump_trigger
+            .as_ref()
+            .is_some_and(|plan| plan.core)
+            .then_some(DEFAULT_TRIGGER_CORE_MIB << 20),
+        core_timeout_ms: dump_trigger
+            .as_ref()
+            .is_some_and(|plan| plan.core)
+            .then_some(antinomie_service::stages::plan::CORE_TIMEOUT_MS),
+        dump_trigger,
         ..ExecRequest::default()
     };
     request.validate().map_err(CliError::invalid)?;
     Ok(request)
+}
+
+/// The core budget of a trigger core, the policy default (`core_max_mib`).
+const DEFAULT_TRIGGER_CORE_MIB: u32 = 64;
+
+/// The dump trigger the flags ask for; `None` (off) without `--dump-trigger`
+/// or with `--dump-trigger off`.
+pub fn trigger_for(arguments: &Exec) -> Result<Option<DumpTrigger>, CliError> {
+    let Some(text) = arguments.dump_trigger.as_deref() else {
+        return Ok(None);
+    };
+    let setting = TriggerSetting::parse(text).ok_or_else(|| {
+        CliError::invalid(format!(
+            "{text:?} is not a dump trigger tier; use {}",
+            TriggerSetting::NAMES
+        ))
+        .with_field("dump-trigger")
+    })?;
+    let kind = match arguments.dump_kind.as_deref() {
+        None => TriggerKind::default(),
+        Some(text) => TriggerKind::parse(text).ok_or_else(|| {
+            CliError::invalid(format!(
+                "{text:?} is not a dump kind; use {}",
+                TriggerKind::NAMES
+            ))
+            .with_field("dump-kind")
+        })?,
+    };
+    Ok(trigger_plan(setting, kind))
 }
 
 /// The library record the argument names: a SHA-256, or a file added now.
@@ -430,6 +483,59 @@ fn failure_text(failure: &Failure) -> String {
     }
 }
 
+/// The human lines of the run's dump trigger.
+fn trigger_lines(report: &TriggerReport) -> Vec<(&'static str, String)> {
+    let mut lines = Vec::new();
+    let what = match (report.armed.memory, report.armed.core) {
+        (true, true) => "memory and core",
+        (true, false) => "memory",
+        _ => "core",
+    };
+    lines.push((
+        "dump trigger",
+        format!(
+            "{what} at {} or higher: {}",
+            report.armed.tier,
+            if report.fired {
+                "fired"
+            } else {
+                "did not fire"
+            }
+        ),
+    ));
+    for record in &report.records {
+        let dumps: Vec<String> = [("core", &record.core), ("memory", &record.memory)]
+            .into_iter()
+            .filter_map(|(name, dump)| {
+                let dump = dump.as_ref()?;
+                let mut text = format!("{name} {}", dump.state);
+                if let Some(path) = &dump.path {
+                    text.push_str(&format!(" at {path}"));
+                }
+                if let Some(error) = &dump.error {
+                    text.push_str(&format!(" ({error})"));
+                }
+                Some(text)
+            })
+            .collect();
+        lines.push((
+            "trigger",
+            format!(
+                "{} ({}) by process {} ({}): {}",
+                record.rule,
+                record.tier,
+                record.pid,
+                record.syscall,
+                dumps.join(", ")
+            ),
+        ));
+    }
+    for note in &report.notes {
+        lines.push(("trigger note", note.clone()));
+    }
+    lines
+}
+
 /// The result object of a finished `run exec`.
 fn reply(
     report: &RunReport,
@@ -481,6 +587,7 @@ fn reply(
         "sample": {"sha256": record.sha256, "name": record.name},
         "run": run,
         "artifacts": artifacts,
+        "triggers": report.triggers,
         "warnings": report.warnings.iter()
             .map(|w| json!({"code": w.code, "text": w.text}))
             .collect::<Vec<_>>(),
@@ -541,6 +648,9 @@ fn reply(
             )
             .to_ascii_lowercase(),
         ));
+    }
+    if let Some(triggers) = &report.triggers {
+        pairs.extend(trigger_lines(triggers));
     }
     for warning in &report.warnings {
         pairs.push(("warning", format!("{}: {}", warning.code, warning.text)));
@@ -693,6 +803,108 @@ mod tests {
     fn a_core_dump_in_a_desktop_is_not_asked_here_but_validate_still_runs() {
         let exec = parse(&["--core-dump"]);
         assert!(request_for(&exec).unwrap().core_dump_on_exit);
+    }
+
+    #[test]
+    fn the_dump_trigger_is_off_unless_asked() {
+        let request = request_for(&parse(&[])).unwrap();
+        assert!(request.dump_trigger.is_none());
+        assert!(request.core_max_size.is_none() && request.core_timeout_ms.is_none());
+        let off = request_for(&parse(&["--dump-trigger", "off"])).unwrap();
+        assert!(off.dump_trigger.is_none());
+    }
+
+    #[test]
+    fn the_dump_trigger_flags_make_the_plan() {
+        use antinomie_monitor_core::dump_trigger::TriggerTier;
+        let request = request_for(&parse(&["--dump-trigger", "high"])).unwrap();
+        let plan = request.dump_trigger.unwrap();
+        assert_eq!(plan.min_tier, TriggerTier::High);
+        assert!(plan.core && !plan.memory);
+        assert_eq!(request.core_max_size, Some(64 << 20));
+        assert_eq!(request.core_timeout_ms, Some(5000));
+        for (kind, memory, core) in [
+            ("core", false, true),
+            ("memory", true, false),
+            ("Both", true, true),
+        ] {
+            let request =
+                request_for(&parse(&["--dump-trigger", "Medium", "--dump-kind", kind])).unwrap();
+            let plan = request.dump_trigger.unwrap();
+            assert_eq!(plan.min_tier, TriggerTier::Medium, "{kind}");
+            assert_eq!((plan.memory, plan.core), (memory, core), "{kind}");
+            // A memory-only trigger asks for no core budget.
+            assert_eq!(request.core_max_size.is_some(), core, "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_bad_tier_or_kind_is_refused_and_a_kind_needs_a_trigger() {
+        for args in [
+            ["--dump-trigger", "urgent"].as_slice(),
+            ["--dump-trigger", "high", "--dump-kind", "all"].as_slice(),
+        ] {
+            let error = request_for(&parse(args)).unwrap_err();
+            assert_eq!(error.exit.code(), 4, "{args:?}");
+        }
+        let sha = "ab".repeat(32);
+        assert!(
+            Wrapper::try_parse_from(["x", "exec", sha.as_str(), "--dump-kind", "core"]).is_err()
+        );
+    }
+
+    #[test]
+    fn the_result_tells_what_the_trigger_did() {
+        use antinomie_service::{
+            api::job::{JobDump, JobTrigger},
+            waiter::trigger::Armed,
+        };
+        let fired = TriggerReport {
+            armed: Armed {
+                tier: "high".into(),
+                memory: false,
+                core: true,
+            },
+            fired: true,
+            records: vec![JobTrigger {
+                rule: "persistence.cron".into(),
+                tier: "high".into(),
+                summary: String::new(),
+                syscall: "openat".into(),
+                pid: 7,
+                at_ms: 1,
+                memory: None,
+                core: Some(JobDump {
+                    state: "partial".into(),
+                    size: Some(10),
+                    capture_id: None,
+                    error: None,
+                    path: Some("/runs/r/core".into()),
+                }),
+            }],
+            missed: 0,
+            skipped: 0,
+            lost: 0,
+            notes: Vec::new(),
+        };
+        let lines = trigger_lines(&fired);
+        assert_eq!(lines[0].1, "core at high or higher: fired");
+        assert_eq!(
+            lines[1].1,
+            "persistence.cron (high) by process 7 (openat): core partial at /runs/r/core"
+        );
+        let quiet = TriggerReport {
+            fired: false,
+            records: Vec::new(),
+            notes: vec!["armed, nothing matched".into()],
+            ..fired
+        };
+        let lines = trigger_lines(&quiet);
+        assert_eq!(lines[0].1, "core at high or higher: did not fire");
+        assert_eq!(
+            lines[1],
+            ("trigger note", "armed, nothing matched".to_owned())
+        );
     }
 
     #[test]

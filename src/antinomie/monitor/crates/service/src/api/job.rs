@@ -160,6 +160,43 @@ pub struct JobVm {
     pub revert: Revert,
 }
 
+/// One dump a dump trigger took (or tried to take).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct JobDump {
+    /// The artifact state: `in_progress`, `complete`, `partial`,
+    /// `interrupted` or `failed`. A core is usually `partial`: the guest
+    /// copies only the pages that are resident.
+    pub state: String,
+    /// Bytes on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Local-only, like `recording.directory`: absent from every remote reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// A suspicious-activity match that took a dump: the rule, its tier, the
+/// process and call, and what became of the memory dump and the core.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct JobTrigger {
+    pub rule: String,
+    /// `low`, `medium` or `high`.
+    pub tier: String,
+    pub summary: String,
+    pub syscall: String,
+    pub pid: u32,
+    /// Host Unix milliseconds of the match.
+    pub at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<JobDump>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core: Option<JobDump>,
+}
+
 /// The program's run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct JobRun {
@@ -172,6 +209,15 @@ pub struct JobRun {
     /// The signal number when it was killed by one.
     pub signal: Option<i32>,
     pub core_dumped: bool,
+    /// The dumps the policy's dump trigger took, in order; empty when the
+    /// trigger is off or took none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<JobTrigger>,
+    /// What the trigger did when it took nothing, or took less than it was
+    /// asked: "armed but no rule of that tier matched", matches that came too
+    /// late, matches over the budget.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trigger_notes: Vec<String>,
 }
 
 /// The recording of the job's run. `run_key` is the address of every

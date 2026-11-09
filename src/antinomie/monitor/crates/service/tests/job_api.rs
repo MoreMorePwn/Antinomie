@@ -71,6 +71,8 @@ fn job(state: JobState) -> Job {
             exit: None,
             signal: Some(9),
             core_dumped: false,
+            triggers: Vec::new(),
+            trigger_notes: Vec::new(),
         }),
         recording: Some(JobRecording {
             vm_id: "vm".into(),

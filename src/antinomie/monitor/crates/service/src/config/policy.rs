@@ -10,6 +10,7 @@ use crate::api::{
     ops::Scope,
     spec::{ReportFormat, Route, RunAsName, RunIn, StaticChecks, StaticPreset},
 };
+use antinomie_monitor_core::dump_trigger::{DumpTrigger, TriggerTier};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -134,13 +135,91 @@ impl Default for NetworkPolicy {
     }
 }
 
+/// Whether a run takes a dump when the live Triage rules match, and from
+/// which tier (the UI's "Dump when suspicious activity is seen"). Off by
+/// default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerSetting {
+    #[default]
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl TriggerSetting {
+    pub const NAMES: &'static str = "off, low, medium or high";
+
+    pub fn parse(text: &str) -> Option<Self> {
+        if text.trim().eq_ignore_ascii_case("off") {
+            return Some(Self::Off);
+        }
+        TriggerTier::from_name(text).map(|tier| match tier {
+            TriggerTier::Low => Self::Low,
+            TriggerTier::Medium => Self::Medium,
+            TriggerTier::High => Self::High,
+        })
+    }
+
+    pub fn tier(self) -> Option<TriggerTier> {
+        match self {
+            Self::Off => None,
+            Self::Low => Some(TriggerTier::Low),
+            Self::Medium => Some(TriggerTier::Medium),
+            Self::High => Some(TriggerTier::High),
+        }
+    }
+}
+
+/// What the trigger takes: a core of the process that made the call, the
+/// VM's memory, or both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerKind {
+    #[default]
+    Core,
+    Memory,
+    Both,
+}
+
+impl TriggerKind {
+    pub const NAMES: &'static str = "core, memory or both";
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "core" => Some(Self::Core),
+            "memory" => Some(Self::Memory),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+}
+
+/// The dump trigger a setting and a kind ask for; `None` when it is off. The
+/// other limits are the UI's defaults (one dump, 30 s apart, memory only on a
+/// VM of at most 4 GiB).
+pub fn trigger_plan(setting: TriggerSetting, kind: TriggerKind) -> Option<DumpTrigger> {
+    Some(DumpTrigger {
+        min_tier: setting.tier()?,
+        memory: matches!(kind, TriggerKind::Memory | TriggerKind::Both),
+        core: matches!(kind, TriggerKind::Core | TriggerKind::Both),
+        ..DumpTrigger::default()
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct EvidencePolicy {
     pub memory_dump: bool,
     pub core_dump: bool,
-    /// The engine maximum is 1024.
+    /// The engine maximum is 1024. Also the budget of a core the trigger takes.
     pub core_max_mib: u32,
+    /// Take a dump when the live Triage rules match at this tier or above
+    /// (`off`, `low`, `medium`, `high`).
+    pub dump_trigger: TriggerSetting,
+    /// What the trigger takes: `core`, `memory` or `both`.
+    pub dump_trigger_kind: TriggerKind,
 }
 
 impl Default for EvidencePolicy {
@@ -149,7 +228,16 @@ impl Default for EvidencePolicy {
             memory_dump: false,
             core_dump: false,
             core_max_mib: 64,
+            dump_trigger: TriggerSetting::Off,
+            dump_trigger_kind: TriggerKind::Core,
         }
+    }
+}
+
+impl EvidencePolicy {
+    /// The trigger of a job under this policy, `None` when off.
+    pub fn trigger(&self) -> Option<DumpTrigger> {
+        trigger_plan(self.dump_trigger, self.dump_trigger_kind)
     }
 }
 

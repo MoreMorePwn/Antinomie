@@ -15,7 +15,10 @@
 //!
 //! `vm_start_failed` and `guest_unreachable` count toward the quarantine of
 //! three in a row.
-use super::{LaneStages, Prepared, Provisioned, STOP_WAIT, StageStop, plan::CORE_REVISION};
+use super::{
+    LaneStages, Prepared, Provisioned, STOP_WAIT, StageStop,
+    plan::{CORE_REVISION, TRIGGER_CORE_REVISION},
+};
 use crate::{
     api::{
         failure::{Failure, FailureCode},
@@ -169,6 +172,23 @@ impl<E: Engine> LaneStages<'_, E> {
                 "the guest is too old for a core dump",
                 Some(&format!(
                     "revision {} found, {CORE_REVISION} needed",
+                    revision.map_or("none".to_owned(), |r| r.to_string())
+                )),
+            ));
+        }
+        if prepared
+            .effective
+            .request
+            .dump_trigger
+            .as_ref()
+            .is_some_and(|plan| plan.core)
+            && revision.is_none_or(|revision| revision < TRIGGER_CORE_REVISION)
+        {
+            return Err(fail(
+                FailureCode::DependencyMissing,
+                "the guest is too old for a core on suspicious activity",
+                Some(&format!(
+                    "revision {} found, {TRIGGER_CORE_REVISION} needed",
                     revision.map_or("none".to_owned(), |r| r.to_string())
                 )),
             ));

@@ -114,6 +114,15 @@ pub enum EventBody {
     /// An artifact became available.
     #[serde(rename = "job.artifact")]
     JobArtifact { artifact: Artifact },
+    /// The run's dump trigger matched and took a dump, or did nothing
+    /// (`trigger` absent, `note` says why). No host paths.
+    #[serde(rename = "job.trigger")]
+    JobTrigger {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger: Option<Box<super::job::JobTrigger>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
     /// Triage finished.
     #[serde(rename = "job.assessment")]
     JobAssessment { assessment: Box<Assessment> },

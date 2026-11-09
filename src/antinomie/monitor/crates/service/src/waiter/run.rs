@@ -105,6 +105,8 @@ pub struct RunReport {
     /// The run as the engine last described it.
     pub run: Option<RunSummary>,
     pub artifacts: Option<RunArtifacts>,
+    /// What the run's dump trigger did; `None` when it asked for none.
+    pub triggers: Option<super::trigger::TriggerReport>,
     pub end_reason: Option<EndReason>,
     pub timings: Timings,
     /// The VM was stopped and its recording is final.
@@ -160,6 +162,9 @@ pub fn pending_parts(run: &RunSummary, artifacts: Option<&RunArtifacts>) -> Vec<
                 if state.in_progress() {
                     parts.push(name);
                 }
+            }
+            if super::trigger::dump_pending(artifacts) {
+                parts.push("trigger dump");
             }
         }
     }
@@ -315,6 +320,7 @@ impl<E: Engine> Waiter<E> {
             warnings: Vec::new(),
             run: None,
             artifacts: None,
+            triggers: None,
             end_reason: None,
             timings: Timings::default(),
             settled: false,
@@ -689,6 +695,10 @@ impl<E: Engine> Waiter<E> {
             .iter()
             .map(|run| run.id.clone())
             .collect();
+        if request.dump_trigger.is_some() {
+            // A headless process has no UI to hand the rule engine over.
+            super::trigger::ensure_live_judge();
+        }
         let id = self.send(Command::Execute(request))?;
         if let Err(error) = self.lane_wait(id, "Execute".into()) {
             return Err(match error {
@@ -862,6 +872,21 @@ impl<E: Engine> Waiter<E> {
                 report
                     .warnings
                     .extend(incomplete_parts(&run, artifacts.as_ref()));
+                if let Some(triggers) = super::trigger::report(&run, artifacts.as_ref()) {
+                    for record in &triggers.records {
+                        sink(EventBody::JobTrigger {
+                            trigger: Some(Box::new(super::trigger::without_paths(record))),
+                            note: None,
+                        });
+                    }
+                    for note in &triggers.notes {
+                        sink(EventBody::JobTrigger {
+                            trigger: None,
+                            note: Some(note.clone()),
+                        });
+                    }
+                    report.triggers = Some(triggers);
+                }
                 report.run = Some(run);
                 report.artifacts = artifacts;
                 break;

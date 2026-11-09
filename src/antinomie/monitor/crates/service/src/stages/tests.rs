@@ -239,6 +239,7 @@ fn the_launch_request_is_the_policys_unless_the_spec_overrides_it() {
         Some(antinomie_monitor_core::route::RouteKind::Drop)
     );
     assert!(!r.analysis.enabled && !r.debug_on_start && r.host_copy.is_none());
+    assert!(r.dump_trigger.is_none(), "the trigger is off by default");
     assert_eq!(plain.run_limit, Duration::from_secs(300));
 
     let mut job = job;
@@ -272,6 +273,30 @@ fn the_launch_request_is_the_policys_unless_the_spec_overrides_it() {
         r.route,
         Some(antinomie_monitor_core::route::RouteKind::InetSim)
     );
+}
+
+#[test]
+fn the_policys_dump_trigger_is_in_the_launch_request_with_a_core_budget() {
+    use crate::config::policy::{TriggerKind, TriggerSetting};
+    use antinomie_monitor_core::dump_trigger::TriggerTier;
+    let w = W::new("plan-trigger");
+    let job = w.fx.running(1);
+    let mut policy = crate::config::Policy::default();
+    policy.evidence.dump_trigger = TriggerSetting::High;
+    let r = plan::effective(&job, &policy).request;
+    let plan = r.dump_trigger.expect("the trigger is armed");
+    assert_eq!(plan.min_tier, TriggerTier::High);
+    assert!(plan.core && !plan.memory);
+    // The core of a trigger has the policy's budget though no exit core is asked.
+    assert!(!r.core_dump_on_exit);
+    assert_eq!(
+        (r.core_max_size, r.core_timeout_ms),
+        (Some(64 << 20), Some(plan::CORE_TIMEOUT_MS))
+    );
+    policy.evidence.dump_trigger_kind = TriggerKind::Memory;
+    let r = plan::effective(&job, &policy).request;
+    assert!(r.dump_trigger.is_some_and(|plan| plan.memory && !plan.core));
+    assert_eq!((r.core_max_size, r.core_timeout_ms), (None, None));
 }
 
 #[test]
