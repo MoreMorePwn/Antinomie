@@ -715,7 +715,12 @@ impl Scan {
         // calls to judge: say so, with the signal, instead of an empty report.
         let root_crash = (*scoped_count == 0)
             .then(|| root_exit_signal(directory))
-            .flatten();
+            .flatten()
+            .map(|signal| match truncated_elf_note(directory) {
+                // The identification of the file says why it died so early.
+                Some(note) => format!("{signal}, and the static analysis of the file says: {note}"),
+                None => signal,
+            });
         if let Some(text) = &root_crash {
             engine.root_crash(text, clock_anchor);
         }
@@ -826,7 +831,10 @@ impl Scan {
         ioc_scan::list_findings(&mut engine, &ioc, &verdicts, clock_anchor);
         ioc_scan::annotate(&mut network.new_tabs, &network.http, &ioc, &verdicts);
         let output = engine.finish(&files);
-        let process = finish_processes(nodes);
+        let mut process = finish_processes(nodes);
+        if root_crash.is_some() {
+            settle_crashed_start(&mut process, &recording.directory);
+        }
         let mut graph = graph::Collector::new(&process, request.finding_view);
         for mark in &output.info {
             graph.count_info(&request.finding_view, mark);
@@ -1021,5 +1029,29 @@ impl Scan {
                 gaps
             },
         }))
+    }
+}
+
+/// A program that died of a signal before its first recorded call has a
+/// process row without an exit record: show the run's own end instead of
+/// "running", the signal for the program and "ended with the run" for the
+/// rest.
+pub(crate) fn settle_crashed_start(process: &mut [ProcessNode], directory: &Path) {
+    let Some(status) = root_exit_status(directory) else {
+        return;
+    };
+    for node in process
+        .iter_mut()
+        .filter(|node| !node.thread && !node.state.starts_with("task exit"))
+        .filter(|node| node.in_call.is_none())
+    {
+        if node.parent.is_none() || node.parent_missing || node.depth == 0 {
+            node.state = format!("task exit, {}", crate::values::task_end(&status));
+            if let antinomie_monitor_core::WaitStatus::Signaled { signal, .. } = status {
+                node.end_signal = Some(signal);
+            }
+        } else {
+            node.state = "task exit, ended with the run".into();
+        }
     }
 }

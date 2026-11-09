@@ -10,6 +10,7 @@ mod dump_trigger;
 mod evidence_delete;
 mod guest_resource_control;
 mod launch_failure;
+pub use launch_failure::split_run_record;
 mod manual_core;
 mod process_core;
 mod recorder_health;

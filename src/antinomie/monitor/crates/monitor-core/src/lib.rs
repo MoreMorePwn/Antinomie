@@ -118,7 +118,7 @@ mod build_git_head;
 pub mod fuzz_entry;
 pub use analysis::*;
 pub use api::*;
-pub use backend::Backend;
+pub use backend::{Backend, split_run_record};
 pub use control::specimen_ram_bound;
 pub use core_limits::*;
 pub use observation::*;

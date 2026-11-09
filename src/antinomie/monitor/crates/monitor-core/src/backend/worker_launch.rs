@@ -379,6 +379,7 @@ impl Worker {
             tracer_hashing,
             ..
         } = shape;
+        let guest_arch = session.disk_bundle.arch;
         let run_id = summary.id.clone();
         let mut run = match ProgramRun::new(summary, session.capture.quota()) {
             Ok(run) => run,
@@ -436,11 +437,13 @@ impl Worker {
                     timeout,
                 )
                 .map_err(|error| {
+                    let host = launch_host_head(&self.options.data_dir, request);
                     launch_failure(
                         error,
                         &request.path,
                         &request.cwd,
-                        request.host_copy.as_deref(),
+                        host.as_ref(),
+                        Some(guest_arch),
                     )
                 })?;
             (|| {
@@ -705,4 +708,22 @@ impl Worker {
             }
         }
     }
+}
+
+/// The front of the program a failed launch tried to start, for the host's
+/// reading of its ELF headers: the upload's host copy, else the library
+/// sample's archive. `None` when neither can be read.
+fn launch_host_head(
+    data_dir: &std::path::Path,
+    request: &ExecRequest,
+) -> Option<crate::analysis::HostHead> {
+    if let Some(copy) = request.host_copy.as_deref()
+        && let Some(head) = crate::analysis::HostHead::of_file(copy)
+    {
+        return Some(head);
+    }
+    let sample = request.sample.as_ref()?;
+    let archive = crate::samples::archive_path(data_dir, &sample.sha256).ok()?;
+    let bytes = crate::samples::open_sample(&archive, &sample.sha256).ok()?;
+    Some(crate::analysis::HostHead::of_bytes(&bytes))
 }

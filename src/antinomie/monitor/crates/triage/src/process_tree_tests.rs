@@ -703,3 +703,30 @@ fn probe_real_run() {
         .collect();
     eprintln!("roots: {roots:?}");
 }
+
+#[test]
+pub fn a_crash_before_the_first_call_shows_the_signal_not_running() {
+    let dir = std::env::temp_dir().join(format!("ant-crash-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("run.json"),
+        r#"{"execution":{"root_exit":{"Signaled":{"signal":7,"core_dumped":false}}}}"#,
+    )
+    .unwrap();
+    // An exec with no exit record: the row a crash before the first call leaves.
+    let calls = vec![as_task(exec(7, "/tmp/cut", &["cut"]), 7, 7, 70)];
+    let mut nodes = process_nodes(&calls);
+    assert_eq!(nodes[0].state, "exit not recorded");
+    crate::archive_scan::stages::settle_crashed_start(&mut nodes, &dir);
+    let rows = process_rows(&nodes, None, &Suspicious::new());
+    assert_eq!(rows[0][5].text, "0 \u{b5}s");
+    assert_eq!(rows[0][6].text, "killed by SIGBUS");
+    assert_eq!(nodes[0].end_signal, Some(7));
+    // No run exit on record: the row stays as it was.
+    let empty = dir.join("none");
+    std::fs::create_dir_all(&empty).unwrap();
+    let mut again = process_nodes(&calls);
+    crate::archive_scan::stages::settle_crashed_start(&mut again, &empty);
+    assert_eq!(again[0].state, "exit not recorded");
+    std::fs::remove_dir_all(dir).unwrap();
+}
