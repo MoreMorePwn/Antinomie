@@ -20,12 +20,16 @@
 //! | `SIGUSR1` | The queue's state is written to the log. |
 
 pub mod artifacts;
+mod housekeeping;
 pub mod lane;
 mod lane_ops;
+#[cfg(test)]
+mod p4_tests;
 pub mod runner;
 pub mod service;
 #[cfg(test)]
 mod tests;
+mod watch_env;
 
 use crate::{
     api::{
@@ -210,6 +214,8 @@ pub struct Daemon<E: Engine + Send + 'static> {
     service: Arc<Service>,
     lane: Option<JoinHandle<Waiter<E>>>,
     server: Option<(StopHandle, JoinHandle<()>)>,
+    /// The watch folders' thread; it ends on the stop flag.
+    helpers: Vec<JoinHandle<()>>,
     log: Arc<dyn Fn(&str) + Send + Sync>,
     host_grace: Duration,
 }
@@ -403,6 +409,8 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             } else {
                 Accelerator::Tcg
             },
+            watch: Default::default(),
+            log: Arc::clone(&log),
         });
 
         // The socket is bound before the lane starts, so a socket that cannot
@@ -442,6 +450,18 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             let thread = std::thread::spawn(move || server.serve());
             (handle, thread)
         });
+        let mut helpers = Vec::new();
+        // Direct mode runs one job in the command itself: it takes no files
+        // from watch folders and cleans nothing up.
+        if setup.socket.is_some() {
+            let watch = Arc::clone(&service);
+            helpers.push(
+                std::thread::Builder::new()
+                    .name("antinomie-watch".into())
+                    .spawn(move || watch_env::run(watch))
+                    .map_err(|e| format!("no thread for the watch folders: {e}"))?,
+            );
+        }
         log(&format!(
             "daemon ready: data {} socket {}",
             data_dir.display(),
@@ -454,6 +474,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             service,
             lane: Some(lane_thread),
             server,
+            helpers,
             log,
             host_grace: setup.host_grace,
         })
@@ -568,6 +589,9 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         }
         self.service.controls.begin_stop();
         let _ = crate::store::lock(&self.service.wake).send(());
+        for helper in self.helpers.drain(..) {
+            let _ = helper.join();
+        }
         let thread = self.lane.take().expect("the lane thread is joined once");
         let waiter = thread.join().map_err(|_| {
             ApiError::new(

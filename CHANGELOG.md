@@ -149,6 +149,27 @@ x86 programs by their own table.
   tags the sample `auto:label=...` and `auto:policy=...` in the library, with the
   automation actor in its custody chain. See "Auto mode" in docs/usage.md.
 
+- **Watch folders (ANT-T0383).** A file that appears in a folder named under
+  `[[inbox.watch]]` in `service.toml` becomes a job, as the actor
+  `auto:policy-<policy>` (the label `watch` names the folder). The folder is
+  scanned every 2 seconds; a file is taken only after its size and times have
+  been steady for 3 seconds, and never while its name starts with a dot or ends
+  in `.part`, `.tmp` or `.crdownload`. Nothing is followed out of the folder: a
+  symbolic link, device, FIFO, socket or file with a second hard link is refused
+  and left where it is, a file of another user is refused, and a folder that is
+  writable by everyone, owned by another user, or (without `allow_group_write`)
+  writable by its group is not used at all (`engine.alert`
+  `watch_folder_refused`). Each file is opened relative to its folder without
+  following links and read from that descriptor. After intake the file moves to
+  `inbox/processed/`, is deleted, or is kept (`delete_after`); a file that fails
+  intake moves to `inbox/rejected/` with a `.reason` file and is not tried
+  again. `policy_by_dir` picks the policy from a subfolder named after one
+  (other folders are ignored), `recursive` follows subfolders (8 deep at most),
+  and `watch_rate` jobs a minute is the limit: above it the folder pauses for a
+  minute and `engine.alert` `watch_flood` is raised. `antinomie-cli auto watch
+  list` shows each folder, what it took and what it refused; `auto watch scan`
+  scans now. See "Auto mode" in docs/usage.md and docs/service-config.md.
+
 - **`antinomie-cli run list`, `run show` and `run export`, and Triage reads
   through the query API (ANT-T0367, ANT-T0369).** `run list` lists the recorded
   runs of the data directory (`--vm`, `--sample`, `--job`, `--state`, `--since`,

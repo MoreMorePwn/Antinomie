@@ -49,5 +49,7 @@ pub mod store;
 pub mod verdict;
 /// The engine waiter: commands, results and the waits a headless caller needs.
 pub mod waiter;
+/// Watch folders (card P4-2).
+pub mod watch;
 /// The watchdog of a lane job (design 4.7.1).
 pub mod watchdog;

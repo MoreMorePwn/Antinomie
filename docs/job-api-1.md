@@ -242,8 +242,8 @@ Ephemeral events (`job.progress`, `job.metrics`) are sent live only.
 **Operations served in 0.9.0.** `capabilities`, `health`, `upload.*`,
 `job.submit`, `job.get`, `job.list`, `job.cancel`, `job.retry`, `events.subscribe`,
 `events.list`, `artifact.list`, `artifact.get`, `report.get`, `policy.list`,
-`queue.status`, `queue.pause`, `queue.resume`, the `lane.*` operations below, and
-every `recording.*` read. Not
+`queue.status`, `queue.pause`, `queue.resume`, the `lane.*` and `watch.*` operations
+below, and every `recording.*` read. Not
 served by the daemon in 0.9.0 (`unsupported`; the direct commands work beside a
 running daemon): `job.delete`, `sample.*`, `vm.list`, `base.list`,
 `custody.verify`. The reserved names of 5.11 (`run.`, `terminal.`, `rule.`,
@@ -270,6 +270,16 @@ and the CLI's `auto lane` commands need them while a daemon owns the folder):
 only while no job runs: a busy lane answers `conflict` at once (pause the queue
 first), and a request not reached within its wait (900 s, 60 s) is dropped, never
 run late. Each sends `lane.state` with the reason.
+
+**Watch folder operations** (an addition of this binding; the CLI's `auto watch`):
+
+| Op | Scope | Params | Result |
+|---|---|---|---|
+| `watch.list` | `read` | none | `{folders: [{path, policy, state, detail, taken, rejected, refused: [{name, reason}], pending, last_scan_ms, paused_until_ms}]}`; `state` is `watching`, `paused`, `held`, `refused` or `error` |
+| `watch.scan` | `manage` | none | The same, after a scan made now (waits at most 30 s) |
+
+Watch folders add the events `engine.alert` with `code` `watch_flood` and
+`watch_folder_refused`.
 
 New `details.reason` values of this binding: `too_many_requests`, `rate_limited`,
 `too_many_connections`, `too_many_subscriptions`, `service_stopping`, `cancelled`.

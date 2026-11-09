@@ -1686,8 +1686,8 @@ per line: a list command prints its items and then a last line
 | 130 | interrupted | Interrupted with Ctrl-C |
 
 **Commands in this build.** This list is what `antinomie-cli --help` shows; the
-`auto` commands are in [Auto mode](#auto-mode-090) below. Watch folders and the web
-layer are not shipped yet.
+`auto` commands are in [Auto mode](#auto-mode-090) below. The web layer is not
+shipped yet.
 
 - `doctor [--require tool,...]` lists the runtime tools and exits 20 when a
   required one is missing. Without `--require` the tools the window also treats as
@@ -1914,6 +1914,8 @@ stopped, nothing is still being saved).
 | `auto retry JOB [--override KEY=VALUE]` | A new job from a finished one, with `repeat_of` set |
 | `auto queue status\|pause\|resume` | The queue; a paused queue starts no job (running jobs finish) |
 | `auto policy list` | The policies you may submit to |
+| `auto watch list` | The watch folders: state, files taken, files rejected, entries refused and why. Without a daemon, the folders `service.toml` names |
+| `auto watch scan` | Scans every watch folder now (a file still has to be steady for 3 seconds). Needs the daemon |
 
 Without a daemon, the reading commands read the job store directly (they work
 beside the window), `cancel` and `queue pause/resume` take the data folder for a
@@ -1925,6 +1927,32 @@ to a report:
 antinomie-cli --data-dir ~/auto auto submit ./sample.elf --verdict-exit --out ./report
 echo $?     # 0 clean_observed, 30 suspicious, 31 malicious, 32 inconclusive, 10 failed, 11 partial
 ```
+
+**Watch folders.** Name a folder in `service.toml` and every file dropped into it
+becomes a job:
+
+```toml
+[[inbox.watch]]
+path = "/srv/drop/default"
+policy = "default"
+delete_after = "move"       # processed files go to <data>/inbox/processed/
+```
+
+A file is taken about 3 seconds after it stops changing, so a file being copied in
+is never read half-way, and names ending `.part`, `.tmp`, `.crdownload` or starting
+with `.` are waited for. The daemon opens each file from inside the folder without
+following links, and refuses what could lead out of it: a symbolic link, a device or
+FIFO, a file with more than one hard link, a file of another user. It uses the
+folder only when it is yours and no one else can write to it (a group-writable folder
+needs `allow_group_write = true`; a folder anyone can write to is never used).
+Refused entries are left alone and listed by `auto watch list`. A file the intake
+rejects (wrong type, too large, a duplicate the policy denies) goes to
+`<data>/inbox/rejected/` with a `.reason` file and is not tried again. More than
+`watch_rate` (10) files a minute pauses the folder for a minute and raises an
+`engine.alert` `watch_flood`. `policy_by_dir = true` makes a subfolder named after
+a policy use that policy; other subfolders are ignored. The jobs carry the label
+`watch=<folder name>` and the custody actor `auto:policy-<policy>`. The keys are
+in [service configuration](service-config.md#watch-folders).
 
 **The label.** A succeeded job has an assessment: the raw Triage assessment, the
 highest tier, a policy label (`malicious`, `suspicious`, `clean_observed`,

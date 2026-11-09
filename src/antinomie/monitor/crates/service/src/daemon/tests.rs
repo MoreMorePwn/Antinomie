@@ -33,11 +33,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-const SCRIPT: &[u8] = b"#!/bin/sh\necho hello\n";
+pub(super) const SCRIPT: &[u8] = b"#!/bin/sh\necho hello\n";
 
-struct Svc {
-    dir: PathBuf,
-    service: Arc<Service>,
+pub(super) struct Svc {
+    pub(super) dir: PathBuf,
+    pub(super) service: Arc<Service>,
     _wake: mpsc::Receiver<()>,
     commands: mpsc::Receiver<LaneCommand>,
 }
@@ -48,7 +48,7 @@ impl Drop for Svc {
     }
 }
 
-fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
+pub(super) fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
     let dir = scratch(&format!("daemon-{name}"));
     let data = dir.join("data");
     std::fs::create_dir_all(&data).unwrap();
@@ -92,6 +92,8 @@ fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
         wake: Mutex::new(wake),
         commands: Mutex::new(commands),
         accelerator: Accelerator::Kvm,
+        watch: Default::default(),
+        log: Arc::new(|_: &str| {}),
     });
     Svc {
         dir,
@@ -101,11 +103,11 @@ fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
     }
 }
 
-fn me() -> Caller {
+pub(super) fn me() -> Caller {
     local_caller(rustix::process::geteuid().as_raw())
 }
 
-fn socket_ctx() -> CallContext {
+pub(super) fn socket_ctx() -> CallContext {
     CallContext {
         caller: me(),
         cancel: Default::default(),
@@ -113,7 +115,7 @@ fn socket_ctx() -> CallContext {
     }
 }
 
-fn call(svc: &Svc, op: &str, params: Value) -> Result<Value, ApiError> {
+pub(super) fn call(svc: &Svc, op: &str, params: Value) -> Result<Value, ApiError> {
     svc.service.call(op, params, &socket_ctx())
 }
 
@@ -142,7 +144,7 @@ fn upload(svc: &Svc, bytes: &[u8]) -> String {
     id
 }
 
-fn submit_upload(svc: &Svc) -> Job {
+pub(super) fn submit_upload(svc: &Svc) -> Job {
     let id = upload(svc, SCRIPT);
     let reply = call(svc, "job.submit", json!({"sample": {"upload_id": id}})).unwrap();
     assert_eq!(reply["replayed"], false);

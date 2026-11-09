@@ -52,6 +52,8 @@ pub struct Service {
     pub wake: Mutex<mpsc::Sender<()>>,
     pub commands: Mutex<mpsc::Sender<LaneCommand>>,
     pub accelerator: Accelerator,
+    pub watch: crate::watch::WatchHub,
+    pub log: Arc<dyn Fn(&str) + Send + Sync>,
 }
 
 /// Parse the parameters of an op; an unknown member is named in `field`.
@@ -107,11 +109,14 @@ fn starts_work(op: Op) -> bool {
 }
 
 impl Service {
-    fn wake_lane(&self) {
+    pub(super) fn wake_lane(&self) {
         let _ = crate::store::lock(&self.wake).send(());
     }
 
-    fn submit_context<'a>(&'a self, policies: &'a crate::config::PolicySet) -> SubmitContext<'a> {
+    pub(super) fn submit_context<'a>(
+        &'a self,
+        policies: &'a crate::config::PolicySet,
+    ) -> SubmitContext<'a> {
         let config = self.config.read().unwrap_or_else(|p| p.into_inner());
         SubmitContext {
             policies,
@@ -519,6 +524,9 @@ impl Handler for Service {
             return self.recording(op, value, ctx);
         }
         if let Some(answer) = super::lane_ops::call(self, op, value.clone(), ctx) {
+            return answer;
+        }
+        if let Some(answer) = super::housekeeping::call(self, op, value.clone(), ctx) {
             return answer;
         }
         if reserved(op) {

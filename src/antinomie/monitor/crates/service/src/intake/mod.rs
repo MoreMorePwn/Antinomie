@@ -157,12 +157,26 @@ impl Intake {
         policy: &LoadedPolicy,
         actor: &str,
     ) -> Result<JobSample, IntakeError> {
-        let mut file = open_nofollow(path, false).map_err(|e| {
+        let file = open_nofollow(path, false).map_err(|e| {
             deny(
                 FailureCode::SampleMissing,
                 format!("the file cannot be opened: {e}"),
             )
         })?;
+        self.sample_from_file(file, shown_name, name_hint, policy, actor)
+    }
+
+    /// Steps 1 to 4 for a file the caller already opened (a watch folder
+    /// opens its file relative to the folder's descriptor, so no path is
+    /// followed twice). The file is read from this descriptor only.
+    pub fn sample_from_file(
+        &self,
+        mut file: std::fs::File,
+        shown_name: &str,
+        name_hint: Option<&str>,
+        policy: &LoadedPolicy,
+        actor: &str,
+    ) -> Result<JobSample, IntakeError> {
         let info = file
             .metadata()
             .map_err(|e| deny(FailureCode::SampleMissing, e.to_string()))?;
