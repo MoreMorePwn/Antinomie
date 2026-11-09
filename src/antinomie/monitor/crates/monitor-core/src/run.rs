@@ -439,6 +439,8 @@ impl ProgramRun {
         if !matches!(self.summary.state, RunState::Finished | RunState::Stopped) {
             self.summary.state = RunState::Finalized;
         }
+        // A dump trigger that took nothing says why, before `run.json` is final.
+        self.settle_trigger();
         // Said once, at the end, where every view of the run shows its notes.
         if let Some(note) = self.telemetry_loss.totals().note() {
             self.add_note(note);

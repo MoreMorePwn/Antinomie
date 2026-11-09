@@ -59,11 +59,19 @@ impl Worker {
             return;
         };
         let mut found = Vec::new();
+        let mut over = Vec::new();
         for (cookie, run) in &mut session.runs {
+            let ended = !run.summary.state.is_live() && run.recording_complete();
             let Some(watch) = run.watch.as_mut() else {
                 continue;
             };
             watch.tick();
+            if ended && !watch.settled {
+                // The run is over: what still waits for an exit is judged now,
+                // and its notes then say what the trigger did.
+                watch.flush();
+                over.push(*cookie);
+            }
             while let Some(finding) = watch.queue.pop_front() {
                 found.push((*cookie, finding));
             }
@@ -78,7 +86,26 @@ impl Worker {
         for (cookie, finding) in found {
             self.take_trigger(cookie, finding);
         }
+        for cookie in over {
+            self.note_settled_trigger(cookie);
+        }
         self.settle_triggers();
+    }
+
+    /// A run that is over says in its notes when its trigger took nothing.
+    fn note_settled_trigger(&mut self, cookie: u64) {
+        let Some(run) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.runs.get_mut(&cookie))
+        else {
+            return;
+        };
+        if run.settle_trigger()
+            && let Err(error) = run.persist_summary()
+        {
+            self.snapshot.last_error = Some(error);
+        }
     }
 
     fn take_trigger(&mut self, cookie: u64, finding: LiveFinding) {
