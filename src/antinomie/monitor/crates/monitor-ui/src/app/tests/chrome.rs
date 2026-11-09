@@ -270,6 +270,33 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
 }
 
 #[test]
+fn a_vm_with_only_command_line_runs_names_the_newest_in_the_sidebar() {
+    let mut app = app();
+    observer_fixture(&mut app);
+    app.selected = Some(app.snapshot.vms[0].id.clone());
+    let vm_id = app.snapshot.vms[0].id.clone();
+    app.snapshot.runs.clear();
+    app.settings.last_runs.clear();
+    for (id, path, started_ms) in [
+        ("old", "/tmp/old", 1_000_000u64),
+        ("new", "/tmp/new", 5_000_000),
+    ] {
+        let mut saved = run(id);
+        saved.vm_id = vm_id.clone();
+        saved.request.path = path.into();
+        saved.started_ms = Some(started_ms);
+        app.history.push(saved);
+    }
+    app.note_last_runs();
+    let last = app.settings.last_runs.get(&vm_id).expect("a latest run");
+    assert_eq!(
+        (last.run_id.as_str(), last.program.as_str()),
+        ("new", "/tmp/new")
+    );
+    assert_eq!(last.started, 5_000);
+}
+
+#[test]
 fn sidebar_shows_each_vm_state_resources_and_latest_run() {
     let ctx = egui::Context::default();
     theme::install(&ctx);

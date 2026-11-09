@@ -908,7 +908,10 @@ impl Session {
                 None,
                 format!("sealed at {boundary}"),
             );
-            core.finish_request(RunArtifactState::Interrupted,format!("process-core acquisition sealed at {boundary}; only checkpoint-validated ownership may be adopted in a new timeline"));
+            core.finish_request(
+                RunArtifactState::Interrupted,
+                sealed_text("the core", boundary),
+            );
             core.released = true;
             let deadline = Instant::now() + Duration::from_secs(120);
             loop {
@@ -1074,5 +1077,36 @@ mod tests {
         assert_eq!(failure.arm_status, -28);
         assert!(failure.released);
         assert!(failure.checkpoint_handle().is_none());
+    }
+}
+
+/// Why a core stopped growing when its VM session ended, in plain words.
+/// `boundary` is how the session ended: `clean`, `forced` or anything else
+/// (`unexpected-exit`). Only the part saved by then is kept; nothing resumes
+/// it in a later session.
+pub(super) fn sealed_text(what: &str, boundary: &str) -> String {
+    let when = match boundary {
+        "clean" => "The VM was stopped",
+        "forced" => "The VM was forced off",
+        _ => "The VM ended unexpectedly",
+    };
+    format!(
+        "{when} before {what} was finished. Only the part saved so far is kept; it is not continued after a restore or restart."
+    )
+}
+
+#[cfg(test)]
+mod sealed_text_tests {
+    use super::sealed_text;
+
+    #[test]
+    fn the_partial_core_text_is_plain_words() {
+        let text = sealed_text("the core", "clean");
+        assert!(text.starts_with("The VM was stopped before the core was finished."));
+        assert!(sealed_text("the core", "forced").contains("forced off"));
+        assert!(sealed_text("the core", "unexpected-exit").contains("ended unexpectedly"));
+        for jargon in ["sealed", "checkpoint-validated", "ownership", "timeline"] {
+            assert!(!text.contains(jargon), "{text}");
+        }
     }
 }

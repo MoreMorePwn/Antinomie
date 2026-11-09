@@ -752,6 +752,15 @@ pub struct RunArtifacts {
 }
 
 impl RunArtifacts {
+    /// The run's launch was rejected or never confirmed: its issues say so.
+    /// Such a run has no process, so it has no cores and nothing to report
+    /// about them.
+    pub fn never_started(&self) -> bool {
+        self.issues
+            .iter()
+            .any(|issue| issue.contains(LAUNCH_REJECTED) || issue.contains(LAUNCH_OUTCOME_UNKNOWN))
+    }
+
     /// The cores the dump trigger took, in the order it took them.
     pub fn trigger_cores(
         &self,
@@ -2115,6 +2124,9 @@ impl RunState {
         matches!(self, RunState::FailedToStart | RunState::LaunchUnconfirmed)
     }
 }
+
+/// How the error of a launch the guest rejected begins.
+pub const LAUNCH_REJECTED: &str = "launch rejected by the guest, nothing was started";
 
 /// How the error of a launch whose answer never came ends.
 pub const LAUNCH_OUTCOME_UNKNOWN: &str = "launch outcome may be unknown";

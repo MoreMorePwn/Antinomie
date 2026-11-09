@@ -311,6 +311,13 @@ fn create(
     let command = create_command(arguments, snapshot, password)?;
     let before: Vec<String> = snapshot.vms.iter().map(|vm| vm.id.clone()).collect();
     let message = engine.command(command, limit)?;
+    // A Debian VM is made in the background: the command's result can come
+    // before the saved VM is in the list (it printed `"vm": null`).
+    let _ = engine.wait_until(
+        "the new VM in the list",
+        Some(Duration::from_secs(10)),
+        |snapshot| snapshot.vms.iter().any(|vm| !before.contains(&vm.id)),
+    );
     let created = engine
         .snapshot()
         .vms

@@ -65,10 +65,13 @@ impl Builder {
             .iter()
             .enumerate()
             .map(|(at, key)| {
-                let (label, finding) = if key.finding_ref.is_empty() {
-                    ((at + 1).to_string(), String::new())
+                // The row's own number: findings of one rule that the table
+                // folds share a row there, so its number would repeat here.
+                let label = (at + 1).to_string();
+                let finding = if key.finding_ref.is_empty() {
+                    String::new()
                 } else {
-                    self.finding_label(&key.finding_ref)
+                    self.finding_label(&key.finding_ref).1
                 };
                 let process = match key.pid {
                     Some(pid) if !key.process.contains(&pid.to_string()) => {

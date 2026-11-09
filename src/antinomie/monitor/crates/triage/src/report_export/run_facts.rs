@@ -257,6 +257,7 @@ fn environment(run: &RunSummary) -> Vec<Fact> {
             kernel.push_str(&format!(" (patch revision {revision})"));
         }
         out.push(Fact::new("Kernel", kernel));
+        out.push(Fact::new("Architecture", env.arch.label()));
         out.push(Fact::new(
             "Virtual machine",
             format!(
@@ -264,7 +265,12 @@ fn environment(run: &RunSummary) -> Vec<Fact> {
                 env.vm_name, env.cpus, env.ram_mib, env.network
             ),
         ));
-        out.push(Fact::new("Stealth profile", env.stealth.clone()));
+        // The preset's menu label ends "(as before)", which only means
+        // something next to an older release; a report names the profile.
+        out.push(Fact::new(
+            "Stealth profile",
+            env.stealth.replace(" (as before)", ""),
+        ));
         if !env.rule_packs.is_empty() {
             // "name version", the version whole (a snapshot id is matched by
             // it); the document lists the packs one per row.
@@ -306,6 +312,30 @@ mod tests {
             total_task_count: 2,
         });
         run
+    }
+
+    #[test]
+    fn the_environment_names_the_architecture_and_the_profile_without_its_menu_suffix() {
+        let mut run = record(RunState::Finished, None);
+        run.environment = Some(antinomie_monitor_core::run_environment::RunEnvironment {
+            base_name: "BusyBox".into(),
+            kernel_release: "6.12.94".into(),
+            arch: antinomie_monitor_core::GuestArch::AARCH64,
+            stealth: "Transparent QEMU (as before)".into(),
+            ..Default::default()
+        });
+        let facts = environment(&run);
+        let value = |name: &str| {
+            facts
+                .iter()
+                .find(|fact| fact.name == name)
+                .map(|fact| fact.value.clone())
+        };
+        assert_eq!(value("Architecture").as_deref(), Some("arm64"));
+        assert_eq!(
+            value("Stealth profile").as_deref(),
+            Some("Transparent QEMU")
+        );
     }
 
     #[test]

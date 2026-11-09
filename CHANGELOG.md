@@ -14,6 +14,24 @@ x86 programs by their own table.
 
 ### Host
 
+- **Snapshots restore works every time, and other fixes from the ARM evaluation
+  (ANT-T0437).** In the Snapshots window, **Restore disk and boot…** and **Resume
+  disk + memory…** did nothing from the second use in a session: the question opened
+  behind the window. It now opens on top each time. Opening the Core dumps tab no
+  longer raises an error toast (and "Capture issues") for every run that never
+  started: such a run has no cores and is not listed. The report's Key findings are
+  numbered 1, 2, 3… and each row links to its finding (a folded group of one rule
+  links to its shared row); At a glance names the guest architecture, and the
+  Transparent profile reads "Transparent QEMU" there. `run export --part trace`
+  writes the number the guest used for each call in `nr` (it was 4294967295 on
+  arm64, arm and i386); its `args_preview` holds the engine's raw argument previews,
+  and the decoded records are in the Syscall Trace's own JSON export. `vm create`
+  and `snapshot create` print the created VM or snapshot instead of `null`. The
+  partial-core note reads "The VM was stopped before the core was finished. Only the
+  part saved so far is kept; it is not continued after a restore or restart." The
+  IDS page says "Suricata 8.0.7 is installed.", the status bar says "Sigma (pySigma)
+  installed" when an install ends, and the sidebar names the newest run of the
+  selected VM even when the command line made it.
 - **`run exec --start` no longer loses Debian arm64 launches under TCG
   (ANT-T0425).** About 30% of launches failed with "the engine did not answer
   Execute within 60 seconds": the launch waits for a Debian guest to finish booting
@@ -441,8 +459,8 @@ x86 programs by their own table.
   socketpair pairs; inotify/fanotify masks, access modes, socket protocols,
   mempolicy modes, `ITIMER_*`, `fcntl` and `prctl` arguments read by name. It is
   ABI-aware: compat programs read the compat inventory and show bytes with a
-  "No compat layout" note where it has none. The trace JSON export carries the
-  decoded fields.
+  "No compat layout" note where it has none. The Syscall Trace's JSON export carries the
+  decoded fields (`run export --part trace` has the engine's raw previews).
 - **arm64 guests.** A BusyBox arm64 base (Debian 13's pinned arm64 BusyBox and
   e2fsprogs packages, the patched kernel cross-built with Debian 13's
   `aarch64-linux-gnu-gcc-14`) starts on QEMU's `virt` machine, on its device

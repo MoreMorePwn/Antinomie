@@ -10,7 +10,7 @@ const ENOEXEC: i32 = 8;
 const EFAULT: i32 = 14;
 
 /// How the text of a launch the guest rejected begins.
-pub(super) const REJECTED: &str = "launch rejected by the guest, nothing was started";
+pub(super) const REJECTED: &str = crate::LAUNCH_REJECTED;
 
 /// A launch the guest answered with an error: it did not happen, and the text
 /// says why as far as the error number tells. The state is the run's end:

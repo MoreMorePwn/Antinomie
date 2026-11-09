@@ -816,9 +816,11 @@ fn html_anchors_are_unique_and_every_link_resolves() {
     // The key findings are a table that links to the finding and the process.
     assert!(html.contains("<caption>Key findings</caption>"));
     assert!(html.contains("<a href=\"#finding-1\">c2.bpf_backdoor</a>"));
-    // The fold: finding-5 is folded into finding-3; the key finding follows.
+    // The fold: finding-5 is folded into finding-3; the key finding follows
+    // it, and keeps its own number (2) instead of the fold row's (3).
     assert!(!ids.contains(&"finding-5".to_owned()));
-    assert!(html.contains("<a href=\"#finding-3\">#3</a>"), "{html}");
+    assert!(html.contains("<a href=\"#finding-3\">2</a>"), "{html}");
+    assert!(html.contains("<a href=\"#finding-1\">1</a>"), "{html}");
     assert!(
         html.contains(">3 (+4)</td>"),
         "the folded row says how many"

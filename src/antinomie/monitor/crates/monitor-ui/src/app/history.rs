@@ -537,6 +537,33 @@ impl MonitorApp {
                 },
             );
         }
+        // Runs the app did not start (the command line's) are in the saved
+        // history of the selected VM only: the row names the newest of them
+        // unless it already shows a newer run.
+        if let Some(vm_id) = self.selected.clone()
+            && let Some(newest) = self
+                .history
+                .iter()
+                .filter(|run| run.vm_id == vm_id && run.started_ms.is_some())
+                .max_by_key(|run| run.started_ms)
+        {
+            let started = newest.started_ms.unwrap_or(0) / 1000;
+            if self
+                .settings
+                .last_runs
+                .get(&vm_id)
+                .is_none_or(|last| last.run_id != newest.id && last.started < started)
+            {
+                self.settings.last_runs.insert(
+                    vm_id,
+                    LastRun {
+                        run_id: newest.id.clone(),
+                        program: newest.request.path.clone(),
+                        started,
+                    },
+                );
+            }
+        }
         let vms = &self.snapshot.vms;
         if !vms.is_empty() {
             self.settings
