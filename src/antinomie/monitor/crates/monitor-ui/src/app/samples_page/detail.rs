@@ -611,7 +611,7 @@ impl MonitorApp {
                         ui.add(
                             egui::TextEdit::singleline(&mut program)
                                 .desired_width(280.0)
-                                .hint_text("/bin/sh -c ls"),
+                                .hint_text(crate::theme::placeholder(ui, "/bin/sh -c ls")),
                         );
                         if ui
                             .add_enabled(!program.trim().is_empty(), egui::Button::new("Send and open Run program"))
