@@ -14,7 +14,7 @@
 //!
 //! [`ManualClock`]: crate::clock::ManualClock
 use crate::clock::Clock;
-use antinomie_monitor_core::{Command, Notification, Snapshot};
+use antinomie_monitor_core::{Command, Notification, RunSummary, Snapshot};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
@@ -30,10 +30,13 @@ pub use run::{
     STOP_RUN_GRACE, Timings, UPLOAD_WAIT, Warning, incomplete_parts, load_artifacts, pending_parts,
     phase,
 };
-pub(crate) use run::{Stop, route_of};
+pub(crate) use run::{Stop, late_launch_warning, route_of};
 
 /// A guest command (upload, launch, stop run) whose result does not arrive in
-/// this long is an `internal` failure of the engine (audit G5, E17).
+/// this long at KVM speed is an `internal` failure of the engine (audit G5,
+/// E17). Under TCG it is stretched like the engine's own waits on the guest
+/// ([`Waiter::lane_silence`]), and the time the engine reports waiting for the
+/// guest to finish booting does not count.
 pub const LANE_SILENCE: Duration = Duration::from_secs(60);
 
 /// Terminal bytes kept per run: the end of the output, enough to see why a
@@ -49,8 +52,9 @@ pub enum WaitError {
     Failed(String),
     /// The time given ran out while the operation was still going.
     TimedOut { what: String },
-    /// A guest command got no result within [`LANE_SILENCE`].
-    Silent { what: String },
+    /// A guest command got no result within [`Waiter::lane_silence`]
+    /// (`seconds`) while the engine reported no work on it.
+    Silent { what: String, seconds: u64 },
     /// A signal asked the command to stop.
     Interrupted,
     /// The deadline the caller set for the whole command passed.
@@ -66,10 +70,9 @@ impl std::fmt::Display for WaitError {
         match self {
             Self::Failed(message) | Self::Disconnected(message) => f.write_str(message),
             Self::TimedOut { what } => write!(f, "timed out waiting for {what}"),
-            Self::Silent { what } => write!(
+            Self::Silent { what, seconds } => write!(
                 f,
-                "the engine did not answer {what} within {} seconds",
-                LANE_SILENCE.as_secs()
+                "the engine did not answer {what} within {seconds} seconds"
             ),
             Self::Interrupted => f.write_str("interrupted"),
             Self::DeadlineExceeded => f.write_str("the time limit of the command passed"),
@@ -104,6 +107,17 @@ pub struct Waiter<E: Engine> {
     cancel_seen: bool,
     cancel_interrupts: bool,
     abandoned: Vec<u64>,
+    /// An `Execute` given up as silent: the program may still start.
+    pub(crate) unanswered_launch: Option<UnansweredLaunch>,
+}
+
+/// An `Execute` whose answer did not come in time, and the runs that were
+/// there before it: a run that appears later is that launch's
+/// ([`Waiter::late_launch`]).
+#[derive(Clone, Debug)]
+pub(crate) struct UnansweredLaunch {
+    pub id: u64,
+    pub known: Vec<String>,
 }
 
 impl<E: Engine> Waiter<E> {
@@ -121,6 +135,7 @@ impl<E: Engine> Waiter<E> {
             cancel_seen: false,
             cancel_interrupts: false,
             abandoned: Vec::new(),
+            unanswered_launch: None,
         }
     }
 
@@ -335,15 +350,97 @@ impl<E: Engine> Waiter<E> {
         Ok(())
     }
 
-    /// A command to the guest: no result within [`LANE_SILENCE`] means the
-    /// engine is stuck, which is `internal`, not a slow guest.
+    /// How many times longer than at KVM speed the guest may take to answer
+    /// on the running boot: the engine's own factor (`accel::Waits`, the TCG
+    /// multiplier times the host load under TCG), 1 under KVM or before a
+    /// boot.
+    pub fn guest_wait_factor(&self) -> f64 {
+        self.snapshot
+            .accelerator
+            .as_ref()
+            .map_or(1.0, |accelerator| accelerator.guest_wait_factor)
+            .max(1.0)
+    }
+
+    /// `base`, a wait on the guest at KVM speed, stretched for this boot.
+    pub fn guest_wait(&self, base: Duration) -> Duration {
+        base.mul_f64(self.guest_wait_factor())
+    }
+
+    /// [`LANE_SILENCE`] for the running boot.
+    pub fn lane_silence(&self) -> Duration {
+        self.guest_wait(LANE_SILENCE)
+    }
+
+    /// A command to the guest: no result within [`lane_silence`] means the
+    /// engine is stuck, which is `internal`, not a slow guest. While the
+    /// engine reports that a launch waits for the guest to finish booting
+    /// (`Snapshot::launch_wait`, up to the boot wait times the TCG multiplier)
+    /// it is working, so the silence counts from the end of that wait.
+    ///
+    /// [`lane_silence`]: Self::lane_silence
     pub fn lane_command(&mut self, command: Command) -> Result<String, WaitError> {
         let name = command_name(&command);
-        self.command(command, Some(LANE_SILENCE))
-            .map_err(|error| match error {
-                WaitError::TimedOut { .. } => WaitError::Silent { what: name },
-                other => other,
-            })
+        let id = self.send(command)?;
+        self.lane_wait(id, name)
+    }
+
+    /// The wait of [`lane_command`](Self::lane_command) for the command `id`
+    /// already sent.
+    pub(crate) fn lane_wait(&mut self, id: u64, name: String) -> Result<String, WaitError> {
+        let silence = self.lane_silence();
+        let mut quiet_from = self.now_ms();
+        loop {
+            if let Some(result) = self.take_result(id) {
+                return result;
+            }
+            if self.snapshot.launch_wait.is_some() {
+                quiet_from = self.now_ms();
+            }
+            if self.now_ms().saturating_sub(quiet_from) >= millis(silence) {
+                // The engine may still finish it: a cleanup waits for it.
+                self.abandoned.push(id);
+                return Err(WaitError::Silent {
+                    what: name,
+                    seconds: silence.as_secs(),
+                });
+            }
+            if let Err(error) = self.pump(Duration::from_millis(200)) {
+                if matches!(
+                    error,
+                    WaitError::Interrupted | WaitError::Cancelled | WaitError::DeadlineExceeded
+                ) {
+                    self.abandoned.push(id);
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    /// The run of an `Execute` that was given up as silent and started after
+    /// all, once the engine has answered it (call after the VM was stopped:
+    /// the engine handles a stop after the launch it is busy with). `None`
+    /// when no launch was given up or it started nothing. Asked once.
+    pub fn late_launch(&mut self) -> Option<RunSummary> {
+        let launch = self.unanswered_launch.take()?;
+        let _ = self.drain();
+        self.results.remove(&launch.id);
+        self.snapshot
+            .runs
+            .iter()
+            .find(|run| !launch.known.contains(&run.id))
+            .cloned()
+    }
+
+    /// Wait for `pause` to pass, keeping the snapshot current (a pump returns
+    /// at the first notification; this does not).
+    pub fn pause(&mut self, pause: Duration) -> Result<(), WaitError> {
+        let until = self.now_ms() + millis(pause);
+        while self.now_ms() < until {
+            let left = until.saturating_sub(self.now_ms());
+            self.pump(Duration::from_millis(left.min(200)))?;
+        }
+        Ok(())
     }
 
     /// Wait until `done` holds for the latest snapshot. `what` names the wait

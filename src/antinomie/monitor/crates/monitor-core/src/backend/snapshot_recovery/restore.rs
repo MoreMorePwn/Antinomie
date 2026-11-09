@@ -140,6 +140,7 @@ impl Worker {
             self.snapshot.accelerator = Some(AcceleratorUsed {
                 record: process.accel.record(),
                 fallback_warning: process.accel.fallback_warning(&effective.name),
+                guest_wait_factor: process.waits.guest_factor(),
             });
             process.load_state(
                 prepared

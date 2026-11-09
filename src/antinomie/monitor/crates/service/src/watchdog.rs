@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | the whole job | `job_hard_s` = the run limit plus 1800 s, from the first stage | [`Trigger::JobHard`]: the job is cancelled by the watchdog, the VM stopped, the job ends `failed` (`internal`, detail `watchdog`) |
 //! | a stage | its own deadline (4.1) | [`Trigger::StageDeadline`] |
-//! | the engine | during `run` the lane reads the terminal every 200 ms, so every second is answered; 60 s with nothing from the engine means it is stuck | [`Trigger::EngineSilent`] (`internal`) |
+//! | the engine | during `run` the lane reads the terminal every 200 ms, so every second is answered; 60 s with nothing from the engine (times the engine's guest wait factor on a TCG boot) means it is stuck | [`Trigger::EngineSilent`] (`internal`) |
 //! | a stage that reports progress | `stall_s` 120 s with nothing heard is a warning, twice that is a deadline (`collect` waits on the engine's snapshots) | [`Trigger::Stalled`] after a [`Watchdog::stall_warning`] |
 //!
 //! The struct only decides; it reads the clock it is given, so a test moves a

@@ -11,6 +11,10 @@
 //! | `provision` | boots the VM if allowed and needed | `Running` and the guest kernel answered | `boot_limit` |
 //! | `upload` | `UploadSample` from the library | the result; "read-only file system" is retried | 60 s |
 //! | `launch` | `Execute` with the sample linked | a new run in the snapshot | 30 s |
+//!
+//! The upload, launch and guest-answer waits are KVM times: under TCG they
+//! are stretched by the engine's own factor ([`Waiter::guest_wait`]), and the
+//! silence limit of a guest command does not count the engine's boot wait.
 //! | `run` | reads the terminal, sends `StopRun` at the limit | run ended and no live task | `run_limit` + 120 s |
 //! | `collect` | waits for the evidence, then `Stop`, the flush and the disk layer | recording final | 300 s evidence, 1800 s layer |
 //!
@@ -42,6 +46,11 @@ pub const EVIDENCE_WAIT: Duration = Duration::from_secs(300);
 pub const STOP_RUN_GRACE: Duration = Duration::from_secs(120);
 /// `boot_s`.
 pub const BOOT_WAIT: Duration = Duration::from_secs(180);
+/// At most one "not ready for files" progress line in this long: the retries
+/// themselves go on every second.
+pub const NOT_READY_NOTE_EVERY: Duration = Duration::from_secs(5);
+/// Pause between two uploads the guest was not ready for.
+const UPLOAD_RETRY: Duration = Duration::from_secs(1);
 
 /// What to run and where.
 #[derive(Clone, Debug)]
@@ -219,6 +228,28 @@ fn guest_not_ready(message: &str) -> bool {
         .contains("read-only file system")
 }
 
+/// The progress line of an upload the guest was not ready for, `tries` times
+/// so far.
+fn not_ready_text(tries: u32) -> String {
+    let text = "the guest is not ready for files yet; trying again";
+    if tries > 1 {
+        format!("{text} ({tries} tries so far)")
+    } else {
+        text.into()
+    }
+}
+
+/// What a job says about a launch it gave up that started after all.
+pub(crate) fn late_launch_warning(run_id: &str) -> Warning {
+    Warning {
+        code: "late_launch".into(),
+        text: format!(
+            "the engine answered the launch after the job had given up on it: the program ran \
+             as run {run_id} until the VM was stopped; that recording is kept"
+        ),
+    }
+}
+
 /// Why a stage ended the run early.
 pub(crate) enum Stop {
     Failed(Failure),
@@ -327,6 +358,7 @@ impl<E: Engine> Waiter<E> {
         // Only this VM is ever stopped: another one running is not ours.
         if self.snapshot.active_vm.as_deref() != Some(plan.vm_id.as_str()) {
             report.settled = settled_after_stop(&self.snapshot, &plan.vm_id);
+            self.report_late_launch(plan, report, sink);
             return Ok(());
         }
         sink(EventBody::JobProgress {
@@ -344,7 +376,29 @@ impl<E: Engine> Waiter<E> {
                 text: error.to_string(),
             }),
         }
+        self.report_late_launch(plan, report, sink);
         Ok(())
+    }
+
+    /// A launch given up as silent that started the program after all: the
+    /// stop above ended it with the VM (the engine handles the stop after the
+    /// launch), and the job names its run instead of leaving it unreported.
+    fn report_late_launch(
+        &mut self,
+        plan: &RunPlan,
+        report: &mut RunReport,
+        sink: &mut dyn FnMut(EventBody),
+    ) {
+        let Some(run) = self.late_launch() else {
+            return;
+        };
+        sink(EventBody::JobRun {
+            run_id: run.id.clone(),
+            pid: Some(run.pid).filter(|pid| *pid != 0),
+            route: route_of(&plan.request, &run),
+        });
+        report.warnings.push(late_launch_warning(&run.id));
+        report.run = Some(run);
     }
 
     fn stage(
@@ -526,15 +580,13 @@ impl<E: Engine> Waiter<E> {
             })?;
         }
         let vm = plan.vm_id.clone();
-        self.wait_until(
-            "the guest to answer",
-            Some(plan.boot_limit),
-            move |snapshot| {
-                snapshot.active_vm.as_deref() == Some(vm.as_str())
-                    && snapshot.state == VmState::Running
-                    && snapshot.guest_kernel.is_some()
-            },
-        )
+        // The VM runs now, so its accelerator is known.
+        let boot_limit = self.guest_wait(plan.boot_limit);
+        self.wait_until("the guest to answer", Some(boot_limit), move |snapshot| {
+            snapshot.active_vm.as_deref() == Some(vm.as_str())
+                && snapshot.state == VmState::Running
+                && snapshot.guest_kernel.is_some()
+        })
         .map_err(|error| match error {
             WaitError::TimedOut { .. } => Stop::Failed(Failure::new(
                 FailureCode::GuestUnreachable,
@@ -561,7 +613,9 @@ impl<E: Engine> Waiter<E> {
         wait: Duration,
         sink: &mut dyn FnMut(EventBody),
     ) -> Result<String, Stop> {
-        let deadline = self.now_ms() + super::millis(wait);
+        let deadline = self.now_ms() + super::millis(self.guest_wait(wait));
+        let mut tries = 0u32;
+        let mut noted_ms: Option<u64> = None;
         loop {
             let result = self.lane_command(Command::UploadSample {
                 sha256: sha256.to_owned(),
@@ -573,12 +627,19 @@ impl<E: Engine> Waiter<E> {
                 Err(WaitError::Failed(message))
                     if guest_not_ready(&message) && self.now_ms() < deadline =>
                 {
-                    sink(EventBody::JobProgress {
-                        stage: Stage::Upload,
-                        text: "the guest is not ready for files yet; trying again".into(),
-                        fraction: None,
-                    });
-                    self.pump(Duration::from_secs(1))?;
+                    tries += 1;
+                    let now = self.now_ms();
+                    if noted_ms.is_none_or(|at| {
+                        now.saturating_sub(at) >= super::millis(NOT_READY_NOTE_EVERY)
+                    }) {
+                        noted_ms = Some(now);
+                        sink(EventBody::JobProgress {
+                            stage: Stage::Upload,
+                            text: not_ready_text(tries),
+                            fraction: None,
+                        });
+                    }
+                    self.pause(UPLOAD_RETRY)?;
                 }
                 Err(WaitError::Failed(message)) => {
                     return Err(fail(
@@ -628,7 +689,8 @@ impl<E: Engine> Waiter<E> {
             .iter()
             .map(|run| run.id.clone())
             .collect();
-        self.lane_command(Command::Execute(request))
+        let id = self.send(Command::Execute(request))?;
+        self.lane_wait(id, "Execute".into())
             .map_err(|error| match error {
                 WaitError::Failed(message) => Stop::Failed(Failure::new(
                     FailureCode::LaunchFailed,
@@ -636,15 +698,23 @@ impl<E: Engine> Waiter<E> {
                     "the guest refused to start the program",
                     Some(&message),
                 )),
-                silent @ WaitError::Silent { .. } => Stop::Failed(Failure::new(
-                    FailureCode::Internal,
-                    Stage::Launch,
-                    "the engine did not answer the launch",
-                    Some(&silent.to_string()),
-                )),
+                silent @ WaitError::Silent { .. } => {
+                    // The engine may still start it: the cleanup links it.
+                    self.unanswered_launch = Some(super::UnansweredLaunch {
+                        id,
+                        known: known.clone(),
+                    });
+                    Stop::Failed(Failure::new(
+                        FailureCode::Internal,
+                        Stage::Launch,
+                        "the engine did not answer the launch",
+                        Some(&silent.to_string()),
+                    ))
+                }
                 other => Stop::Abort(other),
             })?;
-        self.wait_until("the run to appear", Some(LAUNCH_WAIT), |snapshot| {
+        let launch_wait = self.guest_wait(LAUNCH_WAIT);
+        self.wait_until("the run to appear", Some(launch_wait), |snapshot| {
             snapshot.runs.iter().any(|run| !known.contains(&run.id))
         })
         .map_err(|error| match error {

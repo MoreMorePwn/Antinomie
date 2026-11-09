@@ -126,9 +126,11 @@ impl<E: Engine> LaneStages<'_, E> {
         // 4. The guest answers.
         self.progress(job, Stage::Provision, "waiting for the guest to answer");
         let id = vm.clone();
+        // Stretched for a TCG boot like the engine's own waits on the guest.
+        let limit = self.waiter.guest_wait(BOOT_WAIT);
         let waited = self
             .waiter
-            .wait_until("the guest to answer", Some(BOOT_WAIT), move |s| {
+            .wait_until("the guest to answer", Some(limit), move |s| {
                 s.state == VmState::Failed
                     || (s.active_vm.as_deref() == Some(id.as_str())
                         && s.state == VmState::Running

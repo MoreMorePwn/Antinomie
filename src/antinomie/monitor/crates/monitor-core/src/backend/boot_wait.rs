@@ -20,7 +20,6 @@
 //! and `basic.target` are done; a degraded system counts too) or
 //! `/run/crond.reboot` (cron has started and run its `@reboot` entries) shows.
 //! A probe that is unsure or absent keeps the wait going until the timeout.
-use super::worker_guest::GUEST_REPLY_TIMEOUT;
 use super::*;
 use crate::boot_wait::{BootWait, BootWaitOutcome, LaunchWait, WAIT_TEXT};
 
@@ -63,12 +62,13 @@ impl Worker {
         let Ok(args) = control::acquire(path, 0, 0, 4096) else {
             return Probe::Unsure;
         };
+        let timeout = session.reply_timeout();
         match session.request_typed(
             control::ACQUIRE,
             &args,
             &mut self.snapshot,
             &self.sender,
-            GUEST_REPLY_TIMEOUT,
+            timeout,
         ) {
             Ok(reply) => match control::acquisition(&reply) {
                 Ok((id, _)) => {
@@ -77,7 +77,7 @@ impl Worker {
                         &control::with_session(id),
                         &mut self.snapshot,
                         &self.sender,
-                        GUEST_REPLY_TIMEOUT,
+                        timeout,
                     );
                     Probe::Present
                 }

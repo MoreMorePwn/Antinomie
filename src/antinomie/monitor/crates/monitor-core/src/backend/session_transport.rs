@@ -14,7 +14,7 @@ const GUEST_TURNS: u64 = 3;
 /// Task cookies one run remembers for matching a core to the run.
 const TASKS_KEPT: usize = 65_536;
 /// How long past its deadline a command waits for a guest whose control
-/// worker has not had those passes.
+/// worker has not had those passes, at KVM speed.
 const STALLED_GUEST_GRACE: Duration = Duration::from_secs(2);
 
 impl Session {
@@ -498,11 +498,14 @@ impl Session {
         guest_time: bool,
     ) -> Result<Vec<u8>, RequestError> {
         let deadline = Instant::now() + timeout;
+        // A TCG guest is emulated: its starved spells are as many times longer
+        // as its every answer (accel::Waits::guest_command; KVM keeps 2 s).
+        let grace = self.process.waits.guest_command(STALLED_GUEST_GRACE);
         // The deadline is the guest's time: on a loaded host the guest's CPU
         // can wait for the host longer than a command's deadline, and then the
         // command was not late, the guest never got to it. The guest control
         // worker counts its passes; until it has made GUEST_TURNS of them since
-        // the command went out, the wait goes on, up to STALLED_GUEST_GRACE.
+        // the command went out, the wait goes on, up to the grace.
         let sent_turns = self.transport.guest_heartbeat().ok().filter(|_| guest_time);
         loop {
             self.pump(snapshot, sender).map_err(RequestError::Failed)?;
@@ -550,7 +553,7 @@ impl Session {
                 let turns = sent_turns
                     .zip(self.transport.guest_heartbeat().ok())
                     .map_or(u64::MAX, |(sent, seen)| seen.saturating_sub(sent));
-                if turns >= GUEST_TURNS || now >= deadline + STALLED_GUEST_GRACE {
+                if turns >= GUEST_TURNS || now >= deadline + grace {
                     return Err(RequestError::TimedOut(if turns >= GUEST_TURNS {
                         format!("guest command {id} timed out; outcome unknown")
                     } else {
@@ -558,7 +561,7 @@ impl Session {
                             "guest command {id} timed out: the guest's control worker made \
                              {turns} passes in {} ms (its CPU starved or a command blocked it); \
                              outcome unknown",
-                            (timeout + STALLED_GUEST_GRACE).as_millis()
+                            (timeout + grace).as_millis()
                         )
                     }));
                 }

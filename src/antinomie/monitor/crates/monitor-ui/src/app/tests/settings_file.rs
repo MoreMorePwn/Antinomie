@@ -132,3 +132,31 @@ fn a_corrupt_file_is_reported_and_never_replaced() {
     assert_eq!(file.persist(&dir, &settings), None);
     assert_eq!(std::fs::read(settings::path(&dir)).unwrap(), b"{ broken");
 }
+
+#[test]
+fn the_start_waits_are_shared_and_a_file_without_them_keeps_the_windows() {
+    let dir = scratch("start");
+    let _lock = data_owner::lock_data_dir(&dir, &Default::default()).unwrap();
+    // A file written before the start waits were shared: the window's own
+    // stay, and the next write adds them.
+    std::fs::write(settings::path(&dir), r#"{"quota_gib": 5}"#).unwrap();
+    let mut settings = customised();
+    settings.start.tcg_multiplier = 30;
+    settings.start.boot_wait_secs = 200;
+    let mut file = SettingsFile::open(&dir, &mut settings);
+    assert_eq!(settings.start.tcg_multiplier, 30);
+    assert_eq!(file.persist(&dir, &settings), None);
+    let written = settings::load(&dir).unwrap().unwrap();
+    assert_eq!(written.start().tcg_multiplier, 30);
+    assert_eq!(written.start().boot_wait_secs, 200);
+    // A file that has them (`antinomie-cli config set start.…`) wins.
+    std::fs::write(
+        settings::path(&dir),
+        r#"{"start": {"tcg_multiplier": 12, "boot_wait_secs": 90}}"#,
+    )
+    .unwrap();
+    let mut settings = customised();
+    SettingsFile::open(&dir, &mut settings);
+    assert_eq!(settings.start.tcg_multiplier, 12);
+    assert_eq!(settings.start.boot_wait_secs, 90);
+}

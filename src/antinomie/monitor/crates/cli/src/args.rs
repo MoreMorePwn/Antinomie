@@ -6,6 +6,7 @@ use crate::{
     commands::Command,
     output::{ColorWhen, Format},
 };
+use antinomie_monitor_core::StartSettings;
 use clap::{Args, Parser, ValueEnum};
 use std::path::PathBuf;
 
@@ -88,6 +89,19 @@ pub struct Global {
     /// Force software emulation (TCG).
     #[arg(long, global = true)]
     pub tcg: bool,
+    /// Seconds a launch waits at KVM speed for a systemd guest (Debian) to
+    /// finish booting before it starts the program anyway, 5 to 600; stretched
+    /// by the TCG multiplier under TCG [default: settings.json
+    /// `start.boot_wait_secs`, else 60].
+    #[arg(long, global = true, value_name = "SECONDS",
+          value_parser = start_range(StartSettings::BOOT_WAIT_SECS))]
+    pub boot_wait: Option<u32>,
+    /// How many times longer every VM start wait, the boot wait and each guest
+    /// command may take under TCG software emulation, 1 to 100 [default:
+    /// settings.json `start.tcg_multiplier`, else 10].
+    #[arg(long, global = true, value_name = "N",
+          value_parser = start_range(StartSettings::TCG_MULTIPLIER))]
+    pub tcg_multiplier: Option<u32>,
     /// QEMU system emulator [default: qemu-system-x86_64].
     #[arg(long, global = true, value_name = "PATH")]
     pub qemu: Option<PathBuf>,
@@ -97,6 +111,11 @@ pub struct Global {
     /// Let QEMU open its window (the CLI default is headless).
     #[arg(long, global = true)]
     pub no_headless: bool,
+}
+
+/// A parser for a start setting with the range the engine accepts.
+fn start_range(range: std::ops::RangeInclusive<u32>) -> clap::builder::RangedI64ValueParser<u32> {
+    clap::value_parser!(u32).range(i64::from(*range.start())..=i64::from(*range.end()))
 }
 
 impl Global {

@@ -14,6 +14,24 @@ x86 programs by their own table.
 
 ### Host
 
+- **`run exec --start` no longer loses Debian arm64 launches under TCG
+  (ANT-T0425).** About 30% of launches failed with "the engine did not answer
+  Execute within 60 seconds": the launch waits for a Debian guest to finish booting
+  (the boot wait, stretched by the TCG multiplier), and the fixed minute of engine
+  silence ran out first. The silence now ignores the time the engine reports waiting
+  for the boot and is stretched under TCG by the engine's own factor (the TCG
+  multiplier times the host load), as are the upload, launch and guest-answer waits
+  and the host's own guest commands ("the guest's control worker made 0 passes in
+  12000 ms" on a busy host); KVM keeps its times. A launch the engine answers after
+  the job gave up on it no longer leaves an unreported run: the VM is stopped, the
+  result (or the Auto job) names the run and warns `late_launch`. The boot wait and the
+  TCG multiplier are now in `settings.json` (`start`, shared with the window) and
+  `--boot-wait` and `--tcg-multiplier` set them for one command. The "guest is not
+  ready for files yet" progress is said at most every five seconds with a count,
+  instead of four times a second, and the upload retries once a second. A VM whose
+  QEMU exits before it opens its monitor socket now fails its start at once with
+  QEMU's own words, instead of after the whole startup wait.
+
 - **A data folder taken right after its owner let go is no longer refused
   (ANT-T0423).** The owner lock is a `flock`, and a process another thread had
   just forked, but not yet exec'd, holds a copy of its file until the exec, so a new

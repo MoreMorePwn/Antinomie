@@ -65,6 +65,9 @@ pub struct Exec {
     #[arg(long, value_name = "ID")]
     pub vm: Option<String>,
     /// Boot the VM when it is stopped (otherwise a stopped VM is refused).
+    /// A Debian guest is given the boot wait before the program starts;
+    /// under TCG every wait is stretched by the TCG multiplier (see the
+    /// global `--boot-wait` and `--tcg-multiplier`).
     #[arg(long)]
     pub start: bool,
     /// Arguments for the program. More can follow `--`.

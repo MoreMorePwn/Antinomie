@@ -2,10 +2,26 @@
 //! Commands executed inside the running guest.
 use super::*;
 
-/// How long the guest has to answer one command.
+/// How long the guest has to answer one command at KVM speed.
 pub(super) const GUEST_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
+impl Session {
+    /// [`GUEST_REPLY_TIMEOUT`] for this boot: stretched under TCG by the
+    /// factor the boot wait uses (`accel::Waits::guest_command`), unchanged
+    /// under KVM.
+    pub(super) fn reply_timeout(&self) -> Duration {
+        self.process.waits.guest_command(GUEST_REPLY_TIMEOUT)
+    }
+}
+
 impl Worker {
+    /// [`Session::reply_timeout`] of the running VM.
+    pub(super) fn reply_timeout(&self) -> Duration {
+        self.session
+            .as_ref()
+            .map_or(GUEST_REPLY_TIMEOUT, Session::reply_timeout)
+    }
+
     pub(super) fn guest_command(&mut self, command: Command) -> Result<String, String> {
         let launch = matches!(&command, Command::Execute(_));
         let result = self.guest_command_once(command);
@@ -22,7 +38,7 @@ impl Worker {
             self.debug_reap_ended();
         }
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         if matches!(
             &command,
             Command::ListProcesses { .. }
@@ -156,7 +172,7 @@ impl Worker {
     /// Start capturing every user-space process and name those already running.
     fn capture_all(&mut self) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         let message = session.start_capture(
             &self.options,
             CaptureScope::AllUserspace,
@@ -190,7 +206,7 @@ impl Worker {
     /// Stop the admission of observations for one capture.
     fn stop_capture(&mut self, capture_id: String) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         let capture = session
             .captures
             .get(&capture_id)
@@ -245,7 +261,7 @@ impl Worker {
         analysis: crate::analysis::AnalysisSelection,
     ) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         analysis.validate()?;
         control::string(&path, true)?;
         if !analysis.enabled {
@@ -305,7 +321,7 @@ impl Worker {
         executable: bool,
     ) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         let mut file =
             File::open(&source).map_err(|e| format!("upload {}: {e}", source.display()))?;
         let metadata = file.metadata().map_err(|e| e.to_string())?;
@@ -389,7 +405,7 @@ impl Worker {
         executable: bool,
     ) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         // Decrypted in memory only; the host keeps the archive. The
         // library reads it back and compares its SHA-256 first: a
         // sample that does not verify is never sent.

@@ -2909,12 +2909,17 @@ pub struct Snapshot {
 }
 
 /// The accelerator a VM boot actually uses.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AcceleratorUsed {
     /// `kvm`, `tcg`, or `tcg (KVM unavailable)`: what run records show.
     pub record: String,
     /// Set when KVM was wanted and unusable: the warning shown at the start.
     pub fallback_warning: Option<String>,
+    /// How many times longer than at KVM speed the guest may take to answer
+    /// on this boot (`accel::Waits::guest_factor`): the TCG multiplier times
+    /// the host load factor under TCG, 1 under KVM. A front end stretches its
+    /// own waits on guest commands (upload, launch) by it.
+    pub guest_wait_factor: f64,
 }
 
 /// Validated guest observations from the temporary collector; octets throughout.

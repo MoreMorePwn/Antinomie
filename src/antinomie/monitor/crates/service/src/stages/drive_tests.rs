@@ -375,6 +375,47 @@ fn a_silent_engine_during_the_run_fails_the_job_internal_and_stops_the_vm() {
     lane_is_free(&w);
 }
 
+/// B3's orphan in the lane: the engine answers `Execute` ten seconds after
+/// the silence limit, with a run. The lane stops the VM (which ends the
+/// program), and the job names that run instead of leaving it unreported.
+#[test]
+fn a_launch_answered_after_the_lane_gave_up_is_stopped_and_named_by_the_job() {
+    let w = W::new("drive-late-launch");
+    let job = w.fx.running(1);
+    let mut waiter = w.engine(|fake| {
+        restore_ok(fake);
+        upload_ok(fake);
+        fake.on("Execute")
+            .after(70 * SECOND)
+            .then(69 * SECOND, |s| s.runs.push(super::run_tests::live_run()))
+            .ok("launched pid 750, terminal session 1");
+        stop_ok(fake);
+    });
+    let driven = drive(&w, &mut waiter, &job);
+    assert_eq!(failure_of(&driven), FailureCode::Internal);
+    assert_eq!(waiter.snapshot().state, VmState::Stopped);
+    let stored = w.job(&job.id);
+    assert_eq!(
+        stored.run.as_ref().map(|run| run.run_id.as_str()),
+        Some("r1"),
+        "{driven:?}"
+    );
+    assert_eq!(
+        stored.recording.as_ref().map(|recording| recording.phase),
+        Some(RecordingPhase::Interrupted)
+    );
+    assert!(
+        stored
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "late_launch" && warning.text.contains("r1")),
+        "{:?}",
+        stored.warnings
+    );
+    assert!(kinds(&w.fx, &job.id).contains(&"job.run".to_owned()));
+    lane_is_free(&w);
+}
+
 #[test]
 fn a_hung_stop_is_killed_and_a_recording_failure_is_retried_once() {
     let w = W::with("drive-hung-stop", |p| {
@@ -615,12 +656,9 @@ fn a_cancel_during_the_upload_wait_ends_the_job_and_stops_the_vm() {
         (drive(&w, &mut waiter, &job), sent(&mut waiter))
     });
     assert!(matches!(driven, Driven::Cancelled), "{driven:?}");
-    // The retry loop sent the upload again before it saw the cancel; that
-    // command was waited for, then the VM stopped.
-    assert_eq!(
-        names,
-        ["RestoreVmSnapshot", "UploadSample", "UploadSample", "Stop"]
-    );
+    // The pause before the retry sees the cancel: no second upload, the VM
+    // stopped.
+    assert_eq!(names, ["RestoreVmSnapshot", "UploadSample", "Stop"]);
     assert_eq!(w.job(&job.id).state, JobState::Cancelled);
     lane_is_free(&w);
 }

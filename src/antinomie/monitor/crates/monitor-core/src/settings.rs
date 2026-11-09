@@ -119,6 +119,11 @@ pub struct EngineSettings {
     pub memory_online_symbols: bool,
     /// The Disks tab's settings.
     pub disks: DiskSettings,
+    /// How long a VM start and a launch wait (the boot wait, the TCG
+    /// multiplier; Tools > Settings > Advanced). Absent in a file no front end
+    /// has written them to: the defaults apply, and the window keeps its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<crate::api::StartSettings>,
     /// Fields a newer version wrote; kept when the file is rewritten.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -145,6 +150,7 @@ impl Default for EngineSettings {
             analysis_limits: AnalysisLimits::default(),
             memory_online_symbols: true,
             disks: DiskSettings::default(),
+            start: None,
             extra: Map::new(),
         }
     }
@@ -182,7 +188,17 @@ impl EngineSettings {
             1,
             1_048_576,
         )?;
+        if let Some(start) = &self.start {
+            start
+                .validate()
+                .map_err(|error| format!("start: {error}"))?;
+        }
         Ok(())
+    }
+
+    /// The start settings in force: the file's, else the defaults.
+    pub fn start(&self) -> crate::api::StartSettings {
+        self.start.unwrap_or_default()
     }
 
     /// The settings a daemon or container runs with: no automatic outbound
@@ -212,6 +228,7 @@ impl EngineSettings {
     pub fn apply_to(&self, options: &mut crate::BackendOptions) {
         options.capture_quota_size = u64::from(self.quota_gib) * 1024 * 1024 * 1024;
         options.shutdown_timeout = std::time::Duration::from_secs(self.shutdown_timeout_s);
+        options.start = self.start();
     }
 
     /// The settings as a JSON object, keys as in the file.
@@ -219,10 +236,18 @@ impl EngineSettings {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
+    /// [`to_value`](Self::to_value) with the start settings in force shown
+    /// even when the file has none, so `start.*` can be read and set.
+    fn view(&self) -> Value {
+        let mut shown = self.clone();
+        shown.start = Some(self.start());
+        shown.to_value()
+    }
+
     /// One setting, or all of them for an empty key. A dotted key reaches
     /// into an object (`disks.hide_dotfiles`).
     pub fn get(&self, key: &str) -> Result<Value, String> {
-        let root = self.to_value();
+        let root = self.view();
         if key.is_empty() {
             return Ok(root);
         }
@@ -242,7 +267,7 @@ impl EngineSettings {
     pub fn set(&mut self, key: &str, text: &str) -> Result<(), String> {
         let value =
             serde_json::from_str::<Value>(text).unwrap_or_else(|_| Value::String(text.into()));
-        let mut root = self.to_value();
+        let mut root = self.view();
         let mut parts: Vec<&str> = key.split('.').collect();
         let last = parts
             .pop()

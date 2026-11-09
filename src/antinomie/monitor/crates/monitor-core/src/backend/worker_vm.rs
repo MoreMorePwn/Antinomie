@@ -117,6 +117,7 @@ impl Worker {
             self.snapshot.accelerator = Some(AcceleratorUsed {
                 record: process.accel.record(),
                 fallback_warning: process.accel.fallback_warning(&vm.name),
+                guest_wait_factor: process.waits.guest_factor(),
             });
             self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
             self.snapshot.vm_screen.clone_from(&process.screen_socket);

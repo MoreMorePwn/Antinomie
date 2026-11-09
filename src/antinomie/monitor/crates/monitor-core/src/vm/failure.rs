@@ -140,6 +140,51 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// T0424 follow-up: QEMU that exits before it makes its QMP socket ends
+    /// the startup wait at once (600 s under TCG here), with its own words.
+    #[test]
+    fn a_qemu_that_exits_before_its_socket_fails_the_start_at_once() {
+        let dir = std::env::temp_dir().join(format!("ant-qemu-gone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("qemu.log"), format!("{REFUSED}\n")).unwrap();
+        let mut process = tcg_process("sleep 0.3; exit 1", &dir);
+        assert!(process.waits.qmp_startup() >= Duration::from_secs(600));
+        let began = std::time::Instant::now();
+        let message = process.verify_ram_layout().unwrap_err();
+        assert!(began.elapsed() < Duration::from_secs(20), "{message}");
+        assert!(
+            message.starts_with("QEMU exited (exit status: 1) before the VM started: "),
+            "{message}"
+        );
+        assert!(message.contains(REFUSED), "{message}");
+        assert!(
+            message.contains("QEMU exited before its QMP socket was ready"),
+            "{message}"
+        );
+        assert!(!message.contains("TCG"), "{message}");
+        // The restore path (`-incoming defer`) stops waiting too.
+        let gone = tcg_process("exit 1", &dir);
+        let state = dir.join("state.bin");
+        std::fs::write(&state, b"state").unwrap();
+        let began = std::time::Instant::now();
+        let message = gone.load_state(&state).unwrap_err();
+        assert!(began.elapsed() < Duration::from_secs(20), "{message}");
+        assert!(
+            message.contains("QEMU exited before its QMP socket was ready"),
+            "{message}"
+        );
+        assert!(message.contains(REFUSED), "{message}");
+        drop(gone);
+        // A child that still runs is waited for as before; once it has
+        // exited (and even after it was reaped) it is gone.
+        let mut running = tcg_process("sleep 60", &dir);
+        assert!(!super::super::qmp::child_exited(running.child.id()));
+        running.child.kill().unwrap();
+        running.child.wait().unwrap();
+        assert!(super::super::qmp::child_exited(running.child.id()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn a_start_error_without_qemu_words_still_names_the_exit() {
         let status = Command::new("sh").args(["-c", "exit 1"]).status().unwrap();

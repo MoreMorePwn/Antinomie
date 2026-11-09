@@ -41,14 +41,19 @@ impl VmProcess {
         } else {
             self.waits.qmp_connect()
         };
-        let mut qmp =
-            Qmp::connect_retrying(&self.qmp_path, wait, self.waits.qmp_reply(), QMP_ATTEMPTS)
-                .map_err(|error| {
-                    format!(
-                        "QMP connect for the snapshot state: {error}{}",
-                        qemu_log_hint(&self.runtime_dir)
-                    )
-                })?;
+        let mut qmp = Qmp::connect_retrying(
+            &self.qmp_path,
+            wait,
+            self.waits.qmp_reply(),
+            QMP_ATTEMPTS,
+            Some(self.child.id()),
+        )
+        .map_err(|error| {
+            format!(
+                "QMP connect for the snapshot state: {error}{}",
+                qemu_log_hint(&self.runtime_dir)
+            )
+        })?;
         if !incoming {
             qmp.reply("{\"execute\":\"migrate-set-capabilities\",\"arguments\":{\"capabilities\":[{\"capability\":\"x-ignore-shared\",\"state\":false}]}}\n")?;
             let capabilities = qmp.reply("{\"execute\":\"query-migrate-capabilities\"}\n")?;

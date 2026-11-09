@@ -199,8 +199,9 @@ pub fn init_lane<E: Engine>(
         )
         .map_err(|e| left(engine_error(e, "the lane VM did not start")))?;
     let id = vm_id.clone();
+    let limit = waiter.guest_wait(BOOT_WAIT);
     waiter
-        .wait_until("the guest to answer", Some(BOOT_WAIT), move |s| {
+        .wait_until("the guest to answer", Some(limit), move |s| {
             s.active_vm.as_deref() == Some(id.as_str())
                 && s.state == VmState::Running
                 && s.guest_kernel.is_some()
@@ -440,8 +441,9 @@ pub fn reset_lane<E: Engine>(
         )
         .map_err(|e| engine_error(e, "the revert failed; the lane stays as it was"))?;
     let id = file.vm_id.clone();
+    let limit = waiter.guest_wait(BOOT_WAIT);
     waiter
-        .wait_until("the guest to answer", Some(BOOT_WAIT), move |s| {
+        .wait_until("the guest to answer", Some(limit), move |s| {
             s.active_vm.as_deref() == Some(id.as_str())
                 && s.state == VmState::Running
                 && s.guest_kernel.is_some()

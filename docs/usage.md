@@ -1777,6 +1777,7 @@ global flags may also follow the command.
 |---|---|
 | `--data-dir PATH` | Data directory (default `$HOME/antinomie`; `~` is expanded). Use a directory of its own for automation, never the one the window uses |
 | `--bundle PATH`, `--qemu PATH`, `--qemu-img PATH`, `--tcg`, `--no-headless` | Engine options, as in the window. The CLI is headless unless `--no-headless` is given |
+| `--boot-wait SECONDS`, `--tcg-multiplier N` | The waits of a VM start and a launch for this command, over `settings.json`'s `start` section (the window's **Tools > Settings > Advanced**, VM start and guest connection timeouts; `config set start.boot_wait_secs 120`). `--boot-wait` (5 to 600, default 60) is how long a launch waits at KVM speed for a Debian guest to finish booting before it starts the program anyway; `--tcg-multiplier` (1 to 100, default 10) is how many times longer every start wait, that boot wait and each guest command may take under TCG. They matter to the commands that start an engine with a VM: `vm start`, `run exec --start`, `snapshot restore`, `auto daemon` |
 | `--socket PATH` | The daemon's socket (default `<data>/run/antinomie.sock`) |
 | `--daemon`, `--direct` | `--daemon` requires a running daemon (exit 21 when none answers), `--direct` never uses one. Without either, the `auto` commands and the reads (`run list`, `run show`, `run export`, `triage`, `sample list`, `sample show`, `sample tag`, `custody verify` without `--export`, `vm list`, `base list`) use the daemon when one answers and work in the calling process when none does. The other commands always run in the calling process and take the lock (`--direct` and `--daemon` conflict) |
 | `-o, --format human\|json\|ndjson` | Output format; `human` on a terminal, `json` otherwise |
@@ -1871,6 +1872,15 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   happens, one event of the job API per line (`job.stage`, `job.progress`, `job.run`,
   `job.warning`, `job.finished`; `job_id` is null, `seq` counts from 1), then the result;
   it implies `-o ndjson`. `--timeout SECONDS` limits the whole command (exit 14).
+  While the guest finishes mounting its disk the upload is tried again once a second, and
+  `job.progress` says so at most every five seconds, with the count of tries.
+  **Under TCG** (every arm64 VM on an x86-64 host) the upload, launch and guest-answer
+  waits, and the minute after which an unanswered guest command is `internal`, are
+  stretched by the same factor as the engine's own waits: the TCG multiplier times the host
+  load factor. The time the engine reports waiting for a Debian guest to finish booting
+  does not count as silence. If the engine still answers a launch after the job gave up
+  on it, the VM is stopped (which ends the program), the result names that run and a
+  `late_launch` warning says what happened.
 - **Triage, detection and reports of a saved run.** `triage RUN [--parts LIST]`,
   `detect RUN [--engine yara,sigma,ids] [--out DIR] [--save]` and `report RUN
   [--formats html,pdf,json,misp,stix,md] [--parts LIST] [--evidence-bundle] [--defang |
@@ -1993,7 +2003,10 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   into an object (`disks.hide_dotfiles`) and the command takes no lock.
   `config set KEY VALUE` changes one (the value is JSON when it parses, else text) and
   takes the engine lock, so it refuses while the window owns the data directory.
-  `settings.json` is the file the window itself now uses for its engine settings.
+  `settings.json` is the file the window itself now uses for its engine settings,
+  including the VM start waits (`start.boot_wait_secs`, `start.tcg_multiplier`,
+  `start.guest_connect_secs`, `start.kvm_fallback`), which the CLI and the daemon start
+  their engine with.
   `config validate [--policy NAME]` checks `service.toml` and `policies/*.toml`
   without starting anything (see [service configuration](service-config.md)); it
   prints each problem as `file:line:column` and exits 4 when there is an error.

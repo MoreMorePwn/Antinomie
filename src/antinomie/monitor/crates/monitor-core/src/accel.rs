@@ -127,6 +127,8 @@ pub fn choose_with(
 pub struct Waits {
     scale: f64,
     guest_connect: Duration,
+    /// The start runs under TCG: the guest's own answers are slow too.
+    tcg: bool,
 }
 
 /// Most a host load can stretch a wait.
@@ -180,6 +182,7 @@ impl Waits {
         Self {
             scale: tcg * load.max(1.0),
             guest_connect: Duration::from_secs(u64::from(settings.guest_connect_secs.max(1))),
+            tcg: choice.is_tcg(),
         }
     }
 
@@ -243,6 +246,21 @@ impl Waits {
     /// The factor over KVM speed, for messages.
     pub fn factor(&self) -> f64 {
         self.scale
+    }
+
+    /// How many times longer the guest may take to answer a command than at
+    /// KVM speed: [`factor`](Self::factor) under TCG, where the guest itself
+    /// is emulated, and 1 under KVM, whose command waits stay as they were.
+    /// The one factor for every wait on the guest's answers: the host's guest
+    /// commands and a front end's wait on the engine for them.
+    pub fn guest_factor(&self) -> f64 {
+        if self.tcg { self.scale } else { 1.0 }
+    }
+
+    /// `base`, a wait for the guest to answer one command at KVM speed,
+    /// stretched by [`guest_factor`](Self::guest_factor).
+    pub fn guest_command(&self, base: Duration) -> Duration {
+        base.mul_f64(self.guest_factor())
     }
 }
 
@@ -369,6 +387,29 @@ mod tests {
         assert_eq!(load_scale(2.0, 8), 1.0);
         assert_eq!(load_scale(500.0, 8), LOAD_SCALE_CAP);
         assert_eq!(load_scale(f64::NAN, 8), 1.0);
+    }
+
+    #[test]
+    fn guest_commands_stretch_under_tcg_only() {
+        let settings = StartSettings::default();
+        let kvm = Choice {
+            accelerator: Accelerator::Kvm,
+            fallback: None,
+        };
+        let tcg = Choice {
+            accelerator: Accelerator::Tcg,
+            fallback: None,
+        };
+        let ten = Duration::from_secs(10);
+        // KVM keeps its command waits, even on a loaded host.
+        let loaded_kvm = Waits::with_load(&kvm, &settings, 3.0);
+        assert_eq!(loaded_kvm.guest_command(ten), ten);
+        assert_eq!(loaded_kvm.guest_factor(), 1.0);
+        // TCG stretches them by the same factor as the boot wait.
+        let slow = Waits::with_load(&tcg, &settings, 1.5);
+        assert_eq!(slow.guest_factor(), slow.factor());
+        assert_eq!(slow.guest_command(ten), slow.scaled(ten));
+        assert_eq!(slow.guest_command(ten), Duration::from_secs(150));
     }
 
     #[test]

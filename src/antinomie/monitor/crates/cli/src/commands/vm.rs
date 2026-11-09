@@ -33,6 +33,7 @@ pub enum Vm {
     /// Create a VM from an installed base.
     Create(Create),
     /// Boot a VM, wait for the guest to answer, and stop it again (or hold it).
+    /// Under TCG the start waits are stretched by `--tcg-multiplier`.
     Start(Start),
     /// Stop the VM and wait until its recording is final.
     Stop { id: String },

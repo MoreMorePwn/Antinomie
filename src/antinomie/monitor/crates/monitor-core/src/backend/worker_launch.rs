@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Starting a program in the guest: the checks, the launch request and the run it creates.
-use super::worker_guest::GUEST_REPLY_TIMEOUT;
 use super::*;
 use crate::debug::KernelDebugBackend;
 use session_transport::launch_image_hash;
@@ -367,7 +366,7 @@ impl Worker {
         plan: LaunchPlan,
     ) -> Result<SentLaunch, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         let LaunchPlan {
             shape,
             args,
@@ -539,7 +538,7 @@ impl Worker {
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         let LaunchShape {
             specimen,
             supported,
@@ -663,7 +662,7 @@ impl Worker {
         ack: Launched,
         boot_id: String,
     ) -> Result<String, String> {
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = self.reply_timeout();
         let Launched {
             reply,
             id,

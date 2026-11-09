@@ -36,6 +36,7 @@ impl Settings {
             analysis_limits: self.analysis_limits,
             memory_online_symbols: self.memory_online_symbols,
             disks: self.disks.clone(),
+            start: Some(self.start),
             extra: self.engine_extra.clone(),
         }
     }
@@ -63,6 +64,10 @@ impl Settings {
         self.analysis_limits = file.analysis_limits;
         self.memory_online_symbols = file.memory_online_symbols;
         self.disks = file.disks;
+        // A file no front end wrote them to keeps the window's own.
+        if let Some(start) = file.start {
+            self.start = start;
+        }
         self.engine_extra = file.extra;
     }
 }
