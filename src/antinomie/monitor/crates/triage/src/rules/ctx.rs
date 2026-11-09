@@ -78,7 +78,7 @@ impl<'a> Ctx<'a> {
     /// Where the table puts a named argument of this call (`envp` of an exec,
     /// `clone_flags` of a clone), so a rule reads roles, not positions.
     pub fn argument(&self, argument: &str) -> Option<usize> {
-        syscalls::native().argument(self.name, argument)
+        syscalls::argument_of(self.event.syscall_nr, self.name, argument)
     }
 
     /// The value of a named argument, zero when the call has no such argument.
@@ -226,7 +226,7 @@ impl<'a> Ctx<'a> {
             .chain(self.call.exit.iter())
             .flat_map(|event| &event.fields)
             .find(|field| {
-                trace::field_argument_of(self.name, field) == Some(argument)
+                trace::field_argument_on(self.event.syscall_nr, self.name, field) == Some(argument)
                     && (field.key.ends_with(suffix) || suffix.is_empty())
             })
     }
@@ -294,7 +294,7 @@ impl<'a> Ctx<'a> {
 
     /// The socket address the call was given or got back.
     pub fn address(&self, argument: usize) -> Option<sigma_events::Address> {
-        sigma_events::address(self.call, self.name, argument)
+        sigma_events::address(self.call, self.event.syscall_nr, self.name, argument)
     }
 
     /// The bytes a read returned or a write sent, as far as they were captured.

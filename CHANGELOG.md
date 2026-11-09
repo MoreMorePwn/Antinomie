@@ -14,6 +14,13 @@ x86 programs by their own table.
 
 ### Host
 
+- **Argument positions come from the call's own ABI table (ANT-T0440).** Triage rules, the
+  process record, the Sigma and auditd address fields, the trace's field roles and the
+  capture's exec path looked up argument positions in the x86-64 table for every
+  architecture. They now read the table of the event's ABI, so a role such as `clone`'s
+  `tls` (argument 4 on x86-64, 3 on arm64, AArch32 and ia32) is found where that
+  architecture puts it. x86-64 results are unchanged.
+
 - **A slow TCG boot no longer fails the VM Start at 180 s (ANT-T0442).** The service's
   180 s limit on the VM `Start` command was fixed, so on a busy host the engine's own
   TCG wait for the guest to connect could outlast it and the job failed with "the VM did

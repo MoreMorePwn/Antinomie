@@ -434,7 +434,8 @@ pub fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &Even
     let key = |fd: u64| (owner.0, owner.1, fd);
     let sockets = &mut files.journal.sockets;
     let endpoint = |name: &str| {
-        address(call, name, 1).and_then(|found| Some((found.ip.parse().ok()?, found.port)))
+        address(call, event.syscall_nr, name, 1)
+            .and_then(|found| Some((found.ip.parse().ok()?, found.port)))
     };
     match event.syscall_name.as_str() {
         // A non-blocking connect that is still going has already named its peer.
@@ -578,7 +579,7 @@ pub struct Address {
 /// The IP address and port in the `struct sockaddr` a call was given or
 /// filled in. Only a complete AF_INET or AF_INET6 address is decoded; Unix
 /// sockets and short captures give nothing.
-pub fn address(call: &InvocationSummary, name: &str, argument: usize) -> Option<Address> {
+pub fn address(call: &InvocationSummary, nr: u64, name: &str, argument: usize) -> Option<Address> {
     // accept4 takes the same address argument as accept.
     let name = if name == "accept4" { "accept" } else { name };
     let field = call
@@ -590,7 +591,7 @@ pub fn address(call: &InvocationSummary, name: &str, argument: usize) -> Option<
             field.key.contains("addr")
                 && !field.key.contains("len")
                 && !field.key.contains("capacity")
-                && trace::field_argument_of(name, field) == Some(argument)
+                && trace::field_argument_on(nr, name, field) == Some(argument)
         })?;
     if !field.complete {
         return None;
@@ -617,7 +618,7 @@ pub fn address(call: &InvocationSummary, name: &str, argument: usize) -> Option<
 }
 
 /// Index of the address argument of an address-taking syscall.
-pub fn address_argument(name: &str) -> Option<usize> {
+pub fn address_argument(nr: u64, name: &str) -> Option<usize> {
     let argument = match name {
         "connect" => "uservaddr",
         "accept" | "accept4" => "upeer_sockaddr",
@@ -625,5 +626,5 @@ pub fn address_argument(name: &str) -> Option<usize> {
         "sendto" => "addr",
         _ => return None,
     };
-    syscalls::native().argument(name, argument)
+    syscalls::argument_of(nr, name, argument)
 }

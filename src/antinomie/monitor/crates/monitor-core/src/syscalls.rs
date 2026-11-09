@@ -100,6 +100,19 @@ pub fn table_of(id: u64) -> Option<&'static Table> {
     }
 }
 
+/// The table of an id's ABI; the x86-64 table for an id with no known ABI.
+pub fn table_for(id: u64) -> &'static Table {
+    table_of(id).unwrap_or_else(native)
+}
+
+/// Where the call `call` (an ABI's own name for it) puts the argument `role`
+/// on the ABI of host id `id`. Positions differ between ABIs (arm64 and
+/// AArch32 `clone` swap `tls` and `child_tid`), so read them here and not
+/// from the x86-64 table.
+pub fn argument_of(id: u64, call: &str, role: &str) -> Option<usize> {
+    table_for(id).argument(call, role)
+}
+
 /// One ABI's calls, by number and by name. Rules and decoders key on the name
 /// (`"execve"`) and read argument roles by argument name; the number is only
 /// what the wire carries.
@@ -1534,5 +1547,35 @@ mod tests {
         assert_eq!(futex.unknown_bits, 0);
         assert!(futex.names.contains(&"FUTEX_WAIT".into()));
         assert!(futex.names.contains(&"FUTEX_PRIVATE_FLAG".into()));
+    }
+
+    #[test]
+    fn argument_of_reads_the_ids_own_table() {
+        let clone = |abi: Abi| super::id(abi, table(abi).number("clone").unwrap());
+        assert_eq!(argument_of(clone(Abi::X86_64), "clone", "tls"), Some(4));
+        for abi in [Abi::Aarch64, Abi::Arm, Abi::I386] {
+            assert_eq!(argument_of(clone(abi), "clone", "tls"), Some(3), "{abi:?}");
+            assert_eq!(
+                argument_of(clone(abi), "clone", "child_tidptr"),
+                Some(4),
+                "{abi:?}"
+            );
+        }
+        // Positions that differ between the tables for roles the host reads:
+        // fanotify_mark's path and mark fd (32-bit ABIs pass the 64-bit mask
+        // in two registers) and mmap's fd (mmap2 on the 32-bit ABIs, absent
+        // under the name `mmap` there).
+        assert_eq!(
+            table(Abi::X86_64).argument("fanotify_mark", "pathname"),
+            Some(4)
+        );
+        assert_eq!(
+            table(Abi::Arm).argument("fanotify_mark", "pathname"),
+            Some(5)
+        );
+        assert_eq!(
+            table(Abi::I386).argument("fanotify_mark", "pathname"),
+            Some(5)
+        );
     }
 }

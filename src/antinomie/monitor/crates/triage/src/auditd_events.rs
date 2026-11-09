@@ -102,8 +102,8 @@ pub fn records(
     if matches!(name, "execve" | "execveat") {
         found.extend(execve(call, event));
     }
-    if let Some(address) = sigma_events::address_argument(name)
-        .and_then(|argument| sigma_events::address(call, name, argument))
+    if let Some(address) = sigma_events::address_argument(event.syscall_nr, name)
+        .and_then(|argument| sigma_events::address(call, event.syscall_nr, name, argument))
     {
         let mut sockaddr = record("SOCKADDR");
         let hex: String = address

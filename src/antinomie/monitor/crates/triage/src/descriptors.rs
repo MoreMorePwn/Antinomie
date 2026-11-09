@@ -432,7 +432,8 @@ pub fn shares_fs(invocation: &InvocationSummary, event: &EventSummary) -> bool {
 
 pub fn clone_flag(invocation: &InvocationSummary, event: &EventSummary, flag: u64) -> bool {
     match event.syscall_name.as_str() {
-        "clone" => call_args(invocation).is_some_and(|args| clone_flags(&args) & flag != 0),
+        "clone" => call_args(invocation)
+            .is_some_and(|args| clone_flags(event.syscall_nr, &args) & flag != 0),
         // Flags that were not captured: the guest's child record still says
         // whether the task is a thread (which shares files and directory) or a
         // process (which gets copies).

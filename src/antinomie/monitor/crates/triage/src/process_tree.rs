@@ -364,7 +364,7 @@ pub fn observe_processes(
                 node.record.exec(
                     Some(&image),
                     event.timestamp_ns,
-                    process_record::exec_envp(invocation, &event.syscall_name),
+                    process_record::exec_envp(invocation, event.syscall_nr, &event.syscall_name),
                 );
                 node.renames.clear();
                 node.command_line = normalized::command_line(invocation, event);
@@ -387,7 +387,7 @@ pub fn observe_processes(
             .and_then(|event| event.args)
             .or(exit.and_then(|event| event.args));
         if !matches!(
-            spawn_kind(invocation, &event.syscall_name, args),
+            spawn_kind(invocation, event.syscall_nr, &event.syscall_name, args),
             Some(Spawn::Process)
         ) {
             continue;
@@ -712,13 +712,14 @@ pub fn link_child(
 
 pub fn spawn_kind(
     invocation: &InvocationSummary,
+    nr: u64,
     name: &str,
     args: Option<[u64; 6]>,
 ) -> Option<Spawn> {
     match name {
         "fork" | "vfork" => Some(Spawn::Process),
         "clone" => Some(
-            if args.is_some_and(|args| clone_flags(&args) & CLONE_THREAD != 0) {
+            if args.is_some_and(|args| clone_flags(nr, &args) & CLONE_THREAD != 0) {
                 Spawn::Skip
             } else {
                 Spawn::Process

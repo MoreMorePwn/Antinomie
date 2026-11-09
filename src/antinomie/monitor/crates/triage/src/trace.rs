@@ -264,20 +264,25 @@ pub fn async_stage(event: &antinomie_monitor_core::EventSummary) -> String {
 /// else the one its key names (summaries saved before 0.7.0, fields the app
 /// derives itself).
 pub fn field_argument(nr: u64, field: &FieldSummary) -> Option<usize> {
-    field_argument_of(syscalls::known_name(nr).unwrap_or(""), field)
+    field_argument_on(nr, syscalls::known_name(nr).unwrap_or(""), field)
 }
 
-/// `field_argument` for a call known by its name.
-pub fn field_argument_of(name: &str, field: &FieldSummary) -> Option<usize> {
+/// `field_argument` for a call known by its name and host id.
+pub fn field_argument_on(nr: u64, name: &str, field: &FieldSummary) -> Option<usize> {
     match field.arg {
         Some(arg) => Some(usize::from(arg)),
-        None => key_argument(name, &field.key),
+        None => key_argument_on(nr, name, &field.key),
     }
 }
 
 /// The argument a captured field's key names for the call `name`, where
 /// the argument's role is read from the table by argument name.
 pub fn key_argument(name: &str, key: &str) -> Option<usize> {
+    key_argument_on(0, name, key)
+}
+
+/// `key_argument` on the ABI of host id `nr`.
+pub fn key_argument_on(nr: u64, name: &str, key: &str) -> Option<usize> {
     if let Some(rest) = key.strip_prefix("arg") {
         let index = rest.as_bytes().first().copied()?;
         if (b'0'..=b'5').contains(&index)
@@ -289,7 +294,7 @@ pub fn key_argument(name: &str, key: &str) -> Option<usize> {
             return Some(usize::from(index - b'0'));
         }
     }
-    let table = syscalls::native();
+    let table = syscalls::table_for(nr);
     let role = |argument: &str| table.argument(name, argument);
     let head = key.split(['.', '[']).next()?;
     let length = key.ends_with("length") || key.ends_with("capacity");

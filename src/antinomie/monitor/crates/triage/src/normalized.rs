@@ -502,10 +502,10 @@ pub fn build(
     let accepted = matches!(name, "accept" | "accept4") && ret.is_some_and(|ret| ret >= 0);
     let sent = name == "sendto" && ret.is_some_and(|ret| ret >= 0);
     if connected || accepted || sent {
-        let argument = sigma_events::address_argument(name).unwrap_or(1);
+        let argument = sigma_events::address_argument(event.syscall_nr, name).unwrap_or(1);
         let kind = sigma_events::socket_kind(files, call, event);
         let udp = kind == Some(sigma_events::SocketKind::Datagram);
-        if let Some(address) = sigma_events::address(call, name, argument) {
+        if let Some(address) = sigma_events::address(call, event.syscall_nr, name, argument) {
             let mut fields = fields.clone();
             // A datagram socket has no connection: report each peer once.
             let report = !sent

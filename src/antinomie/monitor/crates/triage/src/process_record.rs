@@ -110,8 +110,8 @@ impl ProcessRecord {
 }
 
 /// The environment strings an exec call carried that were captured whole.
-pub fn exec_envp(invocation: &InvocationSummary, name: &str) -> Vec<String> {
-    let Some(argument) = syscalls::native().argument(name, "envp") else {
+pub fn exec_envp(invocation: &InvocationSummary, nr: u64, name: &str) -> Vec<String> {
+    let Some(argument) = syscalls::argument_of(nr, name, "envp") else {
         return Vec::new();
     };
     let fields: Vec<_> = invocation

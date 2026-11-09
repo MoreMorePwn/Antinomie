@@ -66,7 +66,7 @@ fn exec_path_key(event: &EventSummary) -> Option<String> {
     if !matches!(event.syscall_name.as_str(), "execve" | "execveat") {
         return None;
     }
-    let index = crate::syscalls::native().argument(&event.syscall_name, "filename")?;
+    let index = crate::syscalls::argument_of(event.syscall_nr, &event.syscall_name, "filename")?;
     Some(format!("arg{index}.path"))
 }
 

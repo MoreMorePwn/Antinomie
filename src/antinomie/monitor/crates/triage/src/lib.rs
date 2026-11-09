@@ -22,6 +22,8 @@ pub mod tzone;
 pub mod values;
 
 pub mod archive_scan;
+#[cfg(test)]
+pub mod argument_abi_tests;
 pub mod async_files;
 pub mod attack;
 pub mod auditd_events;
@@ -179,10 +181,8 @@ pub const PROCESS_FIELDS: &[FieldSpec<'static>] = &[
 /// reads that bit from its `clone_flags` argument, found by name in the table
 /// (`clone_flags`). `clone3`'s first argument is a pointer, so its flags come
 /// only from a captured `clone_args` flags field.
-pub fn clone_flags(args: &[u64; 6]) -> u64 {
-    syscalls::native()
-        .argument("clone", "clone_flags")
-        .map_or(0, |index| args[index])
+pub fn clone_flags(nr: u64, args: &[u64; 6]) -> u64 {
+    syscalls::argument_of(nr, "clone", "clone_flags").map_or(0, |index| args[index])
 }
 pub const CLONE_THREAD: u64 = 0x0001_0000;
 pub const CLONE_FS: u64 = 0x0000_0200;
