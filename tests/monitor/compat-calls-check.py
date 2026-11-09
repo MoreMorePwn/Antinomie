@@ -7,9 +7,11 @@ The input is the text `event-dump RUN_DIR` prints for the run. Every compat
 structure the recorder captures by its ILP32 layout (contract revision 21,
 guest patches 49, 50 and 51) must be in it, COMPLETE, with the bytes and sizes
 the fixture's calls produce, and none of those calls may keep a pointer that
-is recorded by address only (NO_DECODER).
+is recorded by address only (NO_DECODER). From contract revision 22 (guest
+patch 56) the rest of the AArch32 evaluation's calls are checked too; give
+--revision 21 for an older base.
 
-usage: compat-calls-check.py --abi ia32|arm EVENTS.txt
+usage: compat-calls-check.py --abi ia32|arm [--revision N] EVENTS.txt
 """
 import argparse
 import re
@@ -121,8 +123,32 @@ IPC_OLD = {"ia32": [("ipc", 2, "ipc.control", 56, ""), ("ipc", 2, "ipc.control",
                     ("ipc", 2, "ipc.control", 44, "")],
            "arm": [("msgctl", 2, "ipc.control", 56, ""), ("shmctl", 2, "ipc.control", 48, ""),
                    ("semctl", 2, "ipc.control", 44, "")]}
+# Revision 22 (patch 56). The fixture's link points at its work directory,
+# so readlink's text starts with "/". _llseek moved to offset 1; utimensat set
+# 1 s and 2 s; getsockopt's int is 4 bytes; termios is 36 bytes, winsize 8.
+REV22 = [
+    ("readlink", 2, "arg1.buf", None, "/".encode().hex()),
+    ("setsockopt", 1, "arg3.optval", 4, "00100000"),
+    ("getsockopt", 1, "arg4.optlen", 4, "04000000"),
+    ("getsockopt", 2, "arg4.optlen", 4, "04000000"),
+    ("getsockopt", 2, "arg3.optval", 4, ""),
+    ("sigaltstack", 1, "arg0.stack", 12, ""),
+    ("sigaltstack", 2, "arg1.stack", 12, ""),
+    ("prlimit64", 2, "arg3.old_rlim", 16, ""),
+    ("ugetrlimit", 2, "arg1.rlim", 8, ""),
+    ("setrlimit", 1, "arg1.rlim", 8, ""),
+    ("_llseek", 2, "arg3.result", 8, "0100000000000000"),
+    ("set_robust_list", 1, "arg0.head", 12, ""),
+    ("utimensat", 1, "arg2.utimes", 16, "01000000000000000200000000000000"),
+    ("sched_getaffinity", 2, "arg2.cpu_mask", None, ""),
+    ("sched_setaffinity", 1, "arg2.cpu_mask", None, ""),
+    ("ioctl", 2, "arg2.ioctl", 36, ""),
+    ("ioctl", 2, "arg2.ioctl", 8, ""),
+    ("clone", 2, "arg2.parent_tid", 4, ""),
+]
 CALLS = ({name for name, *_ in COMMON} | {name for name, _ in STAT64_CALLS}
          | {"epoll_wait", "epoll_pwait", "ipc"})
+CALLS_22 = {name for name, *_ in REV22}
 
 
 def parse(text):
@@ -143,11 +169,15 @@ def parse(text):
     return [events[seq] for seq in sorted(events)]
 
 
-def check(events, abi):
+def check(events, abi, revision=22):
     """Problems, one line each; empty when the recording is right."""
     problems = []
     expected = list(COMMON) + [POLL[abi]] + EPOLL[abi] + IPC_OLD[abi] + [
         (call, 2, key, STAT64[abi], "") for call, key in STAT64_CALLS]
+    calls = set(CALLS)
+    if revision >= 22:
+        expected += REV22
+        calls |= CALLS_22
     for call, phase, key, size, prefix in expected:
         found = [event["fields"].get(key) for event in events
                  if event["call"] == call and event["phase"] == phase]
@@ -161,7 +191,7 @@ def check(events, abi):
                             + f", wanted COMPLETE{'' if size is None else f' {size} bytes'}"
                             + (f" starting {prefix}" if prefix else ""))
     for event in events:
-        if event["call"] not in CALLS:
+        if event["call"] not in calls:
             continue
         for key, field in event["fields"].items():
             if field["status"] == NO_DECODER:
@@ -178,11 +208,13 @@ def check(events, abi):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--abi", choices=sorted(STAT64), required=True)
+    parser.add_argument("--revision", type=int, default=22,
+                        help="the base's contract revision (default 22)")
     parser.add_argument("events", help="event-dump output of the fixture's run")
     options = parser.parse_args()
     with open(options.events, encoding="utf-8", errors="replace") as handle:
         events = parse(handle.read())
-    problems = check(events, options.abi)
+    problems = check(events, options.abi, options.revision)
     for problem in problems:
         print("FAIL", problem)
     print(f"{'PASS' if not problems else 'FAIL'} compat calls ({options.abi}): "

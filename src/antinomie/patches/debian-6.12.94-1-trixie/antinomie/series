@@ -94,3 +94,4 @@
 # structures of the AArch32 evaluation, cores with non-resident pages
 0054-antinomie-give-a-specimen-copy-s-sha-256-in-its-acquisition-reply.patch
 0055-antinomie-hold-an-exiting-process-of-a-dump-trigger-run-until-the-host-has-judged-it.patch
+0056-antinomie-capture-the-compat-structures-the-aarch32-evaluation-found-recorded-by-address-only.patch

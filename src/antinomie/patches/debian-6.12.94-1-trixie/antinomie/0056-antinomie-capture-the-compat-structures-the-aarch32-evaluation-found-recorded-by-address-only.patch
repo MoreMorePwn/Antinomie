@@ -1,0 +1,335 @@
+Description: antinomie: capture the compat structures the AArch32 evaluation found recorded by address only
+ The compat rules of contract revision 21 are the whole of what the
+ recorder captures of a compat call; a 32-bit ARM program's other
+ pointers were recorded by address only, thousands of schema gaps per
+ run. The calls and structures, each by its ILP32 layout:
+ .
+ - readlink's buffer at exit (the result's bytes);
+ - setsockopt's value at entry, and getsockopt's optlen at entry and
+   exit with the value it wrote (an int when it is one, else bytes);
+ - sigaltstack's stack_t in and out;
+ - clone's parent TID (CLONE_PARENT_SETTID) and pidfd at exit, and the
+   child TID pointers as unobserved, by the CLONE_BACKWARDS order both
+   compat ABIs have;
+ - prlimit64's rlimit64 records, ugetrlimit's and setrlimit's rlimit;
+ - _llseek's resulting offset;
+ - set_robust_list's head;
+ - utimensat's two 32-bit times (old_timespec[2]);
+ - sched_setaffinity's and sched_getaffinity's CPU masks, as the
+   compat_ulong_t words they are (unsigned_long[] on ILP32);
+ - the terminal ioctls of a tty (termios, termios2, winsize, pid_t,
+   FIONREAD), whose records have one layout on ILP32 and LP64.
+ .
+ A tty is now known by the tty layer's own ioctl (tty_ioctl()) as well
+ as by the major numbers: an arm64 guest's console, ttyAMA (major 204),
+ had its native terminal ioctls recorded as gaps too.
+ .
+ Only kernel/antinomie/recorder.c changes (the compat rules, their
+ handlers, the shared terminal shapes), and control_wire.h names them
+ in the revision comment; no stock file is hooked.
+ .
+ Contract: revision 22. Fields only: every field a revision-21 guest
+ wrote is unchanged.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-10
+
+---
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index e4f3114ca..762d015cb 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -40,7 +40,10 @@
+ /* Revision 22: the SHA-256 of a specimen copy in its acquisition reply
+  * (EXEC_SPECIMEN_DIGEST, ACQUIRE DIGEST), offered in TRACER_CAPS; the dump
+  * trigger's exit hold (EXEC_EXIT_HOLD, EXIT_HOLD, lifecycle.exit_hold,
+- * CORE_EXIT_HELD), offered in TRACER_CAPS. */
++ * CORE_EXIT_HELD), offered in TRACER_CAPS; the compat structures of readlink,
++ * get/setsockopt, sigaltstack, clone, prlimit64, ugetrlimit, setrlimit,
++ * _llseek, set_robust_list, utimensat, sched_get/setaffinity and a tty's
++ * terminal ioctls, and the terminal ioctls of every tty (fields only). */
+ #define ANTC_REVISION 22
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 1b0ddb658..c61ef455f 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -831,60 +831,82 @@ static void ifconf_buffer(struct ant_task *ctx, u64 address)
+ 	      conf.ifc_len > ANT_IFCONF_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
+ }
+ 
++/* drivers/tty/tty.h: every tty file's ioctl, whatever its device's major
++ * (an arm64 guest's console is ttyAMA, major 204).
++ */
++long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
++
++static bool tty_file_of(struct file *file)
++{
++	u32 major;
++
++	if (!file || !S_ISCHR(file_inode(file)->i_mode))
++		return false;
++	if (file->f_op->unlocked_ioctl == tty_ioctl)
++		return true;
++	major = imajor(file_inode(file));
++	return major == TTY_MAJOR || major == TTYAUX_MAJOR ||
++		(major >= UNIX98_PTY_SLAVE_MAJOR &&
++		 major < UNIX98_PTY_SLAVE_MAJOR + UNIX98_PTY_MAJOR_COUNT);
++}
++
++/* The terminal requests a tty answers alike on every ABI (struct termios,
++ * termios2, winsize, pid_t and int have one layout on ILP32 and LP64).
++ */
++static bool tty_shape(bool compat, u32 request, u64 *size, const char **layout, bool *input)
++{
++	*input = false;
++	switch (request) {
++	case TCSETS: case TCSETSW: case TCSETSF:
++		*input = true;
++		fallthrough;
++	case TCGETS:
++		*size = sizeof(struct termios);
++		*layout = compat ? ANT_COMPAT_LAYOUT("termios") : ANT_LAYOUT("termios");
++		return true;
++	case TCSETS2: case TCSETSW2: case TCSETSF2:
++		*input = true;
++		fallthrough;
++	case TCGETS2:
++		/* glibc's tcgetattr() and isatty() ask with TCGETS2. */
++		*size = sizeof(struct termios2);
++		*layout = compat ? ANT_COMPAT_LAYOUT("termios2") : ANT_LAYOUT("termios2");
++		return true;
++	case TIOCSWINSZ:
++		*input = true;
++		fallthrough;
++	case TIOCGWINSZ:
++		*size = sizeof(struct winsize);
++		*layout = compat ? ANT_COMPAT_LAYOUT("winsize") : ANT_LAYOUT("winsize");
++		return true;
++	case TIOCSPGRP:
++		*input = true;
++		fallthrough;
++	case TIOCGPGRP: case TIOCGSID:
++		*size = sizeof(pid_t);
++		*layout = compat ? ANT_COMPAT_LAYOUT("pid_t") : ANT_LAYOUT("pid_t");
++		return true;
++	case FIONREAD:
++		*size = sizeof(int);
++		*layout = compat ? ANT_COMPAT_LAYOUT("int") : ANT_LAYOUT("int");
++		return true;
++	}
++	return false;
++}
++
+ static void ioctl_field(struct ant_task *ctx, bool output, long result)
+ {
+ 	struct fd fd = fdget(ctx->args[0]);
+ 	struct file *file = fd_file(fd);
+-	u32 major;
+ 	u64 size = U64_MAX;
+ 	const char *layout = "";
+-	bool tty_file = false, input = false, ifconf = false;
++	bool tty_file = tty_file_of(file), input = false, ifconf = false;
+ 	u32 request = ctx->args[1];
+ 	u16 encoding = 3;
+ 	u8 dir;
+ 
+-	if (file && S_ISCHR(file_inode(file)->i_mode)) {
+-		major = imajor(file_inode(file));
+-		tty_file = major == TTY_MAJOR || major == TTYAUX_MAJOR ||
+-			(major >= UNIX98_PTY_SLAVE_MAJOR &&
+-			 major < UNIX98_PTY_SLAVE_MAJOR + UNIX98_PTY_MAJOR_COUNT);
+-	}
+ 	if (tty_file)
+-		switch (ctx->args[1]) {
+-		case TCSETS: case TCSETSW: case TCSETSF:
+-			input = true;
+-			fallthrough;
+-		case TCGETS:
+-			size = sizeof(struct termios);
+-			layout = ANT_LAYOUT("termios");
+-			break;
+-		case TCSETS2: case TCSETSW2: case TCSETSF2:
+-			input = true;
+-			fallthrough;
+-		case TCGETS2:
+-			/* glibc's tcgetattr() and isatty() ask with TCGETS2. */
+-			size = sizeof(struct termios2);
+-			layout = ANT_LAYOUT("termios2");
+-			break;
+-		case TIOCSWINSZ:
+-			input = true;
+-			fallthrough;
+-		case TIOCGWINSZ:
+-			size = sizeof(struct winsize);
+-			layout = ANT_LAYOUT("winsize");
+-			break;
+-		case TIOCSPGRP:
+-			input = true;
+-			fallthrough;
+-		case TIOCGPGRP: case TIOCGSID:
+-			size = sizeof(pid_t);
+-			layout = ANT_LAYOUT("pid_t");
+-			break;
+-		case FIONREAD:
+-			size = sizeof(int);
+-			layout = ANT_LAYOUT("int");
+-			break;
+-		}
++		tty_shape(false, request, &size, &layout, &input);
+ 	fdput(fd);
+ 	if (size == U64_MAX)
+ 		vfs_ioctl_shape(request, &size, &layout, &input);
+@@ -1057,6 +1079,9 @@ struct ant_compat_rule {
+ 
+ #define COMPAT_RULE(name, a, w, x, c, sz, k, l) \
+ 	{ ANT_COMPAT_NR(name), a, w, x, c, sz, k, ANT_COMPAT_LAYOUT(l) }
++/* Opaque bytes: a data buffer, which has no layout (encoding 1). */
++#define COMPAT_BYTES(name, a, w, x, c, sz, k) \
++	{ ANT_COMPAT_NR(name), a, w, x, c, sz, k, NULL }
+ static const struct ant_compat_rule compat_rules[] = {
+ 	COMPAT_RULE(poll, 0, CR_IN | CR_OUT, CX_COUNT, 1, 8, "arg0.pollfds", "pollfd[]"),
+ 	COMPAT_RULE(ppoll, 0, CR_IN | CR_OUT, CX_COUNT, 1, 8, "arg0.pollfds", "pollfd[]"),
+@@ -1127,8 +1152,109 @@ static const struct ant_compat_rule compat_rules[] = {
+ 		    "siginfo_t"),
+ 	COMPAT_RULE(waitid, 4, CR_OUT, CX_FIXED, 0, sizeof(struct compat_rusage), "arg4.ru",
+ 		    "rusage"),
++	/* Contract revision 22: the rest of the AArch32 evaluation's gaps. The
++	 * keys are the native calls' where those have their own, else the arm
++	 * table's argument names.
++	 */
++	COMPAT_BYTES(readlink, 1, CR_OUT, CX_RESULT, 0, 0, "arg1.buf"),
++	COMPAT_BYTES(setsockopt, 3, CR_IN, CX_COUNT, 4, 1, "arg3.optval"),
++	COMPAT_RULE(sigaltstack, 0, CR_IN, CX_FIXED, 0, sizeof(compat_stack_t), "arg0.stack",
++		    "stack_t"),
++	COMPAT_RULE(sigaltstack, 1, CR_OUT, CX_FIXED, 0, sizeof(compat_stack_t), "arg1.stack",
++		    "stack_t"),
++	COMPAT_RULE(prlimit64, 2, CR_IN, CX_FIXED, 0, sizeof(struct rlimit64), "arg2.new_rlim",
++		    "rlimit64"),
++	COMPAT_RULE(prlimit64, 3, CR_OUT, CX_FIXED, 0, sizeof(struct rlimit64), "arg3.old_rlim",
++		    "rlimit64"),
++	COMPAT_RULE(ugetrlimit, 1, CR_OUT, CX_FIXED, 0, sizeof(struct compat_rlimit), "arg1.rlim",
++		    "rlimit"),
++	COMPAT_RULE(setrlimit, 1, CR_IN, CX_FIXED, 0, sizeof(struct compat_rlimit), "arg1.rlim",
++		    "rlimit"),
++	COMPAT_RULE(_llseek, 3, CR_OUT, CX_FIXED, 0, sizeof(loff_t), "arg3.result", "loff_t"),
++	COMPAT_RULE(set_robust_list, 0, CR_IN, CX_FIXED, 0, sizeof(struct compat_robust_list_head),
++		    "arg0.head", "robust_list_head"),
++	COMPAT_RULE(utimensat, 2, CR_IN, CX_FIXED, 0, 2 * sizeof(struct old_timespec32),
++		    "arg2.utimes", "old_timespec[2]"),
++	/* The CPU mask is compat_ulong_t words: unsigned long on ILP32. */
++	COMPAT_RULE(sched_setaffinity, 2, CR_IN, CX_COUNT, 1, 1, "arg2.cpu_mask",
++		    "unsigned_long[]"),
++	COMPAT_RULE(sched_getaffinity, 2, CR_OUT, CX_RESULT, 0, 0, "arg2.cpu_mask",
++		    "unsigned_long[]"),
+ };
+ 
++/* getsockopt: optlen (int) at entry and, on success, at exit, and the option
++ * value the call wrote, as many bytes as optlen then says. The bytes are
++ * typed as an int only when the option is one.
++ */
++static void compat_getsockopt(struct ant_task *ctx, bool output, long result)
++{
++	enum ant_status status;
++	s32 length;
++	u64 size;
++
++	if (!ctx->args[4] || (output && result))
++		return;
++	status = copy_from_user_nofault(&length, (void __user *)(unsigned long)ctx->args[4],
++					sizeof(length)) ? ANT_COPY_FAULT : ANT_COMPLETE;
++	field(ctx, 4, "arg4.optlen", ANT_COMPAT_LAYOUT("int"), 3, ctx->args[4],
++	      status == ANT_COMPLETE ? &length : NULL, sizeof(length), sizeof(length), status);
++	if (!output || status != ANT_COMPLETE || length < 0 || !ctx->args[3])
++		return;
++	size = min_t(u64, length, ANT_IOCTL_GENERIC_MAX);
++	if (length == sizeof(int))
++		field(ctx, 3, "arg3.optval", ANT_COMPAT_LAYOUT("int"), 3, ctx->args[3], NULL,
++		      size, length, ANT_COMPLETE);
++	else
++		field(ctx, 3, "arg3.optval", "", 1, ctx->args[3], NULL, size, length,
++		      size < (u64)length ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++/* clone (CLONE_BACKWARDS on both compat ABIs: parent_tidptr is arg 2,
++ * child_tidptr arg 4), as the native call's exit records it.
++ */
++static void compat_clone(struct ant_task *ctx, bool output, long result)
++{
++	u64 flags = ctx->args[0];
++
++	if (!output || result <= 0)
++		return;
++	if ((flags & CLONE_PARENT_SETTID) && ctx->args[2])
++		user_field(ctx, 2, "arg2.parent_tid", ANT_COMPAT_LAYOUT("pid_t"), 3, ctx->args[2],
++			   sizeof(u32));
++	if ((flags & CLONE_PIDFD) && ctx->args[2])
++		user_field(ctx, 2, "arg2.pidfd", ANT_COMPAT_LAYOUT("int"), 3, ctx->args[2],
++			   sizeof(int));
++	/* The child writes its own TID, and the kernel clears it at the
++	 * child's exit; neither is visible here.
++	 */
++	if ((flags & CLONE_CHILD_SETTID) && ctx->args[4])
++		field(ctx, 4, "arg4.child_tid", ANT_COMPAT_LAYOUT("pid_t"), 3, ctx->args[4], NULL,
++		      sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
++	if ((flags & CLONE_CHILD_CLEARTID) && ctx->args[4])
++		field(ctx, 4, "arg4.clear_child_tid", ANT_COMPAT_LAYOUT("pid_t"), 3, ctx->args[4],
++		      NULL, sizeof(u32), sizeof(u32), ANT_ASYNC_UNOBSERVED);
++}
++
++/* ioctl: the terminal requests of a tty, whose records have one layout on
++ * ILP32 and LP64; any other compat request keeps no field, as before.
++ */
++static void compat_ioctl(struct ant_task *ctx, bool output, long result)
++{
++	struct fd fd;
++	const char *layout;
++	bool tty, input;
++	u64 size;
++
++	if (!ctx->args[2] || !tty_shape(true, ctx->args[1], &size, &layout, &input))
++		return;
++	fd = fdget(ctx->args[0]);
++	tty = tty_file_of(fd_file(fd));
++	fdput(fd);
++	if (!tty || (output ? input || result < 0 : !input))
++		return;
++	field(ctx, 2, "arg2.ioctl", layout, 3, ctx->args[2], NULL, size, size, ANT_COMPLETE);
++}
++
+ /* A compat iovec array (readv, writev, preadv, pwritev): the array, and the
+  * buffers it names, read at entry (writes) or at exit up to the result (reads).
+  */
+@@ -1626,6 +1752,18 @@ static bool compat_rules_capture(struct ant_task *ctx, bool output, long result)
+ 		compat_futex(ctx, output, result);
+ 		return true;
+ 	}
++	if (ctx->wire_nr == ANT_COMPAT_NR(getsockopt)) {
++		compat_getsockopt(ctx, output, result);
++		return true;
++	}
++	if (ctx->wire_nr == ANT_COMPAT_NR(clone)) {
++		compat_clone(ctx, output, result);
++		return true;
++	}
++	if (ctx->wire_nr == ANT_COMPAT_NR(ioctl)) {
++		compat_ioctl(ctx, output, result);
++		return true;
++	}
+ 	if (ctx->wire_nr == ANT_COMPAT_NR(epoll_wait) || ctx->wire_nr == ANT_COMPAT_NR(epoll_pwait)) {
+ 		compat_epoll_wait(ctx, output, result);
+ 		return true;
+@@ -1674,8 +1812,9 @@ static bool compat_rules_capture(struct ant_task *ctx, bool output, long result)
+ 			extent = rule->size;
+ 		}
+ 		size = min_t(u64, extent, ANT_IOCTL_GENERIC_MAX * 16);
+-		field(ctx, rule->arg, rule->key, rule->layout, 3, ctx->args[rule->arg], NULL,
+-		      size, extent, size < extent ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++		field(ctx, rule->arg, rule->key, rule->layout ?: "", rule->layout ? 3 : 1,
++		      ctx->args[rule->arg], NULL, size, extent,
++		      size < extent ? ANT_INVALID_EXTENT : ANT_COMPLETE);
+ 	}
+ 	return any;
+ }

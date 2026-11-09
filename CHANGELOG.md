@@ -26,6 +26,14 @@ x86 programs by their own table.
   stopped run and a process whose Core dump on exit is armed are never held. An older
   base keeps the old behaviour and the run's notes say so.
 
+- **Fewer schema gaps in 32-bit ARM runs (ANT-T0443).** On a revision-22 arm64 base
+  the structures of readlink, getsockopt and setsockopt, sigaltstack, clone's TID
+  pointers, prlimit64, ugetrlimit, setrlimit, _llseek, set_robust_list, utimensat
+  and the CPU-affinity calls of an AArch32 program (and of an ia32 one on x86-64)
+  are decoded instead of shown as schema gaps, and so are the terminal ioctls of a
+  tty for both arm64 ABIs (the console of an arm64 guest included). The layout
+  inventories name `old_timespec[2]`.
+
 - **Static analysis of a program that exits at once, and of a launch the guest
   refused (ANT-T0344).** The host copy of an uploaded program replaces the guest
   transfer once the guest vouches for its hash, and that hash came only with the
@@ -793,6 +801,11 @@ x86 programs by their own table.
   header flag `DIGEST`, 56-byte reply, offered in TRACER_CAPS); the digest may use
   half the copy's time limit and a slower copy is kept without one. Only
   `kernel/antinomie/` changes.
+- Patch 56 (contract revision 22): the compat structures of readlink, getsockopt
+  and setsockopt, sigaltstack, clone, prlimit64, ugetrlimit, setrlimit, _llseek,
+  set_robust_list, utimensat and sched_get/setaffinity, and the terminal ioctls of a
+  tty for compat programs, are captured by their ILP32 layouts; a tty is known by
+  the tty layer's own ioctl too (arm64's ttyAMA console). Only `recorder.c` changes.
 - Patch 55 (contract revision 22): the dump trigger's exit hold. A run armed for it
   (EXEC flag `EXIT_HOLD`, or the `EXIT_HOLD` command) parks each process that ends,
   in the process core's exit hook (`ant_monitor_core_exit()`: exit_group, the last

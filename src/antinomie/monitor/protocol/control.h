@@ -40,7 +40,10 @@
 /* Revision 22: the SHA-256 of a specimen copy in its acquisition reply
  * (EXEC_SPECIMEN_DIGEST, ACQUIRE DIGEST), offered in TRACER_CAPS; the dump
  * trigger's exit hold (EXEC_EXIT_HOLD, EXIT_HOLD, lifecycle.exit_hold,
- * CORE_EXIT_HELD), offered in TRACER_CAPS. */
+ * CORE_EXIT_HELD), offered in TRACER_CAPS; the compat structures of readlink,
+ * get/setsockopt, sigaltstack, clone, prlimit64, ugetrlimit, setrlimit,
+ * _llseek, set_robust_list, utimensat, sched_get/setaffinity and a tty's
+ * terminal ioctls, and the terminal ioctls of every tty (fields only). */
 #define ANTC_REVISION 22
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001

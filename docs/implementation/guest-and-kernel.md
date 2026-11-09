@@ -1176,8 +1176,9 @@ compat table's layouts).
   inventories lack), clone's `parent_tidptr`/`child_tidptr`, `prlimit64` and
   `ugetrlimit`, `sched_getaffinity` (`cpumask` is unsupported), `_llseek`'s
   result, `set_robust_list`, and the `ioctl` TCGETS/TIOCGWINSZ of both arm64
-  ABIs. That needs compat rules in the recorder (a guest change); the host
-  already reads the layouts it needs (`stack_t`, `rlimit`, `rlimit64`,
+  ABIs. Contract revision 22 (patch 56, ANT-T0443) adds those compat rules (see
+  "Contract revision 22: the compat structures of the AArch32 evaluation"); the
+  host already read the layouts they need (`stack_t`, `rlimit`, `rlimit64`,
   `robust_list_head`, `loff_t`, `int`, `winsize`, `termios`). The host does not
   count a call with no pointer argument (arm's `cacheflush`, `set_tls`) as a
   schema gap, and an exec whose AArch32 `argv` pointers were not recorded keeps
@@ -1233,6 +1234,40 @@ this host without the features, and an older host refuses a revision-22 base.
 * **Tools.** `guest-run` takes `"host_copy": true` (the upload at the run's
   path is the host copy), `"expect_refused": true`, `"no_evidence_wait": true`
   and `"saved_analysis_wait"` (the saved analyses after the VM stopped).
+
+### Contract revision 22: the compat structures of the AArch32 evaluation (0.9.0)
+
+Board card ANT-T0443 (split from ANT-T0429, finding A1). Patch 56 changes only
+`recorder.c` (and names the captures in `control_wire.h`'s revision comment).
+
+* **Compat rules.** readlink's buffer at exit (bytes, the result's length),
+  setsockopt's value at entry (optlen bytes), sigaltstack's `stack_t` (12 bytes)
+  in and out (`arg0.stack`, `arg1.stack`), prlimit64's `rlimit64` records
+  (`arg2.new_rlim` at entry, `arg3.old_rlim` at exit), ugetrlimit's and
+  setrlimit's `rlimit` (8), _llseek's `loff_t` result (`arg3.result`),
+  set_robust_list's `robust_list_head` (12), utimensat's two 32-bit times
+  (`arg2.utimes`, `old_timespec[2]`, a layout the generator now inventories on
+  every architecture) and sched_setaffinity's and sched_getaffinity's masks
+  (`arg2.cpu_mask`, `unsigned_long[]`: compat_ulong_t words; `cpumask` stays
+  unsupported, the native capture names the mask the same way). A rule without
+  a layout (`COMPAT_BYTES`) records opaque bytes (encoding 1).
+* **Handlers.** getsockopt (`compat_getsockopt()`): `arg4.optlen` at entry and
+  at exit, and the value the call wrote, as many bytes as optlen then says
+  (`int` when it is 4 bytes, else bytes). clone (`compat_clone()`, CLONE_BACKWARDS
+  on both compat ABIs): `arg2.parent_tid` (pid_t) and `arg2.pidfd` at exit, the
+  child TID pointers `arg4.child_tid` / `arg4.clear_child_tid` as
+  ASYNC_UNOBSERVED, as the native exit records them. ioctl (`compat_ioctl()`):
+  a tty's terminal requests (termios, termios2, winsize, pid_t, FIONREAD's int,
+  one layout on ILP32 and LP64) through the native code's `tty_shape()`; any
+  other compat request keeps no field.
+* **Terminals.** `tty_file_of()` also takes a file whose `unlocked_ioctl` is the
+  tty layer's `tty_ioctl()`: arm64's console (ttyAMA, major 204) had its native
+  terminal ioctls recorded as NO_DECODER gaps. A terminal request on a file that
+  is not a tty keeps its gap marker as before.
+* **Check.** `tests/monitor/compat-calls-fixture.c` makes every call above
+  (`rev22_calls()`, restoring its alternate stack, robust list, limit and CPU
+  mask), and `compat-calls-check.py` expects their fields (`--revision 21` for
+  an older base).
 
 ### Contract revision 22: the dump trigger's exit hold (0.9.0)
 
