@@ -46,3 +46,29 @@ pub fn wire_number(id: u64) -> u64 {
 pub(super) fn tag_of(id: u64) -> u64 {
     id >> ABI_SHIFT
 }
+
+/// The ids of these calls on every ABI this host ships a table for, the way
+/// an event's `syscall_nr` carries them: x86-64's numbers, and the aarch64,
+/// arm and i386 calls of the same name or of that family (arm's `send` for
+/// `sendto`, `mmap2` for `mmap`). A list of calls names x86-64's; a filter
+/// built from [`super::number`] alone keeps no call of an arm64 or a compat run.
+pub fn ids_on_every_abi(names: &[String]) -> std::collections::HashSet<u64> {
+    let wanted: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+    [Abi::X86_64, Abi::Aarch64, Abi::Arm, Abi::I386]
+        .into_iter()
+        .flat_map(|abi| {
+            let wanted = &wanted;
+            super::table(abi)
+                .all()
+                .iter()
+                .filter(move |entry| {
+                    wanted.contains(entry.name.as_str())
+                        || entry
+                            .family
+                            .as_deref()
+                            .is_some_and(|family| wanted.contains(family))
+                })
+                .map(move |entry| id(abi, entry.number))
+        })
+        .collect()
+}

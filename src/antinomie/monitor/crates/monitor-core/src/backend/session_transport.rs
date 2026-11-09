@@ -134,20 +134,7 @@ impl Session {
                 );
                 match run.assembler.ingest(&packet) {
                     Ok(event) => {
-                        if let (Some(watch), Some(exited)) = (run.watch.as_mut(), event.as_ref())
-                            && exited.tid == exited.pid
-                            && exited
-                                .fields
-                                .iter()
-                                .any(|field| field.key == "lifecycle.task_exit")
-                        {
-                            watch.exit(exited.pid, exited.timestamp_ns);
-                        }
-                        if run.assembler.just_finished
-                            && let (Some(watch), Some(done)) = (run.watch.as_mut(), event.as_ref())
-                        {
-                            watch.event(done.clone());
-                        }
+                        run.watch_event(event.as_ref());
                         note_guest_loss(&mut snapshot.health, event.as_ref());
                         if let Some(hash) = event.as_ref().and_then(launch_image_hash) {
                             self.analysis

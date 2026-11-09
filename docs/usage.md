@@ -314,7 +314,11 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    (1000), Nobody (65534, the unprivileged account every system has) or a custom
    UID and GID. Under **Dumps**, **Dump when suspicious activity is seen** has
    a **Minimum tier** of Low, Medium or High: the first finding at that tier or
-   above takes the dump. **Memory Dump on Exit** and **Core Dump on Exit** sit
+   above takes the dump. The trigger watches x86-64 and arm64 runs alike, 32-bit
+   programs (i386, AArch32) included. A run whose trigger took nothing says so in
+   its notes: either no rule of that tier matched while the program ran, or the
+   matches came too late (the process or the recording had ended), with the
+   reason. **Memory Dump on Exit** and **Core Dump on Exit** sit
    below the trigger's options in the same section. Each launch gets its own terminal
    window for input and output.
    On a VM with a desktop base, **Run in** picks where the program runs:

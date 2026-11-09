@@ -258,6 +258,19 @@ class PlanTests(unittest.TestCase):
         self.assertTrue(check.argv[-1].endswith("ia32-fixture-64"))
         self.assertNotIn("tracer-ia32", {c.name for c in vm.plan("full", self.ctx(), "arm64")})
 
+    def test_trigger_runs_the_native_and_32_bit_programs_on_both_architectures(self):
+        for arch in ("x86_64", "arm64"):
+            with self.subTest(arch=arch):
+                checks = {c.name: c for c in vm.plan("full", self.ctx(), arch)}
+                check = checks["trigger"]
+                self.assertEqual(check.group, "full")
+                self.assertTrue(check.argv[0].endswith("/trigger-check"))
+                self.assertEqual(check.argv[1:3], ["/base", "/out/runs/trigger"])
+                self.assertTrue(check.argv[3].endswith("/trigger-fixture"))
+                self.assertTrue(check.argv[4].endswith("/trigger-fixture-32"))
+                self.assertNotIn("trigger", {c.name for c in vm.plan("quick", self.ctx(), arch)})
+        self.assertEqual(vm.ARCH_CC32["arm64"], "arm-linux-gnueabihf-gcc")
+
     def test_interop_pairs_old_host_with_new_base_and_back(self):
         by_name = {c.name: c.argv for c in vm.plan("full", self.ctx())}
         self.assertTrue(by_name["io-old-new-p3"][0].startswith("/oldhost/"))

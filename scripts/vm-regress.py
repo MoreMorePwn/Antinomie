@@ -14,7 +14,8 @@ quick  the conformance trace suite's oracle groups (user, root, threads) and the
        a VM of the realistic desktop profile on a Routed network, whose card
        (at its machine's PCI slot; QEMU's igb at 00:0e.0 on arm64) must get a
        DHCP lease from the gateway
-full   quick, the debugger, audit, io_uring, tracer, stealth, cloud profiles, network routes and snapshot
+full   quick, the debugger, audit, io_uring, tracer, stealth, cloud profiles, network routes, snapshot
+       and dump trigger
        checks, the conformance stress groups and interop in both directions
        (an old host on BASE, the current host on OLD); conf-stress-contended
        passes with transport drops only when each is attributed to a gap in
@@ -118,6 +119,8 @@ ATTRIBUTED_GROUPS = {"conf-stress-contended": "stress-contended"}
 MEASURED_GROUPS = {"conf-stress-rate": "stress-rate"}
 # The compiler of each guest architecture's static fixtures.
 ARCH_CC = {"x86_64": "gcc", "arm64": "aarch64-linux-gnu-gcc"}
+# The compiler of a foreign architecture's 32-bit (compat) fixture, optional.
+ARCH_CC32 = {"arm64": "arm-linux-gnueabihf-gcc"}
 # Checks an arm64 tier does not plan, and why: the app's live debugger check
 # types x86-64 registers into GEF and pwndbg (debug-p2/p3 run the aarch64
 # fixtures through gdb-multiarch instead), the legacy checks need a base from
@@ -529,6 +532,11 @@ def plan_x86_64(tier, ctx):
         # A 95 MiB program analysed whole on a 2 GiB VM, refused on a 320 MiB one (two boots).
         Check("specimen", "full", example("specimen-check", base, runs / "specimen", fix / "specimen-probe"),
               str(ROOT), 3600, needs=("base",)),
+        # Dump on suspicious activity with the app's rules and call list: a core
+        # at High for a shell, a native and a 32-bit program, and the note of a
+        # trigger that never matched (ANT-T0426: never fired on arm64).
+        Check("trigger", "full", example("trigger-check", base, runs / "trigger", fix / "trigger-fixture",
+                                         fix / "trigger-fixture-32"), str(ROOT), 2400, needs=("base",)),
     ]
     # Old host on the new base runs the whole contract; the new host on an old base can only
     # run what that guest has: the legacy checks above (io_uring, tracer) and the audit core.
@@ -583,6 +591,7 @@ def build_fixtures(out, arch="x86_64"):
         (["-static", "-O2", *strict], "cloud-probe.c", fix / "cloud-probe"),
         (["-static", "-O2", *strict], "route-probe.c", fix / "route-probe"),
         (["-static", "-O2", *strict], "specimen-probe.c", fix / "specimen-probe"),
+        (["-static", "-O2", *strict], "trigger-fixture.c", fix / "trigger-fixture"),
         (["-O1", "-static", "-no-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2fix"),
         (["-O1", "-static-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2pie"),
         (["-O1", "-static", "-no-pie", "-pthread"], "debug-p3-fixture.c", fix / "debug/p3fix"),
@@ -614,6 +623,12 @@ def build_fixtures(out, arch="x86_64"):
                               str(TESTS / "ia32-fixture.c")], env, str(ROOT), log, 600)
         if code != 0:
             (fix / name).unlink(missing_ok=True)
+    # The trigger check's 32-bit program, by the same compiler; without it the
+    # check runs its other cases ("SKIP compat").
+    code, _ = run_logged([*ia32_cc, "-m32", "-static", "-O2", *strict, "-o", str(fix / "trigger-fixture-32"),
+                          str(TESTS / "trigger-fixture.c")], env, str(ROOT), log, 600)
+    if code != 0:
+        (fix / "trigger-fixture-32").unlink(missing_ok=True)
     stamp.write_text("built\n")
     return fix
 
@@ -642,6 +657,7 @@ def build_foreign_fixtures(out, arch):
         (["-static", "-O2", *strict], "cloud-probe.c", fix / "cloud-probe"),
         (["-static", "-O2", *strict], "route-probe.c", fix / "route-probe"),
         (["-static", "-O2", *strict], "specimen-probe.c", fix / "specimen-probe"),
+        (["-static", "-O2", *strict], "trigger-fixture.c", fix / "trigger-fixture"),
         (["-O1", "-static", "-pthread"], "debug-fixture.c", fix / "debug/fixture"),
         (["-O1", "-static", "-no-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2fix"),
         (["-O1", "-static-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2pie"),
@@ -652,6 +668,14 @@ def build_foreign_fixtures(out, arch):
         code, _ = run_logged([cc, *flags, "-o", str(target), str(TESTS / source)], env, str(ROOT), log, 600)
         if code != 0:
             raise Failure(f"building {source} for {arch} failed, see {log}")
+    # The trigger check's AArch32 program (ARCH_CC32); without the compiler the
+    # check runs its other cases ("SKIP compat").
+    cc32 = ARCH_CC32.get(arch)
+    if cc32 and shutil.which(cc32):
+        code, _ = run_logged([cc32, "-static", "-O2", *strict, "-o", str(fix / "trigger-fixture-32"),
+                              str(TESTS / "trigger-fixture.c")], env, str(ROOT), log, 600)
+        if code != 0:
+            (fix / "trigger-fixture-32").unlink(missing_ok=True)
     code, _ = run_logged([str(TESTS / "build-workload.sh"), str(fix), "--static"], env, str(ROOT), log, 1800)
     if code != 0:
         raise Failure(f"building the {arch} stress samples failed, see {log}")

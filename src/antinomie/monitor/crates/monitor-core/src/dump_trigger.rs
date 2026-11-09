@@ -282,24 +282,30 @@ pub(crate) struct Watch {
     /// When each process was last seen to exit, by thread group id, on the
     /// guest clock: says how late a dump was.
     exits: HashMap<u32, u64>,
+    /// The run is over and its notes say what the trigger did.
+    pub settled: bool,
 }
 
 impl Watch {
     pub(crate) fn new(plan: &DumpTrigger, keep: &[String]) -> Option<Self> {
         let factory = FACTORY.get()?;
-        Some(Self {
-            judge: factory(),
+        Some(Self::with_judge(factory(), plan, keep))
+    }
+
+    fn with_judge(judge: Box<dyn LiveJudge>, plan: &DumpTrigger, keep: &[String]) -> Self {
+        Self {
+            judge,
             plan: plan.clone(),
-            keep: keep
-                .iter()
-                .filter_map(|name| crate::syscalls::number(name))
-                .collect(),
+            // By id on every ABI: an arm64 run's events carry aarch64 and
+            // arm ids, which no x86-64 number matches.
+            keep: crate::syscalls::ids_on_every_abi(keep),
             pending: HashMap::new(),
             order: VecDeque::new(),
             queue: VecDeque::new(),
             lost: 0,
             exits: HashMap::new(),
-        })
+            settled: false,
+        }
     }
 
     /// The leader of thread group `pid` exited at `guest_ns`.
@@ -357,6 +363,16 @@ impl Watch {
         }
     }
 
+    /// Judge every entry still waiting for its exit: the run is over.
+    pub(crate) fn flush(&mut self) {
+        self.order.clear();
+        let mut entries: Vec<EventSummary> = self.pending.drain().map(|(_, entry)| entry).collect();
+        entries.sort_by_key(|entry| (entry.timestamp_ns, entry.call_id));
+        for entry in entries {
+            self.judge_events(&[entry]);
+        }
+    }
+
     fn judge_events(&mut self, events: &[EventSummary]) {
         for call in pair_events(events) {
             for finding in self.judge.judge(&call) {
@@ -372,3 +388,125 @@ impl Watch {
         }
     }
 }
+
+/// The note of a run whose trigger never matched: a trigger that was armed
+/// and stayed silent says so, so a run with no dump is not read as one whose
+/// trigger was off. None when the trigger did something (a dump, a match
+/// too late to dump, one over the budget, or one the queue lost).
+pub fn silent_note(plan: &DumpTrigger, log: Option<&TriggerLog>) -> Option<String> {
+    if log.is_some_and(|log| {
+        !log.records.is_empty() || !log.missed.is_empty() || log.skipped > 0 || log.lost > 0
+    }) {
+        return None;
+    }
+    let what = match (plan.memory, plan.core) {
+        (true, true) => "memory dump and core",
+        (true, false) => "memory dump",
+        _ => "core",
+    };
+    Some(format!(
+        "Dump trigger armed ({what} at {} or higher), but no rule of that tier matched while the program ran: no dump was taken.",
+        plan.min_tier.label()
+    ))
+}
+
+/// Feed recorded entries and exits to `judge` the way a run's live watch
+/// does, with the recorder's list of calls (`keep`, by name) as the filter, and
+/// return what the watch would hand the worker at `plan`'s tier. For tests
+/// and tools that check a judge against a recording of any architecture.
+#[doc(hidden)]
+pub fn replay(
+    judge: Box<dyn LiveJudge>,
+    plan: &DumpTrigger,
+    keep: &[String],
+    events: impl IntoIterator<Item = EventSummary>,
+) -> Vec<LiveFinding> {
+    let mut watch = Watch::with_judge(judge, plan, keep);
+    let mut found = Vec::new();
+    for event in events {
+        watch.event(event);
+        found.extend(watch.queue.drain(..));
+    }
+    watch.flush();
+    found.extend(watch.queue.drain(..));
+    found
+}
+
+/// The words for matches the recording ended on before they could be acted on.
+pub(crate) const RECORDING_ENDED: &str = "The recording ended before the dump could be taken.";
+
+impl crate::run::ProgramRun {
+    /// Hand the run's live watch what the assembler just returned: a process
+    /// exit, and an entry or exit once it is whole. Telemetry that came before
+    /// the launch was acknowledged goes through here as well as live packets.
+    pub(crate) fn watch_event(&mut self, event: Option<&EventSummary>) {
+        let (Some(watch), Some(event)) = (self.watch.as_mut(), event) else {
+            return;
+        };
+        if event.tid == event.pid
+            && event
+                .fields
+                .iter()
+                .any(|field| field.key == "lifecycle.task_exit")
+        {
+            watch.exit(event.pid, event.timestamp_ns);
+        }
+        if self.assembler.just_finished {
+            watch.event(event.clone());
+        }
+    }
+
+    /// Once the run is over, say in its notes what its dump trigger did when
+    /// it took nothing: matches the recording ended on are kept as misses,
+    /// and a trigger that never matched says so. Once per run; true when the
+    /// summary changed.
+    pub(crate) fn settle_trigger(&mut self) -> bool {
+        let Some(watch) = self.watch.as_mut() else {
+            return false;
+        };
+        if watch.settled {
+            return false;
+        }
+        watch.settled = true;
+        watch.flush();
+        let late: Vec<LiveFinding> = watch.queue.drain(..).collect();
+        let lost = std::mem::take(&mut watch.lost);
+        let Some(plan) = self.summary.request.dump_trigger.clone() else {
+            return false;
+        };
+        if !late.is_empty() || lost > 0 {
+            let at_ms = crate::disks::unix_ms();
+            let log = self
+                .summary
+                .triggers
+                .get_or_insert_with(TriggerLog::default);
+            log.lost += lost;
+            let count = late.len() as u64 + lost;
+            for finding in late {
+                if log.missed.len() < RECORDS_MAX {
+                    log.missed.push(TriggerMiss {
+                        at_ms,
+                        finding,
+                        reason: RECORDING_ENDED.into(),
+                    });
+                }
+            }
+            self.add_note(format!(
+                "Dump trigger: {count} match{} came as the recording ended; no dump was taken.",
+                if count == 1 { "" } else { "es" }
+            ));
+            return true;
+        }
+        match silent_note(&plan, self.summary.triggers.as_ref()) {
+            Some(note) => {
+                self.add_note(note);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "dump_trigger_tests.rs"]
+mod arch_tests;

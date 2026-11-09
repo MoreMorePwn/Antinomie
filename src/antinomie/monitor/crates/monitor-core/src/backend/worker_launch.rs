@@ -618,6 +618,9 @@ impl Worker {
             );
             match run.assembler.ingest(&packet) {
                 Ok(event) => {
+                    // The dump trigger judges these calls too: a fast program
+                    // makes its first calls before the launch is acknowledged.
+                    run.watch_event(event.as_ref());
                     if let Some(hash) = event.as_ref().and_then(launch_image_hash) {
                         session
                             .analysis

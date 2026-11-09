@@ -16,7 +16,7 @@ pub mod arch;
 mod ids;
 pub mod scalars;
 pub use arch::{Constants, DataModel, Endian};
-pub use ids::{id, untabled_id, wire_number};
+pub use ids::{id, ids_on_every_abi, untabled_id, wire_number};
 
 #[derive(Debug, Deserialize)]
 pub struct ArgumentInfo {
