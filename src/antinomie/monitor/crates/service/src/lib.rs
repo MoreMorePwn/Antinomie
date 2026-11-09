@@ -17,6 +17,8 @@ pub const API_VERSION: u32 = 1;
 
 /// `JobApi`, the job objects, events and errors (cards P3-1 and later).
 pub mod api;
+/// The service log's line for a sensitive read (design 5.12.7).
+pub mod audit;
 /// Time and ids behind small seams.
 pub mod clock;
 /// `service.toml`, `policies/*.toml` and `config validate` (card P3-3).

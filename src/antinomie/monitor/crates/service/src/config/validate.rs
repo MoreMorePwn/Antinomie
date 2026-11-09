@@ -185,6 +185,9 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     if config.retention.jobs_days == 0 || config.retention.recordings_days == 0 {
         sink.error("retention", "the retention periods must be at least 1 day");
     }
+    if config.inbox.processed_keep_days == 0 {
+        sink.error("inbox.processed_keep_days", "must be at least 1 day");
+    }
     let mut watched = Vec::new();
     for (index, watch) in config.inbox.watch.iter().enumerate() {
         let key = |name: &str| format!("inbox.watch.{index}.{name}");

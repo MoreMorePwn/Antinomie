@@ -306,6 +306,9 @@ impl QueryService {
             len: bytes.len() as u64,
             data_b64: base64(&bytes),
         };
+        if entry.kind.sensitive() {
+            self.audit_read(ctx, "recording.artifact.get", &params.run_key, reply.len);
+        }
         Ok(opened.single(reply, entry.kind != RecordingArtifactKind::NetworkCapture))
     }
 

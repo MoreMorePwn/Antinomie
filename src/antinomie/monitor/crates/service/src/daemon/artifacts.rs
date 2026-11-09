@@ -102,13 +102,25 @@ fn served(
     }
     let path = resolve(&service.store.job_dir(&artifact.job_id), location)?;
     let mut out = json!({ "artifact": to_value(&artifact)?, "path": path });
+    let mut served = if range.is_some() { 0 } else { artifact.size };
     if let Some(range) = range {
         let bytes = read_range(&path, range, artifact.size)?;
+        served = bytes.len() as u64;
         out["range"] = json!({
             "offset": range.offset,
             "len": bytes.len(),
             "data": b64::encode(&bytes),
         });
+    }
+    if artifact.sensitive {
+        crate::audit::record(
+            Some(&service.log),
+            &caller.client_id,
+            "artifact.get",
+            "job",
+            artifact.job_id.as_str(),
+            served,
+        );
     }
     Ok(out)
 }

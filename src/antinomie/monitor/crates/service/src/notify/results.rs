@@ -7,33 +7,39 @@
 //! consumer never sees half of it. Only reports that are not sensitive are
 //! copied (never the evidence bundle, a capture, a dump or a core), each read
 //! through the same containment check as `artifact.get`, from a no-follow
-//! open. A drop that exists is left as it is. Files and folders are private
-//! (0600, 0700): the consumer is the daemon's user, or the administrator
-//! gives it access to `dir` itself.
+//! open. A drop that exists is left as it is. By default files and folders are
+//! private (0600, 0700): the consumer is the daemon's user, or the
+//! administrator gives it access to `dir` itself. `[results] mode = "group"`
+//! makes them 0640 and 0750 so the daemon's group can read them; nothing is
+//! ever writable by others, and the umask cannot widen either mode.
 
 use super::calendar::date_of;
 use crate::{
     api::{artifact::ArtifactKind, job::Job},
+    config::service::ResultsMode,
     daemon::artifacts::resolve,
     store::{Store, mirror::write_private},
 };
 use std::{
     fs::{self, File},
     io::{self, Read, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
 /// Most bytes one drop copies (reports are small; this is a safety bound).
 pub const MAX_DROP_BYTES: u64 = 256 << 20;
 
-fn private_dir(path: &Path) -> io::Result<()> {
-    fs::DirBuilder::new().mode(0o700).create(path)
+/// Make a folder with exactly `mode` (the umask is not allowed to narrow a
+/// group-readable folder into one the consumer cannot enter).
+fn made_dir(path: &Path, mode: u32) -> io::Result<()> {
+    fs::DirBuilder::new().mode(mode).create(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
 }
 
 /// A folder that exists as a plain folder (a link is refused), made if it is
 /// missing.
-fn plain_dir(path: &Path) -> io::Result<()> {
+fn plain_dir(path: &Path, mode: u32) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.is_dir() => Ok(()),
         Ok(_) => Err(io::Error::other(format!(
@@ -44,10 +50,10 @@ fn plain_dir(path: &Path) -> io::Result<()> {
             if let Some(parent) = path.parent() {
                 fs::DirBuilder::new()
                     .recursive(true)
-                    .mode(0o700)
+                    .mode(mode)
                     .create(parent)?;
             }
-            private_dir(path)
+            made_dir(path, mode)
         }
         Err(error) => Err(error),
     }
@@ -95,10 +101,16 @@ pub fn drop_name(job: &Job) -> String {
 }
 
 /// Write the drop of `job`. Returns its folder.
-pub fn write(store: &Store, job: &Job, root: &Path, now_ms: u64) -> Result<PathBuf, String> {
-    plain_dir(root).map_err(|e| format!("{}: {e}", root.display()))?;
+pub fn write(
+    store: &Store,
+    job: &Job,
+    root: &Path,
+    mode: ResultsMode,
+    now_ms: u64,
+) -> Result<PathBuf, String> {
+    plain_dir(root, mode.dir_mode()).map_err(|e| format!("{}: {e}", root.display()))?;
     let day = root.join(date_of(job.finished_ms.unwrap_or(now_ms)));
-    plain_dir(&day).map_err(|e| format!("{}: {e}", day.display()))?;
+    plain_dir(&day, mode.dir_mode()).map_err(|e| format!("{}: {e}", day.display()))?;
     let name = drop_name(job);
     let target = day.join(&name);
     if fs::symlink_metadata(&target).is_ok() {
@@ -111,8 +123,8 @@ pub fn write(store: &Store, job: &Job, root: &Path, now_ms: u64) -> Result<PathB
         // Left by a drop that was cut short: ours, by its hidden name.
         let _ = fs::remove_dir_all(&staging);
     }
-    private_dir(&staging).map_err(|e| format!("{}: {e}", staging.display()))?;
-    let outcome = fill(store, job, &staging);
+    made_dir(&staging, mode.dir_mode()).map_err(|e| format!("{}: {e}", staging.display()))?;
+    let outcome = fill(store, job, &staging, mode);
     if let Err(error) = outcome {
         let _ = fs::remove_dir_all(&staging);
         return Err(error);
@@ -124,10 +136,13 @@ pub fn write(store: &Store, job: &Job, root: &Path, now_ms: u64) -> Result<PathB
     Ok(target)
 }
 
-fn fill(store: &Store, job: &Job, staging: &Path) -> Result<(), String> {
+fn fill(store: &Store, job: &Job, staging: &Path, mode: ResultsMode) -> Result<(), String> {
     let job_dir = store.job_dir(&job.id);
     let json = serde_json::to_vec_pretty(job).map_err(|e| e.to_string())?;
-    write_private(&staging.join("job.json"), &json).map_err(|e| format!("job.json: {e}"))?;
+    let job_json = staging.join("job.json");
+    write_private(&job_json, &json).map_err(|e| format!("job.json: {e}"))?;
+    fs::set_permissions(&job_json, fs::Permissions::from_mode(mode.file_mode()))
+        .map_err(|e| format!("job.json: {e}"))?;
     let mut copied = json.len() as u64;
     for artifact in &job.artifacts {
         if !report_kind(artifact.kind) || artifact.sensitive {
@@ -154,8 +169,11 @@ fn fill(store: &Store, job: &Job, staging: &Path) -> Result<(), String> {
         let mut output = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o600)
+            .mode(mode.file_mode())
             .open(staging.join(safe_name(&artifact.name)))
+            .map_err(|e| format!("artifact {}: {e}", artifact.name))?;
+        output
+            .set_permissions(fs::Permissions::from_mode(mode.file_mode()))
             .map_err(|e| format!("artifact {}: {e}", artifact.name))?;
         copy_exact(&mut input, &mut output, meta.len())
             .map_err(|e| format!("artifact {}: {e}", artifact.name))?;

@@ -3,13 +3,14 @@
 //! on the library directly and need no engine lock, so they run beside a
 //! window or a daemon. Results use the `Sample` object of design 5.4.7.
 //!
-//! `list`, `show` and `tag` go to the daemon when one answers at the socket
-//! (`sample.list`, `sample.get`, `sample.tag`) and run the same library code
-//! in this process otherwise. `add`, `verify` and `remove` stay in this
-//! process: `add` reads files by path and `--delete-original` deletes one,
-//! which the daemon never does for a client.
+//! `add`, `list`, `show` and `tag` go to the daemon when one answers at the
+//! socket (`sample.list`, `sample.get`, `sample.tag`; `add` uploads the file,
+//! then calls `sample.add`) and run the same library code in this process
+//! otherwise. `verify` and `remove` stay in this process: they work on
+//! archives. `add --delete-original` deletes the file in the CLI, after the
+//! daemon reported the same SHA-256.
 use super::{
-    auto::link,
+    auto::{link, submit::upload},
     library::{library_error, open_existing, open_for_write, parse_sha256},
 };
 use crate::{
@@ -114,7 +115,7 @@ pub struct TagArgs {
 pub fn run(sample: &Sample, context: &Context) -> Result<Reply, CliError> {
     let data = context.data_dir();
     match sample {
-        Sample::Add(arguments) => add(arguments, open_for_write(data)?),
+        Sample::Add(arguments) => add(arguments, context),
         Sample::List(arguments) => list(arguments, context),
         Sample::Show(arguments) => show(arguments, context),
         Sample::Tag(arguments) => match link::daemon(context)? {
@@ -151,7 +152,9 @@ fn tag_value(tag: &Tag) -> Value {
     json!({"kind": tag.kind, "value": tag.value})
 }
 
-fn add(arguments: &Add, mut library: Library) -> Result<Reply, CliError> {
+/// `sample add`: through the daemon (an upload, then `sample.add`) when one
+/// answers at the socket, else straight into the library in this process.
+fn add(arguments: &Add, context: &Context) -> Result<Reply, CliError> {
     if arguments.name.is_some() && arguments.files.len() > 1 {
         return Err(CliError::invalid("--name names one sample; give one file").with_field("name"));
     }
@@ -160,18 +163,52 @@ fn add(arguments: &Add, mut library: Library) -> Result<Reply, CliError> {
         .iter()
         .map(|text| parse_tag(text))
         .collect::<Result<_, _>>()?;
+    let mut adder = match link::daemon(context)? {
+        Some(client) => Adder::Daemon(Box::new(client)),
+        None => Adder::Library(Box::new(open_for_write(context.data_dir())?)),
+    };
     let mut items = Vec::new();
     let mut failures = 0;
     let mut first_failure: Option<CliError> = None;
     for path in &arguments.files {
-        let new = NewSample {
-            name: arguments.name.clone().unwrap_or_default(),
-            tags: tags.clone(),
-            origin: NewOrigin::default(),
-            ..Default::default()
-        };
-        match library.add_file(path, new, arguments.delete_original) {
-            Ok(added) => {
+        match adder.add(path, arguments, &tags, context) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                failures += 1;
+                items.push(json!({"path": path, "ok": false, "error": error.to_value()}));
+                first_failure.get_or_insert(error);
+            }
+        }
+    }
+    render_added(items, failures, first_failure)
+}
+
+/// Where `sample add` puts a file.
+enum Adder {
+    Library(Box<Library>),
+    Daemon(Box<antinomie_service::server::client::Client>),
+}
+
+impl Adder {
+    /// One file: the item the command prints for it.
+    fn add(
+        &mut self,
+        path: &PathBuf,
+        arguments: &Add,
+        tags: &[Tag],
+        context: &Context,
+    ) -> Result<Value, CliError> {
+        match self {
+            Self::Library(library) => {
+                let new = NewSample {
+                    name: arguments.name.clone().unwrap_or_default(),
+                    tags: tags.to_vec(),
+                    origin: NewOrigin::default(),
+                    ..Default::default()
+                };
+                let added = library
+                    .add_file(path, new, arguments.delete_original)
+                    .map_err(library_error)?;
                 let record = library.get(&added.sha256).map_err(library_error)?;
                 let mut item =
                     json!({"path": path, "ok": true, "sha256": added.sha256, "new": added.new});
@@ -180,16 +217,38 @@ fn add(arguments: &Add, mut library: Library) -> Result<Reply, CliError> {
                     item["size"] = record.size.into();
                     item["type"] = record.file_type.to_ascii_lowercase().into();
                 }
-                items.push(item);
+                Ok(item)
             }
-            Err(message) => {
-                failures += 1;
-                let error = library_error(message);
-                items.push(json!({"path": path, "ok": false, "error": error.to_value()}));
-                first_failure.get_or_insert(error);
+            Self::Daemon(client) => {
+                // The daemon opens no file a client names: the file goes up
+                // as an upload (hashed here and checked there), then is added.
+                let (id, sha256) = upload(client, path, context)?;
+                let mut params = json!({"sample": {"upload_id": id}});
+                if let Some(name) = &arguments.name {
+                    params["name"] = json!(name);
+                }
+                if !tags.is_empty() {
+                    params["tags"] = tags.iter().map(tag_value).collect();
+                }
+                let sample = link::call(client, "sample.add", params)?;
+                if arguments.delete_original && sample["sha256"].as_str() == Some(sha256.as_str()) {
+                    std::fs::remove_file(path).map_err(|e| CliError::io(path, &e))?;
+                }
+                Ok(json!({
+                    "path": path, "ok": true, "sha256": sample["sha256"],
+                    "new": sample["new"], "name": sample["name"],
+                    "size": sample["size"], "type": sample["type"],
+                }))
             }
         }
     }
+}
+
+fn render_added(
+    items: Vec<Value>,
+    failures: usize,
+    first_failure: Option<CliError>,
+) -> Result<Reply, CliError> {
     let rows: Vec<Vec<String>> = items
         .iter()
         .map(|item| {

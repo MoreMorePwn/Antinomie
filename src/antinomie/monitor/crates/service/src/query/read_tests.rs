@@ -1704,3 +1704,63 @@ fn reads_stay_consistent_while_a_writer_appends_to_the_trace() {
     assert_eq!(all.total, Some(25));
     eprintln!("growing fixture: {stale} stale walks, {complete_walks} complete walks");
 }
+
+#[test]
+fn sensitive_reads_are_logged_by_the_service_with_caller_run_and_size_never_the_bytes() {
+    let data = Data::new("audit");
+    let run = standard(&data);
+    let key = run.key();
+    let lines = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = Arc::clone(&lines);
+    let service = data.service().with_audit(Arc::new(move |line: &str| {
+        sink.lock().unwrap().push(line.to_owned())
+    }));
+    let single = reply!(
+        call(
+            &service,
+            "recording.trace.get",
+            json!({"run_key": key, "ref": {"stream": "9", "task": "10", "call": "2"}}),
+            &ctx()
+        ),
+        Invocation
+    );
+    let field = json_of(&single.value.unwrap())["entry"]["fields"][0]["field"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The rows, a refused read and a read of nothing leave no line.
+    call(
+        &service,
+        "recording.captured.read",
+        json!({"run_key": key, "field": field, "offset": "0", "len": 4}),
+        &plain_ctx(),
+    )
+    .unwrap_err();
+    assert!(lines.lock().unwrap().is_empty());
+    reply!(
+        call(
+            &service,
+            "recording.captured.read",
+            json!({"run_key": key, "field": field, "offset": "0", "len": 11}),
+            &ctx()
+        ),
+        Bytes
+    );
+    let (vm, boot, id) = key.parts();
+    let seen = lines.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(
+        seen[0].starts_with("sensitive read: caller="),
+        "{}",
+        seen[0]
+    );
+    assert!(
+        seen[0].ends_with(&format!(
+            " op=recording.captured.read run={vm}:{boot}:{id} size=11"
+        )),
+        "{}",
+        seen[0]
+    );
+    // The bytes (/etc/passwd) are not in the line, plain or encoded.
+    assert!(!seen[0].contains("passwd") && !seen[0].contains("L2V0Yy9wYXNzd2Q"));
+}

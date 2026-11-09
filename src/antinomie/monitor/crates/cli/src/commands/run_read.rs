@@ -38,6 +38,25 @@ pub const TRIAGE_PARTS: [&str; 5] = ["findings", "indicators", "files", "network
 
 /// Bytes of one file version or artifact an export fetches.
 const BYTES_CAP: u64 = 64 << 20;
+/// What `--sensitive` fetches besides: the captured argument bytes of calls
+/// (fields and bytes in all) and the frames of the captures (packets in all).
+/// An export that reaches a cap says so in its file list (`truncated`).
+const CAPTURED_FIELDS_CAP: usize = 10_000;
+const CAPTURED_BYTES_CAP: u64 = 256 << 20;
+const PACKETS_CAP: usize = 100_000;
+/// `recording.captured.read` returns at most this many bytes per call.
+const CAPTURED_CHUNK: u64 = 64 << 10;
+
+/// What an export asks of the query API: the CLI's client, or a fake in a test.
+trait Reads {
+    fn call(&self, op: &str, params: Value) -> Result<Value, CliError>;
+}
+
+impl Reads for Client<'_> {
+    fn call(&self, op: &str, params: Value) -> Result<Value, CliError> {
+        Client::call(self, op, params)
+    }
+}
 
 #[derive(Args, Debug)]
 pub struct List {
@@ -83,8 +102,11 @@ pub struct Export {
     /// Default: all but the bytes of sensitive evidence.
     #[arg(long, value_delimiter = ',', value_name = "LIST")]
     pub part: Vec<String>,
-    /// Also write the bytes the sample produced: captured packets, memory and
-    /// core dumps, file copies and the contents of changed files.
+    /// Also write the bytes the sample produced: the frames of the recorded
+    /// packets (part network), the captured bytes of calls (part trace), the
+    /// capture, memory and core files and file copies (part artifacts) and the
+    /// contents of changed files (part files). With a daemon each read is
+    /// written to its service log.
     #[arg(long)]
     pub sensitive: bool,
     /// Leave out the parts that need the Triage index (findings, indicators,
@@ -306,7 +328,7 @@ fn safe_name(name: &str) -> String {
 
 /// Every page of an operation, as the items.
 fn all_pages(
-    client: &Client<'_>,
+    client: &dyn Reads,
     op: &str,
     params: Value,
     partial: &mut bool,
@@ -345,7 +367,7 @@ fn all_pages(
 }
 
 /// The bytes of a ranged read, in calls of at most 1 MiB.
-fn ranged(client: &Client<'_>, op: &str, params: &Value, size: u64) -> Result<Vec<u8>, CliError> {
+fn ranged(client: &dyn Reads, op: &str, params: &Value, size: u64) -> Result<Vec<u8>, CliError> {
     use base64_lite::decode;
     let mut data = Vec::new();
     let mut offset = 0u64;
@@ -474,7 +496,7 @@ pub fn export(arguments: &Export, context: &Context) -> Result<Reply, CliError> 
 /// The files of one part.
 fn export_part(
     part: &str,
-    client: &Client<'_>,
+    client: &dyn Reads,
     run: &Value,
     sensitive: bool,
     out: &mut Out,
@@ -487,13 +509,16 @@ fn export_part(
         }
         params
     };
-    let mut rows = |client: &Client<'_>, op: &str, params: Value| -> Result<Vec<Value>, CliError> {
+    let mut rows = |client: &dyn Reads, op: &str, params: Value| -> Result<Vec<Value>, CliError> {
         all_pages(client, op, params, partial)
     };
     match part {
         "trace" => {
             let items = rows(client, "recording.trace.page", run.clone())?;
             out.lines("trace.ndjson", &items)?;
+            if sensitive {
+                export_captured(client, run, &items, out)?;
+            }
         }
         "processes" => {
             let items = rows(client, "recording.process.tree", run.clone())?;
@@ -542,6 +567,9 @@ fn export_part(
                 }
                 Err(error) if error.code == ErrorCode::NotFound => {}
                 Err(error) => return Err(error),
+            }
+            if sensitive {
+                export_packets(client, run, out, partial)?;
             }
         }
         "timeline" => {
@@ -603,9 +631,161 @@ fn export_part(
     Ok(())
 }
 
+/// The captured argument bytes of the calls (`--sensitive`, part `trace`):
+/// one file `captured/<stream>-<task>-<call>-e<event>-<key>` per field and
+/// `captured.ndjson` naming each. Only calls whose row shows captured bytes
+/// are opened. The bytes are fetched with `recording.captured.read`, which
+/// the daemon checks and logs as a sensitive read.
+fn export_captured(
+    reads: &dyn Reads,
+    run: &Value,
+    rows: &[Value],
+    out: &mut Out,
+) -> Result<(), CliError> {
+    let (mut fields, mut total, mut truncated) = (0usize, 0u64, false);
+    let mut index = Vec::new();
+    'rows: for row in rows {
+        let shows_bytes = row["args_preview"].as_array().is_some_and(|args| {
+            args.iter()
+                .any(|a| a["captured_len"].as_u64().unwrap_or(0) > 0)
+        });
+        if !shows_bytes {
+            continue;
+        }
+        let mut request = run.clone();
+        request["ref"] = row["ref"].clone();
+        let call = match reads.call("recording.trace.get", request) {
+            Ok(call) => call,
+            Err(error) if error.code == ErrorCode::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        let invocation = &call["value"];
+        let mut events: Vec<&Value> = ["entry", "exit", "task_exit"]
+            .iter()
+            .map(|name| &invocation[*name])
+            .filter(|event| event.is_object())
+            .collect();
+        for list in ["async_events", "kernel_notes"] {
+            events.extend(invocation[list].as_array().into_iter().flatten());
+        }
+        for event in events {
+            for field in event["fields"].as_array().into_iter().flatten() {
+                let size = field["captured_len"].as_u64().unwrap_or(0);
+                if size == 0 {
+                    continue;
+                }
+                if fields >= CAPTURED_FIELDS_CAP || total >= CAPTURED_BYTES_CAP {
+                    truncated = true;
+                    break 'rows;
+                }
+                let mut data = Vec::new();
+                while (data.len() as u64) < size.min(CAPTURED_BYTES_CAP - total) {
+                    let want = (size - data.len() as u64).min(CAPTURED_CHUNK);
+                    let mut request = run.clone();
+                    request["field"] = field["field"].clone();
+                    request["offset"] = json!(data.len().to_string());
+                    request["len"] = json!(want);
+                    let reply = reads.call("recording.captured.read", request)?;
+                    let chunk = base64_lite::decode(
+                        reply["value"]["data_b64"].as_str().unwrap_or_default(),
+                    );
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    data.extend(chunk);
+                }
+                let name = format!(
+                    "captured/{}-{}-{}-e{}-{}",
+                    text(&row["ref"]["stream"]),
+                    text(&row["ref"]["task"]),
+                    text(&row["ref"]["call"]),
+                    text(&event["event_seq"]),
+                    safe_name(&text(&field["key"]))
+                );
+                out.bytes(&name, &data)?;
+                total += data.len() as u64;
+                fields += 1;
+                index.push(json!({
+                    "ref": row["ref"], "event_seq": event["event_seq"], "key": field["key"],
+                    "arg": field["arg"], "layout": field["layout"],
+                    "captured_len": field["captured_len"], "complete": field["complete"],
+                    "file": name, "bytes": data.len(),
+                }));
+            }
+        }
+    }
+    if !index.is_empty() || truncated {
+        out.lines("captured.ndjson", &index)?;
+        if truncated && let Some(last) = out.files.last_mut() {
+            last["truncated"] = json!(true);
+        }
+    }
+    Ok(())
+}
+
+/// The frames of the captures (`--sensitive`, part `network`): one file
+/// `network-packets-<capture>.ndjson` per capture, a line `{n, frame_len,
+/// bytes_b64}` per packet, fetched with `recording.network.packet`.
+fn export_packets(
+    reads: &dyn Reads,
+    run: &Value,
+    out: &mut Out,
+    partial: &mut bool,
+) -> Result<(), CliError> {
+    let captures = match reads.call("recording.network.captures", run.clone()) {
+        Ok(page) => page["items"].as_array().cloned().unwrap_or_default(),
+        Err(error) if error.code == ErrorCode::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let mut count = 0usize;
+    for capture in &captures {
+        let id = text(&capture["capture_id"]);
+        let mut params = run.clone();
+        params["capture_id"] = json!(id);
+        let listed = all_pages(reads, "recording.network.packets", params, partial)?;
+        let mut lines = Vec::new();
+        let mut truncated = false;
+        for packet in &listed {
+            if count >= PACKETS_CAP {
+                truncated = true;
+                break;
+            }
+            let mut request = run.clone();
+            request["capture_id"] = json!(id);
+            request["n"] = packet["n"].clone();
+            let reply = reads.call("recording.network.packet", request)?;
+            let detail = &reply["value"];
+            lines.push(json!({
+                "n": packet["n"],
+                "frame_len": detail["frame_len"],
+                "bytes_b64": detail["bytes"],
+            }));
+            count += 1;
+        }
+        // The id is the service's, but it is still only ever a file name.
+        let flat: String = id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .take(64)
+            .collect();
+        let name = format!("network-packets-{flat}.ndjson");
+        out.lines(&name, &lines)?;
+        if truncated && let Some(last) = out.files.last_mut() {
+            last["truncated"] = json!(true);
+        }
+    }
+    Ok(())
+}
+
 /// The contents of the changed files whose versions are available.
 fn export_file_contents(
-    client: &Client<'_>,
+    client: &dyn Reads,
     run: &Value,
     changed: &[Value],
     out: &mut Out,
@@ -677,6 +857,147 @@ mod tests {
         assert_eq!(safe_name(".."), "file");
         assert_eq!(safe_name("a b$c"), "a_b_c");
         assert_eq!(safe_name(""), "file");
+    }
+
+    /// Answers from a script and remembers what was asked.
+    struct Fake {
+        asked: std::cell::RefCell<Vec<(String, Value)>>,
+    }
+
+    impl Reads for Fake {
+        fn call(&self, op: &str, params: Value) -> Result<Value, CliError> {
+            self.asked
+                .borrow_mut()
+                .push((op.to_owned(), params.clone()));
+            let b64 = |bytes: &[u8]| {
+                const A: &[u8; 64] =
+                    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                let mut out = String::new();
+                for chunk in bytes.chunks(3) {
+                    let n = chunk
+                        .iter()
+                        .enumerate()
+                        .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+                    for i in 0..4 {
+                        if i <= chunk.len() {
+                            out.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
+                        } else {
+                            out.push('=');
+                        }
+                    }
+                }
+                out
+            };
+            Ok(match op {
+                "recording.trace.get" => json!({"value": {
+                    "ref": params["ref"],
+                    "entry": {"event_seq": "7", "fields": [
+                        {"field": "obj:path", "key": "path", "arg": 0, "layout": "cstring",
+                         "captured_len": 150000, "complete": true},
+                        {"field": "obj:none", "key": "none", "captured_len": 0}
+                    ]},
+                    "exit": null, "task_exit": null,
+                    "async_events": [], "kernel_notes": []
+                }}),
+                "recording.captured.read" => {
+                    let offset: usize = params["offset"].as_str().unwrap().parse().unwrap();
+                    let len = params["len"].as_u64().unwrap() as usize;
+                    // The read size is the service's: 64 KiB at most.
+                    assert!(len <= 65536, "{len}");
+                    let bytes: Vec<u8> = (offset..offset + len).map(|i| (i % 251) as u8).collect();
+                    json!({"value": {"offset": offset.to_string(), "len": len, "data_b64": b64(&bytes)}})
+                }
+                "recording.network.captures" => json!({"items": [{"capture_id": "cap/1"}]}),
+                "recording.network.packets" => {
+                    json!({"items": [{"n": 1}, {"n": 2}, {"n": 3}], "next_cursor": null})
+                }
+                "recording.network.packet" => {
+                    let n = params["n"].as_u64().unwrap() as u8;
+                    json!({"value": {"n": n, "frame_len": 3, "bytes": b64(&[n, n, n])}})
+                }
+                other => panic!("unexpected {other}"),
+            })
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ant-t421-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn captured_call_bytes_are_read_in_chunks_and_written_under_out() {
+        let dir = scratch("captured");
+        let fake = Fake {
+            asked: Default::default(),
+        };
+        let mut out = Out {
+            root: dir.clone(),
+            files: Vec::new(),
+        };
+        let run = json!({"run_key": "k"});
+        let rows = vec![
+            json!({"ref": {"stream": "1", "task": "2", "call": "3"},
+                   "args_preview": [{"key": "path", "captured_len": 150000}]}),
+            // No captured bytes in the row: the call is not even opened.
+            json!({"ref": {"stream": "1", "task": "2", "call": "4"},
+                   "args_preview": [{"key": "fd", "captured_len": 0}]}),
+        ];
+        export_captured(&fake, &run, &rows, &mut out).unwrap();
+        let data = fs::read(dir.join("captured/1-2-3-e7-path")).unwrap();
+        assert_eq!(data.len(), 150_000);
+        assert!(data.iter().enumerate().all(|(i, b)| *b == (i % 251) as u8));
+        let asked = fake.asked.borrow();
+        assert_eq!(
+            asked
+                .iter()
+                .filter(|(op, _)| op == "recording.trace.get")
+                .count(),
+            1
+        );
+        assert_eq!(
+            asked
+                .iter()
+                .filter(|(op, _)| op == "recording.captured.read")
+                .count(),
+            3,
+            "150000 bytes at 64 KiB a read"
+        );
+        let index = fs::read_to_string(dir.join("captured.ndjson")).unwrap();
+        assert!(index.contains("captured/1-2-3-e7-path") && index.contains("150000"));
+        assert_eq!(out.files.len(), 2);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn packet_frames_are_written_one_line_each_per_capture() {
+        let dir = scratch("packets");
+        let fake = Fake {
+            asked: Default::default(),
+        };
+        let mut out = Out {
+            root: dir.clone(),
+            files: Vec::new(),
+        };
+        let mut partial = false;
+        export_packets(&fake, &json!({"run_key": "k"}), &mut out, &mut partial).unwrap();
+        // The capture id is made safe as a file name.
+        let text = fs::read_to_string(dir.join("network-packets-cap_1.ndjson")).unwrap();
+        let lines: Vec<Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1]["n"], 2);
+        assert_eq!(lines[1]["frame_len"], 3);
+        assert_eq!(
+            base64_lite::decode(lines[2]["bytes_b64"].as_str().unwrap()),
+            [3, 3, 3]
+        );
+        assert!(out.files[0].get("truncated").is_none());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

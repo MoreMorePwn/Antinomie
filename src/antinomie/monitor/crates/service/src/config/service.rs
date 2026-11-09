@@ -120,12 +120,25 @@ fn default_watch_rate() -> u32 {
     10
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Inbox {
     /// Default `<data>/inbox`.
     pub dir: Option<PathBuf>,
     pub watch: Vec<Watch>,
+    /// Days the files of `inbox/processed/` stay before retention removes
+    /// them (default 7).
+    pub processed_keep_days: u32,
+}
+
+impl Default for Inbox {
+    fn default() -> Self {
+        Self {
+            dir: None,
+            watch: Vec::new(),
+            processed_keep_days: 7,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,10 +180,38 @@ impl Default for Retention {
     }
 }
 
+/// Who may read the result drops (`[results] mode`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultsMode {
+    /// Files 0600, folders 0700: the daemon's user only.
+    #[default]
+    Private,
+    /// Files 0640, folders 0750: the daemon's group may read.
+    Group,
+}
+
+impl ResultsMode {
+    pub fn file_mode(self) -> u32 {
+        match self {
+            Self::Private => 0o600,
+            Self::Group => 0o640,
+        }
+    }
+
+    pub fn dir_mode(self) -> u32 {
+        match self {
+            Self::Private => 0o700,
+            Self::Group => 0o750,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Results {
     pub dir: Option<PathBuf>,
+    pub mode: ResultsMode,
 }
 
 /// Reserved: live routes are not in v1 (decided D6); the key is parsed and
