@@ -529,6 +529,26 @@ fn compat_result(result: i64) -> i64 {
     }
 }
 
+/// The host syscall id of a record of a guest whose native ABI is `native`
+/// (see [`Assembler::syscall_id`]), and whether its ABI is one the tables decode.
+pub(crate) fn host_syscall_id(native: crate::syscalls::Abi, h: &Header) -> u64 {
+    match native {
+        abi if h.abi == ANT_ABI_COMPAT
+            && let Some(compat) = abi.compat() =>
+        {
+            crate::syscalls::id(compat, h.syscall_nr)
+        }
+        crate::syscalls::Abi::X86_64 => h.syscall_nr,
+        abi if h.abi == ANT_ABI_NATIVE => crate::syscalls::id(abi, h.syscall_nr),
+        _ => crate::syscalls::untabled_id(h.syscall_nr),
+    }
+}
+
+/// The record's ABI is one a guest of this native ABI decodes.
+pub(crate) fn decoded_record_abi(native: crate::syscalls::Abi, abi: u16) -> bool {
+    abi == ANT_ABI_NATIVE || (abi == ANT_ABI_COMPAT && native.compat().is_some())
+}
+
 pub struct Assembler {
     directory: PathBuf,
     quota: u64,
@@ -569,20 +589,11 @@ impl Assembler {
     /// number only. On x86-64 every other record keeps its number as its id,
     /// as it always did (x32's, and an older guest's ia32 calls, ABI 0).
     pub(crate) fn syscall_id(&self, h: &Header) -> u64 {
-        match self.abi {
-            abi if h.abi == ANT_ABI_COMPAT
-                && let Some(compat) = abi.compat() =>
-            {
-                crate::syscalls::id(compat, h.syscall_nr)
-            }
-            crate::syscalls::Abi::X86_64 => h.syscall_nr,
-            abi if h.abi == ANT_ABI_NATIVE => crate::syscalls::id(abi, h.syscall_nr),
-            _ => crate::syscalls::untabled_id(h.syscall_nr),
-        }
+        host_syscall_id(self.abi, h)
     }
     /// The record's ABI is one the run's tables decode.
     fn decoded_abi(&self, abi: u16) -> bool {
-        abi == ANT_ABI_NATIVE || (abi == ANT_ABI_COMPAT && self.abi.compat().is_some())
+        decoded_record_abi(self.abi, abi)
     }
     pub fn new(directory: PathBuf, quota: u64) -> Result<Self> {
         private_dir(&directory).map_err(|e| error(e.to_string()))?;

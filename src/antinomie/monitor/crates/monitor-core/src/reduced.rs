@@ -9,7 +9,8 @@
 //!
 //! * Until the boot has used nine tenths of the quota everything is saved.
 //! * From then on a call is saved only when its system call is on the list the
-//!   UI built from those rules (see `triage::rules::calls`), or when it is
+//!   UI built from those rules (see `triage::rules::calls`; kept by name on every ABI the host has a table
+//!   for), or when it is
 //!   process lifecycle. Every other call is dropped and counted per system
 //!   call. Lifecycle events of a task (phase 3: its exit, its exec) are always
 //!   kept, and so is anything the list cannot name (another ABI, an unknown
@@ -89,7 +90,8 @@ pub(crate) enum Verdict {
 /// The reduced mode of one boot.
 #[derive(Default)]
 pub(crate) struct Reducer {
-    /// Syscall numbers kept; empty disables the mode.
+    /// Host syscall ids kept, on every ABI (`syscalls::ids_on_every_abi`);
+    /// empty disables the mode.
     keep: HashSet<u64>,
     /// The boot's own record: what no run owns is counted here.
     pub active: Option<ReducedRecording>,
@@ -98,10 +100,7 @@ pub(crate) struct Reducer {
 impl Reducer {
     pub(crate) fn new(calls: &[String]) -> Self {
         Self {
-            keep: calls
-                .iter()
-                .filter_map(|name| crate::syscalls::number(name))
-                .collect(),
+            keep: crate::syscalls::ids_on_every_abi(calls),
             active: None,
         }
     }
@@ -140,15 +139,21 @@ impl Reducer {
     }
 
     /// Whether a packet is kept. Only the entry and exit of a call whose
-    /// syscall is known and not on the list are dropped.
-    pub(crate) fn verdict(&self, header: &Header) -> Verdict {
-        if header.record_type != 1 || !matches!(header.phase, 1 | 2) || header.abi != 1 {
+    /// syscall is known on its own ABI's table (the guest's native one, or its
+    /// compat one for AArch32 and ia32 programs) and not on the list are
+    /// dropped. `native` is the guest's ABI.
+    pub(crate) fn verdict(&self, header: &Header, native: crate::syscalls::Abi) -> Verdict {
+        if header.record_type != 1
+            || !matches!(header.phase, 1 | 2)
+            || !crate::parser::decoded_record_abi(native, header.abi)
+        {
             return Verdict::Keep;
         }
-        let Some(name) = crate::syscalls::known_name(header.syscall_nr) else {
+        let id = crate::parser::host_syscall_id(native, header);
+        let Some(name) = crate::syscalls::known_name(id) else {
             return Verdict::Keep;
         };
-        if self.keep.contains(&header.syscall_nr) {
+        if self.keep.contains(&id) {
             return Verdict::Keep;
         }
         let begin = header.phase == 1 && header.fragment == 1;
@@ -181,3 +186,7 @@ pub fn read(directory: &std::path::Path) -> Option<(ReducedRecording, Option<u64
         run.get("started_ms").and_then(|value| value.as_u64()),
     ))
 }
+
+#[cfg(test)]
+#[path = "reduced_tests.rs"]
+mod tests;

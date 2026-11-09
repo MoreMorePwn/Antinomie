@@ -53,6 +53,13 @@ x86 programs by their own table.
   run) now reach the judge as well: on x86-64 a program that wrote a cron entry at
   once took no dump. A run whose trigger was armed but never matched gets a note
   saying so, and matches the VM stop cut off are kept as misses with the reason.
+- **Reduced recording keeps and drops arm64 and 32-bit calls by their own names
+  (ANT-T0438).** When the quota is nearly full only the calls Triage's rules read are
+  kept, but the list was matched against x86-64 numbers, so on an arm64 guest it kept
+  and dropped unrelated calls (an `execve` could be dropped, a `read` kept), and the
+  dropped-call counts carried the wrong names. The decision now reads each call's id
+  on its own ABI (AArch64, AArch32, x86-64, and ia32 programs on x86-64). x86-64
+  native decisions are unchanged.
 - **Runs know their job, sensitive reads reach the service log, `sample add` goes
   through the daemon, and `run export --sensitive` writes packet and call bytes
   (ANT-T0421).** `run list` showed `job_id: null` and `--job` found nothing; the
