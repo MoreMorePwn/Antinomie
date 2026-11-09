@@ -156,8 +156,7 @@ fn the_summary_is_building_then_the_report_builders_and_nothing_is_written() {
     assert!(value["assessment"].is_string(), "{summary}");
     assert!(value["counts"]["processes"].as_u64().unwrap() >= 1);
     assert!(value["counts"]["findings"].as_u64().unwrap() >= 1);
-    // Parity with the report builder the export and `antinomie-cli report` use.
-    assert_eq!(value["counts"], report_counts(&data, &run));
+    let counts = value["counts"].clone();
     // Every other Triage read, then the directory is as it was.
     for (op, extra) in [
         ("recording.findings.list", json!({})),
@@ -183,6 +182,12 @@ fn the_summary_is_building_then_the_report_builders_and_nothing_is_written() {
     assert!(!run.dir.join("triage-digest.json").exists());
     assert!(!run.dir.join("triage-findings-v2.jsonl").exists());
     assert!(service.scans_in_memory() <= 2);
+    // Parity with the report builder the export and `antinomie-cli report` use.
+    // Last, and with the process-wide kept index dropped (other tests running
+    // alongside push it out, it keeps two entries outside triage's own tests):
+    // that builder is the window's scan, which writes its journals into the run.
+    antinomie_triage::scan_cache::forget();
+    assert_eq!(counts, report_counts(&data, &run));
 }
 
 #[test]

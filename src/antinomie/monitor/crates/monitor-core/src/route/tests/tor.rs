@@ -536,9 +536,11 @@ fn a_tor_that_stalls_twice_is_an_error_after_one_retry() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Whether the slot's lock can be taken, waiting as long as a start would: a
+/// process forked by another test thread holds a copy of the descriptor, and so
+/// the lock, until its exec (a single probe right after the stop saw that).
 fn lock_is_free(state: &Path) -> bool {
-    let file = std::fs::File::open(state.join("lock")).unwrap();
-    file.try_lock().is_ok()
+    lock_slot_within(state, Duration::from_secs(3)).is_ok()
 }
 
 #[test]
