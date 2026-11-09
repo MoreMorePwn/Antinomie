@@ -372,6 +372,9 @@ mod tests {
         let carried = jobs.take_carried();
         assert_eq!(carried.len(), 1);
         assert!(carried[0].queue[0].host_copy_vouched());
+        // Its final report goes into the run's record itself: no session
+        // is left to take it there.
+        assert!(carried[0].session_ended);
         assert_eq!(
             fs::read(root.join("analysis/specimen.host")).unwrap(),
             b"abc"

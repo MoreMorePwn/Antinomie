@@ -26,6 +26,9 @@ impl Jobs {
         let mut carried = Jobs::default();
         carried.tools_dir = self.tools_dir.clone();
         carried.available = self.available;
+        // No session takes the carried jobs' updates into its runs: each job
+        // saves its final report into its run's record itself (`finish`).
+        carried.session_ended = true;
         if self.active.as_ref().is_some_and(Self::host_side) {
             carried.active = self.active.take();
         }
