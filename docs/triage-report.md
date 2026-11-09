@@ -81,11 +81,12 @@ has scanned it.
 ## What a report holds, in order
 
 1. **At a glance**: the sample, its SHA-256 and size, the family (a link to its
-   evidence), how the run ended, when and for how long, the route, base image
-   and kernel; then the Summary's statement, the findings by tier (each count
+   evidence), how the run ended, when and for how long, the route, base image,
+   kernel and guest architecture; then the Summary's statement, the findings by tier (each count
    opens Suspicious activity; INFO findings the index does not list are counted
    and said), what was observed (each count opens its section), the **Key
-   findings** table (#, Tier, Rule, Behaviour, Object, Process, Count, First
+   findings** table (# is the row's own number; a row links to its finding, and
+   folded findings of one rule to their shared row; Tier, Rule, Behaviour, Object, Process, Count, First
    seen, ATT&CK; up to 10, worst first), the **Family evidence** table (Family,
    Engine, Rule, Pack, Strength, Count), the key behaviours, up to eight
    indicators worth sharing, and the notes about the run.

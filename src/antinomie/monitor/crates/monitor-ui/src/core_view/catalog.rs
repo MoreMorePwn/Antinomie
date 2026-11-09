@@ -449,6 +449,11 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
             if !exit_core && triggered.is_empty() {
                 continue;
             }
+            // A run that never started has no process and no cores: it is
+            // not listed, and its launch error is not a capture issue.
+            if triggered.is_empty() && artifacts.core_dump.is_none() && artifacts.never_started() {
+                continue;
+            }
             for issue in &artifacts.issues {
                 if result.issues.len() >= 16 {
                     break;

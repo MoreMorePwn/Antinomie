@@ -1923,7 +1923,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   evidence and `generation`; `--summary` adds the Triage summary. `run export RUN --out
   DIR [--part LIST] [--sensitive]` writes the parts `trace`, `processes`,
   `findings`, `indicators`, `files`, `network`, `timeline`, `analysis`, `custody`
-  and `artifacts` (default: all) as `*.ndjson` files, one row per line, and the
+  and `artifacts` (default: all) as `*.ndjson` files, one row per line (a `trace` row's `nr` is the number the guest used for the call; `args_preview` holds the engine's raw argument previews, and the decoded records are in the Syscall Trace's own JSON export), and the
   retained evidence files of `artifacts` into `DIR` and nowhere else; the bytes the
   sample produced are written only with `--sensitive`: the capture, memory and core
   files and file copies (`artifacts/`), the contents of changed files (`files/`), the

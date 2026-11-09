@@ -204,9 +204,9 @@ fn create(
         let stopped = engine.waiter().stop_vm(&vm_id, limit).map_err(wait_error);
         let message = taken?;
         stopped?;
-        return finish_create(engine, &vm_id, &before, message, true);
+        return finish_create(engine, &vm_id, &before, message, true, limit);
     }
-    finish_create(engine, &vm_id, &before, taken?, false)
+    finish_create(engine, &vm_id, &before, taken?, false, limit)
 }
 
 /// The engine says why a snapshot of this kind cannot be taken now.
@@ -237,7 +237,11 @@ fn finish_create(
     before: &[String],
     message: String,
     stopped: bool,
+    limit: Option<Duration>,
 ) -> Result<Reply, CliError> {
+    // The engine's list is as old as its last refresh: read the new
+    // checkpoint from a current one (it printed `"snapshot": null`).
+    let _ = refresh(vm_id, limit, engine);
     let active = engine
         .snapshot()
         .vm_snapshot_trees

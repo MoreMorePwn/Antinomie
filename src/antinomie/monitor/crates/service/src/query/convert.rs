@@ -113,6 +113,13 @@ pub fn captured_field(
     }
 }
 
+/// The number the guest used for a call. An event's id carries its ABI in the
+/// high bits (arm64, arm and i386 calls), which a 32-bit number cannot hold:
+/// the row's `name` says which table the number belongs to.
+fn wire_nr(id: u64) -> u32 {
+    u32::try_from(antinomie_monitor_core::syscalls::wire_number(id)).unwrap_or(u32::MAX)
+}
+
 pub fn call_event(
     call: CallRef,
     event: &EventSummary,
@@ -122,7 +129,7 @@ pub fn call_event(
     CallEvent {
         event_seq: U64(event.event_seq),
         phase: event.phase,
-        syscall_nr: u32::try_from(event.syscall_nr).unwrap_or(u32::MAX),
+        syscall_nr: wire_nr(event.syscall_nr),
         syscall_name: event.syscall_name.clone(),
         pid: event.pid,
         tid: event.tid,
@@ -157,7 +164,7 @@ pub fn trace_row(call: &InvocationSummary, ts_ms: impl Fn(u64) -> Option<u64>) -
         pid: base.pid,
         tid: base.tid,
         name: base.syscall_name.clone(),
-        nr: u32::try_from(base.syscall_nr).unwrap_or(u32::MAX),
+        nr: wire_nr(base.syscall_nr),
         args: base.args.map(|args| args.iter().map(|a| hex(*a)).collect()),
         ret: call
             .exit
@@ -288,5 +295,22 @@ mod tests {
     fn registers_are_lower_case_hex() {
         assert_eq!(hex(255), "0xff");
         assert_eq!(hex(0), "0x0");
+    }
+}
+
+#[cfg(test)]
+mod wire_nr_tests {
+    use super::wire_nr;
+    use antinomie_monitor_core::syscalls::{self, Abi};
+
+    /// An arm64 or compat call's id keeps its ABI in the high bits; the row
+    /// shows the number the guest used (B11 of the Arm evaluation: every row
+    /// read 4294967295).
+    #[test]
+    fn a_row_shows_the_guests_number_not_the_abi_tagged_id() {
+        assert_eq!(wire_nr(59), 59);
+        assert_eq!(wire_nr(syscalls::id(Abi::Aarch64, 221)), 221);
+        assert_eq!(wire_nr(syscalls::id(Abi::Arm, 11)), 11);
+        assert_eq!(wire_nr(syscalls::untabled_id(500)), 500);
     }
 }

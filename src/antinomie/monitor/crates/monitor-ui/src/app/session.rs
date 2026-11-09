@@ -218,6 +218,18 @@ impl MonitorApp {
         if snapshot.state != self.snapshot.state {
             activity.push(("INFO", format!("Session {:?}", snapshot.state)));
         }
+        // The status bar said "installing X" when the install began; say how
+        // it ended instead of keeping that line.
+        if let (Some(before), Some(after)) = (&self.snapshot.tool_install, &snapshot.tool_install)
+            && before.id == after.id
+            && !before.finished
+            && after.finished
+        {
+            self.status = match &after.error {
+                None => format!("{} installed", after.name),
+                Some(error) => format!("{} was not installed: {error}", after.name),
+            };
+        }
         // Once per start: KVM was wanted and the VM runs with TCG instead.
         if snapshot.accelerator != self.snapshot.accelerator
             && let Some(warning) = snapshot

@@ -312,7 +312,7 @@ impl Model {
         ui.horizontal_wrapped(
             |ui| match (self.engine.as_str(), &facts.suricata, &facts.sigma) {
                 ("ids", probe @ ToolProbe::Found { .. }, _) => {
-                    ui.colored_label(theme::good(), format!("{} is installed.", probe.identity()))
+                    ui.colored_label(theme::good(), installed_sentence(&probe.identity()))
                         .on_hover_text(
                             "Rules that need unsupported keywords or datasets stay skipped.",
                         );
@@ -554,9 +554,31 @@ impl Model {
     }
 }
 
+/// The Suricata probe's first line (`This is Suricata version 8.0.7 RELEASE`)
+/// as the sentence the page says: `Suricata 8.0.7 is installed.`
+fn installed_sentence(identity: &str) -> String {
+    let line = identity.trim();
+    let line = line.strip_prefix("This is ").unwrap_or(line);
+    let line = line.replacen(" version ", " ", 1);
+    let line = line.strip_suffix(" RELEASE").unwrap_or(&line);
+    format!("{line} is installed.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_suricata_line_reads_as_one_sentence() {
+        assert_eq!(
+            installed_sentence("This is Suricata version 8.0.7 RELEASE"),
+            "Suricata 8.0.7 is installed."
+        );
+        assert_eq!(
+            installed_sentence("Suricata 7.0.2"),
+            "Suricata 7.0.2 is installed."
+        );
+    }
 
     fn render_with(
         ctx: &egui::Context,

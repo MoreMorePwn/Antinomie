@@ -1069,7 +1069,7 @@ impl Session {
             );
             owner.finish(
                 RunArtifactState::Interrupted,
-                format!("manual capture sealed at {boundary}; no admission is replayed"),
+                super::process_core::sealed_text("the capture", boundary),
             );
             let deadline = Instant::now() + Duration::from_secs(120);
             loop {

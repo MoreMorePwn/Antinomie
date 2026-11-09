@@ -567,6 +567,12 @@ impl SnapshotManager {
             Decision::Delete { .. } => "Delete snapshot",
         };
         let mut open = true;
+        // The question stays above the Snapshots window whose button asked
+        // it. egui keeps the layer order of a window it drew before, and the
+        // click on that button raises the Snapshots window after the question
+        // opens: the question hid behind it from the second use on (the
+        // restore that "did nothing").
+        let layer = egui::LayerId::new(egui::Order::Middle, egui::Id::new("snapshot_decision"));
         // Like the other spawned windows: no dim behind it and free to move.
         crate::widgets::window(title)
             .id(egui::Id::new("snapshot_decision"))
@@ -633,6 +639,7 @@ impl SnapshotManager {
                     cancel = ui.button("Cancel").clicked();
                 });
             });
+        ctx.move_to_top(layer);
         if !open || cancel || command.is_some() {
             self.decision = None;
         }
@@ -1051,6 +1058,55 @@ pub(crate) mod tests {
                     "{title:?} in {size:?}"
                 );
             }
+        }
+    }
+
+    /// B9 of the Arm evaluation: the Restore question opened behind the
+    /// Snapshots window from the second time on.
+    #[test]
+    fn the_restore_question_opens_on_top_every_time() {
+        let size = egui::vec2(1400.0, 900.0);
+        let ctx = context();
+        let tree = fixture();
+        let mut manager = SnapshotManager::default();
+        manager.bind("vm", "Analyst");
+        manager.selected = Some("sample".into());
+        for _ in 0..40 {
+            window_frame(&ctx, &mut manager, &tree, size, Vec::new());
+        }
+        let order = |ctx: &egui::Context| -> Vec<egui::Id> {
+            ctx.memory(|memory| memory.layer_ids().map(|layer| layer.id).collect())
+        };
+        for attempt in 1..=3 {
+            let output = window_frame(&ctx, &mut manager, &tree, size, Vec::new());
+            let at = text_rect(&output, "Restore disk and boot…").center();
+            click_at(&ctx, &mut manager, &tree, size, at);
+            assert!(manager.decision_open(), "attempt {attempt}");
+            for _ in 0..3 {
+                // The click that pressed the button raises the window it is
+                // in, after the question opened: the question must stay above.
+                ctx.move_to_top(egui::LayerId::new(
+                    egui::Order::Middle,
+                    egui::Id::new(WINDOW_ID),
+                ));
+                window_frame(&ctx, &mut manager, &tree, size, Vec::new());
+            }
+            let order = order(&ctx);
+            let position = |name: &str| {
+                order
+                    .iter()
+                    .position(|id| *id == egui::Id::new(name))
+                    .unwrap_or_else(|| panic!("{name} has no layer: {order:?}"))
+            };
+            assert!(
+                position("snapshot_decision") > position(WINDOW_ID),
+                "attempt {attempt}: the question is behind the window"
+            );
+            // Confirm it, as the user does.
+            let output = window_frame(&ctx, &mut manager, &tree, size, Vec::new());
+            let at = text_rect(&output, "Save current and restore").center();
+            click_at(&ctx, &mut manager, &tree, size, at);
+            assert!(!manager.decision_open(), "attempt {attempt}");
         }
     }
 

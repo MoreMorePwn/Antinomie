@@ -184,7 +184,7 @@ impl Builder {
             run.route.clone()
         };
         put("Network route", Cell::plain(route));
-        for name in ["Base image", "Kernel", "Stealth profile"] {
+        for name in ["Base image", "Kernel", "Architecture", "Stealth profile"] {
             put(name, Cell::plain(env(name)));
         }
         put("Run", Cell::plain(run.run_id.clone()));

@@ -140,3 +140,25 @@ fn pending_binding_cap_rejects_before_submitting_another_control() {
     assert!(app.status.contains("too many VM operations are pending"));
     assert_eq!(app.pending_sessions.len(), PENDING_SESSION_LIMIT);
 }
+
+#[test]
+fn the_status_bar_says_a_tool_is_installed_once_the_install_ends() {
+    let mut app = app();
+    let install = |finished: bool| antinomie_monitor_core::analysis_tools::ToolInstall {
+        id: "sigma".into(),
+        name: "Sigma (pySigma)".into(),
+        stage: if finished { "done" } else { "download" }.into(),
+        received: 0,
+        total: 0,
+        finished,
+        error: None,
+        note: String::new(),
+    };
+    app.snapshot.tool_install = Some(install(false));
+    app.status = "installing Sigma (pySigma)".into();
+    let mut next = app.snapshot.clone();
+    next.tool_install = Some(install(true));
+    let mut activity = Vec::new();
+    app.accept_snapshot(next, &mut activity);
+    assert_eq!(app.status, "Sigma (pySigma) installed");
+}

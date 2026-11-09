@@ -475,6 +475,32 @@ fn acquired_catalog_finds_unopened_partial_cores_and_scopes_the_vm() {
 }
 
 #[test]
+fn a_run_that_never_started_has_no_core_and_raises_no_issue() {
+    let fixture = Fixture::new();
+    let directory = fixture.directory.join("runs/rejected");
+    fs::create_dir_all(&directory).unwrap();
+    let artifacts = antinomie_monitor_core::RunArtifacts {
+        run_id: "rejected".into(),
+        vm_id: "chosen".into(),
+        boot_id: "boot".into(),
+        core_state: antinomie_monitor_core::RunArtifactState::Failed,
+        issues: vec![format!(
+            "{}: Bad address",
+            antinomie_monitor_core::LAUNCH_REJECTED
+        )],
+        ..Default::default()
+    };
+    fs::write(
+        directory.join("artifacts.json"),
+        serde_json::to_vec(&artifacts).unwrap(),
+    )
+    .unwrap();
+    let found = catalog(std::slice::from_ref(&fixture.directory), Some("chosen")).unwrap();
+    assert!(found.acquired.is_empty());
+    assert!(found.issues.is_empty(), "{:?}", found.issues);
+}
+
+#[test]
 fn a_deleted_on_exit_core_is_listed_as_a_deleted_row() {
     let fixture = Fixture::new();
     let directory = fixture.directory.join("runs/gone");
