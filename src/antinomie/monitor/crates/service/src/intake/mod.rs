@@ -229,6 +229,69 @@ impl Intake {
     }
 }
 
+impl Intake {
+    /// `sample.add` over the socket: store a finished upload of `client` in
+    /// the library without running it. The type and architecture are read
+    /// from the bytes; no policy applies (the sample is not a job), only
+    /// `MAX_SAMPLE`. The staged copy goes away once the library holds the
+    /// bytes. Returns the SHA-256 and whether the sample is new.
+    pub fn add_upload(
+        &self,
+        client: &str,
+        upload: &crate::api::ids::UploadId,
+        name: Option<&str>,
+        tags: Vec<samples::Tag>,
+        actor: &str,
+    ) -> Result<(String, bool), crate::api::error::ApiError> {
+        use crate::api::error::{ApiError, ErrorCode};
+        let staged = self.staging.sealed(client, upload)?;
+        let mut file = open_nofollow(&staged.path, false)
+            .map_err(|e| ApiError::new(ErrorCode::NotFound, format!("the upload: {e}")))?;
+        let info = file
+            .metadata()
+            .map_err(|e| ApiError::new(ErrorCode::Internal, e.to_string()))?;
+        if !info.is_file() {
+            return Err(ApiError::new(
+                ErrorCode::NotFound,
+                "the upload is not a file",
+            ));
+        }
+        if info.len() > MAX_SAMPLE {
+            return Err(ApiError::payload_too_large(MAX_SAMPLE).with_field("sample.upload_id"));
+        }
+        let mut bytes = Vec::with_capacity(info.len() as usize);
+        (&mut file)
+            .take(MAX_SAMPLE + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| ApiError::new(ErrorCode::Internal, e.to_string()))?;
+        if bytes.len() as u64 > MAX_SAMPLE {
+            return Err(ApiError::payload_too_large(MAX_SAMPLE).with_field("sample.upload_id"));
+        }
+        let shown = staged.name.clone().unwrap_or_else(|| "upload".into());
+        let new = NewSample {
+            name: name
+                .or(staged.name.as_deref())
+                .unwrap_or_default()
+                .to_owned(),
+            tags,
+            origin: NewOrigin {
+                kind: OriginKind::Added,
+                source: "Daemon".into(),
+                path: shown.clone(),
+                name: shown,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut library = Library::open(&self.data_dir).map_err(crate::library::library_error)?;
+        let added = library
+            .add_bytes_as(&bytes, new, actor)
+            .map_err(crate::library::library_error)?;
+        self.staging.discard(upload);
+        Ok((added.sha256, added.new))
+    }
+}
+
 /// The last component of a host path, with control characters turned into
 /// spaces (a name is data, never markup).
 pub fn display_name(path: &Path) -> String {

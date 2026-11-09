@@ -52,7 +52,7 @@ pub struct Global {
     /// Run the command in this process, taking the data-directory lock, even when a daemon could serve it.
     #[arg(long, global = true, conflicts_with = "daemon")]
     pub direct: bool,
-    /// Send an `auto` command to the running daemon; fail when none answers.
+    /// Send the command to the running daemon (an `auto` command, a read such as `run list` or `sample list`); fail when none answers.
     #[arg(long, global = true)]
     pub daemon: bool,
     /// Output format [default: human on a terminal, json otherwise].

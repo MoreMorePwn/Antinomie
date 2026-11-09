@@ -185,6 +185,23 @@ x86 programs by their own table.
   language, server-side sort and paging, and the `trace.page` filter (`q`). Their
   counts are the window's: a test compares them with the report builder.
 
+- **The daemon serves the reads (ANT-T0417).** Beside the job operations the
+  local socket now answers every `recording.*` read (the Triage ones too, with
+  the same `building` answer while the scan is made), `sample.list`,
+  `sample.get`, `sample.add` (a finished upload, never a path),
+  `sample.download` (a range of the AES archive, `artifacts:sensitive`, one
+  `exported` custody entry), `sample.tag`, `custody.verify`, `vm.list` and
+  `base.list`. With a daemon at the socket, `run list`, `run show`, `run
+  export`, `triage`, `sample list|show|tag`, `custody verify` (without
+  `--export`), `vm list` and `base list` ask it and print what direct mode
+  prints; without one they work as before. `run export` still writes only into
+  the folder you give with `--out`: the command pages through the daemon's
+  reads and writes the files itself, so no path is ever sent to the daemon. New
+  `run export --no-triage` leaves out the parts that need the Triage index
+  (findings, indicators, files, network, timeline) so a very large recording is
+  not indexed in full. `sample.list` also takes `tags`, `all` and `custody`,
+  and `sample.get` takes `origins`, `events` and `runs` (additive).
+
 - **Exporting a large run no longer reads its recording a second time
   (ANT-T0412).** The index Triage makes of a run when it opens it is kept for
   the report: an export, or `antinomie-cli report`, of a recording that has not

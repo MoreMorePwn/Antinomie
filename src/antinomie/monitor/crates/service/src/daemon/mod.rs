@@ -22,6 +22,9 @@
 pub mod artifacts;
 pub mod lane;
 mod lane_ops;
+mod library_ops;
+#[cfg(test)]
+mod read_tests;
 pub mod runner;
 pub mod service;
 #[cfg(test)]
@@ -119,7 +122,8 @@ pub struct EngineView {
     pub disk_layers: Vec<DiskLayer>,
     pub since_ms: u64,
     /// The parts of the snapshot the lane checks read (`lane.list`): the
-    /// VMs, their snapshot trees, the VM state, the recording flush.
+    /// VMs, their snapshot trees, the VM state, the recording flush, the
+    /// installed bases (`vm.list`, `base.list`).
     pub lanes: Snapshot,
 }
 
@@ -145,6 +149,8 @@ fn update_view(view: &Mutex<EngineView>, snapshot: &Snapshot, now_ms: u64) {
         active_vm: snapshot.active_vm.clone(),
         recording_flush: snapshot.recording_flush.clone(),
         disk_layers: snapshot.disk_layers.clone(),
+        bases: snapshot.bases.clone(),
+        bases_checking: snapshot.bases_checking,
         ..Snapshot::default()
     };
 }

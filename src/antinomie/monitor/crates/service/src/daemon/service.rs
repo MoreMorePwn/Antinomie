@@ -174,7 +174,7 @@ impl Service {
         to_value(&received)
     }
 
-    fn lane_statuses(&self) -> Vec<LaneStatus> {
+    pub(super) fn lane_statuses(&self) -> Vec<LaneStatus> {
         let view = crate::store::lock(&self.view).clone();
         let phase = crate::store::lock(&self.phase).clone();
         let mut out = Vec::new();
@@ -325,6 +325,7 @@ impl Service {
                 "upload.chunked".into(),
                 "events.resume".into(),
                 "recording.query".into(),
+                "library.read".into(),
             ],
         };
         for name in set.names() {
@@ -476,17 +477,17 @@ impl Service {
             Op::QueueStatus => to_value(&self.queue_status()?),
             Op::QueuePause => self.queue_pause(true),
             Op::QueueResume => self.queue_pause(false),
-            Op::JobDelete
-            | Op::SampleList
+            Op::SampleList
             | Op::SampleGet
             | Op::SampleAdd
             | Op::SampleDownload
             | Op::SampleTag
-            | Op::VmList
-            | Op::BaseList
-            | Op::CustodyVerify => Err(ApiError::new(
+            | Op::CustodyVerify => self.library_op(op, value, ctx),
+            Op::VmList => self.vm_list(),
+            Op::BaseList => self.base_list(),
+            Op::JobDelete => Err(ApiError::new(
                 ErrorCode::Unsupported,
-                "the daemon does not serve this operation in 0.9.0; the direct commands (`antinomie-cli sample ...`, `custody verify`, `vm list`, `base list`) work beside a running daemon",
+                "the daemon does not serve job.delete in 0.9.0",
             )),
         }
     }

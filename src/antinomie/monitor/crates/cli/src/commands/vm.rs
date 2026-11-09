@@ -5,9 +5,12 @@
 //! command ends. `vm start` therefore boots the guest, proves it answers and
 //! stops it again, unless `--hold` keeps it up; leaving a VM running between
 //! commands is what the daemon is for.
-use super::machine::{
-    BOOT_WAIT, confirm, find_base, find_vm, guest_value, network_name, parse_network, parse_preset,
-    preset_name, vm_state, vm_value, wait_bases, wait_guest,
+use super::{
+    auto::link,
+    machine::{
+        BOOT_WAIT, confirm, find_base, find_vm, guest_value, network_name, parse_network,
+        parse_preset, preset_name, vm_state, vm_value, wait_bases, wait_guest,
+    },
 };
 use crate::{
     context::Context,
@@ -99,6 +102,13 @@ pub struct Start {
 }
 
 pub fn run(vm: &Vm, context: &Context) -> Result<Reply, CliError> {
+    // A daemon owns the engine: it lists its VMs (`vm.list`) and the command
+    // takes no lock. The other commands need the lock for themselves.
+    if matches!(vm, Vm::List)
+        && let Some(mut client) = link::daemon(context)?
+    {
+        return list_through(&mut client);
+    }
     // The password is read before the engine starts, so a missing one fails fast.
     let password = match vm {
         Vm::Create(arguments) if arguments.password_stdin => Some(read_password()?),
@@ -179,6 +189,34 @@ fn list(snapshot: &Snapshot) -> Reply {
         )
     };
     Reply::list(items, None).with_human(human)
+}
+
+/// `vm list` from the daemon: the contract's `VmSummary` objects.
+fn list_through(client: &mut antinomie_service::server::client::Client) -> Result<Reply, CliError> {
+    let reply = link::call(client, "vm.list", json!({}))?;
+    let items = reply["vms"].as_array().cloned().unwrap_or_default();
+    let cell = |value: &serde_json::Value, short: bool| match value.as_str() {
+        Some(text) if short => text.chars().take(12).collect(),
+        Some(text) => text.to_owned(),
+        None => "-".to_owned(),
+    };
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|vm| {
+            vec![
+                cell(&vm["id"], false),
+                cell(&vm["name"], false),
+                cell(&vm["base_identity"], true),
+                cell(&vm["lane"], false),
+            ]
+        })
+        .collect();
+    let human = if rows.is_empty() {
+        "no VMs\n".to_owned()
+    } else {
+        table(&["ID", "NAME", "BASE", "LANE"], &rows)
+    };
+    Ok(Reply::list(items, None).with_human(human))
 }
 
 /// The VM config a `vm create` asks for, before the engine's own checks.

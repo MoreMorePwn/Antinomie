@@ -1,13 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `custody verify`: check a sample's tamper-evident chain, or the whole
 //! library, and export the record of one sample (design 3.4.3). No engine lock.
-use super::library::{library_error, open_existing, parse_sha256};
+//!
+//! A check without `--export` goes to the daemon when one answers
+//! (`custody.verify`) and runs the same library code in this process
+//! otherwise. `--export` writes a file at a path, which is never sent to the
+//! daemon, so it runs here.
+use super::{
+    auto::link,
+    library::{library_error, open_existing, parse_sha256},
+};
 use crate::{
     context::Context,
     error::{CliError, ErrorCode},
     output::{Reply, block, table},
 };
 use antinomie_monitor_core::samples::{ChainCheck, ExportFormat, SignWith, Signer};
+use antinomie_service::{api::ops::CustodyVerifyParams, library as service_library};
 use clap::{Subcommand, ValueEnum};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -44,28 +53,110 @@ pub fn run(custody: &Custody, context: &Context) -> Result<Reply, CliError> {
         sign,
         key,
     } = custody;
+    if export.is_none() {
+        return verify(sha256.as_deref(), context);
+    }
     let library = open_existing(context.data_dir())?;
-    match sha256 {
-        Some(sha256) => {
-            let sha256 = parse_sha256(sha256)?;
-            let signing = sign.zip(key.clone()).map(|(signer, key)| SignWith {
-                signer: match signer {
-                    SignerArg::Minisign => Signer::Minisign,
-                    SignerArg::Ssh => Signer::Ssh,
-                },
-                key,
-            });
-            one(&sha256, export.as_deref(), signing.as_ref(), library)
+    let Some(sha256) = sha256 else {
+        return Err(
+            CliError::invalid("--export needs the SHA-256 of one sample").with_field("export"),
+        );
+    };
+    let sha256 = parse_sha256(sha256)?;
+    let signing = sign.zip(key.clone()).map(|(signer, key)| SignWith {
+        signer: match signer {
+            SignerArg::Minisign => Signer::Minisign,
+            SignerArg::Ssh => Signer::Ssh,
+        },
+        key,
+    });
+    one(&sha256, export.as_deref(), signing.as_ref(), library)
+}
+
+/// `custody.verify` through the daemon, or from the library in this process.
+fn verify(sha256: Option<&str>, context: &Context) -> Result<Reply, CliError> {
+    let sha256 = sha256.map(parse_sha256).transpose()?;
+    let params = CustodyVerifyParams {
+        sha256: sha256
+            .map(antinomie_service::api::ids::Sha256Hex::try_from)
+            .transpose()
+            .map_err(|e| CliError::invalid(e.to_string()).with_field("sha256"))?,
+    };
+    let value = match link::daemon(context)? {
+        Some(mut client) => {
+            let value = serde_json::to_value(&params)
+                .map_err(|error| CliError::internal(error.to_string()))?;
+            link::call(&mut client, "custody.verify", value)?
         }
         None => {
-            if export.is_some() {
-                return Err(
-                    CliError::invalid("--export needs the SHA-256 of one sample")
-                        .with_field("export"),
-                );
-            }
-            all(library)
+            service_library::custody_verify(open_existing(context.data_dir())?.as_ref(), &params)
+                .map_err(link::api)?
         }
+    };
+    let ok = value["ok"] == json!(true);
+    if params.sha256.is_some() {
+        let summary = text(&value["summary"]);
+        let human = block(&[
+            ("sample", text(&value["sha256"])),
+            ("custody", summary.clone()),
+            ("verified", ok.to_string()),
+        ]);
+        if ok {
+            return Ok(Reply::value(value).with_human(human));
+        }
+        return Err(CliError::new(ErrorCode::VerificationFailed, summary)
+            .with_details(value)
+            .with_human_output(human));
+    }
+    let samples = value["samples"].as_array().cloned().unwrap_or_default();
+    let index_ok = value["index"]["ok"] == json!(true);
+    let broken = value["broken"].as_array().map_or(0, Vec::len);
+    if samples.is_empty() && index_ok && value["index"]["records"] == json!(0) {
+        return Ok(Reply::value(value).with_human("The library has no custody records.\n".into()));
+    }
+    let rows: Vec<Vec<String>> = samples
+        .iter()
+        .map(|c| {
+            vec![
+                text(&c["sha256"]),
+                text(&c["entries"]),
+                if c["ok"] == json!(true) {
+                    "verified".into()
+                } else {
+                    text(&c["summary"])
+                },
+            ]
+        })
+        .collect();
+    let mut human = format!(
+        "library index: {} records, {}\n\n",
+        text(&value["index"]["records"]),
+        if index_ok {
+            "every link matches"
+        } else {
+            "DOES NOT VERIFY"
+        }
+    );
+    human.push_str(&table(&["sha256", "entries", "chain"], &rows));
+    if ok {
+        return Ok(Reply::value(value).with_human(human));
+    }
+    Err(CliError::new(
+        ErrorCode::VerificationFailed,
+        format!(
+            "custody check failed: {}{broken} sample chain(s) broken",
+            if index_ok { "" } else { "library index, " },
+        ),
+    )
+    .with_details(value)
+    .with_human_output(human))
+}
+
+fn text(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
     }
 }
 
@@ -127,70 +218,6 @@ fn one(
             .with_details(value)
             .with_human_output(text),
     )
-}
-
-fn all(library: Option<antinomie_monitor_core::samples::Library>) -> Result<Reply, CliError> {
-    let Some(library) = library else {
-        let empty =
-            json!({"ok": true, "index": {"records": 0, "ok": true}, "samples": [], "broken": []});
-        return Ok(Reply::value(empty).with_human("The library has no custody records.\n".into()));
-    };
-    let check = library.custody_check_all().map_err(library_error)?;
-    let samples: Vec<Value> = check
-        .samples
-        .iter()
-        .map(|(sha, c)| chain_value(sha, c))
-        .collect();
-    let broken: Vec<&str> = check.broken();
-    let index_ok = check.index.problem.is_none();
-    let ok = index_ok && broken.is_empty();
-    let value = json!({
-        "ok": ok,
-        "index": {
-            "records": check.index.records, "head": check.index.head, "ok": index_ok,
-            "problem": serde_json::to_value(&check.index.problem).unwrap_or(Value::Null),
-        },
-        "samples": samples,
-        "broken": broken,
-    });
-    let rows: Vec<Vec<String>> = check
-        .samples
-        .iter()
-        .map(|(sha, c)| {
-            vec![
-                sha.clone(),
-                c.entries.to_string(),
-                if c.ok() {
-                    "verified".into()
-                } else {
-                    c.summary()
-                },
-            ]
-        })
-        .collect();
-    let mut text = format!(
-        "library index: {} records, {}\n\n",
-        check.index.records,
-        if index_ok {
-            "every link matches"
-        } else {
-            "DOES NOT VERIFY"
-        }
-    );
-    text.push_str(&table(&["sha256", "entries", "chain"], &rows));
-    if ok {
-        return Ok(Reply::value(value).with_human(text));
-    }
-    Err(CliError::new(
-        ErrorCode::VerificationFailed,
-        format!(
-            "custody check failed: {}{} sample chain(s) broken",
-            if index_ok { "" } else { "library index, " },
-            broken.len()
-        ),
-    )
-    .with_details(value)
-    .with_human_output(text))
 }
 
 #[cfg(test)]

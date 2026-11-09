@@ -242,14 +242,36 @@ Ephemeral events (`job.progress`, `job.metrics`) are sent live only.
 **Operations served in 0.9.0.** `capabilities`, `health`, `upload.*`,
 `job.submit`, `job.get`, `job.list`, `job.cancel`, `job.retry`, `events.subscribe`,
 `events.list`, `artifact.list`, `artifact.get`, `report.get`, `policy.list`,
-`queue.status`, `queue.pause`, `queue.resume`, the `lane.*` operations below, and
-every `recording.*` read. Not
-served by the daemon in 0.9.0 (`unsupported`; the direct commands work beside a
-running daemon): `job.delete`, `sample.*`, `vm.list`, `base.list`,
-`custody.verify`. The reserved names of 5.11 (`run.`, `terminal.`, `rule.`,
-`settings.`, writes of `vm.` and `base.`) are `unsupported`; any other unknown
-name is `invalid_argument` on `op`. While the daemon stops, `job.submit`,
-`job.retry` and `upload.*` are `unavailable` with reason `service_stopping`.
+`queue.status`, `queue.pause`, `queue.resume`, the `lane.*` operations below,
+`sample.list`, `sample.get`, `sample.add`, `sample.download`, `sample.tag`,
+`vm.list`, `base.list`, `custody.verify` and every `recording.*` read. Not served
+by the daemon in 0.9.0 (`unsupported`): `job.delete`. The reserved names of 5.11
+(`run.`, `terminal.`, `rule.`, `settings.`, writes of `vm.` and `base.`) are
+`unsupported`; any other unknown name is `invalid_argument` on `op`. While the
+daemon stops, `job.submit`, `job.retry` and `upload.*` are `unavailable` with
+reason `service_stopping`.
+
+**Library, VM and base operations (additions to the table above).** They answer
+from the same code direct mode runs, so the CLI prints the same objects either way.
+
+| Operation | Notes |
+|---|---|
+| `sample.list` | `{samples, next_cursor}`, newest first. Besides `q`, `tag`, `limit` (1 to 1000, default 100) and `cursor`: `tags[]` (more `KIND=VALUE` tags the sample must also have), `all` (include samples whose archive was removed), `custody` (fill `custody_ok`). A tag is `KIND=VALUE` (`verdict`, `category`, `technique`, `custom`); a bare value is a custom tag |
+| `sample.get` | The `Sample` object plus `sha1`, `md5`, `description`, `removed_ms` and `custody` (the chain's summary). `origins`, `events` and `runs` (booleans) add those lists |
+| `sample.add` | Takes `sample.upload_id` only. `sample.path` and `sample.sha256` are `invalid_argument` on the socket (the daemon opens no path a client names). The type and architecture come from the bytes; no policy applies. The custody entry names the caller (`local:<uid>`). The answer is `sample.get`'s object plus `new` |
+| `sample.tag` | Sets the whole tag list (`[{kind, value}]`); the custody entry `edited` (tags) names the caller. The answer is the `Sample` object |
+| `sample.download` | `sha256` and an optional `range {offset, len}` (at most 1 MiB; default the first MiB). The answer is `{sha256, format: "zip-aes256", password: "infected", size, range {offset, len, data}}` with `data` Base64 of the AES archive (never the plaintext). The first range (`offset` 0) writes one custody entry `exported`. Needs `artifacts:sensitive` |
+| `vm.list` | `{vms: [{id, name, base_identity, lane}]}` from the engine's latest snapshot; the lane VM carries its lane |
+| `base.list` | `{bases: [{identity, name, architecture}]}`; no host path. While the engine still lists them: `unavailable`, `retryable` |
+| `custody.verify` | `{ok, head, problems[]}` plus, for one sample, `sha256`, `entries`, `problem`, `summary`; for the library, `index`, `samples[]`, `broken[]`. Needs `manage` |
+
+**Reads from the CLI.** With a daemon at the socket `run list`, `run show`, `run
+export`, `triage` and the other read commands send these operations; `run export`
+never sends an output path: the command pages through `recording.*` and writes the
+files under `--out` itself, and the bytes the sample produced are fetched only with
+`--sensitive` (the scope `artifacts:sensitive` is checked again by the daemon). A
+page that would not fit a 2 MiB line is `payload_too_large` and the command asks
+again for fewer rows.
 
 `job.retry` makes a new job from a finished one: the spec the client first sent,
 the sample named by its library hash, no idempotency key, the given `overrides`

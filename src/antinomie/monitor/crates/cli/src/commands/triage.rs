@@ -6,7 +6,7 @@
 //! written but the index Triage keeps in the recording.
 use super::{
     query::Client,
-    recording::{RUN_HELP, index, open_saved, run_value},
+    recording::{RUN_HELP, index, open_saved},
     report::{parse_parts, part_name},
 };
 use crate::{
@@ -37,17 +37,25 @@ pub fn run(arguments: &Triage, context: &Context) -> Result<Reply, CliError> {
         .into_iter()
         .filter(|part| *part != Part::Summary)
         .collect();
-    let saved = open_saved(context, &arguments.run)?;
-    let client = Client::new(context);
-    let params = json!({"run_key": client.key_of(&saved.run)?});
+    let client = Client::new(context)?;
+    let key = client.resolve(&arguments.run)?;
+    let params = json!({"run_key": key});
     let reply = client.call("recording.summary", params.clone())?;
     let detail = client.call("recording.run.get", params)?;
     let summary = reply["value"].clone();
     let partial = reply["partial"] == json!(true);
+    let run = &detail["value"];
     let mut value = Map::new();
-    value.insert("run".into(), run_value(&saved));
-    value.insert("sample".into(), json!(saved.run.request.sample));
-    value.insert("state".into(), detail["value"]["state"].clone());
+    value.insert(
+        "run".into(),
+        json!({
+            "run_key": run["run_key"], "vm_id": run["vm_id"], "boot_id": run["boot_id"],
+            "run_id": run["run_id"], "program": run["program"],
+            "started_ms": run["started_ms"], "directory": run["directory"],
+        }),
+    );
+    value.insert("sample".into(), run["sample_sha256"].clone());
+    value.insert("state".into(), run["state"].clone());
     value.insert("phase".into(), reply["phase"].clone());
     value.insert("partial".into(), json!(partial));
     value.insert("generation".into(), reply["generation"].clone());
@@ -55,6 +63,17 @@ pub fn run(arguments: &Triage, context: &Context) -> Result<Reply, CliError> {
     let mut notes = Vec::new();
     let mut all = Value::Null;
     if !parts.is_empty() {
+        // The parts come from the report builder over the recording folder,
+        // which this process reads without a lock (also beside a daemon).
+        let saved = open_saved(
+            context,
+            &format!(
+                "{}:{}:{}",
+                text(&run["vm_id"]),
+                text(&run["boot_id"]),
+                text(&run["run_id"])
+            ),
+        )?;
         let scan = index(context, &saved)?;
         let choices = Choices {
             parts: parts.clone(),
@@ -79,7 +98,7 @@ pub fn run(arguments: &Triage, context: &Context) -> Result<Reply, CliError> {
         value.insert("notes".into(), json!(notes));
     }
     let human = human(
-        &saved.run.id,
+        &text(&run["run_id"]),
         &detail["value"],
         &summary,
         partial,

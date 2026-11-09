@@ -76,6 +76,8 @@ pub fn generate() -> Value {
         ops::SampleListParams,
         ops::SampleList,
         ops::Sha256Params,
+        ops::SampleGetParams,
+        ops::SampleDownloadParams,
         ops::SampleAddParams,
         ops::SampleTagParams,
         ops::PolicyList,

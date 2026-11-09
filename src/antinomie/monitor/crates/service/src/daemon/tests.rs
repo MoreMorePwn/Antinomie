@@ -35,9 +35,9 @@ use std::{
 
 const SCRIPT: &[u8] = b"#!/bin/sh\necho hello\n";
 
-struct Svc {
-    dir: PathBuf,
-    service: Arc<Service>,
+pub(super) struct Svc {
+    pub(super) dir: PathBuf,
+    pub(super) service: Arc<Service>,
     _wake: mpsc::Receiver<()>,
     commands: mpsc::Receiver<LaneCommand>,
 }
@@ -48,7 +48,7 @@ impl Drop for Svc {
     }
 }
 
-fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
+pub(super) fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
     let dir = scratch(&format!("daemon-{name}"));
     let data = dir.join("data");
     std::fs::create_dir_all(&data).unwrap();
@@ -101,11 +101,11 @@ fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
     }
 }
 
-fn me() -> Caller {
+pub(super) fn me() -> Caller {
     local_caller(rustix::process::geteuid().as_raw())
 }
 
-fn socket_ctx() -> CallContext {
+pub(super) fn socket_ctx() -> CallContext {
     CallContext {
         caller: me(),
         cancel: Default::default(),
@@ -113,12 +113,12 @@ fn socket_ctx() -> CallContext {
     }
 }
 
-fn call(svc: &Svc, op: &str, params: Value) -> Result<Value, ApiError> {
+pub(super) fn call(svc: &Svc, op: &str, params: Value) -> Result<Value, ApiError> {
     svc.service.call(op, params, &socket_ctx())
 }
 
 /// Upload `bytes` the way a socket client does and return the upload id.
-fn upload(svc: &Svc, bytes: &[u8]) -> String {
+pub(super) fn upload(svc: &Svc, bytes: &[u8]) -> String {
     let begun = call(
         svc,
         "upload.begin",
@@ -234,12 +234,13 @@ fn unknown_reserved_and_unserved_ops_are_told_apart() {
             "{reserved}"
         );
     }
-    for unserved in ["vm.list", "base.list", "sample.list", "job.delete"] {
-        assert_eq!(
-            call(&svc, unserved, json!({})).unwrap_err().code,
-            ErrorCode::Unsupported,
-            "{unserved}"
-        );
+    assert_eq!(
+        call(&svc, "job.delete", json!({})).unwrap_err().code,
+        ErrorCode::Unsupported
+    );
+    // The library, VM and base reads are served now.
+    for served in ["vm.list", "base.list", "sample.list", "custody.verify"] {
+        assert!(call(&svc, served, json!({})).is_ok(), "{served}");
     }
     assert_eq!(
         call(&svc, "events.subscribe", json!({})).unwrap_err().code,

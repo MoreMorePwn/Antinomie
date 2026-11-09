@@ -40,10 +40,12 @@ pub enum Command {
     /// Rule packs and groups: list, enable, disable.
     #[command(subcommand)]
     Rules(rules::Rules),
-    /// Bases: list, install, download, build, delete; takes the engine lock.
+    /// Bases: list, install, download, build, delete; takes the engine lock
+    /// (`list` asks the daemon when one answers).
     #[command(subcommand)]
     Base(base::Base),
-    /// VMs: create, start, stop, status, reset, duplicate, delete; takes the engine lock.
+    /// VMs: create, start, stop, status, reset, duplicate, delete; takes the
+    /// engine lock (`list` asks the daemon when one answers).
     #[command(subcommand)]
     Vm(vm::Vm),
     /// VM snapshots: list, create, restore, delete; takes the engine lock.
@@ -52,14 +54,17 @@ pub enum Command {
     /// Run a library sample in a VM: `run exec`; takes the engine lock.
     #[command(subcommand)]
     Run(run::Run),
-    /// Samples in the library; no engine lock needed.
+    /// Samples in the library; no engine lock needed. `list`, `show` and `tag`
+    /// ask the daemon when one answers.
     #[command(subcommand)]
     Sample(sample::Sample),
-    /// Custody chains of the samples; no engine lock needed.
+    /// Custody chains of the samples; no engine lock needed. `verify` asks the
+    /// daemon when one answers (not with `--export`).
     #[command(subcommand)]
     Custody(custody::Custody),
     /// Index a saved run as Triage does and print its summary: the assessment,
-    /// the counts and the key behaviours. No engine lock needed.
+    /// the counts and the key behaviours. No engine lock needed. Asks the
+    /// daemon when one answers.
     Triage(triage::Triage),
     /// Run YARA, Sigma and IDS over a saved run's evidence; no engine lock
     /// needed unless --save keeps the results in the recording.
