@@ -53,6 +53,9 @@ pub struct RunPlan {
     pub guest_path: String,
     /// The launch; `path` and `sample` are set from the two fields above.
     pub request: ExecRequest,
+    /// The sample is a library: run this program with `LD_PRELOAD` set to the
+    /// library's guest path instead of running the sample itself.
+    pub load_into: Option<String>,
     /// Boot the VM when it is stopped; otherwise a stopped VM is `no_vm`.
     pub start_vm: bool,
     /// `StopRun` is sent when the run has lasted this long.
@@ -600,8 +603,19 @@ impl<E: Engine> Waiter<E> {
 
     fn launch(&mut self, plan: &RunPlan) -> Result<RunSummary, Stop> {
         let mut request = plan.request.clone();
-        request.path = plan.guest_path.clone();
-        request.sample = Some(plan.sample.clone());
+        match &plan.load_into {
+            Some(program) => {
+                // The library is named by the hash it was uploaded with: the
+                // engine links the run to the sample from the push record.
+                request.path = program.clone();
+                request.env.retain(|item| !item.starts_with("LD_PRELOAD="));
+                request.env.push(format!("LD_PRELOAD={}", plan.guest_path));
+            }
+            None => {
+                request.path = plan.guest_path.clone();
+                request.sample = Some(plan.sample.clone());
+            }
+        }
         self.launch_request(request)
     }
 

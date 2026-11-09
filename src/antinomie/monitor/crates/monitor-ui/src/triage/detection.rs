@@ -46,6 +46,7 @@ const FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::number("evidence.address", "Known process virtual address"),
     FieldSpec::text("evidence.report", "Retained specimen report identity"),
     FieldSpec::text("evidence.block", "Verified scanned block digest and extent"),
+    FieldSpec::text("evidence.input", "The scanned input the match came from"),
 ];
 const HEADERS: &[&str] = &[
     "Rule",

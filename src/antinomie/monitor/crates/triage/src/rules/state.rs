@@ -361,6 +361,25 @@ impl State {
 
     /// The call changed `path`: remember that the run wrote it.
     pub fn wrote(&mut self, cx: &Ctx, path: &str, touch: &Touch, out: &mut Vec<Hit>) {
+        if path == "/etc/ld.so.preload" && matches!(touch.op, Op::Written | Op::Created) {
+            // The loader reads this list for every program started after it.
+            let listed = String::from_utf8_lossy(&cx.payload(false)).into_owned();
+            for library in listed
+                .split(|c: char| c.is_whitespace() || c == ':')
+                .filter(|part| part.starts_with('/'))
+            {
+                if self.written.contains(library) {
+                    out.push(
+                        Hit::new(
+                            "injection.dropped_preload",
+                            library,
+                            format!("{library}, a library this run wrote, is listed in /etc/ld.so.preload"),
+                        )
+                        .detail("Every program started after this write loads the library."),
+                    );
+                }
+            }
+        }
         if touch.op == Op::Created && self.created.len() < LIMIT {
             self.created.insert(path.to_owned());
         }

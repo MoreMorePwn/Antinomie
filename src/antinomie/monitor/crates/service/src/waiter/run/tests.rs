@@ -60,6 +60,7 @@ fn plan() -> RunPlan {
         },
         guest_path: "/tmp/abababab-job.sh".into(),
         request: ExecRequest::default(),
+        load_into: None,
         start_vm: false,
         run_limit: Duration::from_secs(20),
         boot_limit: Duration::from_secs(180),

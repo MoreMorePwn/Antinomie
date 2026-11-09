@@ -100,10 +100,11 @@ pub fn run(arguments: &Detect, context: &Context) -> Result<Reply, CliError> {
     };
     let cancel = Arc::new(AtomicBool::new(false));
     let logger = context.logger;
-    let results = detection::detect_saved(&saved, &engines, &settings, keep, &cancel, &|line| {
-        logger.info(line)
-    })
-    .map_err(|error| CliError::new(ErrorCode::PreconditionFailed, error))?;
+    let results =
+        detection::detect_saved(&saved, &scan, &engines, &settings, keep, &cancel, &|line| {
+            logger.info(line)
+        })
+        .map_err(|error| CliError::new(ErrorCode::PreconditionFailed, error))?;
     let outcomes: Vec<(Engine, Outcome)> = results;
     if arguments.save {
         detection::save_digest(&saved, &scan, &settings, &outcomes).map_err(|error| {

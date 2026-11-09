@@ -317,6 +317,10 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    above takes the dump. **Memory Dump on Exit** and **Core Dump on Exit** sit
    below the trigger's options in the same section. Each launch gets its own terminal
    window for input and output.
+   A library sample's window has **Load into…**: give a program (and its
+   arguments, split on spaces) and it sends the library into the running VM, then
+   opens **Run program** with that program and `LD_PRELOAD` set to where the library
+   landed. The run is linked to the library sample (see the **Runs** list in section 5).
    On a VM with a desktop base, **Run in** picks where the program runs:
    **App terminal** (the default), **Guest desktop** (the program joins the
    graphical session, so its windows appear on the VM screen; its output
@@ -939,6 +943,21 @@ The network capture is the guest's own view on every route.
   names are always in the badge's tooltip and in a folded **Tactic colours**
   legend under the Summary and the sample window's ATT&CK section. The Sigma
   rules of low or informational severity add no techniques to the list.
+- **YARA scan inputs.** Besides the sample, the memory dump, the core and the files
+  recovered from the dump, the YARA scan reads: the **Preloaded library** (a library
+  sample the run named in `LD_PRELOAD`, `LD_AUDIT` or its arguments, read from the
+  sample library by its hash); each **File the run wrote** that is an ELF executable
+  or library (Triage rebuilds it from the recorded writes when it saves the run's digest,
+  in `detect --save` and in the Auto lane, and keeps the whole ones under the run's
+  `written` folder; a file that could not
+  be rebuilt whole is listed as skipped with the reason); and each **Unpacked layer**
+  static analysis produced (UPX and the like). Every match records the input it came
+  from, and the match's evidence line begins with it. Families named by these matches
+  count for the run like any other. The scan keeps its time budget and the 64 MiB file /
+  512 MiB total size limits; a library, file or layer left out for budget (or because it
+  is missing) is a **Skipped** row with the reason, and the scan notes name it. Written
+  files are limited to 64 files of 64 MiB (256 MiB together). The Detection tab scans
+  again by itself when Triage keeps new written files.
 - **Triage › Detection** lists each engine's matches as cards under **Matches**.
   On the YARA page the strong matches (an Elastic rule scored 70 or more, a rule
   with `family` metadata, a curated pack's non-generic rule) come first; unscored
@@ -1317,6 +1336,19 @@ fills the window's width: **Arguments** takes the spare width (a long command
 line is cut, the whole of it is on hover) and **Tree status**, **Root exit** and
 **VM** keep a width that fits their usual values.
 
+- **Runs that load a library.** A run of `/bin/sh -c '...'` with a library in
+  `LD_PRELOAD` or `LD_AUDIT` (in the environment, or set in the command line) is
+  linked to the library sample when the library sent that file into the VM: the
+  match is by the SHA-256 recorded when it was sent, not by the name. The sample's
+  **Runs** list shows the run with the **Role** `preloaded` (`audit library`, or
+  `named in arguments`), the sample no longer says "Never run", and the run's
+  Summary names the library above the tier counts. A named library the library never
+  sent has no hash: the Summary says so ("not a library sample: the library did not
+  send this file into the VM") and nothing is linked. A shell variable or glob in
+  the command line is not a name and is not resolved. When a run writes a shared
+  library and then preloads it (through `LD_PRELOAD`, `LD_AUDIT` or by listing it in
+  `/etc/ld.so.preload`), Triage reports **A library the run wrote is loaded into
+  programs** (high) naming the file.
 - **Summary** holds the identity, the **Static analysis** section (each check on a
   line: name, state chip, what it found, **Open**, and the notice to the right of
   the button), the ATT&CK section, **Detections** and **Files written**. Files
@@ -1753,7 +1785,7 @@ shipped yet.
   ...` (or after `--`), `--env K=V`, `--as user|root|UID:GID` (`user` is UID 1000),
   `--route drop|internet|inet_sim|tor|vpn|socks5` (a routed VM only), `--timeout-run
   SECONDS` (default 300: the run is then told to stop), `--net-capture`, `--memory-dump`,
-  `--core-dump`, `--static CHECKS` (the guest-side analysis too) and `--wait` (always on in
+  `--core-dump`, `--static CHECKS` (the guest-side analysis too), `--load-into PROGRAM` (the sample is a shared library: it is uploaded, then the guest program PROGRAM, an absolute path, runs with `LD_PRELOAD` set to it, and the run is linked to the library sample) and `--wait` (always on in
   direct mode). The program runs in the app terminal as `/tmp/<sha8>-<name>`; the end of
   its output is in the result. The wait covers the evidence the way the window's runs do
   (network capture, memory dump and core finished, up to 300 s), then stops the VM and

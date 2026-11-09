@@ -105,6 +105,7 @@ pub fn effective(job: &Job, policy: &Policy) -> Effective {
         route: Some(core_kind(o.route.unwrap_or(policy.network.route))),
         host_copy: None,
         sample: None,
+        preloaded: Vec::new(),
     };
     Effective {
         run_limit: Duration::from_secs(u64::from(o.timeout_s.unwrap_or(policy.run.timeout_s))),

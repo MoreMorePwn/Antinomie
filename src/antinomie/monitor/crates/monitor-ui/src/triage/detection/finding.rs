@@ -163,8 +163,14 @@ pub(super) fn evidence_label(evidence: &Evidence) -> String {
             frame,
             capture.file_name().unwrap_or_default().to_string_lossy()
         ),
-        Evidence::Bytes { path, offset, .. } => format!(
-            "{} — {}",
+        Evidence::Bytes {
+            path,
+            offset,
+            input,
+            ..
+        } => format!(
+            "{}{} — {}",
+            input.map_or(String::new(), |input| format!("{}: ", input.label())),
             path.file_name().unwrap_or_default().to_string_lossy(),
             offset.map_or("file-level match; no byte position".into(), |offset| {
                 format!("open bytes at 0x{offset:x}")
@@ -198,7 +204,15 @@ pub(super) fn evidence_values(evidence: &Evidence) -> Vec<(&'static str, RowValu
             address,
             report_id,
             block,
+            input,
         } => vec![
+            (
+                "evidence.input",
+                input
+                    .and_then(|input| serde_json::to_value(input).ok())
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .map_or(RowValue::Missing, RowValue::Text),
+            ),
             (
                 "evidence.block",
                 block
@@ -738,6 +752,7 @@ mod tests {
             address: None,
             report_id: None,
             block: None,
+            input: None,
         }
     }
 
@@ -966,6 +981,7 @@ mod tests {
                 address: None,
                 report_id: None,
                 block: None,
+                input: None,
             })
             .collect();
         let finding = super::super::tests::finding("sample_rule", "Sample rule", evidence);

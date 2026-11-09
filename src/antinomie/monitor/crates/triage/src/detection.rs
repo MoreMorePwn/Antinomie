@@ -170,8 +170,16 @@ pub fn evidence_key(
                 Some(archive) => {
                     let artifacts = files.digest(&archive.join("artifacts.json"));
                     let journal = files.digest(&archive.join(engine::JOURNAL_FILE));
-                    match (artifacts, journal) {
-                        (Some(artifacts), Some(journal)) => format!("{artifacts}:{journal}"),
+                    // The programs the run wrote, once Triage has kept them.
+                    let written = files.digest(
+                        &archive
+                            .join(engine::written::FOLDER)
+                            .join(engine::written::INDEX),
+                    );
+                    match (artifacts, journal, written) {
+                        (Some(artifacts), Some(journal), Some(written)) => {
+                            format!("{artifacts}:{journal}:{written}")
+                        }
                         _ => return "wait:digest".into(),
                     }
                 }
@@ -354,6 +362,7 @@ pub enum Outcome {
 /// Detection tab keeps it.
 pub fn detect_saved(
     saved: &crate::SavedRun,
+    finished: &crate::ArchiveScan,
     engines: &[Engine],
     settings: &Settings,
     keep: Keep,
@@ -363,6 +372,15 @@ pub fn detect_saved(
     let input = saved.input();
     let (directory, identity) =
         identity(&input).ok_or_else(|| "the run has no recorded program to scan".to_owned())?;
+    // The programs and libraries the run wrote go beside the run first, so
+    // YARA reads them; a scan that keeps nothing leaves the folder alone.
+    if matches!(keep, Keep::Save) && finished.whole_run {
+        let _ = crate::written_export::export(
+            &saved.run.directory,
+            &finished.file_activity,
+            finished.partial,
+        );
+    }
     let mut outcomes = Vec::new();
     for engine in engines {
         if cancel.load(Ordering::Relaxed) {

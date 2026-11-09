@@ -96,6 +96,7 @@ impl RunBoxState {
             .ok()
             .flatten();
         let entry = RunEntry {
+            role: "",
             number: 1,
             run: super::super::super::history::listed(run),
             folder: true,

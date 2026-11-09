@@ -64,18 +64,18 @@ fn load(options: BackendOptions, vms: Vec<(String, String)>) -> Loaded {
             continue;
         };
         for run in runs {
-            let Some(sample) = &run.request.sample else {
-                continue;
-            };
-            seen.push(SeenRun {
-                sha256: sample.sha256.clone(),
-                vm_id: run.vm_id.clone(),
-                vm_name: vm_name.clone(),
-                run_id: run.id.clone(),
-                started_ms: run.started_ms,
-                exit: exit_label(&run),
-                directory: run.directory.display().to_string(),
-            });
+            // The sample the run executed and the libraries it loaded.
+            for sha256 in run.request.linked_hashes() {
+                seen.push(SeenRun {
+                    sha256: sha256.to_owned(),
+                    vm_id: run.vm_id.clone(),
+                    vm_name: vm_name.clone(),
+                    run_id: run.id.clone(),
+                    started_ms: run.started_ms,
+                    exit: exit_label(&run),
+                    directory: run.directory.display().to_string(),
+                });
+            }
         }
     }
     library.index_runs(&seen)?;

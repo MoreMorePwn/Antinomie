@@ -221,6 +221,10 @@ pub enum Evidence {
         report_id: Option<String>,
         #[serde(default)]
         block: Option<ByteSource>,
+        /// Which input the bytes came from; `None` in a report saved before
+        /// the scan covered more than one kind.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<InputKind>,
     },
 }
 
@@ -628,6 +632,7 @@ mod ids;
 mod inputs;
 pub mod journal;
 mod runner;
+pub mod written;
 mod yara;
 pub use coverage::{
     COVERAGE_LIST_LIMIT, Coverage, CoverageItem, CoverageReason, IDS_REASONS, SIGMA_REASONS,

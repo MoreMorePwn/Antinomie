@@ -847,6 +847,65 @@ impl Library {
         Ok(None)
     }
 
+    /// The library samples a launch loads into its program, by the hash of
+    /// the file the library sent into `vm_id` at each path the launch names
+    /// (`LD_PRELOAD`, `LD_AUDIT`, an argument). A named `LD_PRELOAD` or
+    /// `LD_AUDIT` path the library never sent comes back with an empty hash
+    /// and the reason; a plain argument that is not a sample is left out.
+    /// `ran` is the run's own sample, which is not listed again.
+    pub fn identify_preloads(
+        &self,
+        vm_id: &str,
+        env: &[String],
+        args: &[String],
+        ran: Option<&super::SampleRef>,
+    ) -> Result<Vec<super::PreloadRef>, String> {
+        let mut found: Vec<super::PreloadRef> = Vec::new();
+        for (via, path) in super::preload::candidates(env, args) {
+            let sample = self
+                .connection
+                .query_row(
+                    "SELECT s.sha256, s.name FROM push p JOIN sample s ON s.sha256 = p.sha256
+                     WHERE p.vm_id=?1 AND p.path=?2 AND s.removed_ms IS NULL
+                     ORDER BY p.at_ms DESC, p.id DESC LIMIT 1",
+                    params![vm_id, path],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            let entry = match sample {
+                Some((sha256, name)) => {
+                    if via == "argument" && ran.is_some_and(|ran| ran.sha256 == sha256) {
+                        continue;
+                    }
+                    super::PreloadRef {
+                        sha256,
+                        name,
+                        path,
+                        via: via.into(),
+                        note: String::new(),
+                    }
+                }
+                None if via == "argument" => continue,
+                None => super::PreloadRef {
+                    sha256: String::new(),
+                    name: String::new(),
+                    path,
+                    via: via.into(),
+                    note:
+                        "the library did not send this file into the VM, so its hash is not known"
+                            .into(),
+                },
+            };
+            if !found.iter().any(|known| {
+                known.sha256 == entry.sha256 && known.path == entry.path && known.via == entry.via
+            }) {
+                found.push(entry);
+            }
+        }
+        Ok(found)
+    }
+
     /// Remember runs that executed library samples. A run seen for the first
     /// time adds a "Seen in a run" event; a run seen again only refreshes its
     /// start and exit. Runs of samples not in the library are skipped.

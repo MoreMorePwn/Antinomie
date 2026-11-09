@@ -24,7 +24,8 @@ fn symbol(kind: InputKind) -> &'static str {
         InputKind::Executable => icon::FILE_CODE,
         InputKind::CoreDump => icon::CPU,
         InputKind::MemoryDump => icon::MEMORY,
-        InputKind::RecoveredFile => icon::FILE,
+        InputKind::RecoveredFile | InputKind::WrittenFile => icon::FILE,
+        InputKind::PreloadedLibrary | InputKind::UnpackedLayer => icon::FILE_CODE,
         InputKind::Capture => icon::NETWORK,
         InputKind::EventJournal => icon::LIST_BULLETS,
     }
@@ -231,7 +232,11 @@ pub(super) fn target(input: &ScannedInput) -> Option<Route> {
         InputKind::Capture => OpenInput::Capture(input.path.clone()),
         InputKind::CoreDump => OpenInput::Core(input.path.clone()),
         InputKind::MemoryDump => OpenInput::Memory(parent()?),
-        InputKind::RecoveredFile => OpenInput::Folder(parent()?),
+        InputKind::RecoveredFile | InputKind::WrittenFile | InputKind::UnpackedLayer => {
+            OpenInput::Folder(parent()?)
+        }
+        // The library sample is opened from the Samples page.
+        InputKind::PreloadedLibrary => return None,
         InputKind::EventJournal => return Some(Route::Journal(input.sha256.clone())),
     };
     Some(Route::Open(open))

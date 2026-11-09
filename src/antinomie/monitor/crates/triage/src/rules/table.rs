@@ -266,6 +266,13 @@ pub const SPECS: &[Spec] = &[
         &["T1574.006", "DET0435"],
     ),
     rule(
+        "injection.dropped_preload",
+        1,
+        T::High,
+        C::Injection,
+        &["T1574.006", "DET0435"],
+    ),
+    rule(
         "injection.ld_so_preload",
         1,
         T::High,

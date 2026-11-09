@@ -331,8 +331,8 @@ impl MonitorApp {
     ) {
         let font = self.settings.font_size;
         let order =
-            crate::table_sort::order(ui.ctx(), "sample_runs", shown.len(), |column, a, b| {
-                let (a, b) = (&shown[a].run, &shown[b].run);
+            crate::table_sort::order(ui.ctx(), "sample_runs", shown.len(), |column, ia, ib| {
+                let (a, b) = (&shown[ia].run, &shown[ib].run);
                 match column {
                     0 => a.started_ms.cmp(&b.started_ms),
                     1 => a
@@ -348,6 +348,7 @@ impl MonitorApp {
                         .cmp(&b.request.args.join(" ").to_lowercase()),
                     3 => run_status(a).cmp(run_status(b)),
                     4 => root_exit(a).cmp(&root_exit(b)),
+                    6 => shown[ia].role.cmp(shown[ib].role),
                     _ => vm_name(a).cmp(&vm_name(b)),
                 }
             });
@@ -378,6 +379,7 @@ impl MonitorApp {
                     .column(Col::flex(130.0).range(RUN_STATUS_MIN..=240.0))
                     .column(Col::flex(110.0).range(RUN_EXIT_MIN..=200.0))
                     .column(Col::flex(120.0).range(RUN_VM_MIN..=260.0))
+                    .column(Col::flex(110.0).range(70.0..=180.0))
                     .column(Col::fixed(72.0))
                     .max_scroll_height(height)
                     .min_scrolled_height(0.0)
@@ -389,6 +391,7 @@ impl MonitorApp {
                             "Tree status",
                             "Root exit",
                             "VM",
+                            "Role",
                         ]
                         .into_iter()
                         .enumerate()
@@ -436,6 +439,19 @@ impl MonitorApp {
                             });
                             row.col(|ui| {
                                 ui.add(egui::Label::new(vm_name(run)).selectable(false).truncate());
+                            });
+                            row.col(|ui| {
+                                let role = if entry.role.is_empty() {
+                                    "ran"
+                                } else {
+                                    entry.role
+                                };
+                                ui.add(egui::Label::new(role).selectable(false).truncate())
+                                    .on_hover_text(if entry.role.is_empty() {
+                                        "The run executed this sample"
+                                    } else {
+                                        "The run loaded this library into another program; see its Summary"
+                                    });
                             });
                             row.col(|ui| {
                                 let known = self.run(&run.id).is_some();

@@ -120,12 +120,12 @@ impl HostTriage for RealTriage {
     fn detect(
         &self,
         saved: &SavedRun,
-        _scan: &ArchiveScan,
+        scan: &ArchiveScan,
         engines: &[Engine],
         cancel: &Arc<AtomicBool>,
     ) -> Result<Vec<(Engine, Outcome)>, String> {
         let settings = detection::headless_settings(&self.options.data_dir)?;
-        detection::detect_saved(saved, engines, &settings, Keep::Save, cancel, &|_| {})
+        detection::detect_saved(saved, scan, engines, &settings, Keep::Save, cancel, &|_| {})
     }
 
     fn save_digest(

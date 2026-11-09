@@ -74,6 +74,11 @@ pub struct Exec {
     /// the usual one is set.
     #[arg(long = "env", value_name = "K=V")]
     pub env: Vec<String>,
+    /// Treat the sample as a shared library: upload it, then run PROGRAM (a path
+    /// in the guest) with `LD_PRELOAD` set to the uploaded library, instead of
+    /// running the sample itself. The run is linked to the library sample.
+    #[arg(long = "load-into", value_name = "PROGRAM")]
+    pub load_into: Option<String>,
     /// Who runs it: `user` (UID 1000, the default), `root`, or UID:GID.
     #[arg(long = "as", default_value = "user", value_name = "WHO")]
     pub who: String,
@@ -165,6 +170,14 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
         if !item.contains('=') || item.starts_with('=') {
             return Err(CliError::invalid(format!("{item:?} is not K=V")).with_field("env"));
         }
+    }
+    if let Some(program) = &arguments.load_into
+        && !program.starts_with('/')
+    {
+        return Err(CliError::invalid(format!(
+            "{program:?} is not an absolute path in the guest (for example /bin/sh)"
+        ))
+        .with_field("load-into"));
     }
     if !env.iter().any(|item| item.starts_with("PATH=")) {
         env.push("PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".into());
@@ -282,6 +295,7 @@ fn exec_on(
         },
         guest_path: record.guest_path(),
         request: request.clone(),
+        load_into: arguments.load_into.clone(),
         start_vm: arguments.start,
         run_limit: Duration::from_secs(arguments.timeout_run),
         boot_limit: BOOT_WAIT,
@@ -604,6 +618,15 @@ mod tests {
             let exec = parse(&["--env", bad]);
             assert_eq!(request_for(&exec).unwrap_err().exit.code(), 4, "{bad}");
         }
+    }
+
+    #[test]
+    fn load_into_needs_an_absolute_guest_path() {
+        let exec = parse(&["--load-into", "/bin/sh"]);
+        assert_eq!(exec.load_into.as_deref(), Some("/bin/sh"));
+        assert!(request_for(&exec).is_ok());
+        let relative = parse(&["--load-into", "sh"]);
+        assert_eq!(request_for(&relative).unwrap_err().exit.code(), 4);
     }
 
     #[test]

@@ -13,8 +13,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod libraries;
 mod progress;
 mod sigma;
+pub(super) use libraries::{StagedLibrary, stage_libraries};
 pub(super) use progress::ProgressWriter;
 use progress::watch_progress;
 #[cfg(test)]
@@ -102,6 +104,10 @@ pub(super) struct Staged {
     /// Inputs staging could not prepare; the scan lists them as skipped.
     #[serde(default)]
     pub skipped_inputs: Vec<super::ScannedInput>,
+    /// The library samples the run loaded into its program, copied out of the
+    /// sample library for the sandboxed YARA scan (which cannot read it).
+    #[serde(default)]
+    pub libraries: Vec<StagedLibrary>,
     /// Selected rule files that could not be staged. Their rules did not run,
     /// so the result is incomplete; this is not a coverage limit.
     #[serde(default)]
@@ -159,7 +165,7 @@ fn validate_run(request: &Request) -> Result<(), String> {
     Ok(())
 }
 
-fn host_path(value: &str) -> PathBuf {
+pub(super) fn host_path(value: &str) -> PathBuf {
     value
         .strip_prefix("~/")
         .and_then(|tail| std::env::var_os("HOME").map(|base| PathBuf::from(base).join(tail)))
@@ -375,6 +381,7 @@ fn stage(
         captures: vec![],
         journal: None,
         skipped_inputs: vec![],
+        libraries: vec![],
         unstaged: vec![],
         network_off: false,
         warnings: vec![],
@@ -402,6 +409,7 @@ fn stage(
         Engine::Yara => {
             staged.yara_sources = managed;
             staged.yara_sources.extend(extra);
+            staged.libraries = stage_libraries(&request, work);
             if let Some(artifacts) = owned_artifacts(&request)?
                 && (request.settings.scan_memory || request.settings.scan_recovered)
             {
@@ -1368,6 +1376,7 @@ mod tests {
             captures: vec![],
             journal: None,
             skipped_inputs: vec![],
+            libraries: vec![],
             unstaged: vec![],
             network_off: false,
             warnings: vec!["pack x was not evaluated".into()],
@@ -1542,6 +1551,7 @@ mod tests {
                 size: data.len() as u64,
                 sha256: crate::storage::sha256_hex(data),
             }),
+            input: None,
         };
         assert_eq!(read_evidence(&request, &evidence).unwrap(), b"3456789");
         fs::write(&path, b"changed!!!").unwrap();
@@ -1613,6 +1623,7 @@ mod tests {
             captures: vec![],
             journal: None,
             skipped_inputs: vec![],
+            libraries: vec![],
             unstaged: vec![],
             network_off: false,
             warnings: vec![],

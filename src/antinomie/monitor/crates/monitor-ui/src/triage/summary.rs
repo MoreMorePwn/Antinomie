@@ -23,6 +23,8 @@ pub(super) use state::State as SummaryState;
 pub(super) struct RunFacts {
     pub base: Option<String>,
     pub screenshot: Option<std::path::PathBuf>,
+    /// The libraries the run loaded into its program, one line each.
+    pub preloaded: Vec<String>,
 }
 
 /// What a click in the Summary asks for, applied once the frame is drawn.
@@ -213,9 +215,17 @@ impl TriageView {
         &mut self,
         base: Option<String>,
         screenshot: Option<std::path::PathBuf>,
+        preloaded: Vec<String>,
     ) {
-        if self.run_facts.base != base || self.run_facts.screenshot != screenshot {
-            self.run_facts = RunFacts { base, screenshot };
+        if self.run_facts.base != base
+            || self.run_facts.screenshot != screenshot
+            || self.run_facts.preloaded != preloaded
+        {
+            self.run_facts = RunFacts {
+                base,
+                screenshot,
+                preloaded,
+            };
         }
     }
 }

@@ -32,7 +32,7 @@ pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     in_memory(cx, &path, out);
     dropped(cx, st, &path, out);
     staging(st, &path, out);
-    environment(cx, out);
+    environment(cx, st, out);
     if name == "pkexec"
         && (empty_argv(cx) || cx.envp().iter().any(|var| var.starts_with("GCONV_PATH=")))
     {
@@ -259,7 +259,7 @@ pub fn staging(st: &State, path: &str, out: &mut Vec<Hit>) {
 }
 
 /// `LD_PRELOAD` and its relatives, and history switches, in the new program's environment.
-pub fn environment(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn environment(cx: &Ctx, st: &State, out: &mut Vec<Hit>) {
     for var in cx.envp() {
         let Some((name, value)) = var.split_once('=') else {
             continue;
@@ -273,6 +273,20 @@ pub fn environment(cx: &Ctx, out: &mut Vec<Hit>) {
             }),
             _ => false,
         };
+        if matches!(name, "LD_PRELOAD" | "LD_AUDIT") {
+            for library in value.split([':', ' ']).filter(|part| !part.is_empty()) {
+                if st.written.contains(library) {
+                    out.push(
+                        Hit::new(
+                            "injection.dropped_preload",
+                            library,
+                            format!("program started with {name}={library}, a library this run wrote"),
+                        )
+                        .detail("Scanned with the run's YARA rules when it could be rebuilt whole from the recorded writes."),
+                    );
+                }
+            }
+        }
         if risky {
             out.push(Hit::new(
                 "injection.ld_preload_env",

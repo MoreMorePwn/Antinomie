@@ -124,6 +124,20 @@ impl Worker {
                 })
                 .unwrap_or(None);
         }
+        // Libraries named in LD_PRELOAD, LD_AUDIT or the arguments, by the
+        // hash the library recorded when it sent each file into this VM.
+        if request.preloaded.is_empty() {
+            request.preloaded = crate::samples::Library::open(&self.options.data_dir)
+                .and_then(|library| {
+                    library.identify_preloads(
+                        &session.vm.id,
+                        &request.env,
+                        &request.args,
+                        request.sample.as_ref(),
+                    )
+                })
+                .unwrap_or_default();
+        }
         let aarch32 = Self::is_aarch32_sample(&self.snapshot, &self.options.data_dir, request);
         if aarch32
             && request.core_dump_on_exit

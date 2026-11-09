@@ -192,3 +192,44 @@ pub fn ld_so_preload_is_high_and_the_linker_search_path_is_medium() {
         "reading it is normal"
     );
 }
+
+#[test]
+pub fn a_library_the_run_wrote_and_then_preloads_is_named() {
+    let env = run(vec![
+        open_write(1, "/tmp/libhook.so", 3),
+        write(1, 3, b"\x7fELF"),
+        exec_env(1, "/bin/ls", &["ls"], &["LD_PRELOAD=/tmp/libhook.so"]),
+    ]);
+    let row = rows(&env, "injection.dropped_preload");
+    assert_eq!(row.len(), 1, "{:?}", rules_of(&env));
+    assert_eq!(text(row[0], "finding.tier"), "high");
+    assert!(text(row[0], "finding.summary").contains("a library this run wrote"));
+    // A library the run did not write is only the existing medium finding.
+    let other = run(vec![exec_env(
+        1,
+        "/bin/ls",
+        &["ls"],
+        &["LD_PRELOAD=/usr/lib/libother.so"],
+    )]);
+    assert!(!has(&other, "injection.dropped_preload"));
+    assert!(has(&other, "injection.ld_preload_env"));
+}
+
+#[test]
+pub fn a_written_library_listed_in_ld_so_preload_is_named() {
+    let out = run(vec![
+        open_write(1, "/lib/libntpx/.backup_ld.so", 3),
+        write(1, 3, b"\x7fELF"),
+        open_write(1, "/etc/ld.so.preload", 4),
+        write(1, 4, b"/lib/libntpx/.backup_ld.so\n"),
+    ]);
+    let row = rows(&out, "injection.dropped_preload");
+    assert_eq!(row.len(), 1, "{:?}", rules_of(&out));
+    assert!(text(row[0], "finding.summary").contains("ld.so.preload"));
+    let unrelated = run(vec![
+        open_write(1, "/etc/ld.so.preload", 4),
+        write(1, 4, b"/lib/other.so\n"),
+    ]);
+    assert!(!has(&unrelated, "injection.dropped_preload"));
+    assert!(has(&unrelated, "injection.ld_so_preload"));
+}

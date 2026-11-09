@@ -68,6 +68,9 @@ pub(super) enum Tab {
 /// One run of the sample, numbered in start order (run 1 is the oldest).
 pub(super) struct RunEntry {
     pub(super) number: usize,
+    /// How the run used this sample: empty when it ran the sample, else
+    /// "preloaded", "audit library" or "named in arguments".
+    pub(super) role: &'static str,
     /// Without the static-analysis rows; the report is in [`Data::report`].
     pub(super) run: RunSummary,
     /// The run's folder is still on disk.
@@ -391,6 +394,8 @@ enum Action {
     EditTags,
     EditText,
     RunInVm,
+    /// Send the library into the VM and run this command line with it in `LD_PRELOAD`.
+    LoadInto(String),
     Export,
     Report,
 }
@@ -500,6 +505,7 @@ impl MonitorApp {
                 &data.record.description,
             ),
             Some(Action::RunInVm) => self.run_sample_in_vm(&data.record),
+            Some(Action::LoadInto(program)) => self.load_sample_into(&data.record, &program),
             Some(Action::Export) => {
                 self.samples_page.export = Some(super::export::ExportDialog::new(
                     &data.record,
@@ -592,6 +598,36 @@ impl MonitorApp {
                 .clicked()
             {
                 chosen = Some(Action::RunInVm);
+            }
+            if data.record.file_type.eq_ignore_ascii_case("elf") {
+                // The program to run with this library preloaded.
+                let memory = egui::Id::new(("load-into-program", &data.record.sha256));
+                let mut program = ui
+                    .data_mut(|d| d.get_temp::<String>(memory))
+                    .unwrap_or_else(|| "/bin/sh".to_owned());
+                ui.add_enabled_ui(can_run, |ui| {
+                    ui.menu_button("Load into…", |ui| {
+                        ui.label("Program (and arguments) to run with this library in LD_PRELOAD:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut program)
+                                .desired_width(280.0)
+                                .hint_text("/bin/sh -c ls"),
+                        );
+                        if ui
+                            .add_enabled(!program.trim().is_empty(), egui::Button::new("Send and open Run program"))
+                            .on_hover_text(
+                                "Sends the library into the running VM, then opens Run program with the program and LD_PRELOAD set to the library",
+                            )
+                            .clicked()
+                        {
+                            chosen = Some(Action::LoadInto(program.trim().to_owned()));
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_hover_text("Run a program with this library preloaded into it");
+                });
+                ui.data_mut(|d| d.insert_temp(memory, program));
             }
             if ui.button("Edit tags…").clicked() {
                 chosen = Some(Action::EditTags);
@@ -733,6 +769,32 @@ impl MonitorApp {
     }
 }
 
+impl MonitorApp {
+    /// Send the library into the running VM, then open Run program with
+    /// `command` (a program and plain-space-separated arguments) and
+    /// `LD_PRELOAD` set to where the library lands.
+    fn load_sample_into(&mut self, record: &SampleRecord, command: &str) {
+        let destination = record.guest_path();
+        let mut words = command.split_whitespace().map(str::to_owned);
+        let Some(path) = words.next() else { return };
+        let mut run = ExecRequest {
+            path,
+            args: words.collect(),
+            uid: 1000,
+            gid: 1000,
+            cwd: "/tmp".into(),
+            ..ExecRequest::default()
+        };
+        run.env.push(format!("LD_PRELOAD={destination}"));
+        self.samples.await_run(run);
+        self.send(Command::UploadSample {
+            sha256: record.sha256.clone(),
+            destination,
+            executable: true,
+        });
+    }
+}
+
 /// Runs read, whether a report was found, and the scan's rows once done.
 #[cfg(test)]
 pub(in crate::app) type Probe = (usize, bool, Option<(usize, usize, u64)>);
@@ -845,6 +907,15 @@ impl SamplesPage {
             .as_ref()
             .and_then(|detail| detail.data.as_ref())
             .map(|data| data.runs.iter().map(|entry| entry.run.id.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// How each run used the open sample, in the Runs tab's order ("" when it ran it).
+    pub(in crate::app) fn detail_run_roles(&self) -> Vec<&'static str> {
+        self.detail
+            .as_ref()
+            .and_then(|detail| detail.data.as_ref())
+            .map(|data| data.runs.iter().map(|entry| entry.role).collect())
             .unwrap_or_default()
     }
 
