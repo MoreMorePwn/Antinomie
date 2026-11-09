@@ -242,3 +242,55 @@ error keeps the old settings, so run `config validate` first.
 **What happened to a job.** `auto events JOB` lists its events; `<data>/service/jobs/<id>/job.log` has its log lines;
 `kill -USR1` on the daemon writes the queue's state to its log. Log lines go to
 standard error (the journal under systemd), as text or with `--log-format json`.
+
+## Run it under systemd
+
+Two unit files are in `packaging/`, in the repository and in the release archive: `antinomie-auto.service` (a system unit for a dedicated
+user on a dedicated host, with a device policy) and `antinomie-auto.user.service`
+(a user unit). Both run `antinomie-cli auto daemon`, restart it after a crash, and
+give it six minutes to stop.
+
+**The system unit** (as root):
+
+```text
+useradd --system --create-home --home-dir /var/lib/antinomie \
+        --shell /usr/sbin/nologin --groups kvm antinomie
+install -m 0755 antinomie-cli /usr/local/bin/antinomie-cli
+install -m 0644 packaging/antinomie-auto.service /etc/systemd/system/
+systemctl daemon-reload
+# prepare the lane once, as that user, with the daemon not running
+sudo -u antinomie -H antinomie-cli --data-dir /var/lib/antinomie base install ./bases/busybox
+sudo -u antinomie -H antinomie-cli --data-dir /var/lib/antinomie auto init --base busybox
+install -m 0644 -o antinomie packaging/service.toml.example /var/lib/antinomie/service.toml   # optional
+systemctl enable --now antinomie-auto.service
+sudo -u antinomie -H antinomie-cli --data-dir /var/lib/antinomie auto submit ./sample.elf --wait
+```
+
+**The user unit** (as the user who runs it, who must be in the `kvm` group):
+
+```text
+./install.sh                       # puts antinomie-cli in ~/.local/bin
+install -D -m 0644 packaging/antinomie-auto.user.service ~/.config/systemd/user/antinomie-auto.service
+systemctl --user daemon-reload
+antinomie-cli --data-dir ~/antinomie-auto base install ./bases/busybox
+antinomie-cli --data-dir ~/antinomie-auto auto init --base busybox
+systemctl --user enable --now antinomie-auto.service
+loginctl enable-linger "$USER"     # keep it running without a login session
+```
+
+What the units say:
+
+| Setting | Why |
+|---|---|
+| `Type=simple`, `Restart=on-failure`, `RestartSec=10`, `StartLimitBurst=5` in 5 minutes | The daemon recovers from a crash at its next start; a crash loop stops instead of spinning. A stop through `systemctl` is not restarted. There is no `sd_notify`: the unit is started when the process runs; ask `doctor` or `auto status` whether the daemon answers |
+| `KillMode=mixed`, `TimeoutStopSec=360` | QEMU is a child of the daemon. `systemctl stop` sends `SIGTERM` to the daemon alone, which stops the running job and its VM and exits. Only what is still alive after 360 s (the 120 s VM stop plus up to 120 s for a job already in its host stages and the disk-layer step) gets `SIGKILL`, QEMU included. With `[daemon] shutdown = "drain"` raise it above `drain_timeout_s` |
+| `ExecReload` | `systemctl reload` sends `SIGHUP`: policies and `service.toml` are read again |
+| `NoNewPrivileges`, `CapabilityBoundingSet=` (empty), `RestrictSUIDSGID`, `LockPersonality`, `ProtectKernel*`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname` | The daemon needs no privilege: QEMU opens `/dev/kvm` through the `kvm` group and bubblewrap uses unprivileged user namespaces |
+| `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `StateDirectory` | The only writable place is the data folder. Add other folders (a watch folder, `[results] dir`, a log file) with `systemctl edit antinomie-auto` and `ReadWritePaths=` |
+| `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`, `RestrictNamespaces=user mnt pid ipc uts net` | QEMU's user-mode network, the local socket and bubblewrap's namespaces, and nothing else |
+| `DevicePolicy=closed` with `/dev/kvm`, `/dev/null`, `/dev/zero`, `/dev/full`, `/dev/random`, `/dev/urandom`, `/dev/tty`, `/dev/ptmx` and the pseudo-terminals (system unit) | Not `PrivateDevices`, which would hide `/dev/kvm`. A user manager cannot set a device policy, so the user unit has none |
+| No `MemoryDenyWriteExecute`, `ProcSubset` or `SystemCallFilter` | QEMU's TCG and the YARA-X engine generate code at run time, the resource floors read `/proc/meminfo`, and bubblewrap needs mount and namespace calls |
+
+Read the log with `journalctl -u antinomie-auto` (`journalctl --user -u
+antinomie-auto`). `systemd-analyze security antinomie-auto.service` scores the
+unit. The Docker equivalent of this unit comes with the web interface in 0.9.1.

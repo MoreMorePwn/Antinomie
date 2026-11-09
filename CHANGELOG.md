@@ -167,6 +167,20 @@ x86 programs by their own table.
   tags the sample `auto:label=...` and `auto:policy=...` in the library, with the
   automation actor in its custody chain. See "Auto mode" in docs/usage.md.
 
+- **`antinomie-cli` in the release archive, a systemd unit and the Auto mode guide
+  (ANT-T0389, ANT-T0390).** The release archive carries `antinomie-cli` beside
+  `antinomie-monitor`, and `./install.sh` installs both (`~/.local/bin/antinomie`
+  and `antinomie-cli`; `--uninstall` removes both). The archive also holds
+  `packaging/`: `antinomie-auto.service`, a hardened system unit for a dedicated
+  user (`Type=simple`, `Restart=on-failure`, `KillMode=mixed`, `TimeoutStopSec=360`,
+  `NoNewPrivileges`, `ProtectSystem=strict`, a closed device policy with `/dev/kvm`),
+  `antinomie-auto.user.service` for a user manager, and an example `service.toml`
+  and `policies/default.toml`. New guide `docs/auto-mode.md` (pipeline, policies,
+  revert, watch folders, retention, failure codes, troubleshooting, systemd), a
+  "Command line and automation" section in `docs/usage.md`, an "Unattended use"
+  section in `docs/security.md`, and the dependencies the headless crates added
+  (`toml`, `schemars` and their helpers) in the licence notices.
+
 - **`antinomie-cli run list`, `run show` and `run export`, and Triage reads
   through the query API (ANT-T0367, ANT-T0369).** `run list` lists the recorded
   runs of the data directory (`--vm`, `--sample`, `--job`, `--state`, `--since`,

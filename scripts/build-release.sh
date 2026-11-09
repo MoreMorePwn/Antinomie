@@ -53,6 +53,7 @@ cp "$REPO/install.sh" "$REPO/CHANGELOG.md" "$REPO/LICENSE" "$REPO/LICENSING.md" 
 cp "$MONITOR/assets/antinomie.desktop" "$MONITOR/assets/antinomie.svg" "$package/"
 cp -r "$REPO/assets/branding" "$package/branding"
 cp -r "$REPO/LICENSES" "$package/"
+cp -r "$REPO/packaging" "$package/packaging"
 python3 "$REPO/scripts/check-licenses.py" --output "$package/LICENSES/cargo-dependencies"
 # Preserve notices from the toolchain/libc actually used by this build.
 rust_notice="$(rustc --print sysroot)/share/doc/rust/COPYRIGHT-library.html"
@@ -88,12 +89,13 @@ cat > "$package/README.txt" <<TEXT
 Antinomie $version (Linux x86-64)
 
 Install for the current user (no root needed):
-    ./install.sh            # antinomie command, application menu entry, icon
+    ./install.sh            # antinomie and antinomie-cli commands, menu entry, icon
     ./install.sh --uninstall
 
 Or run it in place:
     ./antinomie-monitor
     ./antinomie-cli --help      # headless command line, no window
+    packaging/                  # systemd units and example service.toml for Auto mode
 
 Requirements: glibc 2.39 or newer (Debian 13, Ubuntu 24.04 or later), QEMU
 (qemu-system-x86_64, qemu-img, GTK display backend) and access to /dev/kvm

@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# The policy `auto init` writes as <data>/policies/default.toml when the folder has
+# none. Copy it there and point vm.lane_vm at your lane VM. Reference: docs/service-config.md.
+
+description = "Static checks, 5 minute run, nothing leaves the machine"
+
+[sample]
+accept_types   = ["elf"]
+accept_arch    = ["x86_64"]
+max_sample_mib = 64
+on_duplicate   = "run"
+
+[vm]
+lane_vm      = "auto-1"
+revert       = "snapshot_disk"
+revert_to    = "auto-clean"
+network      = "routed"
+revert_after = false
+
+[run]
+timeout_s    = 300
+max_run_s    = 1800
+run_as       = "user"
+allow_root   = false
+run_in       = "app_terminal"
+guest_dir    = "/tmp"
+args_allowed = true
+env_allowed  = false
+
+[network]
+route          = "drop"
+allowed_routes = ["drop", "inet_sim"]
+capture        = true
+
+[evidence]
+memory_dump  = false
+core_dump    = false
+core_max_mib = 64
+
+[analysis]
+static_checks         = "triage"
+static_time_limit_min = 2
+triage                = true
+detection             = { yara = true, sigma = true, ids = true }
+required_stages       = ["analyse"]
+online_ioc            = false
+
+[report]
+formats = ["html", "json"]
+bundle  = false
+defang  = true
+
+[verdict]
+mapping = "default"
+
+[retry]
+max_attempts = 2
+backoff_s    = [30, 120]
+retry_on     = ["vm_start_failed", "guest_unreachable", "upload_failed", "guest_lost"]
+
+[access]
+scopes  = ["submit"]
+clients = ["*"]
+
+[limits]
+max_queued_per_client = 50
+max_jobs_per_day      = 500
+max_concurrent        = 1
+priority_max          = 5
+wait_s                = 3600
