@@ -93,3 +93,4 @@
 # Contract revision 22 in 0.9.0: specimen digests, the exit hold of the dump trigger, the compat
 # structures of the AArch32 evaluation, cores with non-resident pages
 0054-antinomie-give-a-specimen-copy-s-sha-256-in-its-acquisition-reply.patch
+0055-antinomie-hold-an-exiting-process-of-a-dump-trigger-run-until-the-host-has-judged-it.patch
