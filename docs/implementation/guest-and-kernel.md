@@ -1256,7 +1256,9 @@ host had to open the core file to count).
   nothing, and the tail past the probe or page budget) and the pages it read in
   (`struct ant_coredump_live` `unavailable`, `faulted`); `ant_core_live_finish()`
   and the exit core's path keep the thread contexts lost (expected less retained
-  notes). CORE_STATUS header flag COVERAGE (2) appends them (16 bytes after
+  notes; `ant_core_live_finish()` now sets the expected size before it counts the
+  notes: it counted none before, so every live core was marked partial with its
+  thread contexts lost). CORE_STATUS header flag COVERAGE (2) appends them (16 bytes after
   STORED's part: lost, left out or 0xffffffff for a core the exit writer wrote,
   read in, zero), all zero until the state is terminal. CORE_CAPS offers
   COVERAGE (64) and NONRESIDENT (128).

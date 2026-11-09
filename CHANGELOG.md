@@ -36,7 +36,10 @@ x86 programs by their own table.
   which policy it used. The guest now counts what a core lacks (thread contexts
   lost, pages left out, pages read in) and the partial core's message gives those
   counts without opening the file. On an older base the box is disabled and a
-  request for it is taken resident-only with an issue that says so.
+  request for it is taken resident-only with an issue that says so. A live core whose
+  every thread context and page was kept is now Complete: the guest counted the
+  contexts before it knew the file's size, so every live core read as one whose
+  contexts were lost and was marked Partial.
 
 - **Fewer schema gaps in 32-bit ARM runs (ANT-T0443).** On a revision-22 arm64 base
   the structures of readlink, getsockopt and setsockopt, sigaltstack, clone's TID

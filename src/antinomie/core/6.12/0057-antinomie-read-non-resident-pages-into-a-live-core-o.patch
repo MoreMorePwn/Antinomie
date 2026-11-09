@@ -1,4 +1,4 @@
-From 3e7b2ea7bb08c0172fc3673d7af374259b5728a4 Mon Sep 17 00:00:00 2001
+From 839aeb5e44ffa5ad0f2555f27992fa38138fbdf0 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Tue, 10 Nov 2026 02:45:44 +0700
 Subject: [PATCH] antinomie: read non-resident pages into a live core on
@@ -21,6 +21,11 @@ STORED's part, the thread contexts the core's notes lack, the pages it
 selected but did not keep (not counted for an exit core's writer) and
 the pages it read in. CORE_CAPS offers both (COVERAGE, NONRESIDENT).
 
+A live core read the thread contexts it kept before its expected size was
+known, so it always counted none and every live core was marked partial
+with its contexts lost; ant_core_live_finish() now sets the expected size
+first.
+
 Only kernel/antinomie changes: manual_core.c reads the pages and
 counts them, process_core.c keeps and reports the counts,
 process_core.h and control_wire.h define them.
@@ -28,11 +33,11 @@ process_core.h and control_wire.h define them.
 Contract: revision 22. Policy 1 and the 80- and 96-byte statuses are
 unchanged; the new policy and flag are offered in CORE_CAPS.
 ---
- kernel/antinomie/control_wire.h | 22 ++++++++++++++-
- kernel/antinomie/manual_core.c  | 19 ++++++++++++-
- kernel/antinomie/process_core.c | 47 ++++++++++++++++++++++++++++-----
- kernel/antinomie/process_core.h |  5 ++++
- 4 files changed, 84 insertions(+), 9 deletions(-)
+ kernel/antinomie/control_wire.h | 22 ++++++++++++-
+ kernel/antinomie/manual_core.c  | 19 ++++++++++-
+ kernel/antinomie/process_core.c | 57 ++++++++++++++++++++++++++++-----
+ kernel/antinomie/process_core.h |  5 +++
+ 4 files changed, 93 insertions(+), 10 deletions(-)
 
 diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
 index 762d015cb..f69436f9c 100644
@@ -126,7 +131,7 @@ index 409048273..d4be27c7a 100644
  	}
  	error = ant_core_live_lookup(&identity, admission, &core);
 diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
-index e8743e3e4..5e87bab30 100644
+index e8743e3e4..5ddfd9b9d 100644
 --- a/kernel/antinomie/process_core.c
 +++ b/kernel/antinomie/process_core.c
 @@ -72,6 +72,10 @@ struct ant_core {
@@ -181,7 +186,24 @@ index e8743e3e4..5e87bab30 100644
  	mutex_unlock(&core_lock);
  	return core;
  }
-@@ -827,6 +836,7 @@ void ant_core_live_finish(struct ant_core *core, int error, u32 thread_count, bo
+@@ -812,7 +821,15 @@ static u32 core_thread_count(struct ant_core *core)
+ void ant_core_live_finish(struct ant_core *core, int error, u32 thread_count, bool gap)
+ {
+ 	u64 expected = core->chunks ? core_expected_size(core) : 0;
+-	u32 retained = core->chunks ? core_thread_count(core) : 0;
++	u32 retained;
++
++	/* core_thread_count() reads the notes only of a core whose expected
++	 * size is known: set it first, or every live core reads as one whose
++	 * thread contexts were all lost. Nothing reads it before the state
++	 * below is terminal.
++	 */
++	core->expected_size = expected;
++	retained = core->chunks ? core_thread_count(core) : 0;
+ 
+ 	/* The caller has released all owned parks and stopped writing. */
+ 	if (core->sink_error)
+@@ -827,6 +844,7 @@ void ant_core_live_finish(struct ant_core *core, int error, u32 thread_count, bo
  		error = -ENODATA;
  	mutex_lock(&core_lock);
  	core->expected_size = expected;
@@ -189,7 +211,7 @@ index e8743e3e4..5e87bab30 100644
  	core->thread_count = retained;
  	core->flags |= ANTC_CORE_PAUSE_RELEASED;
  	if (expected)
-@@ -859,6 +869,15 @@ void ant_core_held_write(struct ant_core *core, int wait_status,
+@@ -859,6 +877,15 @@ void ant_core_held_write(struct ant_core *core, int wait_status,
  	ant_core_live_finish(core, error, threads, false);
  }
  
@@ -205,7 +227,7 @@ index e8743e3e4..5e87bab30 100644
  bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
  {
  	struct ant_core *core, *selected = NULL;
-@@ -920,8 +939,10 @@ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+@@ -920,8 +947,10 @@ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
  	mutex_lock(&core_lock);
  	if (core->expected_size)
  		core->flags |= core_format_flag(core);
@@ -217,7 +239,7 @@ index e8743e3e4..5e87bab30 100644
  	core->thread_count = thread_count;
  	core->status = error;
  	core->finish_ns = ktime_get_ns();
-@@ -996,9 +1017,12 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+@@ -996,9 +1025,12 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
  
  	if (args_len != (opcode == ANTC_CORE_READ ? 32 : 16))
  		return -EINVAL;
@@ -232,7 +254,7 @@ index e8743e3e4..5e87bab30 100644
  		return -EINVAL;
  	extended = flags & ANTC_CORE_STATUS_STORED;
  	id = get_unaligned_le64(args + 8);
-@@ -1025,6 +1049,10 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+@@ -1025,6 +1057,10 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
  		removed = true;
  	} else if (opcode == ANTC_CORE_STATUS) {
  		size_t reply_size = extended ? ANTC_CORE_STATUS_STORED_SIZE : ANTC_CORE_STATUS_SIZE;
@@ -243,7 +265,7 @@ index e8743e3e4..5e87bab30 100644
  
  		if (capacity < reply_size) {
  			error = -EMSGSIZE;
-@@ -1050,6 +1078,11 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
+@@ -1050,6 +1086,11 @@ int ant_core_command(u32 opcode, const u8 *args, size_t args_len,
  		put_unaligned_le32(core->flags, reply + 64);
  		put_unaligned_le32(core->tgid, reply + 68);
  		put_unaligned_le32(core->thread_count, reply + 72);
