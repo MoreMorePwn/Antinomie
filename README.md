@@ -185,8 +185,8 @@ antinomie
 - **No Rust needed.** Prebuilt installs run as they are.
 - **Updating:** run `./install.sh` from a newer release. It replaces the
   executable and keeps your data.
-- **Uninstalling:** `./install.sh --uninstall` removes the three installed files
-  and keeps your data too.
+- **Uninstalling:** `./install.sh --uninstall` removes the installed files
+  (`antinomie`, `antinomie-cli`, the menu entry and the icon) and keeps your data too.
 - **Other distributions:** **Tools → App dependencies** names the packages for
   apt, dnf, pacman and zypper. Only Debian and Ubuntu installs are tested.
 - **Provenance:** releases from 0.8.0 on carry a build attestation. With the GitHub
@@ -375,6 +375,18 @@ The app checks dependencies at startup (**Tools → App dependencies**). From a
 terminal: `antinomie --check-dependencies`. The
 [full dependency list](docs/usage.md#dependencies-and-analysis-tools) names every tool.
 
+## What's new in 0.9.0
+
+* **Headless mode:** `antinomie-cli` ships beside the window in the same archive and
+  `./install.sh` installs both. It runs the engine with no display: bases, VMs,
+  snapshots, samples, custody, static analysis, rules, Triage, reports and `run exec`.
+  See [Command line and automation](docs/usage.md#command-line-and-automation-090).
+* **Auto mode:** `antinomie-cli auto daemon` and `auto submit` take a sample in and
+  give a report and a label out, on a lane VM that reverts to a clean snapshot before
+  every job, with policies, watch folders, result files, retention and a systemd unit
+  (`packaging/`). See [Auto mode](docs/auto-mode.md) and
+  [Unattended use](docs/security.md#unattended-use).
+
 ## What's new in 0.8.3
 
 0.8.3 runs the same revision-20 bases as 0.8.0 to 0.8.2; the
@@ -507,10 +519,7 @@ list.
 
 Planned and undated:
 
-- **Headless mode**: a job daemon (the `antinomie-cli` commands for samples,
-  custody, static analysis and rules arrive in 0.9.0)
 - **Docker-based web interface and API**
-- **Auto mode**: a sample in, a report out
 - **MIPS** guests
 - **TLS decryption**
 - **In-memory unpacking detection**: catch and save code a sample decrypts or
@@ -522,8 +531,9 @@ Planned and undated:
 | Read | For |
 |---|---|
 | [User guide](docs/usage.md) | Bases, VMs, runs, routes and reading results. |
-| [Command line](docs/usage.md#command-line-090) | `antinomie-cli` (0.9.0): doctor, samples, custody, static analysis and rules without a window. |
-| [Job API](docs/job-api-1.md) and [service configuration](docs/service-config.md) | The contract and the configuration files of the coming job daemon (0.9.0 ships the contract and `config validate`; the daemon is not shipped). |
+| [Command line and automation](docs/usage.md#command-line-and-automation-090) | `antinomie-cli` (0.9.0): install, `doctor`, your first job, the daemon and watch folders; the [command reference](docs/usage.md#command-line-090) follows. |
+| [Auto mode](docs/auto-mode.md) | The pipeline, policies, revert, retention, failure codes, troubleshooting and the systemd unit. |
+| [Job API](docs/job-api-1.md) and [service configuration](docs/service-config.md) | The contract and the configuration files of the job daemon. |
 | [Triage report](docs/triage-report.md) | Export formats, evidence bundle and the JSON schema. |
 | [Security model](docs/security.md) | Trust boundaries, network modes, sensitive data and safe use. |
 | [Security policy](SECURITY.md) | Supported versions and how to report a vulnerability privately. |

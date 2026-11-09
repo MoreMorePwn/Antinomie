@@ -3,10 +3,10 @@
 [← Back to the overview](../README.md)
 
 > **Status in 0.9.0.** The files, their keys and `antinomie-cli config validate`
-> exist and are checked, and `antinomie-cli auto daemon` reads them: the socket,
-> the queue limits, the resource floors, the shutdown keys and the reload on
-> `SIGHUP`. Watch folders, retention, result files and notifications are parsed
-> and checked but the daemon does not act on them yet.
+> are checked, and `antinomie-cli auto daemon` acts on all of them: the socket, the
+> queue limits, the resource floors, the shutdown keys, the reload on `SIGHUP`, watch
+> folders, retention, result files and the `on_finish` command. Webhooks are parsed
+> and checked but not built. [Auto mode](auto-mode.md) explains them.
 
 Headless mode reads two kinds of file from the data directory. A person writes
 them; the program never rewrites them.
@@ -69,6 +69,21 @@ A second `SIGTERM`/`SIGINT` within 5 s interrupts every wait at once, stops the
 VM and exits 130; recovery at the next start finishes the rest. `SIGHUP` reads
 `policies/` and `service.toml` again (a file with an error keeps the old set);
 `SIGUSR1` writes the queue's state to the log.
+
+## Watch folders, retention, results and the hook
+
+| Key | Default | What the daemon does with it |
+|---|---|---|
+| `[[inbox.watch]] path` | none | An absolute folder the daemon polls every 2 s. It must belong to the daemon's user |
+| `policy`, `policy_by_dir` | `default`, false | The policy of its files; with `policy_by_dir`, a file in `path/<policy>/` uses that policy and an unknown folder name is ignored |
+| `recursive` | false | Also scan subfolders (a symbolic link to a folder is never entered) |
+| `delete_after` | `move` | `move` to `processed/`, `delete`, or `keep` (remembered by device, inode, size and time) |
+| `on_duplicate` | the policy's | Overrides the policy for this folder |
+| `allow_group_write` | false | Allow a folder the daemon's group can write to; one anyone can write to is never used |
+| `watch_rate` | 10 | New jobs a minute before the folder pauses for a minute (`watch_flood`) |
+| `[retention] jobs_days`, `recordings_days`, `max_recordings_gib`, `keep_failed` | 90, 14, 200, true | The hourly pass and `auto gc` ([retention](auto-mode.md#retention-and-clean-up)) |
+| `[results] dir` | none | A copy of `job.json` and the reports of each finished job under `<dir>/<date>/<sha8>-<jobid>/` |
+| `[notify] on_finish` | none | A command (argv, no shell) run when a job ends, with `ANTINOMIE_JOB_ID`, `ANTINOMIE_STATE`, `ANTINOMIE_LABEL`, `ANTINOMIE_SHA256` and `ANTINOMIE_RESULT_JSON` and a 30 s limit |
 
 ## Verdict keys
 
