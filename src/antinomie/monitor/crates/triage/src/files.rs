@@ -281,7 +281,15 @@ impl FileIndex {
                     self.bind_description(opened, group);
                 }
             }
-            self.note_activity(files, call, event, hits, fd, (None, None));
+            self.note_activity(
+                files,
+                call,
+                event,
+                hits,
+                fd,
+                (opened_description, description),
+                (None, None),
+            );
             return None;
         }
         let observed = displayed_path(call, event, files);
@@ -458,7 +466,15 @@ impl FileIndex {
             }),
         };
         let shape = shape::of(name, args, &copy, open_flags(call, event), success, changed);
-        self.note_activity(files, call, event, hits, fd, (transfer, shape));
+        self.note_activity(
+            files,
+            call,
+            event,
+            hits,
+            fd,
+            (opened_description, description),
+            (transfer, shape),
+        );
         if lifecycle_only && !self.changes.contains_key(&group) {
             return read_row;
         }
@@ -543,6 +559,7 @@ impl FileIndex {
         event: &EventSummary,
         hits: &[Hit],
         fd: Option<u64>,
+        (opened, description): (Option<u64>, Option<u64>),
         (transfer, shape): (
             Option<file_activity::Transfer>,
             Option<file_activity::Shape>,
@@ -572,6 +589,10 @@ impl FileIndex {
             cookie: call.task_cookie,
             fd,
             identity: kernel_records::file_id(call),
+            // A descriptor leads to its file whatever name the file has now;
+            // only a call that names no path of its own goes by it.
+            opened,
+            description: description.filter(|_| path_list(call).is_empty()),
             call,
             event,
             image: process_image(files, event),
@@ -1436,6 +1457,97 @@ pub mod tests {
         assert_eq!(kinds(file(&activity, "/tmp/probed")), [Kind::Probe]);
         // One process made every call.
         assert_eq!(activity.processes.len(), 1);
+    }
+
+    #[test]
+    fn writes_through_a_descriptor_opened_before_a_rename_stay_in_the_files_history() {
+        // INC: open, write, rename to ".INC", then three trailer writes through
+        // the descriptor, which still leads to the file. The writes carry no
+        // identity and the descriptor's table remembers only the old name.
+        let calls = [
+            create(1, "/tmp/a", 100, 1),
+            operation(2, 18, "pwrite64", 4, [3, 0, 4, 0x40000, 0, 0], b"abcd"),
+            identified(
+                named(3, 82, "rename", 0, [0; 6], &["/tmp/a", "/tmp/a.INC"]),
+                2,
+                1,
+                100,
+            ),
+            operation(4, 18, "pwrite64", 4, [3, 0, 4, 0x40000, 0, 0], b"trl1"),
+            operation(5, 18, "pwrite64", 4, [3, 0, 4, 0x40000, 0, 0], b"trl2"),
+            operation(6, 18, "pwrite64", 4, [3, 0, 4, 0x40000, 0, 0], b"trl3"),
+        ];
+        let activity = activity_of(&calls);
+        assert_eq!(
+            activity.files.len(),
+            1,
+            "{:?}",
+            activity.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+        let a = file(&activity, "/tmp/a");
+        assert_eq!(
+            kinds(a),
+            [
+                Kind::Create,
+                Kind::Write,
+                Kind::Rename,
+                Kind::Write,
+                Kind::Write,
+                Kind::Write
+            ]
+        );
+    }
+
+    #[test]
+    fn worker_threads_writing_after_a_rename_reach_the_same_file_history() {
+        // A thread (clone with CLONE_FILES) writes the trailers through the
+        // descriptor the main thread opened, after the main thread renamed the
+        // file; a second descriptor made by dup leads to the same file.
+        let as_thread = |mut call: InvocationSummary| {
+            for event in call.entry.iter_mut().chain(call.exit.iter_mut()) {
+                event.task_cookie = 2;
+                event.tid = 2;
+            }
+            call.task_cookie = 2;
+            call
+        };
+        let calls = [
+            create(1, "/tmp/a", 100, 1),
+            operation(2, 18, "pwrite64", 4, [3, 0, 4, 0x40000, 0, 0], b"abcd"),
+            operation(3, 56, "clone", 2, [0x10f00, 0, 0, 0, 0, 0], b""),
+            identified(
+                named(4, 82, "rename", 0, [0; 6], &["/tmp/a", "/tmp/a.INC"]),
+                2,
+                1,
+                100,
+            ),
+            as_thread(operation(
+                5,
+                18,
+                "pwrite64",
+                4,
+                [3, 0, 4, 0x40000, 0, 0],
+                b"trl1",
+            )),
+            operation(6, 32, "dup", 5, [3, 0, 0, 0, 0, 0], b""),
+            as_thread(operation(
+                7,
+                18,
+                "pwrite64",
+                4,
+                [5, 0, 4, 0x40000, 0, 0],
+                b"trl2",
+            )),
+            operation(8, 18, "pwrite64", 4, [3, 0, 4, 0x40000, 0, 0], b"trl3"),
+        ];
+        let activity = activity_of(&calls);
+        let names: Vec<_> = activity.files.iter().map(|f| &f.path).collect();
+        assert_eq!(activity.files.len(), 1, "{names:?}");
+        let writes = kinds(&activity.files[0])
+            .iter()
+            .filter(|kind| **kind == Kind::Write)
+            .count();
+        assert_eq!(writes, 4);
     }
 
     #[test]

@@ -281,6 +281,10 @@ pub struct Record<'a> {
     pub fd: Option<u64>,
     /// The file the guest identified, once a call named it.
     pub identity: Option<FileId>,
+    /// The open-file description this call created, and the one it acted on
+    /// by descriptor alone: both lead to the file they were opened on.
+    pub opened: Option<u64>,
+    pub description: Option<u64>,
     pub call: &'a InvocationSummary,
     pub event: &'a EventSummary,
     pub image: Option<&'a str>,
@@ -346,6 +350,9 @@ pub struct Builder {
     pub files: BTreeMap<String, FileActivity>,
     /// The file each name leads to now.
     pub current: BTreeMap<String, String>,
+    /// The file each open-file description was opened on, so a write through
+    /// a descriptor reaches it after the file was renamed, by any thread.
+    pub by_description: BTreeMap<u64, String>,
     pub processes: Vec<(u32, u32, Option<String>)>,
     pub events: usize,
     pub omitted_files: u64,
@@ -419,12 +426,36 @@ impl Builder {
     /// the name leads to now; else the name; a call with no name is keyed by
     /// the task and descriptor.
     pub fn key(&mut self, record: &Record<'_>) -> String {
+        let key = self.key_of(record);
+        if let Some(description) = record.opened.or(record.description) {
+            if self.by_description.len() < NAMES_TRACKED
+                || self.by_description.contains_key(&description)
+            {
+                if record.opened.is_some() && record.identity.is_some() {
+                    self.by_description.insert(description, key.clone());
+                } else {
+                    self.by_description
+                        .entry(description)
+                        .or_insert_with(|| key.clone());
+                }
+            }
+        }
+        key
+    }
+
+    fn key_of(&mut self, record: &Record<'_>) -> String {
         if let Some(id) = &record.identity {
             let key = format!("id:{}:{}:{}", id.key.dev, id.key.ino, id.key.generation);
             if record.path_known && self.current.len() < NAMES_TRACKED {
                 self.current.insert(record.path.to_owned(), key.clone());
             }
             return key;
+        }
+        if let Some(key) = record
+            .description
+            .and_then(|description| self.by_description.get(&description))
+        {
+            return key.clone();
         }
         if record.path_known {
             return self
