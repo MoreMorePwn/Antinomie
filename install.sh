@@ -3,18 +3,20 @@
 #
 # install.sh — install Antinomie for the current user (no root needed):
 #   ~/.local/bin/antinomie                                  the app
+#   ~/.local/bin/antinomie-cli                              the command line (headless, no window)
 #   ~/.local/share/applications/antinomie.desktop           application menu entry
 #   ~/.local/share/icons/hicolor/scalable/apps/antinomie.svg icon
 #
 #   ./install.sh               build (if needed) and install or update; in a
 #                              release archive, install the prebuilt app
-#   ./install.sh --uninstall   remove those three files (application data stays)
+#   ./install.sh --uninstall   remove those four files (application data stays)
 #
 # QEMU (qemu-system-x86_64, qemu-img) and KVM access are still needed to run VMs.
 set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 data=${XDG_DATA_HOME:-"$HOME/.local/share"}
 bin="$HOME/.local/bin/antinomie"
+cli_bin="$HOME/.local/bin/antinomie-cli"
 desktop="$data/applications/antinomie.desktop"
 icon="$data/icons/hicolor/scalable/apps/antinomie.svg"
 
@@ -24,7 +26,7 @@ refresh_menus() {
 }
 
 if [[ ${1:-} == --uninstall ]]; then
-    rm -f "$bin" "$desktop" "$icon"
+    rm -f "$bin" "$cli_bin" "$desktop" "$icon"
     refresh_menus
     echo "Antinomie removed. Its bases, VM disks and recordings (~/antinomie by default) are kept."
     exit 0
@@ -33,23 +35,28 @@ elif [[ $# -gt 0 ]]; then
     exit 2
 fi
 
-if [[ -x "$repo/antinomie-monitor" && -f "$repo/antinomie.desktop" ]]; then
+if [[ -x "$repo/antinomie-monitor" && -x "$repo/antinomie-cli" && -f "$repo/antinomie.desktop" ]]; then
     # Release archive: the prebuilt app and its assets sit next to this script.
     built="$repo/antinomie-monitor"
+    built_cli="$repo/antinomie-cli"
     assets="$repo"
 else
     bash "$repo/scripts/build-monitor-host.sh" >/dev/null
     built="$repo/work/monitor-host/antinomie-monitor"
+    built_cli="$repo/work/monitor-host/antinomie-cli"
     assets="$repo/src/antinomie/monitor/assets"
 fi
 install -D -m 0755 "$built" "$bin"
+install -D -m 0755 "$built_cli" "$cli_bin"
 install -D -m 0644 "$assets/antinomie.svg" "$icon"
 mkdir -p "$(dirname "$desktop")"
 sed "s|@BIN@|$bin|" "$assets/antinomie.desktop" > "$desktop"
 chmod 0644 "$desktop"
 refresh_menus
 echo "Installed: $bin"
+echo "Installed: $cli_bin"
 echo "Start it from the application menu (Antinomie) or run: antinomie"
+echo "The command line needs no window: antinomie-cli --help, antinomie-cli doctor"
 case ":$PATH:" in
     *":$HOME/.local/bin:"*) ;;
     *) echo "Note: ~/.local/bin is not on PATH; add it or start Antinomie from the menu." ;;

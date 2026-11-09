@@ -40,6 +40,16 @@ tables under NCSA. The checker evaluates those terms like any expression,
 records them as `packages[].bundled_license`, and fails when the bundled
 notice files are not among the retained documents.
 
+**Headless crates (0.9.0).** `antinomie-cli`, `antinomie-service` and
+`antinomie-triage` add these packages to the locked graph, compared with 0.8.3:
+`toml`, `toml_writer` and `serde_spanned` (MIT OR Apache-2.0; the daemon's
+configuration), `schemars`, `schemars_derive` (MIT), `serde_derive_internals`,
+`dyn-clone`, `ref-cast` and `ref-cast-impl` (MIT OR Apache-2.0; the job API's
+JSON Schema). `libc` (MIT OR Apache-2.0) was already in the graph and becomes
+a direct dependency of the command line. All are permitted expressions, all retain their notice documents in the
+release archive's `LICENSES/cargo-dependencies`, and none embeds a C library.
+`THIRD-PARTY-NOTICES.md` lists them.
+
 The inventory is a reproducible metadata/notice check, not a blanket assertion
 of legal clearance. New dependencies or missing host notice documents need
 review. Do not change imported licenses to the host license. The release
