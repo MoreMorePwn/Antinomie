@@ -480,6 +480,11 @@ impl ProgramRun {
             self.storage_error(error.clone());
         }
         self.capture.final_health = Some(health.clone());
+        // An analysis a VM stop carried on can finish before this last
+        // write: its own report on disk is then newer than this copy.
+        if let Some(saved) = settled_analysis(&self.summary) {
+            self.summary.analysis = Some(saved);
+        }
         storage::atomic_json(&self.summary.directory.join("run.json"), &self.summary)?;
         self.note_end(health);
         let (rows, cols) = self.terminal.screen().size();
@@ -512,6 +517,19 @@ impl ProgramRun {
         self.begin_finalize(available);
         self.complete_finalize(state, health)
     }
+}
+
+/// The run's analysis as its own folder has it, when the summary still shows
+/// it in progress and the job has finished since (the same report, settled).
+fn settled_analysis(summary: &RunSummary) -> Option<crate::analysis::AnalysisReport> {
+    use crate::analysis::AnalysisState::{Acquiring, Queued, Running};
+    let current = summary.analysis.as_ref()?;
+    if !matches!(current.state, Acquiring | Queued | Running) {
+        return None;
+    }
+    let saved = crate::analysis::jobs::open_report(&summary.directory.join("analysis")).ok()?;
+    (saved.id == current.id && !matches!(saved.state, Acquiring | Queued | Running))
+        .then_some(saved)
 }
 
 fn unix_ms() -> u64 {
@@ -586,6 +604,45 @@ mod tests {
         assert_eq!(run.stored_len(), increment as u64);
         assert!(increment > 0);
         drop(run);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn the_final_record_takes_an_analysis_that_finished_after_the_vm_stopped() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-settled-analysis-{}", storage::unique_id()));
+        std::fs::create_dir_all(directory.join("analysis")).unwrap();
+        let selection = crate::analysis::AnalysisSelection {
+            enabled: true,
+            checks: vec![crate::analysis::AnalysisKind::Metadata],
+            time_limit_minutes: 0,
+            limits: Default::default(),
+        };
+        let mut running = crate::analysis::jobs::new_report("/tmp/sample", &selection);
+        running.state = crate::analysis::AnalysisState::Running;
+        let mut summary: RunSummary = serde_json::from_value(serde_json::json!({
+            "id": "run1", "vm_id": "vm", "boot_id": "boot", "session_id": 0,
+            "root_task_cookie": 0, "pid": 0, "request": ExecRequest::default(),
+            "directory": directory, "terminal_eof": false, "state": "Finished",
+            "recording_error": null, "notes": []
+        }))
+        .unwrap();
+        summary.analysis = Some(running.clone());
+        // No report on disk yet: the summary's copy stays.
+        assert!(settled_analysis(&summary).is_none());
+        let mut done = running.clone();
+        crate::analysis::jobs::fail(
+            &mut done,
+            crate::analysis::AnalysisState::Partial,
+            "fixture",
+        );
+        storage::atomic_json(&directory.join("analysis/report.json"), &done).unwrap();
+        let settled = settled_analysis(&summary).expect("the finished report");
+        assert_eq!(settled.state, crate::analysis::AnalysisState::Partial);
+        // Another analysis's report is never taken.
+        let mut other = running;
+        other.id = "other".into();
+        summary.analysis = Some(other);
+        assert!(settled_analysis(&summary).is_none());
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]

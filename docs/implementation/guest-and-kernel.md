@@ -1235,7 +1235,10 @@ this host without the features, and an older host refuses a revision-22 base.
   now has its queue marked `session_ended`, so its final report goes into its run's
   `run.json` and `manifest.json` (`save_run_analysis()`); that flag was never set
   before, and a run whose analysis finished after the stop kept "acquiring" or
-  "running" in its record while its `report.json` was complete.
+  "running" in its record while its `report.json` was complete. The run's own
+  last write (`complete_finalize()`, on the flush thread after the stop) takes
+  that settled report too when the job finished first (`settled_analysis()`), so
+  neither order leaves the record behind (seen on an arm64 fast-exit run).
 * **Tools.** `guest-run` takes `"host_copy": true` (the upload at the run's
   path is the host copy), `"expect_refused": true`, `"no_evidence_wait": true`
   and `"saved_analysis_wait"` (the saved analyses after the VM stopped).
