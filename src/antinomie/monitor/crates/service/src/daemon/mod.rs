@@ -24,11 +24,11 @@ mod housekeeping;
 pub mod lane;
 mod lane_ops;
 mod library_ops;
-#[cfg(test)]
-mod read_tests;
 mod notify_thread;
 #[cfg(test)]
 mod p4_tests;
+#[cfg(test)]
+mod read_tests;
 pub mod runner;
 pub mod service;
 #[cfg(test)]
