@@ -14,6 +14,19 @@ x86 programs by their own table.
 
 ### Host
 
+- **A Debian arm64 VM with a realistic profile and a network starts (ANT-T0424).**
+  QEMU 11 refused its card (`-device igb,…,addr=0x19: VF addr overflows`):
+  QEMU's igb, the card of the arm64 machines, brings eight SR-IOV virtual
+  functions from its own PCI place plus 0x80, which at 00:19.0 pass the bus's
+  last function. On arm64 a base that names its NIC by slot now has it at
+  00:0e.0 (`enp0s14`), the highest slot where they fit, on every profile; x86-64
+  is unchanged. A disk provisioned for 00:19.0 before gets the profile's own
+  card there, and the start log says so. When QEMU exits during a start, the
+  error now begins with QEMU's exit status and its own message; the TCG speed
+  advice is added only when a wait ran out. The quick tier of
+  `scripts/vm-regress.py` gains `nic-routed` on a Debian base: a realistic
+  desktop VM on a Routed network whose card must get a DHCP lease (on arm64 and
+  x86-64; `guest-run` takes `"vm": {"routed": true}`).
 - **Runs know their job, sensitive reads reach the service log, `sample add` goes
   through the daemon, and `run export --sensitive` writes packet and call bytes
   (ANT-T0421).** `run list` showed `job_id: null` and `--job` found nothing; the
@@ -421,7 +434,7 @@ x86 programs by their own table.
   touches the disk; the guest reports the hash it stored, the VM powers off and
   the disk tools remove what that boot left. A failed or overlong (15 minutes)
   provisioning boot fails the creation with its reason. On arm64 the NIC of
-  such a VM sits at PCI 00:19.0 (`enp0s25`) on every profile. The x86-64
+  such a VM sits at PCI 00:0e.0 (`enp0s14`) on every profile. The x86-64
   provisioning is unchanged (a test pins it byte for byte).
 - **Who sent the fatal signal.** On a revision-21 base the task-exit record
   names the sender of the signal that ended a task, and Triage's note on

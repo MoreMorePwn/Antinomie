@@ -54,7 +54,9 @@ impl Qmp {
                 Err(_) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(50))
                 }
-                Err(error) => return Err(error.to_string()),
+                Err(error) => {
+                    return Err(format!("{SOCKET_WAIT_OUT} {} s: {error}", wait.as_secs()));
+                }
             }
         };
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -155,4 +157,14 @@ pub(super) fn repeatable(command: &serde_json::Value) -> bool {
 /// A QMP error that is only a missing reply, not a closed or refused socket.
 pub(super) fn is_timeout(error: &str) -> bool {
     error.contains("timed out waiting for a reply")
+}
+
+/// How a connection that QEMU's socket never accepted within its wait starts.
+const SOCKET_WAIT_OUT: &str = "QMP socket not ready after";
+
+/// A QMP error where a wait ran out: a reply that did not come, or a socket
+/// that did not accept in time (not a closed or reset one, which QEMU's exit
+/// causes).
+pub(super) fn waited_out(error: &str) -> bool {
+    is_timeout(error) || error.contains(SOCKET_WAIT_OUT)
 }

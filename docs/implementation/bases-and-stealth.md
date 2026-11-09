@@ -751,7 +751,13 @@ the NIC at that interface's slot, so a disk and its NIC always agree, and
 both the user-mode network and the Routed gateway's `-device` use it. Saving
 a profile whose slot differs rewrites the stanza on the VM's disk
 (`set_interface`, VM stopped); with snapshots that is refused, since their
-disks name the old interface. A reset writes the current profile's.
+disks name the old interface. A reset writes the current profile's. An
+arm64 VM (`virt`) has the NIC at 00:0e.0, `enp0s14` (`NicSlot::Virt`), on
+every profile: the PC chipsets' places mean nothing there, and QEMU's igb (the
+arm64 machines' card) cannot sit at 00:19.0 or 00:1f.6, where its eight
+SR-IOV virtual functions would pass the bus's last function (0.9.0, ANT-T0424;
+see "Guest accounts on Debian arm64: the provisioning boot" in
+guest-and-kernel.md).
 `/etc/resolv.conf` is a plain file dhcpcd rewrites from the lease. Packages
 configured during the build that recorded
 the build host's name (exim4's mail name) get the chosen hostname, and the

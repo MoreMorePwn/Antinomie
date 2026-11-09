@@ -31,6 +31,8 @@
 //! `"vm": {"nat": true}` gives the VM NAT networking.
 //! `"vm": {"isolated_network": true}` uses restricted networking without
 //! outbound forwarding and overrides NAT, as in the application.
+//! `"vm": {"routed": true}` wires the VM's card to Antinomie's own gateway
+//! (Routed network: its DHCP gives the lease; runs keep the default route).
 //! `"vm": {"stealth": "desktop"}` (or `"laptop"`, `"server"`, or a whole
 //! stealth profile object) launches the VM with a realistic hardware identity;
 //! `"laptop:dell-latitude-5420"` copies that catalog machine.
@@ -395,6 +397,10 @@ fn run() -> Result<Value, String> {
                 nat: vm_spec.get("nat").and_then(Value::as_bool).unwrap_or(false),
                 isolated_network: vm_spec
                     .get("isolated_network")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                routed: vm_spec
+                    .get("routed")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
                 transport: vm_spec

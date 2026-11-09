@@ -154,12 +154,53 @@ class PlanTests(unittest.TestCase):
         return {"out": out, "base": Path("/base"), "old_base": Path("/old"), "new": Path("/new"),
                 "fix": out / "fixtures", "old": Path("/oldhost"), "old_ok": True}
 
-    def test_quick_is_the_three_oracle_groups_and_the_in_app_screen(self):
+    def test_quick_is_the_three_oracle_groups_the_in_app_screen_and_a_routed_nic(self):
         checks = vm.plan("quick", self.ctx())
-        self.assertEqual([c.name for c in checks], ["conf-quick", "screen"])
+        self.assertEqual([c.name for c in checks], ["conf-quick", "screen", "nic-routed"])
         self.assertEqual(checks[0].argv[-1], "user,root,threads")
         self.assertEqual(checks[1].argv, ["/new/guest-run", "/out/runs/screen/plan.json"])
-        self.assertIn("screen", [c.name for c in vm.plan("full", self.ctx())])
+        self.assertEqual(checks[2].argv, ["/new/guest-run", "/out/runs/nic-routed/plan.json"])
+        self.assertEqual((checks[2].group, checks[2].needs), ("quick", ("base", "debian_base")))
+        self.assertEqual(vm.missing(checks[2], self.ctx()),
+                         "needs a Debian base (BASE's guest asks for an account)")
+        self.assertIsNone(vm.missing(checks[2], {**self.ctx(), "debian_base": True}))
+        full = [c.name for c in vm.plan("full", self.ctx())]
+        self.assertIn("screen", full)
+        self.assertIn("nic-routed", full)
+
+    def nic_plan(self, arch):
+        with tempfile.TemporaryDirectory() as tmp:
+            base, out = Path(tmp) / "base", Path(tmp) / "out"
+            base.mkdir()
+            (base / "bundle.json").write_text('{"guest": {"min_ram_mib": 2048, "min_disk_gib": 4, '
+                                              '"requires_credentials": true}}')
+            ctx = {**self.ctx(), "base": base, "out": out, "arch": arch}
+            check = next(c for c in vm.plan("quick", ctx, arch) if c.name == "nic-routed")
+            argv, env = vm.command_for(check, ctx, None)
+            path = Path(argv[-1])
+            self.assertEqual((argv[0], env), (str(Path("/new/guest-run")), {}))
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            return vm.json.loads(path.read_text()), check, out
+
+    def test_the_nic_check_starts_a_realistic_routed_vm_and_waits_for_its_lease(self):
+        scale = vm.time_scale("arm64")
+        x86, x86_check, out = self.nic_plan("x86_64")
+        arm, arm_check, _ = self.nic_plan("arm64")
+        self.assertEqual(arm_check.timeout, x86_check.timeout * scale)
+        self.assertEqual(x86["data_dir"], str(out / "runs/nic-routed/data"))
+        self.assertIs(x86["headless"], True)
+        vm_spec = x86["vm"]
+        self.assertEqual((vm_spec["stealth"], vm_spec["routed"], vm_spec["ram_mib"], vm_spec["username"]),
+                         ("desktop", True, 2048, "niccheck"))
+        self.assertRegex(vm_spec["password"], r"^[0-9a-f]{32}$")
+        [run] = x86["runs"]
+        self.assertEqual((run["path"], run["args"][0], run["done"]), ("/bin/sh", "-c", "NIC-LEASE"))
+        self.assertIn("ip -4 -o addr show scope global", run["args"][1])
+        # Without a lease the probe keeps running, so the marker wait fails.
+        self.assertTrue(run["args"][1].endswith("exec sleep 3600"))
+        for key in ("boot_timeout", "create_timeout"):
+            self.assertEqual(arm[key], x86[key] * scale, key)
+        self.assertEqual(arm["runs"][0]["timeout"], run["timeout"] * scale)
 
     def screen_plan(self, bundle):
         with tempfile.TemporaryDirectory() as tmp:
@@ -298,7 +339,7 @@ class PlanTests(unittest.TestCase):
         self.assertIn("stealth", arm64)
         for name, check in arm64.items():
             self.assertEqual(check.timeout, x86[name] * scale, name)
-        self.assertEqual([c.name for c in vm.plan("quick", self.ctx(), "arm64")], ["conf-quick"])
+        self.assertEqual([c.name for c in vm.plan("quick", self.ctx(), "arm64")], ["conf-quick", "nic-routed"])
         self.assertEqual(vm.parse(["quick", "/base", "--arch", "arm64"]).arch, "arm64")
         self.assertEqual(vm.parse(["quick", "/base"]).arch, "x86_64")
 

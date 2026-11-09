@@ -62,9 +62,11 @@ impl Drop for UnstartedRuntime {
         }
     }
 }
+mod failure;
 mod machine;
 mod qmp;
 mod state_transfer;
+use failure::*;
 pub(crate) use machine::*;
 use qmp::*;
 mod virt;
@@ -323,23 +325,6 @@ pub(crate) fn qemu_command(qemu: &Path) -> Command {
             command
         }
         None => Command::new(qemu),
-    }
-}
-
-/// The end of `qemu.log`, where QEMU says why it stopped (for example that
-/// another process holds the disk's write lock).
-fn qemu_log_hint(runtime_dir: &Path) -> String {
-    const TAIL: u64 = 2048;
-    let Ok(mut file) = File::open(runtime_dir.join("qemu.log")) else {
-        return String::new();
-    };
-    let len = file.metadata().map_or(0, |metadata| metadata.len());
-    let _ = file.seek(SeekFrom::Start(len.saturating_sub(TAIL)));
-    let mut tail = String::new();
-    let _ = file.take(TAIL).read_to_string(&mut tail);
-    match tail.lines().rev().find(|line| !line.trim().is_empty()) {
-        Some(line) => format!("; QEMU said: {}", line.trim()),
-        None => String::new(),
     }
 }
 
@@ -802,17 +787,15 @@ impl VmProcess {
             cmd.arg("-initrd").arg(initrd);
         }
         // An arm64 machine's card sits where the disk's configuration names
-        // it too, on a base that names its NIC by slot (Debian).
-        let nic = match (arm_machine, nic_slot) {
-            (Some(_), Some(slot)) => {
-                format!(
-                    "{},{}",
-                    crate::stealth::arm64::nic_option(&stealth),
-                    slot.address()
-                )
-            }
-            (Some(_), None) => crate::stealth::arm64::nic_option(&stealth),
-            (None, _) => crate::stealth::nic_option_for(&stealth, nic_slot),
+        // it too, on a base that names its NIC by slot (Debian), when its
+        // SR-IOV functions fit there.
+        let nic = if virt {
+            let (nic, note) =
+                crate::stealth::arm64::nic_device(&stealth, arm_machine.is_some(), nic_slot);
+            fallbacks.extend(note);
+            nic
+        } else {
+            crate::stealth::nic_option_for(&stealth, nic_slot)
         };
         if let Some(netdev) = user_network_backend(vm) {
             // Network captures attach a filter-dump to net0 over QMP.
@@ -885,7 +868,7 @@ impl VmProcess {
         Ok(())
     }
     /// Confirms over QMP that QEMU placed guest RAM where the transport maps it.
-    pub fn verify_ram_layout(&self) -> Result<(), String> {
+    pub fn verify_ram_layout(&mut self) -> Result<(), String> {
         // The socket is created before machine and display setup. On a busy
         // host that work runs well past a few seconds, so the greeting wait
         // has to cover startup rather than only the listen backlog.
@@ -902,11 +885,7 @@ impl VmProcess {
                 Ok(qmp) => break qmp,
                 Err(error) if is_timeout(&error) && attempt < QMP_ATTEMPTS => attempt += 1,
                 Err(error) => {
-                    return Err(format!(
-                        "QMP connect for RAM layout: {error}{}{}",
-                        qemu_log_hint(&self.runtime_dir),
-                        self.slow_hint()
-                    ));
+                    return Err(self.start_failure(&format!("QMP connect for RAM layout: {error}")));
                 }
             }
         };
@@ -925,7 +904,7 @@ impl VmProcess {
             match qmp.reply(&request) {
                 Ok(reply) => break reply,
                 Err(error) if is_timeout(&error) && attempt < QMP_ATTEMPTS => attempt += 1,
-                Err(error) => return Err(format!("{error}{}", self.slow_hint())),
+                Err(error) => return Err(self.start_failure(&error)),
             }
         };
         let mtree = mtree["return"]
@@ -964,7 +943,11 @@ impl VmProcess {
                 format!(
                     "QMP connect: {error}{}{}",
                     qemu_log_hint(&self.runtime_dir),
-                    self.slow_hint()
+                    if waited_out(&error) {
+                        self.slow_hint()
+                    } else {
+                        String::new()
+                    }
                 )
             })
             .and_then(|mut qmp| {

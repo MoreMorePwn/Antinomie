@@ -10,7 +10,10 @@ quick  the conformance trace suite's oracle groups (user, root, threads) and the
        in-app VM screen: one VM of BASE started as the app starts it by default
        (not headless: QEMU's VNC display on a private unix socket), whose
        vnc.sock must answer the RFB handshake and give a drawn framebuffer
-       update (no host display is needed)
+       update (no host display is needed); on a Debian base also nic-routed:
+       a VM of the realistic desktop profile on a Routed network, whose card
+       (at its machine's PCI slot; QEMU's igb at 00:0e.0 on arm64) must get a
+       DHCP lease from the gateway
 full   quick, the debugger, audit, io_uring, tracer, stealth, cloud profiles, network routes and snapshot
        checks, the conformance stress groups and interop in both directions
        (an old host on BASE, the current host on OLD); conf-stress-contended
@@ -477,7 +480,12 @@ def plan_x86_64(tier, ctx):
                     mon, 3600, needs=("base",)),
               # The in-app screen's VNC launch (guest-run with screen_check; its plan: screen_plan).
               Check("screen", "quick", example("guest-run", runs / "screen" / "plan.json"), str(ROOT),
-                    1800, needs=("base",))]
+                    1800, needs=("base",)),
+              # A realistic profile's card on a Routed network gets a lease
+              # (guest-run; its plan: nic_plan). On arm64 the profile presents
+              # an arm64 machine with QEMU's igb, which QEMU refused at 00:19.0.
+              Check("nic-routed", "quick", example("guest-run", runs / "nic-routed" / "plan.json"), str(ROOT),
+                    1800, needs=("base", "debian_base"))]
     if tier == "quick":
         return checks
 
@@ -755,31 +763,62 @@ def command_for(check, ctx, args):
         argv = ["cargo", "test", "--release", "--locked", "-j", "2", "-p", "antinomie-monitor-ui", "--bin",
                 "antinomie-monitor", "recorded_tracer_triage", "--", "--ignored", "--nocapture"]
         return argv, env
-    if check.name == "screen":
+    plans = {"screen": screen_plan, "nic-routed": nic_plan}
+    if check.name in plans:
         path = Path(check.argv[-1])
         path.parent.mkdir(parents=True, exist_ok=True)
         # The plan may hold the throwaway account's password.
         with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as plan_file:
-            plan_file.write(json.dumps(screen_plan(ctx), indent=1) + "\n")
+            plan_file.write(json.dumps(plans[check.name](ctx), indent=1) + "\n")
     return check.argv, {}
 
 
-def screen_plan(ctx):
-    """guest-run's plan of the screen check: a new VM of BASE (raised to its
-    guest profile's minima, with a throwaway account when the base asks for
-    one) started with the default in-app screen, not headless. guest-run
-    imports BASE into the check's own data folder."""
+def base_vm(ctx, name, username):
+    """A new VM of BASE for guest-run: raised to its guest profile's minima,
+    with a throwaway account when the base asks for one."""
     try:
         guest = json.loads((Path(ctx["base"]) / "bundle.json").read_text()).get("guest") or {}
     except (OSError, ValueError, AttributeError) as error:
         raise Failure(f"cannot read {ctx['base']}/bundle.json: {error}")
-    vm = {"name": "vm-regress screen", "cpus": 2, "ram_mib": max(1024, int(guest.get("min_ram_mib") or 0)),
+    vm = {"name": name, "cpus": 2, "ram_mib": max(1024, int(guest.get("min_ram_mib") or 0)),
           "disk_gib": max(1, int(guest.get("min_disk_gib") or 0))}
     if guest.get("requires_credentials"):
-        vm.update(username="screencheck", password=secrets.token_hex(16))
+        vm.update(username=username, password=secrets.token_hex(16))
+    return vm
+
+
+def screen_plan(ctx):
+    """guest-run's plan of the screen check: a new VM of BASE (base_vm)
+    started with the default in-app screen, not headless. guest-run imports
+    BASE into the check's own data folder."""
+    vm = base_vm(ctx, "vm-regress screen", "screencheck")
     runs = ctx["out"] / "runs" / "screen"
     return {"data_dir": str(runs / "data"), "headless": False, "import": str(ctx["base"]), "vm": vm,
             "boot_timeout": 300, "screen_check": True}
+
+
+# The nic-routed check's run: waits up to three minutes for a global IPv4
+# address (the gateway's DHCP lease) and prints it with each card's driver;
+# without one it prints what it has and keeps running, so guest-run's wait for
+# NIC-LEASE fails the check with that output.
+NIC_PROBE = (
+    "for n in /sys/class/net/*; do d=$(readlink \"$n/device/driver\"); echo \"NIC ${n##*/} ${d##*/}\"; done; "
+    "i=0; while [ $i -lt 90 ]; do a=$(ip -4 -o addr show scope global); "
+    "if [ -n \"$a\" ]; then echo \"NIC-LEASE $a\"; exit 0; fi; i=$((i+1)); sleep 2; done; "
+    "echo NIC-NONE; ip -o addr; exec sleep 3600")
+
+
+def nic_plan(ctx):
+    """guest-run's plan of the nic-routed check: a new VM of BASE (base_vm)
+    with the realistic desktop profile on a Routed network, headless, and one
+    run of NIC_PROBE. On arm64 every wait is ARM64_TIME_SCALE times longer."""
+    scale = time_scale(ctx.get("arch", "x86_64"))
+    vm = {**base_vm(ctx, "vm-regress nic", "niccheck"), "stealth": "desktop", "routed": True}
+    runs = ctx["out"] / "runs" / "nic-routed"
+    return {"data_dir": str(runs / "data"), "headless": True, "import": str(ctx["base"]), "vm": vm,
+            "boot_timeout": 300 * scale, "create_timeout": 900 * scale,
+            "runs": [{"path": "/bin/sh", "args": ["-c", NIC_PROBE], "done": "NIC-LEASE",
+                      "timeout": 300 * scale}]}
 
 
 def input_result(ctx, name):
@@ -1279,7 +1318,7 @@ def main(argv=None):
         ctx = {"out": out, "base": base, "old_base": old_base, "new": MONITOR / EXAMPLES,
                "fix": out / "fixtures", "old": out / "old-host-examples", "old_ok": False,
                "legacy_base": legacy, "base_revision": bundle_revision(base),
-               "debian_base": bundle_debian(base)}
+               "debian_base": bundle_debian(base), "arch": args.arch}
         checks = plan(tier, ctx, args.arch)
         if args.list:
             for check in checks:

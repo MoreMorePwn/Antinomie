@@ -350,9 +350,11 @@ fn fish_quote(text: &str) -> String {
 
 /// The interface provisioning configures for a VM with `profile` on a base
 /// whose `stealth_support` names its NIC by PCI slot (`onboardnic`): the
-/// profile's slot's name; on arm64 (`virt`, whose PC slots mean nothing and
-/// whose display takes the first free ones) always 00:19.0's. None on other
-/// bases (they configure their NIC themselves).
+/// profile's slot's name; on arm64 always [`NicSlot::Virt`]'s (00:0e.0, where
+/// the arm64 machines' igb fits). None on other bases (they configure their
+/// NIC themselves).
+///
+/// [`NicSlot::Virt`]: crate::stealth::NicSlot::Virt
 pub(crate) fn provisioned_interface(
     stealth_support: &[String],
     profile: &crate::stealth::StealthProfile,
@@ -364,7 +366,7 @@ pub(crate) fn provisioned_interface(
             if arch == crate::api::GuestArch::X86_64 {
                 profile.nic_slot().interface()
             } else {
-                crate::stealth::NicSlot::Ich.interface()
+                crate::stealth::NicSlot::Virt.interface()
             }
         })
 }
