@@ -26,7 +26,9 @@ impl Session {
         if self.quota.reduced.active.is_none() {
             return false;
         }
-        let verdict = self.quota.reduced.verdict(header);
+        let native =
+            crate::syscalls::Abi::of(self.disk_bundle.arch).unwrap_or(crate::syscalls::Abi::X86_64);
+        let verdict = self.quota.reduced.verdict(header, native);
         let Some(boot) = self.quota.reduced.active.as_mut() else {
             return false;
         };
