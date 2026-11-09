@@ -14,6 +14,15 @@ x86 programs by their own table.
 
 ### Host
 
+- **The dump trigger fires on arm64 runs, and says so when it took nothing
+  (ANT-T0426).** The live judge kept the calls the rules read by their x86-64
+  numbers, so no call of an arm64 run (AArch64 or AArch32) reached it: a run with
+  dozens of High findings took no trigger dump and said nothing. It now keeps them
+  by id on every ABI, and 32-bit x86 programs on x86-64 are watched too. The calls a
+  fast program makes before its launch is acknowledged (held, then replayed into the
+  run) now reach the judge as well: on x86-64 a program that wrote a cron entry at
+  once took no dump. A run whose trigger was armed but never matched gets a note
+  saying so, and matches the VM stop cut off are kept as misses with the reason.
 - **Runs know their job, sensitive reads reach the service log, `sample add` goes
   through the daemon, and `run export --sensitive` writes packet and call bytes
   (ANT-T0421).** `run list` showed `job_id: null` and `--job` found nothing; the

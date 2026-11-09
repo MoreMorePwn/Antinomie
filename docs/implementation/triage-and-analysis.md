@@ -450,6 +450,27 @@ same as `run.json` `triggers.records`, written by `save_trigger`. `core_state`
 and `core_dump` stay about the exit core (Core dump on exit) only: a trigger takes
 up to eight cores and memory dumps, which one state field cannot hold.
 
+The live watch (`dump_trigger::Watch`) judges only the calls the rules read
+(`rules::calls::watched`, handed over as `reduced_keep_calls`, x86-64 names). Since
+0.9.0 (ANT-T0426) it keeps them by host syscall id on every ABI
+(`syscalls::ids_on_every_abi`): x86-64's numbers, as before, and the aarch64, arm and
+i386 calls of the same name or family (arm's `send` for `sendto`, `mmap2` for `mmap`).
+Before, it kept x86-64 numbers only, so an arm64 run's tagged ids never reached the
+judge and its trigger never fired. The telemetry held before a launch is acknowledged
+(`pre_ack`, replayed by `replay_pre_ack`) goes to the watch too, through the same
+`ProgramRun::watch_event` as live packets; before, a program that made its suspicious
+call within milliseconds of its start (a static x86-64 program under KVM) was never
+judged. Once a run is over (`recording_complete`) the
+worker flushes the entries still waiting for an exit and `ProgramRun::settle_trigger`
+writes one note when the trigger took nothing: "armed ... but no rule of that tier
+matched", or, for matches the VM stop cut off, a `missed` entry each ("The recording
+ended before the dump could be taken.") and a count note. `begin_finalize` settles a
+run the VM stop ended first. `dump_trigger::replay` feeds recorded events to a judge
+the way the watch does: the unit tests use it, and so does the triage example
+`trigger-replay RUN_DIR [--all]`, which prints what the trigger would have matched in a
+saved recording. The triage example `trigger-check` is the VM check (vm-regress full
+tier, `trigger`, on x86-64 and arm64).
+
 `TerminalClosed` is set only by `Run::eof` when the PTY ends before any execution
 status exists; once a status arrived the state stays `Running` with `terminal_eof`.
 Before 0.8.2 the sample window's exit column said "Unknown" for such a run; it now says
