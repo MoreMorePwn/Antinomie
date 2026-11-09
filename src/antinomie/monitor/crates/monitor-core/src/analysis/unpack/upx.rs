@@ -13,6 +13,7 @@ use super::super::tools;
 use std::{fs, os::unix::fs::OpenOptionsExt, path::Path, time::Duration};
 
 const MAGIC: &[u8; 4] = b"UPX!";
+const INFO_LINE: &[u8] = b"$Info: This file is packed with the UPX";
 /// Size of the pack header and the overlay offset that follows it.
 const TRAILER_SIZE: usize = 36;
 /// How far from the end of the file the pack header is looked for.
@@ -126,7 +127,7 @@ fn find_header_loose(bytes: &[u8], l_info: usize) -> Option<usize> {
 /// damaged to unpack: the packer's `$Info:` line, or a `UPX!` magic.
 pub(super) fn marker(bytes: &[u8]) -> Option<&'static str> {
     let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
-    if has(b"$Info: This file is packed with the UPX") {
+    if has(INFO_LINE) {
         Some("the UPX copyright line")
     } else if bytes.windows(4).filter(|w| *w == MAGIC).count() >= 2 {
         // The loader header and the pack header each carry the magic; one
@@ -144,6 +145,13 @@ pub(super) fn detect(bytes: &[u8]) -> Option<Detection> {
             Some(header) => (header, false),
             None => (find_header_loose(bytes, l_info)?, true),
         };
+        // The version, format and size octets alone match some unpacked
+        // programs' tails by chance; call a file UPX's only with a `UPX!` magic or the copyright line.
+        let has = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+        let evidence = has(MAGIC) || has(INFO_LINE);
+        if !evidence {
+            return None;
+        }
         let layout = Layout { l_info, header };
         let mut changes = Vec::new();
         if altered {

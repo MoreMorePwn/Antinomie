@@ -14,6 +14,15 @@ x86 programs by their own table.
 
 ### Host
 
+- **No more false "UPX (header modified)" on unpacked ARM programs, and no
+  "Rust" for GCC builds (ANT-T0431).** The UPX check accepted any ELF whose
+  tail had bytes shaped like UPX's version, format and size fields, even with no
+  `UPX!` magic anywhere, so unpacked GCC, musl and Go programs were called
+  "UPX (header modified)" and tagged packed. It now needs a `UPX!` magic or the
+  `$Info: This file is packed with the UPX` line. Detect It Easy's "Rust" is
+  its own heuristic and matched GCC and uClibc ARM builds; it is now marked
+  DISPUTED, as its Go claim already was, when the file has no Rust library
+  path, panic symbol or backtrace variable.
 - **A data folder taken right after its owner let go is no longer refused
   (ANT-T0423).** The owner lock is a `flock`, and a process another thread had
   just forked, but not yet exec'd, holds a copy of its file until the exec, so a new
