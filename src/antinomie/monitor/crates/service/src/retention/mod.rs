@@ -8,7 +8,8 @@
 //! | Job records and artifacts | After `jobs_days` (90): the rows, the events and the job's folder; a job whose recording is still there loses the recording first, or stays |
 //! | Staged uploads | 24 hours (the staging store's own expiry) |
 //! | Rejected inbox files | 7 days |
-//! | Never | A job that has not ended, its recording, a recording with an open read, a run whose artifacts are still being written, the sample library, the custody log, `processed/` |
+//! | Processed inbox files | `[inbox] processed_keep_days` (7): plain files of `inbox/processed/` older than that |
+//! | Never | A job that has not ended, its recording, a recording with an open read, a run whose artifacts are still being written, the sample library, the custody log, the VM-wide captures and dumps of a deleted run |
 //!
 //! A pass is a plan (what would go and what is skipped, and why) that is then
 //! carried out, unless it is a dry run. Every deletion is logged with the job
@@ -18,7 +19,10 @@
 //! The run folder is removed by the engine's own deletion: kept files move to
 //! the library, the run's record is copied into the sample's record, and
 //! captures and dumps that live elsewhere in the VM's recording stay with the
-//! VM, as they do when the window deletes a run.
+//! VM, as they do when the window deletes a run. Retention leaves those
+//! VM-wide captures and dumps alone on purpose (user decision, 0.9.0): they
+//! may hold the traffic or memory of other runs of the VM, so they go only
+//! with the VM, or when the user removes them.
 
 mod runs;
 #[cfg(test)]
@@ -37,7 +41,7 @@ use crate::{
 };
 use serde::Serialize;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
 
@@ -48,7 +52,7 @@ pub const REJECTED_DAYS: u64 = 7;
 /// What a pass did or would do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Action {
-    /// `recording`, `job`, `upload`, `rejected_file`.
+    /// `recording`, `job`, `upload`, `rejected_file`, `processed_file`.
     pub kind: String,
     pub job: Option<String>,
     pub run: Option<String>,
@@ -93,6 +97,10 @@ pub struct Retention<'a> {
     pub config: RetentionConfig,
     /// `<inbox>/rejected`.
     pub rejected_dir: PathBuf,
+    /// `<inbox>/processed`, and the days its files stay (`[inbox]
+    /// processed_keep_days`).
+    pub processed_dir: PathBuf,
+    pub processed_keep_days: u32,
     /// The staging store's expiry: what would go, and going.
     pub uploads: Option<&'a dyn Uploads>,
     pub now_ms: u64,
@@ -271,7 +279,20 @@ impl Retention<'_> {
                 }
             }
         }
-        self.expire_rejected(&mut report);
+        self.expire_files(
+            &self.rejected_dir,
+            "rejected_file",
+            "rejected",
+            REJECTED_DAYS,
+            &mut report,
+        );
+        self.expire_files(
+            &self.processed_dir,
+            "processed_file",
+            "processed",
+            u64::from(self.processed_keep_days),
+            &mut report,
+        );
         report
     }
 
@@ -380,11 +401,13 @@ impl Retention<'_> {
         }
     }
 
-    fn expire_rejected(&self, report: &mut GcReport) {
-        let Ok(entries) = std::fs::read_dir(&self.rejected_dir) else {
+    /// Plain files of `dir` older than `days`. `kind` is the action's kind and
+    /// `label` the word in its text and log line.
+    fn expire_files(&self, dir: &Path, kind: &str, label: &str, days: u64, report: &mut GcReport) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
-        let limit = Duration::from_secs(REJECTED_DAYS * 24 * 3600);
+        let limit = Duration::from_secs(days * 24 * 3600);
         let now = SystemTime::UNIX_EPOCH + Duration::from_millis(self.now_ms);
         let mut names: Vec<_> = entries.flatten().collect();
         names.sort_by_key(|e| e.file_name());
@@ -407,10 +430,10 @@ impl Retention<'_> {
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             let mut action = Action {
-                kind: "rejected_file".into(),
+                kind: kind.into(),
                 job: None,
                 run: None,
-                detail: format!("{} (older than {REJECTED_DAYS} days)", clean(&name)),
+                detail: format!("{} (older than {days} days)", clean(&name)),
                 bytes: meta.len(),
                 done: false,
             };
@@ -421,12 +444,12 @@ impl Retention<'_> {
             match std::fs::remove_file(&path) {
                 Ok(()) => {
                     action.done = true;
-                    (self.log)(&format!("gc: deleted the rejected file {}", clean(&name)));
+                    (self.log)(&format!("gc: deleted the {label} file {}", clean(&name)));
                     report.actions.push(action);
                 }
                 Err(error) => report
                     .errors
-                    .push(format!("rejected file {}: {error}", clean(&name))),
+                    .push(format!("{label} file {}: {error}", clean(&name))),
             }
         }
     }

@@ -22,6 +22,7 @@ fn delivery<'a>(
     Delivery {
         store: &service.store,
         results_dir: config.results.dir.clone(),
+        results_mode: config.results.mode,
         on_finish: config.notify.on_finish.clone(),
         hook_timeout: hook::TIMEOUT,
         now_ms: SystemClock.now_ms(),

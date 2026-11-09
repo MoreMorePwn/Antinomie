@@ -212,6 +212,8 @@ fn gc_direct(context: &Context, dry_run: bool) -> Result<GcReport, CliError> {
         runs: &runs,
         config: config.retention.clone(),
         rejected_dir: inbox.join("rejected"),
+        processed_dir: inbox.join("processed"),
+        processed_keep_days: config.inbox.processed_keep_days,
         uploads: staging.as_ref().map(|s| s as &dyn retention::Uploads),
         now_ms: clock.now_ms(),
         log: &log,

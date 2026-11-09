@@ -62,6 +62,8 @@ pub struct Delivery<'a> {
     pub store: &'a Store,
     /// `[results] dir`.
     pub results_dir: Option<PathBuf>,
+    /// `[results] mode`.
+    pub results_mode: crate::config::service::ResultsMode,
     /// `[notify] on_finish`.
     pub on_finish: Vec<String>,
     pub hook_timeout: Duration,
@@ -131,7 +133,7 @@ impl Delivery<'_> {
         if let Some(root) = &self.results_dir
             && !marker.results
         {
-            let outcome = results::write(self.store, &job, root, self.now_ms);
+            let outcome = results::write(self.store, &job, root, self.results_mode, self.now_ms);
             match &outcome {
                 Ok(path) => {
                     marker.results = true;

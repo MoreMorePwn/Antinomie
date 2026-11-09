@@ -63,6 +63,7 @@ runs while a window or the daemon owns the data directory.
 | `[queue] max_queued`, `per_client_queued` | 1000, 100 | `job.submit` fails `quota_exceeded` above them (the smaller of `per_client_queued` and the policy's `max_queued_per_client` applies) |
 | `[queue] paused_on_start` | false | Start with the queue paused (`queue.resume` starts it) |
 | `[inbox] dir` | `<data>/inbox` | Where uploads are staged (`uploads/`), and where watched files go after intake (`processed/`) or on failure (`rejected/`) |
+| `[inbox] processed_keep_days` | 7 | Retention removes the plain files of `<inbox>/processed/` older than this many days (at least 1) |
 | `[resources] min_free_disk_gib`, `min_free_ram_mib`, `require_kvm` | 20, VM RAM + 2048, true | The floors of the queue: below one, jobs wait `queued` and the queue pauses (`low_disk`, `no_kvm`); checked every 5 s, and the disk every minute of a run. A `run/PAUSE` file pauses the queue within 5 s |
 
 A second `SIGTERM`/`SIGINT` within 5 s interrupts every wait at once, stops the
@@ -122,10 +123,15 @@ take it again; a rewritten file is a new file. `SIGHUP` re-reads the folder list
 | `[retention] jobs_days` | 90 | A finished job's record, events, artifacts and folder; the job's recording goes with it, or the job stays |
 
 Staged uploads expire after 24 hours and files in `<inbox>/rejected/` after 7
-days. Never removed: a job that has not ended, a recording with an open read (a
-client reading it through `recording.*`) or whose capture, dump or core is still
-being written, the sample library, its custody chain, `<inbox>/processed/`. Each
-deletion is logged (`gc: deleted the recording of job=... run=...`). The daemon
+days. Files in `<inbox>/processed/` go after `[inbox] processed_keep_days` (7):
+plain files only (a folder or a link there is left alone), by their modification
+time, with the same dry run and log lines as every other deletion
+(`gc: deleted the processed file ...`). Never removed: a job that has not ended,
+a recording with an open read (a client reading it through `recording.*`) or whose
+capture, dump or core is still being written, the sample library, its custody
+chain. Retention also leaves alone the VM-wide captures and dumps of a run it
+deletes (they may hold the traffic or memory of other runs of the VM; they go with
+the VM, or when you remove them). Each deletion is logged (`gc: deleted the recording of job=... run=...`). The daemon
 runs a pass a minute after its start and then every hour; `antinomie-cli auto gc
 --dry-run` prints what a pass would do and `auto gc` runs one now.
 
@@ -134,6 +140,7 @@ runs a pass a minute after its start and then every hour; `antinomie-cli auto gc
 ```toml
 [results]
 dir = "/srv/antinomie/results"          # absolute
+mode = "private"                        # private (default) or group
 
 [notify]
 on_finish = ["/usr/local/bin/antinomie-hook", "--flag"]   # absolute path, then fixed arguments
@@ -143,9 +150,12 @@ on_finish = ["/usr/local/bin/antinomie-hook", "--flag"]   # absolute path, then 
 (UTC date of the end) holding `job.json` and the job's reports (HTML, PDF, JSON,
 MISP, STIX, Markdown; never the evidence bundle, a capture, a dump or a core). It
 is written under a hidden name and renamed, so a poller never sees a half-written
-drop. Files are 0600 and folders 0700: the consumer runs as the daemon's user, or
-the administrator gives it access to `dir`. A link where `dir` should be is
-refused.
+drop. `[results] mode` sets who may read it: `private` (the default) makes files
+0600 and folders 0700, so the consumer runs as the daemon's user or the
+administrator gives it access to `dir`; `group` makes files 0640 and folders 0750 so
+a consumer in the daemon's group can read them (nothing is ever writable by the
+group or others, whatever the umask). Any other value is an error in `config
+validate`. A link where `dir` should be is refused.
 
 `[notify] on_finish`: the command is run **directly**, without a shell, with
 exactly the arguments you configured; nothing a job controls is in them. Its
@@ -167,7 +177,12 @@ its exit code is logged. A drop or hook that fails raises `engine.alert`
 (`result_drop_failed`, `hook_failed`) and never changes the job. Delivery is at
 least once: `notified.json` in the job's folder records what was done, and after a
 restart the jobs that ended in the last 24 hours and were not delivered are
-delivered. Webhooks are not part of 0.9.0.
+delivered. **A failed hook is not retried**: once the command has run (it exited
+non-zero, was killed after 30 seconds, or could not start) the job is marked as
+notified and `hook_failed` is raised, so a hook with a side effect never runs twice
+for a failure it caused. The at-least-once delivery covers only a daemon that
+stopped before it recorded the hook as run. A hook that must not miss a job should
+retry inside itself, or poll `[results] dir`. Webhooks are not part of 0.9.0.
 
 ## Verdict keys
 

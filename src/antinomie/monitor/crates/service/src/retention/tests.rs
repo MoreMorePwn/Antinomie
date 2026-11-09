@@ -139,6 +139,8 @@ impl Rig {
             runs: &self.runs,
             config,
             rejected_dir: rejected,
+            processed_dir: self.fx.dir.join("processed"),
+            processed_keep_days: 7,
             uploads: None,
             now_ms: NOW,
             log: &log,
@@ -394,6 +396,75 @@ fn a_failed_deletion_is_reported_and_the_pass_goes_on() {
     assert_eq!(rig.runs.deleted_jobs(), [b.to_string()]);
     assert_eq!(report.errors.len(), 1);
     assert!(report.errors[0].contains("the engine refused"));
+}
+
+#[test]
+fn processed_files_go_after_the_configured_days_with_the_same_dry_run_and_log_rules() {
+    let rig = Rig::new("processed");
+    let dir = rig.fx.dir.join("processed");
+    fs::create_dir_all(&dir).unwrap();
+    for name in ["old.bin", "new.bin"] {
+        fs::write(dir.join(name), b"x").unwrap();
+    }
+    fs::create_dir(dir.join("subdir")).unwrap();
+    let at = |days: u64| {
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(NOW - days * DAY)
+    };
+    let stamp = |name: &str, days: u64| {
+        fs::File::options()
+            .write(true)
+            .open(dir.join(name))
+            .unwrap()
+            .set_modified(at(days))
+            .unwrap();
+    };
+    stamp("old.bin", 8);
+    stamp("new.bin", 6);
+    // A dry run reports the file, removes nothing and logs nothing.
+    let dry = rig.run(true);
+    let planned: Vec<_> = dry
+        .actions
+        .iter()
+        .filter(|a| a.kind == "processed_file")
+        .collect();
+    assert_eq!(planned.len(), 1);
+    assert!(!planned[0].done && planned[0].detail.contains("older than 7 days"));
+    assert!(dir.join("old.bin").exists());
+    assert!(rig.log.lock().unwrap().is_empty());
+    // The real pass removes only the old plain file and logs it.
+    let report = rig.run(false);
+    assert!(
+        report
+            .actions
+            .iter()
+            .any(|a| a.kind == "processed_file" && a.done)
+    );
+    assert!(!dir.join("old.bin").exists());
+    assert!(dir.join("new.bin").exists() && dir.join("subdir").is_dir());
+    assert!(
+        rig.log
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("deleted the processed file old.bin"))
+    );
+    // A shorter keep time takes the six-day file too.
+    let mut config = rig.config();
+    config.max_recordings_gib = 200;
+    let log = |_: &str| {};
+    Retention {
+        store: &rig.fx.store,
+        runs: &rig.runs,
+        config,
+        rejected_dir: rig.fx.dir.join("rejected"),
+        processed_dir: dir.clone(),
+        processed_keep_days: 5,
+        uploads: None,
+        now_ms: NOW,
+        log: &log,
+    }
+    .run(false);
+    assert!(!dir.join("new.bin").exists());
 }
 
 #[test]

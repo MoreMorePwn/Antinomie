@@ -387,6 +387,52 @@ fn service_toml_checks_lanes_safety_and_watch_folders() {
 }
 
 #[test]
+fn processed_keep_days_and_the_results_mode_have_defaults_and_are_checked() {
+    use antinomie_service::config::service::ResultsMode;
+    let (config, found) = parse_service("service.toml", "");
+    assert!(found.is_empty());
+    let config = config.unwrap();
+    assert_eq!(config.inbox.processed_keep_days, 7);
+    assert_eq!(config.results.mode, ResultsMode::Private);
+    assert_eq!(
+        (
+            ResultsMode::Private.file_mode(),
+            ResultsMode::Private.dir_mode()
+        ),
+        (0o600, 0o700)
+    );
+    assert_eq!(
+        (
+            ResultsMode::Group.file_mode(),
+            ResultsMode::Group.dir_mode()
+        ),
+        (0o640, 0o750)
+    );
+
+    let (config, found) = parse_service(
+        "service.toml",
+        "[inbox]\nprocessed_keep_days = 30\n[results]\nmode = \"group\"\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+    let config = config.unwrap();
+    assert_eq!(config.inbox.processed_keep_days, 30);
+    assert_eq!(config.results.mode, ResultsMode::Group);
+
+    // A keep time of zero and a mode that does not exist are errors, the
+    // second with the line it is on.
+    let (_, found) = parse_service("service.toml", "[inbox]\nprocessed_keep_days = 0\n");
+    assert!(
+        found.iter().any(|p| p.message.contains("at least 1 day")
+            && p.to_string().contains("processed_keep_days")),
+        "{found:?}"
+    );
+    let (config, found) = parse_service("service.toml", "[results]\nmode = \"world\"\n");
+    assert!(config.is_none());
+    let text = found[0].to_string();
+    assert!(text.contains(":2:") && text.contains("world"), "{text}");
+}
+
+#[test]
 fn load_reads_the_data_directory_and_checks_across_files() {
     let root = scratch("load");
     fs::write(root.join("policies").join("default.toml"), DEFAULT_POLICY).unwrap();

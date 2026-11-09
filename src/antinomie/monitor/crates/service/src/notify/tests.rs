@@ -28,6 +28,7 @@ const T: u64 = 1_794_000_000_000;
 struct Rig {
     fx: Fx,
     results: PathBuf,
+    mode: std::cell::Cell<crate::config::service::ResultsMode>,
     alerts: Mutex<Vec<String>>,
     log: Mutex<Vec<String>>,
 }
@@ -39,6 +40,7 @@ impl Rig {
         Self {
             fx,
             results,
+            mode: Default::default(),
             alerts: Mutex::new(Vec::new()),
             log: Mutex::new(Vec::new()),
         }
@@ -123,6 +125,7 @@ impl Rig {
         Delivery {
             store: &self.fx.store,
             results_dir: results.then(|| self.results.clone()),
+            results_mode: self.mode.get(),
             on_finish: hook.iter().map(|s| (*s).to_owned()).collect(),
             hook_timeout: timeout,
             now_ms: T + 1000,
@@ -205,6 +208,25 @@ fn the_result_drop_has_job_json_and_the_reports_but_not_the_sensitive_files() {
             .mode()
             & 0o777,
         0o600
+    );
+}
+
+#[test]
+fn the_group_mode_makes_a_drop_readable_by_the_group_and_never_writable() {
+    use crate::config::service::ResultsMode;
+    let rig = Rig::new("group");
+    rig.mode.set(ResultsMode::Group);
+    let job = rig.ended(Outcome::Succeeded, Some(Label::Suspicious));
+    let folder = rig.deliver(&job.id, true, &[]).drop.unwrap().unwrap();
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&folder), 0o750);
+    assert_eq!(mode(folder.parent().unwrap()), 0o750);
+    assert_eq!(mode(&rig.results), 0o750);
+    assert_eq!(mode(&folder.join("job.json")), 0o640);
+    assert_eq!(mode(&folder.join("report-01010101.html")), 0o640);
+    assert!(
+        !names(&folder).iter().any(|n| n.contains("pcap")),
+        "sensitive files stay out in every mode"
     );
 }
 
@@ -556,6 +578,7 @@ fn after_a_restart_the_last_day_is_delivered_and_older_jobs_are_not() {
     Delivery {
         store: &rig.fx.store,
         results_dir: Some(rig.results.clone()),
+        results_mode: Default::default(),
         on_finish: vec![],
         hook_timeout: Duration::from_secs(5),
         now_ms: T + 1000,

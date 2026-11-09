@@ -25,6 +25,14 @@ x86 programs by their own table.
   the daemon's service log, never the bytes. With a daemon, `sample add FILE` uploads
   the file and calls `sample.add`. `run export --sensitive` also writes the frames of
   the recorded packets and the captured bytes of calls under `--out`.
+- **Retention clears `processed/`; result files can be group-readable
+  (ANT-T0422).** `[inbox] processed_keep_days` (default 7) makes `auto gc` and the
+  daemon remove files of `<inbox>/processed/` older than that, with the same dry run
+  and log lines. `[results] mode = "group"` writes result drops 0640/0750 instead of
+  0600/0700; `config validate` refuses any other value. Documented: retention leaves
+  the VM-wide captures and dumps of a deleted run alone, and a failed `on_finish`
+  hook is not retried.
+
 - **Network flows name the process that made them, and a capture names its run
   (ANT-T0397).** The capture is VM-wide and the guest tags no packet, so the app
   now matches each flow on the host to the run's recorded network calls

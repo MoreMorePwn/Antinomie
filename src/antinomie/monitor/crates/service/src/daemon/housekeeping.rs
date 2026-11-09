@@ -48,6 +48,8 @@ impl Service {
             runs: &runs,
             config: config.retention.clone(),
             rejected_dir: config.inbox_dir(&self.data_dir).join("rejected"),
+            processed_dir: config.inbox_dir(&self.data_dir).join("processed"),
+            processed_keep_days: config.inbox.processed_keep_days,
             uploads: Some(self.intake.staging()),
             now_ms: SystemClock.now_ms(),
             log: &log,
