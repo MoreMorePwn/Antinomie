@@ -93,6 +93,7 @@ pub(super) fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
         commands: Mutex::new(commands),
         accelerator: Accelerator::Kvm,
         watch: Default::default(),
+        gc_lock: Mutex::new(()),
         log: Arc::new(|_: &str| {}),
     });
     Svc {
@@ -236,7 +237,7 @@ fn unknown_reserved_and_unserved_ops_are_told_apart() {
             "{reserved}"
         );
     }
-    for unserved in ["vm.list", "base.list", "sample.list", "job.delete"] {
+    for unserved in ["vm.list", "base.list", "sample.list"] {
         assert_eq!(
             call(&svc, unserved, json!({})).unwrap_err().code,
             ErrorCode::Unsupported,

@@ -170,6 +170,20 @@ x86 programs by their own table.
   list` shows each folder, what it took and what it refused; `auto watch scan`
   scans now. See "Auto mode" in docs/usage.md and docs/service-config.md.
 
+- **Retention and `auto gc` (ANT-T0384).** The daemon removes what Auto mode
+  leaves behind: recordings of finished jobs after `[retention] recordings_days`
+  (14), through the same run deletion the window uses (a failed job keeps its
+  recording while `keep_failed` is set), the oldest recordings first when they
+  exceed `max_recordings_gib` (200), job records, events and artifacts after
+  `jobs_days` (90), staged uploads after 24 hours and rejected inbox files after
+  7 days. It never touches a job that has not ended, a recording with an open
+  read or whose artifacts are still being written, the sample library or its
+  custody chain; each deletion is logged with the job and run id and recorded in
+  the sample's custody chain under `auto:policy-<name>`. `antinomie-cli auto gc
+  --dry-run` prints the plan; `auto gc` applies it now (with a daemon, or on its
+  own when none runs); `auto delete JOB [--with-recording]` removes one finished
+  job. The daemon runs a pass an hour. See "Auto mode" in docs/usage.md.
+
 - **`antinomie-cli run list`, `run show` and `run export`, and Triage reads
   through the query API (ANT-T0367, ANT-T0369).** `run list` lists the recorded
   runs of the data directory (`--vm`, `--sample`, `--job`, `--state`, `--since`,

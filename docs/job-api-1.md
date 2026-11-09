@@ -242,10 +242,10 @@ Ephemeral events (`job.progress`, `job.metrics`) are sent live only.
 **Operations served in 0.9.0.** `capabilities`, `health`, `upload.*`,
 `job.submit`, `job.get`, `job.list`, `job.cancel`, `job.retry`, `events.subscribe`,
 `events.list`, `artifact.list`, `artifact.get`, `report.get`, `policy.list`,
-`queue.status`, `queue.pause`, `queue.resume`, the `lane.*` and `watch.*` operations
-below, and every `recording.*` read. Not
+`queue.status`, `queue.pause`, `queue.resume`, `job.delete`, the `lane.*`, `watch.*`
+and `gc.run` operations below, and every `recording.*` read. Not
 served by the daemon in 0.9.0 (`unsupported`; the direct commands work beside a
-running daemon): `job.delete`, `sample.*`, `vm.list`, `base.list`,
+running daemon): `sample.*`, `vm.list`, `base.list`,
 `custody.verify`. The reserved names of 5.11 (`run.`, `terminal.`, `rule.`,
 `settings.`, writes of `vm.` and `base.`) are `unsupported`; any other unknown
 name is `invalid_argument` on `op`. While the daemon stops, `job.submit`,
@@ -271,12 +271,22 @@ only while no job runs: a busy lane answers `conflict` at once (pause the queue
 first), and a request not reached within its wait (900 s, 60 s) is dropped, never
 run late. Each sends `lane.state` with the reason.
 
-**Watch folder operations** (an addition of this binding; the CLI's `auto watch`):
+`job.delete` (`manage`) removes an ended job's row, events, artifacts and folder
+and answers `{deleted: true}`. A job that has not ended is a `conflict`. With
+`with_recording: true` the job's recording is deleted first through the engine's
+own run deletion (custody actor `auto:policy-<policy>`); a recording that a
+`recording.*` read has open, or whose artifacts are still being written, is a
+`precondition_failed` with `details.reason = "recording_open"` and nothing is
+removed. Without `with_recording` the recording stays where it is.
+
+**Watch folder and retention operations** (an addition of this binding; the
+CLI's `auto watch` and `auto gc`):
 
 | Op | Scope | Params | Result |
 |---|---|---|---|
 | `watch.list` | `read` | none | `{folders: [{path, policy, state, detail, taken, rejected, refused: [{name, reason}], pending, last_scan_ms, paused_until_ms}]}`; `state` is `watching`, `paused`, `held`, `refused` or `error` |
 | `watch.scan` | `manage` | none | The same, after a scan made now (waits at most 30 s) |
+| `gc.run` | `manage` | `dry_run?` (default false) | `{dry_run, now_ms, actions: [{kind, job, run, detail, bytes, done}], skipped: [{kind, job, why}], errors[], freed_bytes}`; `kind` is `recording`, `job`, `upload` or `rejected_file` |
 
 Watch folders add the events `engine.alert` with `code` `watch_flood` and
 `watch_folder_refused`.

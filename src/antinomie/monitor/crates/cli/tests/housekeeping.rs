@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `auto watch` on the built binary, without a daemon (card P4-2).
+//! `auto watch`, `auto gc` and `auto delete` on the built binary, without a
+//! daemon (cards P4-2, P4-3).
 use std::{path::Path, process::Command};
 
 fn scratch(name: &str) -> std::path::PathBuf {
@@ -64,5 +65,28 @@ fn watch_scan_needs_a_daemon() {
             .contains("needs a running daemon"),
         "{out}"
     );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn gc_on_an_empty_data_folder_plans_nothing_and_a_bad_job_id_is_refused() {
+    let root = scratch("gc");
+    // No data folder: nothing to look at.
+    let (code, _, _) = cli(&root, &["auto", "gc", "--dry-run"]);
+    assert_eq!(code, Some(3));
+    std::fs::create_dir_all(root.join("data")).unwrap();
+    let (code, out, err) = cli(&root, &["auto", "gc", "--dry-run"]);
+    assert_eq!(code, Some(0), "{err}");
+    let report = if out["result"].is_object() {
+        &out["result"]
+    } else {
+        &out
+    };
+    assert_eq!(report["dry_run"], true, "{out}");
+    assert_eq!(report["actions"].as_array().unwrap().len(), 0);
+    let (code, _, err) = cli(&root, &["auto", "delete", "not-a-job"]);
+    assert_eq!(code, Some(4), "{err}");
+    let (code, _, err) = cli(&root, &["auto", "delete", "j_01ARZ3NDEKTSV4RRFFQ69G5FAV"]);
+    assert_eq!(code, Some(3), "{err}");
     let _ = std::fs::remove_dir_all(&root);
 }

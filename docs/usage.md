@@ -1914,6 +1914,8 @@ stopped, nothing is still being saved).
 | `auto retry JOB [--override KEY=VALUE]` | A new job from a finished one, with `repeat_of` set |
 | `auto queue status\|pause\|resume` | The queue; a paused queue starts no job (running jobs finish) |
 | `auto policy list` | The policies you may submit to |
+| `auto delete JOB [--with-recording]` | Removes a finished job: its record, events and artifacts (the sample stays in the library). `--with-recording` also deletes the job's recording through the run deletion the window uses; a recording a client is reading, or still being written, is refused |
+| `auto gc [--dry-run]` | Applies retention now (below) and prints what was deleted and what was skipped and why; `--dry-run` deletes nothing. Works with a daemon, or on its own when none runs |
 | `auto watch list` | The watch folders: state, files taken, files rejected, entries refused and why. Without a daemon, the folders `service.toml` names |
 | `auto watch scan` | Scans every watch folder now (a file still has to be steady for 3 seconds). Needs the daemon |
 
@@ -1953,6 +1955,15 @@ rejects (wrong type, too large, a duplicate the policy denies) goes to
 a policy use that policy; other subfolders are ignored. The jobs carry the label
 `watch=<folder name>` and the custody actor `auto:policy-<policy>`. The keys are
 in [service configuration](service-config.md#watch-folders).
+
+**Retention.** The daemon cleans up after itself once an hour: a recording is
+deleted 14 days after its job ended (through the window's own run deletion; a failed
+job's is kept until its record goes), the oldest recordings go first above 200 GiB,
+a job's record and artifacts go after 90 days, staged uploads after 24 hours and
+rejected inbox files after 7 days (`[retention]` in `service.toml`). It never
+touches a job that has not ended, a recording that is being read through the API or
+written, the sample library or the custody chain. `auto gc --dry-run` shows the
+plan first; every deletion is logged with the job and run id.
 
 **The label.** A succeeded job has an assessment: the raw Triage assessment, the
 highest tier, a policy label (`malicious`, `suspicious`, `clean_observed`,

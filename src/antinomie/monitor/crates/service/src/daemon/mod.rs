@@ -214,7 +214,7 @@ pub struct Daemon<E: Engine + Send + 'static> {
     service: Arc<Service>,
     lane: Option<JoinHandle<Waiter<E>>>,
     server: Option<(StopHandle, JoinHandle<()>)>,
-    /// The watch folders' thread; it ends on the stop flag.
+    /// The watcher and retention threads; they end on the stop flag.
     helpers: Vec<JoinHandle<()>>,
     log: Arc<dyn Fn(&str) + Send + Sync>,
     host_grace: Duration,
@@ -410,6 +410,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
                 Accelerator::Tcg
             },
             watch: Default::default(),
+            gc_lock: Mutex::new(()),
             log: Arc::clone(&log),
         });
 
@@ -460,6 +461,13 @@ impl<E: Engine + Send + 'static> Daemon<E> {
                     .name("antinomie-watch".into())
                     .spawn(move || watch_env::run(watch))
                     .map_err(|e| format!("no thread for the watch folders: {e}"))?,
+            );
+            let gc = Arc::clone(&service);
+            helpers.push(
+                std::thread::Builder::new()
+                    .name("antinomie-gc".into())
+                    .spawn(move || housekeeping::run(gc))
+                    .map_err(|e| format!("no thread for retention: {e}"))?,
             );
         }
         log(&format!(

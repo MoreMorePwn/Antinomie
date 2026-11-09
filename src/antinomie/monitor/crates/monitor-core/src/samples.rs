@@ -55,7 +55,8 @@ pub use chain_export::{
 pub use custody::{ActionKind, CustodyEvent, CustodySink, KINDS, NoCustody, host_file};
 pub use delete_run::{
     Deleted as DeletedRun, PROCESS_TREE_FILE, Place as ArtifactPlace, PlanItem as RunPlanItem,
-    RunPlan, SavedTree, delete as delete_run, plan as plan_run_deletion, saved_process_tree,
+    RunPlan, SavedTree, delete as delete_run, delete_as as delete_run_as,
+    plan as plan_run_deletion, saved_process_tree,
 };
 pub use intake::{Added, FileProbe, NewSample, detect_type};
 pub use ioc_export::{

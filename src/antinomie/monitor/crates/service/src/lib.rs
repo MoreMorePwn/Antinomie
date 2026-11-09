@@ -36,6 +36,8 @@ pub mod lane;
 pub mod query;
 /// Resource floors and the queue pause (card P3-5c).
 pub mod resources;
+/// Retention and `auto gc` (card P4-3).
+pub mod retention;
 /// The JSON Schema generated from the types above.
 pub mod schema;
 /// The local socket: framing, limits, connections, subscriptions, the client

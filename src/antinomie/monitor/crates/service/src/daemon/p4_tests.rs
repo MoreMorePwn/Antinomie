@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The daemon side of watch folders, retention and delivery (cards P4-2 to
 //! P4-4): a watched file becomes a job of the policy's actor, the operations
-//! `watch.list` and `watch.scan` and their scopes.
+//! `watch.list`, `watch.scan`, `gc.run` and `job.delete` and their scopes.
 
 use super::{
     tests::{SCRIPT, call, me, socket_ctx, submit_upload, svc},
@@ -10,7 +10,7 @@ use super::{
 use crate::{
     api::{
         error::ErrorCode,
-        job::Outcome,
+        job::{JobState, Outcome},
         ops::{Caller, Scope},
     },
     config::service::{DeleteAfter, OnDuplicate, Watch},
@@ -204,7 +204,7 @@ fn the_watch_caller_may_only_submit_to_its_own_policy() {
 }
 
 #[test]
-fn watch_operations_check_their_scopes() {
+fn watch_and_gc_operations_check_their_scopes() {
     let svc = svc("ops-scopes", |_| {});
     let reader = CallContext {
         caller: Caller {
@@ -215,13 +215,18 @@ fn watch_operations_check_their_scopes() {
         cancel: Default::default(),
         transport: Transport::Socket,
     };
-    assert_eq!(
-        svc.service
-            .call("watch.scan", json!({}), &reader)
-            .unwrap_err()
-            .code,
-        ErrorCode::Forbidden
-    );
+    for op in ["watch.scan", "gc.run", "job.delete"] {
+        let params = if op == "job.delete" {
+            json!({"job_id": "j_01ARZ3NDEKTSV4RRFFQ69G5FAV"})
+        } else {
+            json!({})
+        };
+        assert_eq!(
+            svc.service.call(op, params, &reader).unwrap_err().code,
+            ErrorCode::Forbidden,
+            "{op}"
+        );
+    }
     assert!(svc.service.call("watch.list", json!({}), &reader).is_ok());
     let unknown = svc
         .service
@@ -229,6 +234,29 @@ fn watch_operations_check_their_scopes() {
         .unwrap_err();
     assert_eq!(unknown.code, ErrorCode::InvalidArgument);
     let _ = me();
+}
+
+#[test]
+fn gc_run_answers_a_plan_and_job_delete_refuses_what_has_not_ended() {
+    let svc = svc("ops-gc", |_| {});
+    let queued = submit_upload(&svc);
+    // A dry run on a young store plans nothing.
+    let report = call(&svc, "gc.run", json!({"dry_run": true})).unwrap();
+    assert_eq!(report["dry_run"], true);
+    assert_eq!(report["actions"].as_array().unwrap().len(), 0);
+    assert!(
+        call(&svc, "gc.run", json!({"dry_runs": true})).is_err(),
+        "unknown member"
+    );
+
+    let error = call(&svc, "job.delete", json!({"job_id": queued.id})).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict);
+    let cancelled = svc.service.store.cancel(&queued.id, None, &me()).unwrap();
+    assert_eq!(cancelled.state, JobState::Cancelled);
+    let deleted = call(&svc, "job.delete", json!({"job_id": queued.id})).unwrap();
+    assert_eq!(deleted["deleted"], true);
+    let error = call(&svc, "job.get", json!({"job_id": queued.id})).unwrap_err();
+    assert_eq!(error.code, ErrorCode::NotFound);
 }
 
 #[test]

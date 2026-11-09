@@ -20,6 +20,7 @@ mod model;
 mod patch;
 mod query;
 pub mod recover;
+pub mod remove;
 mod retry;
 pub mod schema;
 mod submit;
@@ -309,6 +310,10 @@ impl Store {
             Some(FaultAction::Fail) => Err(internal(format!("fault injected at {at:?}"))),
             None => Ok(()),
         }
+    }
+
+    pub(crate) fn read_only_store(&self) -> bool {
+        self.read_only
     }
 
     pub(crate) fn conn(&self) -> MutexGuard<'_, Connection> {

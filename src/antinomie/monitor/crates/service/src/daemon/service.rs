@@ -53,6 +53,8 @@ pub struct Service {
     pub commands: Mutex<mpsc::Sender<LaneCommand>>,
     pub accelerator: Accelerator,
     pub watch: crate::watch::WatchHub,
+    /// One retention pass or `job.delete` at a time.
+    pub gc_lock: Mutex<()>,
     pub log: Arc<dyn Fn(&str) + Send + Sync>,
 }
 
@@ -481,8 +483,8 @@ impl Service {
             Op::QueueStatus => to_value(&self.queue_status()?),
             Op::QueuePause => self.queue_pause(true),
             Op::QueueResume => self.queue_pause(false),
-            Op::JobDelete
-            | Op::SampleList
+            Op::JobDelete => self.job_delete(value),
+            Op::SampleList
             | Op::SampleGet
             | Op::SampleAdd
             | Op::SampleDownload

@@ -112,6 +112,23 @@ the origin, never the host path. A `keep`ed file is remembered by device, inode,
 size and modification time in `<inbox>/.watch-state.json`, so a restart does not
 take it again; a rewritten file is a new file. `SIGHUP` re-reads the folder list.
 
+## Retention
+
+| Key | Default | What is removed |
+|---|---|---|
+| `[retention] recordings_days` | 14 | The recording of a finished job older than this, through the engine's run deletion (the run's record is copied into the sample's record; captures and dumps that belong to the VM stay with it, as when the window deletes a run) |
+| `[retention] keep_failed` | true | A failed job's recording is kept until `jobs_days` |
+| `[retention] max_recordings_gib` | 200 | Above this the oldest recordings go first (those `keep_failed` protects last) |
+| `[retention] jobs_days` | 90 | A finished job's record, events, artifacts and folder; the job's recording goes with it, or the job stays |
+
+Staged uploads expire after 24 hours and files in `<inbox>/rejected/` after 7
+days. Never removed: a job that has not ended, a recording with an open read (a
+client reading it through `recording.*`) or whose capture, dump or core is still
+being written, the sample library, its custody chain, `<inbox>/processed/`. Each
+deletion is logged (`gc: deleted the recording of job=... run=...`). The daemon
+runs a pass a minute after its start and then every hour; `antinomie-cli auto gc
+--dry-run` prints what a pass would do and `auto gc` runs one now.
+
 ## Verdict keys
 
 `[verdict] mapping` is `default` (the mapping of the design: `malicious`,
