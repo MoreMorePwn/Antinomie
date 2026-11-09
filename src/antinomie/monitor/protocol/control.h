@@ -108,7 +108,8 @@
 /* Acquisition reply flag at 20: the SHA-256 at 24 is the copy's. */
 #define ANTC_SPECIMEN_DIGEST_VALID 1
 /* Revision 22 (TRACER_CAPS offers it): the run's processes wait at their
- * exit for the dump trigger (EXIT_HOLD below). No request bytes. */
+ * exit for the dump trigger (EXIT_HOLD below). It appends u32 hold_ms
+ * (1..EXIT_HOLD_MS_MAX), u32 reserved=0 after the core trailer. */
 #define ANTC_EXEC_EXIT_HOLD 128
 #define ANTC_CORE_STATUS 0x1060
 #define ANTC_CORE_READ 0x1061
@@ -174,7 +175,8 @@
 #define ANTC_CORE_STATUS_COVERAGE 2
 #define ANTC_CORE_STATUS_COVERAGE_SIZE 16
 /* EXIT_HOLD (revision 22, with EXEC_EXIT_HOLD): header flags=0, u64 cookie
- * at 8, u32 action at 16, u32 reserved=0 at 20; empty reply.
+ * at 8, u32 action at 16, u32 hold_ms at 20 (ARM only, 0: EXIT_HOLD_MS; else
+ * 0); empty reply.
  * ARM / DISARM: cookie is a run's root cookie (-ESRCH: no such run); DISARM
  * also releases its held processes. RELEASE: cookie is a held process's
  * (its leader's task cookie, or that of the task that sent its hold record),
@@ -182,8 +184,9 @@
  * In an armed run, a process that ends (exit_group, its last thread's exit,
  * a fatal or core-dumping signal; never SIGKILL, never one whose own exit
  * core is armed) first sends lifecycle.exit_hold, a scalar of
- * EXIT_HOLD_MS | (u64)wait_status << 32, in its leader's process, then waits
- * at most EXIT_HOLD_MS, before anything of it is torn down, for CORE_CAPTURE
+ * hold_ms | (u64)wait_status << 32, in its leader's process, then waits
+ * at most the run's hold_ms (the host's longer one under TCG), before anything
+ * of it is torn down, for CORE_CAPTURE
  * of its identity (the core is written by the process itself: CORE_EXIT_HELD,
  * status and read as a manual core's) or RELEASE. A stopped run (STOP_RUN),
  * SIGKILL and the timeout end the wait. At most eight processes wait at once.
@@ -193,6 +196,7 @@
 #define ANTC_EXIT_HOLD_DISARM 2
 #define ANTC_EXIT_HOLD_RELEASE 3
 #define ANTC_EXIT_HOLD_MS 50
+#define ANTC_EXIT_HOLD_MS_MAX 1000
 #define ANTC_RESOURCES 0x1070
 #define ANTC_RESOURCES_SIZE 96
 #define ANTC_RESOURCES_MEMORY_VALID 1

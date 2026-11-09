@@ -32,8 +32,25 @@ pub(crate) const EXEC_EXIT_HOLD: u32 = 128;
 /// The exit hold's command (revision 22): ARM, DISARM or RELEASE.
 pub(crate) const EXIT_HOLD: u32 = 0x1068;
 const EXIT_HOLD_RELEASE: u32 = 3;
-/// The longest a process of an armed run waits at its exit.
+/// How long a process of an armed run waits at its exit on a KVM guest, ms;
+/// a TCG guest, slower in everything, gets it scaled
+/// ([`exit_hold_ms`]), up to the guest's [`EXIT_HOLD_MS_MAX`].
 pub(crate) const EXIT_HOLD_MS: u64 = 50;
+pub(crate) const EXIT_HOLD_MS_MAX: u32 = 1000;
+/// The hold time of a guest `scale` times slower than KVM.
+pub(crate) fn exit_hold_ms(scale: u32) -> u32 {
+    (EXIT_HOLD_MS as u32)
+        .saturating_mul(scale.max(1))
+        .min(EXIT_HOLD_MS_MAX)
+}
+/// Arm the exit hold of an encoded EXEC request: the flag and its trailer
+/// (u32 hold_ms, u32 zero), which follows the core trailer.
+pub(crate) fn with_exit_hold(encoded: Vec<u8>, hold_ms: u32) -> Vec<u8> {
+    let mut encoded = with_exec_flag(encoded, EXEC_EXIT_HOLD);
+    encoded.extend(hold_ms.to_le_bytes());
+    encoded.extend(0u32.to_le_bytes());
+    encoded
+}
 /// The optional EXEC flags every launch asks for when the guest offers them.
 const EXEC_OPTIONAL: u32 = EXEC_HASH_ROOT | EXEC_HASH_WRITES | EXEC_SHELL_JOB;
 /// The optional EXEC flags this host knows; others a guest offers are ignored.
@@ -1093,6 +1110,28 @@ mod tests {
         );
     }
     #[test]
+    fn the_exit_hold_trailer_follows_the_core_trailer_and_scales_under_tcg() {
+        let mut request = ExecRequest {
+            path: "/bin/true".into(),
+            core_dump_on_exit: true,
+            ..Default::default()
+        };
+        request.core_max_size = Some(64 << 20);
+        let plain = execute_analysis(&request, None).unwrap();
+        let held = with_exit_hold(plain.clone(), exit_hold_ms(1));
+        assert_eq!(request_flags(&held), 2 | EXEC_EXIT_HOLD);
+        assert_eq!(held.len(), plain.len() + 8);
+        assert_eq!(&held[plain.len()..plain.len() + 4], &50u32.to_le_bytes());
+        assert_eq!(&held[plain.len() + 4..], &[0; 4]);
+        assert_eq!(
+            (exit_hold_ms(8), exit_hold_ms(100)),
+            (400, EXIT_HOLD_MS_MAX)
+        );
+        let release = exit_hold_release(9);
+        assert_eq!(release.len(), 24);
+        assert_eq!(&release[16..20], &3u32.to_le_bytes());
+    }
+    #[test]
     fn an_acquisition_reply_gives_its_digest_and_keeps_its_old_checks() {
         let mut reply = vec![0u8; SPECIMEN_DIGEST_SIZE];
         reply[0..8].copy_from_slice(&7u64.to_le_bytes());
@@ -1176,6 +1215,7 @@ mod tests {
             ("ANTC_EXIT_HOLD", EXIT_HOLD),
             ("ANTC_EXIT_HOLD_RELEASE", EXIT_HOLD_RELEASE),
             ("ANTC_EXIT_HOLD_MS", EXIT_HOLD_MS as u32),
+            ("ANTC_EXIT_HOLD_MS_MAX", EXIT_HOLD_MS_MAX),
             ("ANTC_CORE_STATUS_COVERAGE", CORE_STATUS_COVERAGE),
             ("ANTC_CORE_POLICY_RESIDENT", CORE_POLICY_RESIDENT),
             ("ANTC_CORE_POLICY_NONRESIDENT", CORE_POLICY_NONRESIDENT),

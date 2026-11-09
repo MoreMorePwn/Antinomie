@@ -10,8 +10,9 @@
 //! kernel reclaim them (MADV_PAGEOUT), so they hold data but are not in
 //! memory. Two live cores of it are taken: one resident-only, one with Read
 //! non-resident pages. The first must count the file's pages as not kept and
-//! read none in; the second must have read them in, carry CORE_NONRESIDENT,
-//! and its file's mapping must hold the pages' bytes ("page N" at each page).
+//! read none in; the second must have read pages in (one read can bring
+//! neighbours along: the kernel's fault-around), carry CORE_NONRESIDENT, and
+//! its file's mapping must hold every page's bytes ("page N" at each page).
 //! Every program is benign; the data folder must be new and disposable.
 use antinomie_monitor_core::*;
 use std::{
@@ -290,10 +291,12 @@ fn check(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
         .as_ref()
         .and_then(|status| status["flags"].as_u64())
         .unwrap_or(0);
-    if counts.pages_read_in < PAGES * 3 / 4 || flags & 0x400 == 0 || flags & 0x40 != 0 {
+    // One read can bring a run of neighbouring file pages in (the kernel's
+    // fault-around), so the count is of the reads, not of the pages: the
+    // pages' bytes in the file below are the proof.
+    if counts.pages_read_in == 0 || flags & 0x400 == 0 || flags & 0x40 != 0 {
         errors.push(format!(
-            "non-resident: expected at least {} pages read in and flag 0x400, got {counts:?}, flags {flags:#x}",
-            PAGES * 3 / 4
+            "non-resident: expected pages read in and flag 0x400, got {counts:?}, flags {flags:#x}"
         ));
     } else {
         println!("PASS non-resident core read the reclaimed pages in");

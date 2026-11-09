@@ -1259,6 +1259,8 @@ host had to open the core file to count).
   EXIT_HELD).
 * **Counts.** The live writer counts the pages it left out (a probe that found
   nothing, and the tail past the probe or page budget) and the pages it read in
+  (the reads it made: one read of a file page can map its neighbours too, the
+  kernel's fault-around, which the next probes then find in memory)
   (`struct ant_coredump_live` `unavailable`, `faulted`); `ant_core_live_finish()`
   and the exit core's path keep the thread contexts lost (expected less retained
   notes; `ant_core_live_finish()` now sets the expected size before it counts the
@@ -1336,8 +1338,12 @@ ms under load).
   hold sits there and no stock file changes. A process of an armed run (once per
   process: the leader's `exit_held`; never for SIGKILL or a pending fatal signal,
   a process whose own exit core is armed, a task without an `mm`, a kernel or
-  io_uring worker) publishes `lifecycle.exit_hold` (`50 | wait_status << 32`) and
-  waits, killable, at most `ANTC_EXIT_HOLD_MS` (50) in one of eight slots, before
+  io_uring worker) publishes `lifecycle.exit_hold` (`hold_ms | wait_status << 32`)
+  and waits, killable, at most the run's `hold_ms` in one of eight slots: the
+  EXEC trailer after the core trailer (u32 `hold_ms` 1-1000, u32 zero), or
+  `ANTC_EXIT_HOLD_MS` (50) for an EXIT_HOLD ARM without one; the host sends 50 ms
+  under KVM and 50 times the TCG time scale (8: 400 ms) under TCG, where the
+  first arm64 TCG check's held process was answered after 58 ms, before
   anything of it is torn down (PF_EXITING is not even set yet). `CORE_CAPTURE`
   of its identity (the leader's cookie, start time and tgid, as PROCESS_LIST
   gives them) is answered by `ant_exit_hold_claim()` before the manual capture
@@ -1352,8 +1358,8 @@ ms under load).
   `check_triggers()` hands the findings to `take_trigger()` first (its core
   request finds the held process in the process list and reaches it through
   the claim; the note says "held at its exit"), then releases the held
-  processes no finding names once `HOLD_GRACE` (15 ms, for calls arriving
-  through another ring) has passed (`Watch::releases()`, `release_held()`). A
+  processes no finding names once `HOLD_GRACE` (15 ms, scaled like the hold
+  under TCG, for calls arriving through another ring) has passed (`Watch::releases()`, `release_held()`). A
   match over the budget or in the cooldown releases its process on the next
   turn. The manual status check accepts EXIT_HELD without RESIDENT_ONLY. On a
   base that does not offer the flag the run's notes say so (`NO_EXIT_HOLD`).

@@ -34,7 +34,7 @@ Last-Update: 2026-11-10
 
 ---
 diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
-index 762d015cb..f69436f9c 100644
+index cb8d0ac6e..e777e1bf4 100644
 --- a/kernel/antinomie/control_wire.h
 +++ b/kernel/antinomie/control_wire.h
 @@ -43,7 +43,9 @@
@@ -48,7 +48,7 @@ index 762d015cb..f69436f9c 100644
  #define ANTC_REVISION 22
  #define ANTC_HEADER_SIZE 8
  #define ANTC_UPLOAD_BEGIN 0x1001
-@@ -153,6 +155,24 @@
+@@ -154,6 +156,24 @@
   * the process itself with the exit core's writer: every page, resident or
   * not; RESIDENT_ONLY is clear. */
  #define ANTC_CORE_EXIT_HELD 0x200
@@ -71,8 +71,8 @@ index 762d015cb..f69436f9c 100644
 +#define ANTC_CORE_STATUS_COVERAGE 2
 +#define ANTC_CORE_STATUS_COVERAGE_SIZE 16
  /* EXIT_HOLD (revision 22, with EXEC_EXIT_HOLD): header flags=0, u64 cookie
-  * at 8, u32 action at 16, u32 reserved=0 at 20; empty reply.
-  * ARM / DISARM: cookie is a run's root cookie (-ESRCH: no such run); DISARM
+  * at 8, u32 action at 16, u32 hold_ms at 20 (ARM only, 0: EXIT_HOLD_MS; else
+  * 0); empty reply.
 diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
 index 409048273..d4be27c7a 100644
 --- a/kernel/antinomie/manual_core.c

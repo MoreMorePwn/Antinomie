@@ -1,4 +1,4 @@
-From 61a961179b78bb9dee9d37a1ee45ecf80192d5c7 Mon Sep 17 00:00:00 2001
+From 2070a90ce9a99ddac2b2db1dde80393d6f6b4b4c Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Tue, 10 Nov 2026 02:34:47 +0700
 Subject: [PATCH] antinomie: capture the compat structures the AArch32
@@ -41,7 +41,7 @@ wrote is unchanged.
  2 files changed, 188 insertions(+), 46 deletions(-)
 
 diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
-index e4f3114ca..762d015cb 100644
+index df6097439..cb8d0ac6e 100644
 --- a/kernel/antinomie/control_wire.h
 +++ b/kernel/antinomie/control_wire.h
 @@ -40,7 +40,10 @@

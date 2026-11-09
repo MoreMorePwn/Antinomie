@@ -73,7 +73,8 @@ impl Worker {
                 over.push(*cookie);
             }
             // A held process no match came for goes on with its exit.
-            releases.extend(watch.releases(crate::dump_trigger::HOLD_GRACE));
+            let grace = watch.hold_grace;
+            releases.extend(watch.releases(grace));
             while let Some(finding) = watch.queue.pop_front() {
                 found.push((*cookie, finding));
             }

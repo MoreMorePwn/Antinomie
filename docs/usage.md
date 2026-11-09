@@ -1598,10 +1598,11 @@ could be taken."), and the next match may still dump. A match is judged the
 moment its call arrives and the worker wakes every millisecond while a run waits
 for one. On a base of contract revision 22, a run that asks for a core holds
 each of its processes at its exit, before anything of it is torn down, for at
-most 50 ms, until the host has judged that process's last calls: a process that
+most 50 ms (400 ms on a TCG guest, such as an arm64 one, where every answer is
+slower), until the host has judged that process's last calls: a process that
 writes its cron entry and exits a millisecond later still has its core taken
 (its note says "held at its exit"), and one no rule matched is let go at once.
-Under heavy host load the host can answer after the 50 ms, and the process is
+Under heavy host load the host can answer after that time, and the process is
 then gone as before. On an older base the run's notes say the base cannot hold
 a process at its exit, and a program that matches and exits within a few tens of
 milliseconds can be gone before the guest can pause it.

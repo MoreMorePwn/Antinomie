@@ -20,7 +20,7 @@ x86 programs by their own table.
   before its core could be requested (the host answers in about a millisecond on an
   idle host, a hundred or more under load). On a revision-22 base a run that asks for
   a core on suspicious activity holds each of its processes at its exit, before
-  anything of it is torn down, for at most 50 ms: the host judges the process's last
+  anything of it is torn down, for at most 50 ms (400 ms under TCG, an arm64 guest): the host judges the process's last
   calls, then asks for its core, which the process writes itself, whole, or lets it
   go at once when no rule matched. The run's note says "held at its exit". SIGKILL, a
   stopped run and a process whose Core dump on exit is armed are never held. An older
@@ -830,7 +830,8 @@ x86 programs by their own table.
   (EXEC flag `EXIT_HOLD`, or the `EXIT_HOLD` command) parks each process that ends,
   in the process core's exit hook (`ant_monitor_core_exit()`: exit_group, the last
   thread's exit, a fatal or core-dumping signal), after a `lifecycle.exit_hold`
-  record, for at most 50 ms; a `CORE_CAPTURE` of its identity makes it write its own
+  record, for at most the run's hold time (EXEC trailer `hold_ms`, 1-1000; the host
+  sends 50 ms, scaled by 8 under TCG); a `CORE_CAPTURE` of its identity makes it write its own
   core with the exit core's writer (core flag `EXIT_HELD` 0x200, read as a manual
   core), `EXIT_HOLD` RELEASE lets it go. No stock kernel file changes.
 

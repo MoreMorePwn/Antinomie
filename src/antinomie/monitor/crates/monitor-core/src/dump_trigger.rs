@@ -304,6 +304,8 @@ pub(crate) struct Watch {
     /// Processes the guest holds at their exit, by thread group id: the task
     /// cookie that sent the hold record, and when it came.
     pub(crate) held: HashMap<u32, (u64, Instant)>,
+    /// How long a held process waits for a match before it is let go.
+    pub(crate) hold_grace: Duration,
     /// The run is over and its notes say what the trigger did.
     pub settled: bool,
 }
@@ -327,6 +329,7 @@ impl Watch {
             lost: 0,
             exits: HashMap::new(),
             held: HashMap::new(),
+            hold_grace: HOLD_GRACE,
             settled: false,
         }
     }
@@ -337,6 +340,12 @@ impl Watch {
             self.exits.clear();
         }
         self.exits.insert(pid, guest_ns);
+    }
+
+    /// A guest `scale` times slower than KVM (TCG) waits as much longer for a
+    /// held process's last calls.
+    pub(crate) fn scale_hold_grace(&mut self, scale: u32) {
+        self.hold_grace = HOLD_GRACE * scale.max(1);
     }
 
     /// The guest holds process `pid` at its exit (its task `cookie` said so):

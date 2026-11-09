@@ -96,6 +96,17 @@ impl Worker {
         let ack = self.register_run(&request, sent)?;
         self.report_launch(&request, ack, boot_id)
     }
+    /// How many times slower than KVM this guest answers: the TCG scale
+    /// (arm64 guests always, an x86-64 guest that fell back), else 1.
+    fn hold_scale(session: &Session) -> u32 {
+        if session.process.accel.is_tcg() {
+            crate::vm::Machine::of(session.disk_bundle.arch)
+                .map_or(1, crate::vm::Machine::time_scale)
+                .max(crate::vm::ARM64_TIME_SCALE)
+        } else {
+            1
+        }
+    }
     /// The launched program is a library sample the library knows as 32-bit ARM,
     /// on an arm64 guest (an AArch32 program there).
     fn is_aarch32_sample(
@@ -272,8 +283,10 @@ impl Worker {
         // exit, so one that ends a millisecond after its match keeps its core.
         let trigger_core = request.dump_trigger.as_ref().is_some_and(|plan| plan.core);
         let exit_hold = trigger_core && offered & control::EXEC_EXIT_HOLD != 0;
+        // Under TCG every reply comes slower: the hold and its grace scale.
+        let hold_scale = Self::hold_scale(session);
         if exit_hold {
-            args = control::with_exec_flag(args, control::EXEC_EXIT_HOLD);
+            args = control::with_exit_hold(args, control::exit_hold_ms(hold_scale));
         }
         let specimen_reply = control::exec_specimen_reply_len(control::request_flags(&args));
         let digest_offered = offered & control::EXEC_SPECIMEN_DIGEST != 0;
@@ -412,6 +425,9 @@ impl Worker {
         run.watch = request.dump_trigger.as_ref().and_then(|plan| {
             crate::dump_trigger::Watch::new(plan, &self.options.reduced_keep_calls)
         });
+        if let Some(watch) = run.watch.as_mut() {
+            watch.scale_hold_grace(Self::hold_scale(session));
+        }
         // What the VM started without, so a run that evaded on a
         // setting that was never applied says so in its notes.
         run.add_stealth_fallbacks(&session.process.stealth_fallbacks);
