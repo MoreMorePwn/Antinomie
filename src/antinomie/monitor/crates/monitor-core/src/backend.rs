@@ -543,6 +543,9 @@ struct Session {
     /// Disk work of recordings closed while the boot runs (a retired capture
     /// archive), taken by the worker into a flush job.
     flush_queue: Vec<crate::recording_flush::Step>,
+    /// Runs the guest refused whose program is analysed all the same, by run
+    /// id: not in `runs` (they have no root task), their record is this folder.
+    unstarted_runs: BTreeMap<String, PathBuf>,
 }
 
 /// Correlation survives a poll deadline, but never a new session or run generation.

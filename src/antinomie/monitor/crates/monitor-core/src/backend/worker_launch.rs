@@ -14,6 +14,11 @@ struct LaunchShape {
     supported: bool,
     tracer_hashing: u32,
     inline_acquisition: bool,
+    /// Bytes of the EXEC reply's specimen part: 0, 24, or with the copy's
+    /// SHA-256 [`control::SPECIMEN_DIGEST_SIZE`].
+    specimen_reply: usize,
+    /// The guest offers the specimen digest (revision 22): an ACQUIRE asks for it too.
+    digest_offered: bool,
 }
 
 /// Everything decided before the launch request goes to the guest.
@@ -48,11 +53,11 @@ fn arm_process_core(
     run: &ProgramRun,
     artifacts: &mut RunArtifactOwner,
     reply: &[u8],
-    inline_acquisition: bool,
+    specimen_reply: usize,
 ) {
     // The core's 24-byte arm reply sits before the debugger's
     // 16-byte start record, which is not part of it.
-    let core_offset = 24 + usize::from(inline_acquisition) * 24;
+    let core_offset = 24 + specimen_reply;
     let core_reply = &reply[core_offset..core_offset + 24];
     match process_core::Transfer::armed(core_reply, &run.summary) {
         Ok(core) => artifacts.core = Some(core),
@@ -262,6 +267,8 @@ impl Worker {
         let offered = control::tracer_offer(self.snapshot.guest_tracer)?;
         let tracer_hashing = offered & (control::EXEC_HASH_ROOT | control::EXEC_HASH_WRITES);
         let args = control::with_tracer_flags(control::execute_analysis(&wire, specimen)?, offered);
+        let specimen_reply = control::exec_specimen_reply_len(control::request_flags(&args));
+        let digest_offered = offered & control::EXEC_SPECIMEN_DIGEST != 0;
         // Refused before the run exists, so Run History lists nothing for it.
         if request.capture_network && !session.vm.has_network() {
             return Err(format!(
@@ -351,6 +358,8 @@ impl Worker {
                 supported,
                 tracer_hashing,
                 inline_acquisition,
+                specimen_reply,
+                digest_offered,
             },
             args,
             summary,
@@ -374,11 +383,7 @@ impl Worker {
             route_claim,
             route_failure,
         } = plan;
-        let LaunchShape {
-            inline_acquisition,
-            tracer_hashing,
-            ..
-        } = shape;
+        let LaunchShape { tracer_hashing, .. } = shape;
         let guest_arch = session.disk_bundle.arch;
         let run_id = summary.id.clone();
         let mut run = match ProgramRun::new(summary, session.capture.quota()) {
@@ -449,7 +454,7 @@ impl Worker {
             (|| {
                 if reply.len()
                     != 24
-                        + usize::from(inline_acquisition) * 24
+                        + shape.specimen_reply
                         + usize::from(request.core_dump_on_exit) * 24
                         + usize::from(request.debug_on_start) * 16
                     || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0
@@ -469,7 +474,13 @@ impl Worker {
         })();
         let (reply, id, cookie, pid) = match acknowledged {
             Ok(acknowledged) => acknowledged,
-            Err(error) => return Err(session.failed_run_launch(&mut run, artifacts, error)),
+            Err(error) => {
+                if error.0 == RunState::FailedToStart {
+                    self.analyze_refused_launch(request, &mut run, shape);
+                }
+                let session = self.session.as_mut().ok_or("VM is stopped")?;
+                return Err(session.failed_run_launch(&mut run, artifacts, error));
+            }
         };
         Ok(SentLaunch {
             run,
@@ -482,6 +493,82 @@ impl Worker {
                 shape,
             },
         })
+    }
+
+    /// A launch the guest refused never ran, but the file it was asked to
+    /// run is still on the guest's disk: its static analysis says what the
+    /// program is, and often why it could not run. The file is acquired by
+    /// path; a guest that offers the copy's SHA-256 vouches with it for the
+    /// host's copy of an uploaded program, which then replaces the transfer.
+    /// The run keeps its record (`failed_run_launch`) while a job is behind it.
+    fn analyze_refused_launch(
+        &mut self,
+        request: &ExecRequest,
+        run: &mut ProgramRun,
+        shape: LaunchShape,
+    ) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        if !shape.supported || request.run_in.guest_desktop() {
+            return;
+        }
+        let Some(report) = run.summary.analysis.take() else {
+            return;
+        };
+        let max_size = shape.specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE);
+        let timeout = session.reply_timeout();
+        let mut digest = None;
+        let acquisition = control::acquire_with(
+            &request.path,
+            request.uid,
+            request.gid,
+            max_size,
+            shape.digest_offered,
+        )
+        .and_then(|args| {
+            session.request(
+                control::ACQUIRE,
+                &args,
+                &mut self.snapshot,
+                &self.sender,
+                timeout,
+            )
+        })
+        .and_then(|reply| {
+            digest = control::split_digest(&reply).ok().and_then(|(_, hex)| hex);
+            control::specimen_acquisition(&reply, max_size)
+        });
+        let Ok(acquisition) = acquisition else {
+            // Not readable either (gone, not permitted): no analysis, as before.
+            run.summary.analysis = Some(report);
+            return;
+        };
+        let available = session.available().saturating_sub(run.stored_len());
+        let report = session.analysis.submit(
+            Some(run.summary.id.clone()),
+            report,
+            run.summary.directory.join("analysis"),
+            Ok(acquisition),
+            available,
+        );
+        // Without the guest's digest nothing vouches for the host copy: the
+        // transfer goes ahead at once instead of waiting for an exec hash
+        // that a refused launch never records.
+        if let (Some(source), Some(digest)) = (&request.host_copy, digest.as_deref()) {
+            let _ = session.analysis.offer_host_copy(&report.id, source);
+            session.analysis.guest_hash(&run.summary.id, Some(digest));
+        }
+        if session.analysis.tracks(&report.id) {
+            session
+                .unstarted_runs
+                .insert(run.summary.id.clone(), run.summary.directory.clone());
+        }
+        run.summary.analysis = Some(report);
+        if let Err(error) = run.refresh_analysis_metadata() {
+            run.storage_error(format!("analysis metadata accounting: {error}"));
+        }
+        session.analysis_updates(&mut self.snapshot, &self.sender);
     }
 
     /// Record the acknowledged launch: custody, artifacts, analysis, replayed telemetry and the run list.
@@ -500,7 +587,7 @@ impl Worker {
             id, cookie, pid, ..
         } = ack;
         let reply = &ack.reply;
-        let inline_acquisition = ack.shape.inline_acquisition;
+        let specimen_reply = ack.shape.specimen_reply;
         run.summary.session_id = id;
         run.summary.root_task_cookie = cookie;
         run.summary.pid = pid;
@@ -509,7 +596,7 @@ impl Worker {
             session.custody_start(&self.options.data_dir, sample, &mut run);
         }
         if request.core_dump_on_exit {
-            arm_process_core(&run, &mut artifacts, reply, inline_acquisition);
+            arm_process_core(&run, &mut artifacts, reply, specimen_reply);
         }
         session.run_artifacts.insert(cookie, artifacts);
         self.submit_run_analysis(request, &mut run, reply, ack.shape);
@@ -547,19 +634,27 @@ impl Worker {
             supported,
             tracer_hashing,
             inline_acquisition,
+            specimen_reply,
+            digest_offered,
         } = shape;
         if let Some(report) = run.summary.analysis.take() {
+            // The SHA-256 of the copy the guest keeps, when it offers one: it
+            // vouches for the host copy at once, however soon the program exits.
+            let mut digest = None;
             let acquisition = if inline_acquisition {
+                let part = &reply[24..24 + specimen_reply];
+                digest = control::split_digest(part).ok().and_then(|(_, hex)| hex);
                 control::specimen_acquisition(
-                    &reply[24..48],
+                    part,
                     specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
                 )
             } else if supported {
-                control::acquire(
+                control::acquire_with(
                     &request.path,
                     request.uid,
                     request.gid,
                     specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
+                    digest_offered,
                 )
                 .and_then(|args| {
                     session.request(
@@ -571,6 +666,7 @@ impl Worker {
                     )
                 })
                 .and_then(|reply| {
+                    digest = control::split_digest(&reply).ok().and_then(|(_, hex)| hex);
                     control::specimen_acquisition(
                         &reply,
                         specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
@@ -590,13 +686,16 @@ impl Worker {
                 acquisition,
                 available,
             ));
-            // Only a guest that hashes the executed file can vouch for
-            // the host's copy; any other falls back to the transfer.
+            // Only a guest that hashes the executed file or its copy can
+            // vouch for the host's copy; any other falls back to the transfer.
             if let (Some(source), Some(report)) = (&request.host_copy, &run.summary.analysis)
-                && tracer_hashing & control::EXEC_HASH_ROOT != 0
+                && (tracer_hashing & control::EXEC_HASH_ROOT != 0 || digest.is_some())
             {
                 // A refusal leaves the guest transfer as it was.
                 let _ = session.analysis.offer_host_copy(&report.id, source);
+                if let Some(digest) = digest.as_deref() {
+                    session.analysis.guest_hash(&run.summary.id, Some(digest));
+                }
             }
             if let Err(error) = run.refresh_analysis_metadata() {
                 run.storage_error(format!("analysis metadata accounting: {error}"));
@@ -673,15 +772,13 @@ impl Worker {
             pid,
             shape,
         } = ack;
-        let inline_acquisition = shape.inline_acquisition;
         let launched = format!("launched pid {pid}, terminal session {id}");
         if !request.debug_on_start {
             return Ok(launched);
         }
         // The guest parked the new program before its first instruction;
         // the debugger takes over that session.
-        let start_offset =
-            24 + usize::from(inline_acquisition) * 24 + usize::from(request.core_dump_on_exit) * 24;
+        let start_offset = 24 + shape.specimen_reply + usize::from(request.core_dump_on_exit) * 24;
         let identity = crate::observation::GuestProcessIdentity {
             boot_id: boot_id.clone(),
             task_cookie: cookie,

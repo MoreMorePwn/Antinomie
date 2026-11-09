@@ -63,6 +63,17 @@
 //! `"guest_desktop_terminal"`), `"screenshot": PATH` to save the screen
 //! `"screenshot_after"` seconds (default 10) after its `done` marker, and
 //! `"stop": true` to stop its process tree after that.
+//!
+//! `"host_copy": true` gives a run the upload whose destination is its path as
+//! the host's copy of the program (as the app does for a file it uploaded),
+//! which replaces the guest transfer once the guest vouches for its hash.
+//! `"expect_refused": true` expects the guest to refuse the launch: the
+//! report keeps the error and the saved run (`run.json`) instead of failing.
+//! `"no_evidence_wait": true` takes the run as it is once its tree exited,
+//! without waiting for its analysis. With `"saved_analysis_wait"` (seconds) at
+//! the plan's top level, the report adds each run's analysis as saved in its
+//! `run.json` after the VM stopped (`saved_analysis`), waiting that long for
+//! it to settle: an analysis that needs the guest ends with the VM.
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification,
     RunArtifactState, RunArtifacts, RunIn, Snapshot, VmConfig, VmState,
@@ -442,6 +453,7 @@ fn run() -> Result<Value, String> {
     )?;
     let boot = number(&plan, "boot_timeout", 60);
     let started = Instant::now();
+    let mut uploaded = BTreeMap::new();
     for upload in plan
         .get("uploads")
         .and_then(Value::as_array)
@@ -450,6 +462,7 @@ fn run() -> Result<Value, String> {
     {
         let source = text(&upload, "source").ok_or("upload.source")?;
         let destination = text(&upload, "destination").ok_or("upload.destination")?;
+        uploaded.insert(destination.clone(), PathBuf::from(&source));
         session.guest_command(
             || Command::Upload {
                 source: PathBuf::from(&source),
@@ -488,6 +501,7 @@ fn run() -> Result<Value, String> {
     };
 
     let mut runs = Vec::new();
+    let mut saved_runs = Vec::new();
     for spec in plan
         .get("runs")
         .and_then(Value::as_array)
@@ -542,7 +556,25 @@ fn run() -> Result<Value, String> {
                 .unwrap_or(false),
             ..ExecRequest::default()
         };
+        let flag = |key: &str| spec.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let mut request = request;
+        if flag("host_copy") {
+            request.host_copy = uploaded.get(&request.path).cloned();
+        }
         let launched = Instant::now();
+        if flag("expect_refused") {
+            // The refusal comes back as the command's error, naming the run.
+            let id = session.backend.send(Command::Execute(request.clone()))?;
+            let error = match session.result(id, boot) {
+                Ok(message) => return Err(format!("launch was not refused: {message}")),
+                Err(error) => error.unwrap_or_else(|| "refusal not answered".into()),
+            };
+            let directory = refused_run_directory(&session.snapshot, &vm_id, &error);
+            saved_runs.extend(directory.clone());
+            runs.push(json!({"refused": error, "directory": directory,
+                "seconds": launched.elapsed().as_secs_f64()}));
+            continue;
+        }
         session.guest_command(|| Command::Execute(request.clone()), boot)?;
         session.settle(|s| s.runs.iter().any(|r| !known.contains(&r.id)), 30)?;
         if request.debug_on_start {
@@ -611,7 +643,7 @@ fn run() -> Result<Value, String> {
                 session.snapshot.last_error, session.snapshot.health
             ));
         }
-        let artifacts = if completion.is_ok() {
+        let artifacts = if completion.is_ok() && !flag("no_evidence_wait") {
             session.finish_run_evidence(&run_id)?
         } else {
             let run = session
@@ -628,6 +660,7 @@ fn run() -> Result<Value, String> {
             .iter()
             .find(|r| r.id == run_id)
             .cloned();
+        saved_runs.extend(summary.as_ref().map(|r| r.directory.clone()));
         runs.push(json!({
             "run_id": run_id,
             "directory": summary.as_ref().map(|r| r.directory.clone()),
@@ -719,14 +752,66 @@ fn run() -> Result<Value, String> {
         }
         None => None,
     };
+    let saved_analysis = plan
+        .get("saved_analysis_wait")
+        .and_then(Value::as_u64)
+        .map(|seconds| saved_analyses(&mut session, &saved_runs, seconds));
     session.backend.shutdown()?;
     Ok(
         json!({"vm_id": vm_id, "base": base, "boot_seconds": boot_seconds,
+              "saved_analysis": saved_analysis,
               "runs": runs, "recorder": recorder, "health": health,
               "guest_resources": guest_resources, "capture": capture,
               "network_captures": network_captures, "screenshot": screenshot,
               "screen": screen}),
     )
+}
+
+/// The folder of the run the guest refused: the error names its id.
+fn refused_run_directory(snapshot: &Snapshot, vm_id: &str, error: &str) -> Option<PathBuf> {
+    let recordings = snapshot
+        .vm_locations
+        .iter()
+        .find(|location| location.vm_id == vm_id)?
+        .recording_directory
+        .join("runs");
+    std::fs::read_dir(&recordings)
+        .ok()?
+        .filter_map(Result::ok)
+        .find(|entry| error.contains(entry.file_name().to_string_lossy().as_ref()))
+        .map(|entry| entry.path())
+}
+
+/// Each run's analysis as its saved `run.json` has it, once it settled or
+/// after `seconds`: what a run keeps when the VM is gone.
+fn saved_analyses(session: &mut Session, directories: &[PathBuf], seconds: u64) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let read = |directory: &PathBuf| -> Value {
+        std::fs::read(directory.join("run.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .map_or(Value::Null, |run| run["analysis"].clone())
+    };
+    loop {
+        session.pump();
+        let reports: Vec<Value> = directories.iter().map(read).collect();
+        let settled = reports.iter().all(|report| {
+            !matches!(
+                report["state"].as_str(),
+                Some("acquiring" | "queued" | "running")
+            )
+        });
+        if settled || Instant::now() > deadline {
+            return json!(
+                directories
+                    .iter()
+                    .zip(reports)
+                    .map(|(directory, report)| json!({"directory": directory, "analysis": report}))
+                    .collect::<Vec<_>>()
+            );
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
 }
 
 /// The in-app screen, as the app's VM screen tab reads it: the VNC client

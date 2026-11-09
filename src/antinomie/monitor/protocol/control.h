@@ -37,7 +37,9 @@
  * any other ioctl whose number encodes a size has those bytes captured, and a
  * read of an event descriptor names its records' layout; the compat
  * structures of common compat calls are captured by their ILP32 layouts. */
-#define ANTC_REVISION 21
+/* Revision 22: the SHA-256 of a specimen copy in its acquisition reply
+ * (EXEC_SPECIMEN_DIGEST, ACQUIRE DIGEST), offered in TRACER_CAPS. */
+#define ANTC_REVISION 22
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -90,6 +92,14 @@
 #define ANTC_EXEC_HASH_ROOT 8
 #define ANTC_EXEC_HASH_WRITES 16
 #define ANTC_EXEC_SHELL_JOB 32
+/* Revision 22 (TRACER_CAPS offers it): with EXEC_SPECIMEN, the specimen
+ * reply is ANTC_SPECIMEN_DIGEST_SIZE bytes and carries the copy's SHA-256. */
+#define ANTC_EXEC_SPECIMEN_DIGEST 64
+/* ACQUIRE header flag (revision 22, offered as EXEC_SPECIMEN_DIGEST). */
+#define ANTC_ACQUIRE_DIGEST 1
+#define ANTC_SPECIMEN_DIGEST_SIZE 56
+/* Acquisition reply flag at 20: the SHA-256 at 24 is the copy's. */
+#define ANTC_SPECIMEN_DIGEST_VALID 1
 #define ANTC_CORE_STATUS 0x1060
 #define ANTC_CORE_READ 0x1061
 #define ANTC_CORE_RELEASE 0x1062
@@ -509,6 +519,11 @@
  * EXEC_SPECIMEN appends u32 max_size, u32 timeout_ms after argv/env.
  * Its reply appends the 24-byte acquisition reply to the normal 24 bytes.
  * Acquisition failure never changes the execution result.
+ * EXEC_SPECIMEN_DIGEST (with EXEC_SPECIMEN only, else -EINVAL) makes that
+ * acquisition reply 56 bytes: u32 flags at 20 (SPECIMEN_DIGEST_VALID) and the
+ * SHA-256 of the copied bytes at 24, taken while they are read. The digest
+ * may use half of timeout_ms; a copy that takes longer is kept without one
+ * (flags 0, zero bytes), as is a failed copy.
  * EXEC_CORE appends u32 max_size (1..max_core_bytes from CORE_CAPS, 1..64MiB
  * without it), u32 timeout_ms (1..max_timeout_ms from CORE_CAPS, 1..5000
  * without it),
@@ -612,9 +627,11 @@
  * completed immutable buffers remain readable. Snapshot operations must
  * reject an in-flight manual capture before pausing/restoring the VM.
  *
- * ACQUIRE: header flags=0, uid at 8, gid at 12, u32 path_len at 16,
- * reserved=0 at 20, absolute path at 24, then u32 max_size, timeout_ms.
- * Acquisition reply: u64 id, u64 size, i32 status, u32 reserved=0.
+ * ACQUIRE: header flags=0 or ACQUIRE_DIGEST, uid at 8, gid at 12, u32
+ * path_len at 16, reserved=0 at 20, absolute path at 24, then u32 max_size,
+ * timeout_ms.
+ * Acquisition reply: u64 id, u64 size, i32 status, u32 reserved=0; with
+ * ACQUIRE_DIGEST 56 bytes, as EXEC_SPECIMEN_DIGEST's.
  * Ready status=0 has nonzero id; unavailable negative errno has id/size=0.
  * max_size is 1..128MiB (1..64MiB before revision 19); timeout_ms is
  * 1..5000. Initial exec captures the

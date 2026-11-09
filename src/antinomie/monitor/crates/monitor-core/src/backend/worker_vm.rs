@@ -250,6 +250,7 @@ impl Worker {
                 kernel_probe: KernelProbe::Due(Instant::now()),
                 core_limits: None,
                 flush_queue: Vec::new(),
+                unstarted_runs: BTreeMap::new(),
             })
         })();
         match result {

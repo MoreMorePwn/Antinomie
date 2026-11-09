@@ -16,17 +16,27 @@ impl Session {
         let (state, error) = failure;
         // The run's definite end: it never started, or it was never confirmed.
         run.summary.state = state;
+        // A refused launch whose program is being analysed all the same
+        // (`analyze_refused_launch`) keeps its record for that analysis.
+        let analyzed = run
+            .summary
+            .analysis
+            .as_ref()
+            .is_some_and(|report| self.analysis.tracks(&report.id));
         // Nothing ran and nothing was captured: leave no run behind, or Run
         // History would list a run that never existed.
-        if run.summary.state == RunState::FailedToStart && owner.network.is_none() {
+        if run.summary.state == RunState::FailedToStart && owner.network.is_none() && !analyzed {
             run.storage_error(error.clone());
             if let Err(cleanup) = fs::remove_dir_all(&run.summary.directory) {
                 return format!("{error}; its run directory remains: {cleanup}");
             }
             return error;
         }
-        // The program did not run, so nothing will ever acquire its specimen.
-        run.settle_unstarted_analysis(&error);
+        // The program did not run, so nothing will ever acquire its specimen,
+        // unless its file is being analysed from the guest's disk.
+        if !analyzed {
+            run.settle_unstarted_analysis(&error);
+        }
         // Say why in the run's digest, so no view waits for a Triage that has
         // nothing to read.
         if run.summary.state == RunState::FailedToStart {
