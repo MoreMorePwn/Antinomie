@@ -830,3 +830,103 @@ fn add_tag_keeps_the_other_tags_and_writes_the_custody_entry_under_the_actor() {
     );
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn a_launch_that_preloads_a_sent_library_names_it_by_hash() {
+    let root = temp("preloads");
+    let mut library = Library::open(&root).unwrap();
+    let hash = library
+        .add_bytes(b"\x7fELF library bytes", added_from("/x/libhook.so"))
+        .unwrap()
+        .sha256;
+    let path = "/tmp/libhook.so".to_owned();
+    library
+        .record_push(
+            &hash,
+            Push {
+                vm_id: "vm1".into(),
+                vm_name: "Debian".into(),
+                path: path.clone(),
+                ..Push::default()
+            },
+        )
+        .unwrap();
+    // In the environment, and inside a shell command line.
+    let env = vec![format!("LD_PRELOAD={path}")];
+    let found = library.identify_preloads("vm1", &env, &[], None).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        (
+            found[0].sha256.as_str(),
+            found[0].via.as_str(),
+            found[0].role()
+        ),
+        (hash.as_str(), "LD_PRELOAD", "preloaded")
+    );
+    let script = vec!["-c".to_owned(), format!("LD_PRELOAD={path} ls; id")];
+    let in_script = library
+        .identify_preloads("vm1", &[], &script, None)
+        .unwrap();
+    assert_eq!(in_script[0].sha256, hash);
+    // Another VM never saw the file: the name stays, the hash is missing and
+    // the reason is given instead of a guess.
+    let other = library.identify_preloads("vm2", &env, &[], None).unwrap();
+    assert_eq!(other.len(), 1);
+    assert!(other[0].sha256.is_empty());
+    assert!(other[0].note.contains("hash is not known"), "{other:?}");
+    assert!(other[0].line().contains("not a library sample"));
+    // An argument that is not a sample is left out; the run's own sample is not listed twice.
+    let plain = vec!["/etc/hostname".to_owned()];
+    assert!(
+        library
+            .identify_preloads("vm1", &[], &plain, None)
+            .unwrap()
+            .is_empty()
+    );
+    let ran = crate::samples::SampleRef {
+        sha256: hash.clone(),
+        name: "libhook.so".into(),
+    };
+    assert!(
+        library
+            .identify_preloads("vm1", &[], std::slice::from_ref(&path), Some(&ran))
+            .unwrap()
+            .is_empty()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_request_links_to_the_sample_it_ran_and_to_the_libraries_it_loaded() {
+    let request = crate::api::ExecRequest {
+        sample: Some(crate::samples::SampleRef {
+            sha256: "aa".repeat(32),
+            name: "dropper".into(),
+        }),
+        preloaded: vec![
+            crate::samples::PreloadRef {
+                sha256: "bb".repeat(32),
+                path: "/tmp/l.so".into(),
+                via: "LD_AUDIT".into(),
+                ..Default::default()
+            },
+            crate::samples::PreloadRef {
+                path: "/tmp/unknown.so".into(),
+                via: "LD_PRELOAD".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    assert_eq!(request.role_of(&"aa".repeat(32)), Some(""));
+    assert_eq!(request.role_of(&"bb".repeat(32)), Some("audit library"));
+    assert_eq!(request.role_of(&"cc".repeat(32)), None);
+    assert_eq!(request.linked_hashes().len(), 2);
+    // Saved with the run and read back; a run saved before this reads none.
+    let saved = serde_json::to_string(&request).unwrap();
+    let back: crate::api::ExecRequest = serde_json::from_str(&saved).unwrap();
+    assert_eq!(back.preloaded, request.preloaded);
+    let old: crate::api::ExecRequest =
+        serde_json::from_str(&saved.replace(r#""preloaded""#, r#""ignored""#)).unwrap();
+    assert!(old.preloaded.is_empty());
+}

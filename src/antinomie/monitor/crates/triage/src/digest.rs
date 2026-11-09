@@ -217,6 +217,12 @@ pub struct Update {
     pub indicators: Option<Vec<IndicatorEntry>>,
     pub files: Vec<run_digest::WrittenFile>,
     pub detections: Option<Vec<DetectionHit>>,
+    /// The run's file activity, for the programs it wrote (see
+    /// [`crate::written_export`]); kept beside the run with the digest.
+    activity: Arc<crate::file_activity::Activity>,
+    /// The scan read the whole finished run.
+    finished: bool,
+    partial: bool,
 }
 
 impl Update {
@@ -228,11 +234,19 @@ impl Update {
             indicators: scan.ioc.as_deref().map(indicators),
             files: scan.written_files.clone(),
             detections,
+            activity: scan.file_activity.clone(),
+            finished: scan.whole_run,
+            partial: scan.partial,
         }
     }
 
     /// Write them into the digest of the run in `directory` (a synced file).
     pub fn write(self, directory: &Path) -> Result<(), String> {
+        // The programs and libraries the run wrote go beside the run for the
+        // YARA scan, best effort: without them the scan says it had none.
+        if self.finished {
+            let _ = crate::written_export::export(directory, &self.activity, self.partial);
+        }
         RunDigest::update(directory, |digest| {
             digest.behaviour = Some(self.behaviour);
             digest.lineage = Some(self.lineage);

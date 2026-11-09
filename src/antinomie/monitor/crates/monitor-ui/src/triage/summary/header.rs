@@ -101,6 +101,16 @@ pub(super) fn show(
     presentation::frame().fill(theme::panel()).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| sample_line(ui, sample, program));
+        for line in &run.preloaded {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new("Preloaded library")
+                        .small()
+                        .color(theme::muted()),
+                );
+                ui.label(RichText::new(line).color(theme::text()));
+            });
+        }
         ui.horizontal_wrapped(|ui| {
             let mut run_line: Vec<String> = Vec::new();
             if let Some(base) = &run.base {

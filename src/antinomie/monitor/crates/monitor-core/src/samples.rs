@@ -36,6 +36,7 @@ mod library;
 mod lineage;
 mod migrate;
 mod notes;
+pub mod preload;
 pub mod promote;
 mod rollup;
 mod runlog;
@@ -596,6 +597,59 @@ pub struct SampleRef {
     pub sha256: String,
     /// The name the sample had when the run started.
     pub name: String,
+}
+
+/// A library sample a run loaded into another program: named in the run's
+/// `LD_PRELOAD` or `LD_AUDIT`, or in its arguments. The SHA-256 is the one the
+/// library recorded when it sent that file into the VM; where the file was
+/// not sent from the library, the hash is empty and `note` says what is
+/// missing (nothing is guessed from the name).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PreloadRef {
+    /// Empty when the named file is not a library sample.
+    pub sha256: String,
+    /// The sample's name when the run started; empty when unknown.
+    pub name: String,
+    /// The guest path the run named.
+    pub path: String,
+    /// `LD_PRELOAD`, `LD_AUDIT` or `argument`.
+    pub via: String,
+    /// Why the hash is unknown; empty when it is known.
+    pub note: String,
+}
+
+impl PreloadRef {
+    /// How the run's sample list words the library's part in the run.
+    pub fn role(&self) -> &'static str {
+        match self.via.as_str() {
+            "LD_PRELOAD" => "preloaded",
+            "LD_AUDIT" => "audit library",
+            _ => "named in arguments",
+        }
+    }
+
+    /// One line for the Summary: "preloaded: name (abcd1234…) via LD_PRELOAD=/tmp/x.so".
+    pub fn line(&self) -> String {
+        let how = if self.via == "argument" {
+            format!("named in the arguments as {}", self.path)
+        } else {
+            format!("{}={}", self.via, self.path)
+        };
+        if self.sha256.is_empty() {
+            format!("{how} (not a library sample: {})", self.note)
+        } else {
+            let name = if self.name.is_empty() {
+                "library sample"
+            } else {
+                &self.name
+            };
+            format!(
+                "{name} ({}) via {how}",
+                &self.sha256[..self.sha256.len().min(12)]
+            )
+        }
+    }
 }
 
 fn unix_ms() -> u64 {

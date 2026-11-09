@@ -188,6 +188,12 @@ pub(super) fn request_evidence_jump(ctx: &egui::Context, values: &[(&str, RowVal
                 ("evidence.block", RowValue::Text(value)) => serde_json::from_str(value).ok(),
                 _ => None,
             }),
+            input: values.iter().find_map(|(key, value)| match (*key, value) {
+                ("evidence.input", RowValue::Text(value)) => {
+                    serde_json::from_value(serde_json::Value::String(value.clone())).ok()
+                }
+                _ => None,
+            }),
         };
         ctx.data_mut(|data| {
             data.insert_temp(egui::Id::new("triage-byte-jump"), evidence);

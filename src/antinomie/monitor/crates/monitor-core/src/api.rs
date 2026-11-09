@@ -627,9 +627,46 @@ pub struct ExecRequest {
     /// runs of a program the library could not read, have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample: Option<crate::samples::SampleRef>,
+    /// Libraries the launch loads into its program (`LD_PRELOAD`, `LD_AUDIT`,
+    /// an argument), found by the hash the library recorded when it sent the
+    /// file into the VM. Runs saved before this have none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preloaded: Vec<crate::samples::PreloadRef>,
 }
 
 impl ExecRequest {
+    /// How this run relates to the library sample `sha256`: `Some("")` when the
+    /// run executed it, the library's role ("preloaded", "audit library",
+    /// "named in arguments") when the run loaded it into another program,
+    /// `None` when the run has nothing to do with it.
+    pub fn role_of(&self, sha256: &str) -> Option<&'static str> {
+        if self
+            .sample
+            .as_ref()
+            .is_some_and(|sample| sample.sha256.eq_ignore_ascii_case(sha256))
+        {
+            return Some("");
+        }
+        self.preloaded
+            .iter()
+            .find(|library| {
+                !library.sha256.is_empty() && library.sha256.eq_ignore_ascii_case(sha256)
+            })
+            .map(crate::samples::PreloadRef::role)
+    }
+
+    /// Every library sample hash this run is linked to, in the order it
+    /// names them: the one it executed, then those it loaded.
+    pub fn linked_hashes(&self) -> Vec<&str> {
+        let mut hashes: Vec<&str> = self.sample.iter().map(|s| s.sha256.as_str()).collect();
+        for library in &self.preloaded {
+            if !library.sha256.is_empty() && !hashes.contains(&library.sha256.as_str()) {
+                hashes.push(&library.sha256);
+            }
+        }
+        hashes
+    }
+
     /// Refuse a request that cannot be launched whatever the guest is: what
     /// the app dialog checks and what a job spec is checked with. The checks
     /// that need the running guest (base revision, graphical base, debugger)
@@ -2201,6 +2238,7 @@ impl Default for ExecRequest {
             route: None,
             host_copy: None,
             sample: None,
+            preloaded: Vec::new(),
         }
     }
 }

@@ -74,6 +74,11 @@ impl MonitorApp {
                 .map(|environment| environment.base_name.clone())
                 .filter(|name| !name.is_empty()),
             screenshot,
+            run.request
+                .preloaded
+                .iter()
+                .map(antinomie_monitor_core::samples::PreloadRef::line)
+                .collect(),
         );
         if let Some(error) = &self.archive_error {
             crate::activity::error(ui, error);

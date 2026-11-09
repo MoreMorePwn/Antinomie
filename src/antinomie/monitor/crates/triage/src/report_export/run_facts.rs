@@ -154,6 +154,27 @@ fn sample(job: &Job, run: &RunSummary) -> Option<SampleInfo> {
             role: String::new(),
         });
     }
+    // The library the launch recorded by hash: the first one it loaded.
+    if let Some(library) = run
+        .request
+        .preloaded
+        .iter()
+        .find(|library| library.sha256.len() == 64)
+    {
+        return Some(SampleInfo {
+            name: library.name.clone(),
+            sha256: library.sha256.clone(),
+            size: job
+                .sample
+                .as_ref()
+                .filter(|known| known.sha256 == library.sha256)
+                .and_then(|known| known.size),
+            role: match library.role() {
+                "preloaded" => "preloaded library".to_owned(),
+                other => other.to_owned(),
+            },
+        });
+    }
     // A program of the base image (a shell running a one-liner) is not the
     // sample, whatever the static analysis opened; any other file is the
     // sample the run was started from, library or not.
@@ -331,6 +352,46 @@ mod tests {
         run.execution.as_mut().unwrap().live_task_count = 2;
         let info = run_info(&RunInfo::default(), &run, Some(1_060_000), 2, 0);
         assert!(info.state.starts_with("Ended by VM stop"), "{}", info.state);
+    }
+
+    #[test]
+    fn a_library_recorded_by_hash_is_the_runs_preloaded_sample() {
+        let mut run = record(RunState::Finished, Some(WaitStatus::Exited { code: 0 }));
+        run.request.preloaded = vec![antinomie_monitor_core::samples::PreloadRef {
+            sha256: "ab".repeat(32),
+            name: "libhook.so".into(),
+            path: "/tmp/libhook.so".into(),
+            via: "LD_PRELOAD".into(),
+            note: String::new(),
+        }];
+        let sample = sample(&bare_job(), &run).unwrap();
+        assert_eq!(
+            (sample.name.as_str(), sample.role.as_str()),
+            ("libhook.so", "preloaded library")
+        );
+        assert_eq!(sample.sha256, "ab".repeat(32));
+        // A library that was named but never sent has no hash and is not claimed.
+        run.request.preloaded[0].sha256.clear();
+        assert!(sample_has_no_library(&run));
+    }
+
+    fn bare_job() -> Job {
+        Job {
+            archive: std::path::PathBuf::new(),
+            pcap: None,
+            request: Default::default(),
+            choices: Default::default(),
+            run: Default::default(),
+            sample: None,
+            clock: None,
+            data_dir: None,
+            now_ms: 0,
+            folder: std::path::PathBuf::new(),
+        }
+    }
+
+    fn sample_has_no_library(run: &RunSummary) -> bool {
+        sample(&bare_job(), run).is_none_or(|sample| sample.role.is_empty())
     }
 
     #[test]

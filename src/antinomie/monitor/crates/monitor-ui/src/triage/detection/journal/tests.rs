@@ -202,6 +202,7 @@ fn a_finding_event_opens_the_viewer_on_that_event_and_links_to_its_call() {
         address: None,
         report_id: None,
         block: None,
+        input: None,
     };
     let mut other: Finding = super::super::tests::finding("r", "t", vec![bytes]);
     assert_eq!(

@@ -448,6 +448,7 @@ mod tests {
             address: None,
             report_id: None,
             block: None,
+            input: None,
         }
     }
 

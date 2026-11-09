@@ -90,6 +90,7 @@ pub mod tone;
 pub mod tracer_qa;
 #[cfg(test)]
 pub mod uring_qa;
+pub mod written_export;
 #[cfg(test)]
 use self::archive_scan::*;
 use self::{

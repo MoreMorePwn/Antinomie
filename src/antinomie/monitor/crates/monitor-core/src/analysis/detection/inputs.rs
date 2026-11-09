@@ -15,6 +15,13 @@ pub enum InputKind {
     CoreDump,
     MemoryDump,
     RecoveredFile,
+    /// A library sample the run loaded into another program (`LD_PRELOAD`,
+    /// `LD_AUDIT`), scanned from the sample library.
+    PreloadedLibrary,
+    /// An executable or library the run wrote, rebuilt from its recorded writes.
+    WrittenFile,
+    /// A layer static analysis unpacked from the sample (UPX and the like).
+    UnpackedLayer,
     /// A run-owned PCAP segment.
     Capture,
     /// The normalized event journal Sigma reads.
@@ -28,6 +35,9 @@ impl InputKind {
             Self::CoreDump => "Process core",
             Self::MemoryDump => "Memory dump",
             Self::RecoveredFile => "Recovered file",
+            Self::PreloadedLibrary => "Preloaded library",
+            Self::WrittenFile => "File the run wrote",
+            Self::UnpackedLayer => "Unpacked layer",
             Self::Capture => "Capture",
             Self::EventJournal => "Event journal",
         }

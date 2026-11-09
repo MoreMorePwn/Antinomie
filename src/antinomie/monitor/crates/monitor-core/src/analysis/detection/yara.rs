@@ -10,6 +10,7 @@ const BLOCK_SIZE: usize = 64 * 1024 * 1024;
 const TOTAL_SIZE: u64 = 512 * 1024 * 1024;
 const EVIDENCE_LIMIT: usize = 16;
 
+mod extra;
 mod physical;
 
 struct Target<'a> {
@@ -17,6 +18,7 @@ struct Target<'a> {
     offset: u64,
     address: Option<u64>,
     report_id: Option<&'a str>,
+    input: InputKind,
 }
 
 fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
@@ -158,6 +160,7 @@ fn record(
                         .and_then(|address| address.checked_add(relative)),
                     report_id: target.report_id.map(str::to_owned),
                     block: Some(block.clone()),
+                    input: Some(target.input),
                 });
             }
         }
@@ -169,6 +172,7 @@ fn record(
                     address: None,
                     report_id: target.report_id.map(str::to_owned),
                     block: Some(block.clone()),
+                    input: Some(target.input),
                 });
             } else {
                 report.omitted_evidence += 1;
@@ -186,13 +190,14 @@ fn scan_file(
     budget: &mut super::RuleTextBudget,
     report: &mut Report,
     total: &mut u64,
+    input: InputKind,
 ) -> Result<(u64, String), String> {
     let parent = path.parent().ok_or("target has no parent")?;
     let mut file =
         crate::archive_io::open_regular(parent, path).map_err(|error| error.to_string())?;
     let before = file.metadata().map_err(|error| error.to_string())?;
     if before.len() > BLOCK_SIZE as u64 || total.saturating_add(before.len()) > TOTAL_SIZE {
-        return Err("recovered file exceeds the 64 MiB file / 512 MiB total budget".into());
+        return Err("the file exceeds the 64 MiB file / 512 MiB total budget".into());
     }
     let mut data = Vec::new();
     (&mut file)
@@ -205,7 +210,7 @@ fn scan_file(
             &file.metadata().map_err(|error| error.to_string())?,
         )
     {
-        return Err("recovered file changed during scan".into());
+        return Err("the file changed during scan".into());
     }
     *total += data.len() as u64;
     let sha256 = record(
@@ -216,6 +221,7 @@ fn scan_file(
             offset: 0,
             address: None,
             report_id: None,
+            input,
         },
         sources,
         budget,
@@ -358,6 +364,11 @@ fn scan_core(
                         .then(|| mapping.start.checked_add(consumed))
                         .flatten(),
                     report_id: None,
+                    input: if virtual_addresses {
+                        InputKind::CoreDump
+                    } else {
+                        InputKind::MemoryDump
+                    },
                 },
                 pass.sources,
                 pass.budget,
@@ -554,6 +565,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                 offset: 0,
                 address: None,
                 report_id: Some(&saved.id),
+                input: InputKind::Executable,
             },
             &sources,
             &mut budget,
@@ -572,6 +584,19 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
             });
         }
     }
+    // The library the run loaded into another program, the executables and
+    // libraries it wrote, and the layers static analysis unpacked.
+    extra::scan(
+        &mut scanner,
+        staged,
+        &mut extra::Shared {
+            sources: &sources,
+            budget: &mut budget,
+            total: &mut total,
+            deadline,
+        },
+        &mut report,
+    );
     let scanning = request.settings.scan_memory || request.settings.scan_recovered;
     let artifacts = if scanning {
         match super::runner::owned_artifacts(request) {
@@ -675,6 +700,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                         &mut budget,
                         &mut report,
                         &mut total,
+                        InputKind::RecoveredFile,
                     ) {
                         Ok((size, sha256)) => report.input(input.size(size).sha256(sha256)),
                         Err(error) => {
@@ -722,6 +748,7 @@ mod tests {
                 offset: 128,
                 address: Some(4096),
                 report_id: None,
+                input: InputKind::Executable,
             },
             &[],
             &mut budget,
@@ -811,6 +838,7 @@ mod tests {
             no_rules: false,
             include_dir: None,
             skipped_inputs: vec![],
+            libraries: vec![],
             unstaged: vec![],
             network_off: false,
         };
@@ -869,6 +897,7 @@ mod tests {
                 offset: 0,
                 address: None,
                 report_id: None,
+                input: InputKind::Executable,
             },
             &[source.into()],
             &mut budget,

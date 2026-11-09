@@ -77,6 +77,7 @@ impl Session {
             route: None,
             host_copy: None,
             sample: None,
+            preloaded: Vec::new(),
         };
         let reply = match self.request_typed(
             control::EXEC,

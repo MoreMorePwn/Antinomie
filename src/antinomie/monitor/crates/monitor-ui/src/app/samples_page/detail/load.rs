@@ -20,12 +20,7 @@ pub(in crate::app::samples_page) fn load(
             continue;
         };
         for run in listed {
-            if run
-                .request
-                .sample
-                .as_ref()
-                .is_some_and(|sample| sample.sha256 == record.sha256)
-            {
+            if run.request.role_of(&record.sha256).is_some() {
                 seen.push(SeenRun {
                     sha256: record.sha256.clone(),
                     vm_id: run.vm_id.clone(),
@@ -93,6 +88,7 @@ pub(in crate::app::samples_page) fn load(
         };
         entries.push(RunEntry {
             number,
+            role: run.request.role_of(&record.sha256).unwrap_or(""),
             run: super::super::history::listed(&run),
             folder,
             artifacts,

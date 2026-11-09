@@ -904,3 +904,52 @@ fn the_family_field_shows_what_triage_named_and_aliases_show_no_host_path() {
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn a_run_that_preloads_a_library_sample_is_listed_under_that_sample_with_its_role() {
+    let root = super::samples_list::temp("detail-preload");
+    let (_, _, library) = super::samples_list::fixture(&root);
+    // The run executed /bin/sh; the library is only in its LD_PRELOAD.
+    let mut run = save_run(&root, &library, "libhook.so", "rp", 7_000, false);
+    run.request.sample = None;
+    run.request.path = "/bin/sh".into();
+    run.request.preloaded = vec![antinomie_monitor_core::samples::PreloadRef {
+        sha256: library.clone(),
+        name: "libhook.so".into(),
+        path: "/tmp/libhook.so".into(),
+        via: "LD_PRELOAD".into(),
+        note: String::new(),
+    }];
+    std::fs::write(
+        run.directory.join("run.json"),
+        serde_json::to_vec(&run).unwrap(),
+    )
+    .unwrap();
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    app.options.data_dir = root.clone();
+    app.snapshot.vms.push(VmConfig {
+        id: "vm".into(),
+        name: "Debian".into(),
+        ..VmConfig::default()
+    });
+    app.rules_ui.set_packs_for_test(Vec::new());
+    app.open_library(crate::workspace::LibraryPage::Samples);
+    until(&mut app, &ctx, |app| app.samples_page.is_loaded());
+    // The list counts the run and no longer marks the sample as never run.
+    let row = app
+        .samples_page
+        .rows()
+        .iter()
+        .find(|row| row.record.sha256 == library)
+        .unwrap();
+    assert_eq!(row.runs.count, 1);
+    app.samples_page.open_detail(&library);
+    until(&mut app, &ctx, |app| {
+        matches!(app.samples_page.detail_probe(), Some((1, _, _)))
+    });
+    assert_eq!(app.samples_page.detail_run_ids(), ["rp"]);
+    assert_eq!(app.samples_page.detail_run_roles(), ["preloaded"]);
+    let _ = std::fs::remove_dir_all(root);
+}

@@ -70,6 +70,21 @@ x86 programs by their own table.
   dropped-call counts carried the wrong names. The decision now reads each call's id
   on its own ABI (AArch64, AArch32, x86-64, and ia32 programs on x86-64). x86-64
   native decisions are unchanged.
+
+- **Preloaded libraries are linked to their sample, scanned and named
+  (ANT-T0398).** A run of `/bin/sh -c '...'` with `LD_PRELOAD` or `LD_AUDIT` naming a
+  file the sample library sent into the VM is recorded with that library's SHA-256;
+  the library's Runs list shows the run with the role `preloaded`, it no longer says
+  "Never run", and the run's Summary and report name the library. A named library
+  that was never sent has no hash and is reported as such. The run's YARA scan also
+  reads the preloaded library, the ELF executables and libraries the run wrote
+  (rebuilt from the recorded writes and kept under the run's `written` folder when Triage saves the run's digest, `detect --save` runs or the Auto lane analyses it), and the
+  layers static analysis unpacked; each match records its input (`Preloaded library`,
+  `File the run wrote`, `Unpacked layer`), skipped inputs say why, and the budgets are
+  unchanged. A library the run wrote and then loaded (`LD_PRELOAD`, `LD_AUDIT`,
+  `/etc/ld.so.preload`) is a new high Triage finding. The library sample window has
+  **Load into…**, and `run exec` has `--load-into PROGRAM`, to run a program with the
+  library preloaded.
 - **Runs know their job, sensitive reads reach the service log, `sample add` goes
   through the daemon, and `run export --sensitive` writes packet and call bytes
   (ANT-T0421).** `run list` showed `job_id: null` and `--job` found nothing; the
