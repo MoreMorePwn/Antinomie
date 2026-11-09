@@ -49,6 +49,38 @@ pub(super) fn go_supported(specimen: &[u8]) -> bool {
     go_evidence(specimen, file.as_ref())
 }
 
+/// Whether the file carries any sign of a Rust build: the standard library's
+/// source paths, its panic and unwinding symbols, or its backtrace variable.
+pub(super) fn rust_supported(specimen: &[u8]) -> bool {
+    [
+        &b"/rustc/"[..],
+        b"rust_panic",
+        b"rust_begin_unwind",
+        b"rust_eh_personality",
+        b"RUST_BACKTRACE",
+        b".rustc",
+    ]
+    .iter()
+    .any(|needle| specimen.windows(needle.len()).any(|w| w == *needle))
+}
+
+/// Why a claim by Detect It Easy is doubtful, when the file lacks the
+/// structures such a build always has. DIE matches these on short byte
+/// patterns (its heuristic rules), which C programs can contain.
+fn dispute(name: &str, specimen: &[u8]) -> Option<&'static str> {
+    if name.eq_ignore_ascii_case("go") && !go_supported(specimen) {
+        Some(
+            "the file has no Go section, build info marker or runtime symbols, so this is probably a false match",
+        )
+    } else if name.eq_ignore_ascii_case("rust") && !rust_supported(specimen) {
+        Some(
+            "the file has no Rust standard library path, panic symbol or backtrace variable (a heuristic match), so this is probably a false match",
+        )
+    } else {
+        None
+    }
+}
+
 /// How `file`'s magic describes the linking: Some(true) dynamic, Some(false)
 /// static.
 fn magic_linking(magic: &str) -> Option<bool> {
@@ -497,19 +529,13 @@ pub(super) fn identify(section: &mut AnalysisSection, specimen: &[u8]) {
                 .and_then(|v| v.as_str())
                 .unwrap_or(&name)
                 .to_owned();
-            // DIE matches Go on short byte patterns that C programs can
-            // contain; say so when the file has none of Go's structures.
-            let disputed = name.eq_ignore_ascii_case("go") && !go_supported(specimen);
+            let disputed = dispute(&name, specimen);
             super::worker::structured_entry(
                 section,
                 format!("{category}: {name}"),
                 format!(
                     "Detect It Easy: {text}{}",
-                    if disputed {
-                        "; DISPUTED: the file has no Go section, build info marker or runtime symbols, so this is probably a false match"
-                    } else {
-                        ""
-                    }
+                    disputed.map_or(String::new(), |why| format!("; DISPUTED: {why}"))
                 ),
                 None,
                 AnalysisData::Identification {
@@ -553,6 +579,23 @@ mod tests {
             .iter()
             .map(|f| format!("{}: {}", f.category, f.name))
             .collect()
+    }
+
+    #[test]
+    fn a_rust_claim_needs_a_sign_of_rust_in_the_file() {
+        let c_program = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/upx-arm/arm-dynamic"),
+        )
+        .unwrap();
+        assert!(!rust_supported(&c_program));
+        assert!(dispute("Rust", &c_program).is_some());
+        assert!(dispute("rust", &c_program).is_some());
+        assert!(dispute("GCC", &c_program).is_none());
+        let mut rust = c_program;
+        rust.extend_from_slice(b"/rustc/0123456789abcdef/library/core/src/panicking.rs\0");
+        assert!(rust_supported(&rust));
+        assert!(dispute("Rust", &rust).is_none());
     }
 
     #[test]

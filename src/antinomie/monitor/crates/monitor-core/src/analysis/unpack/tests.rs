@@ -575,3 +575,55 @@ fn upx_text_with_unlocatable_headers_is_never_reported_as_not_packed() {
     let _ = std::fs::remove_dir_all(dir);
     let _ = std::fs::remove_dir_all(dir2);
 }
+
+fn arm_fixture(name: &str) -> Vec<u8> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/upx-arm")
+        .join(name);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+#[test]
+fn unpacked_arm_and_aarch64_gcc_builds_are_not_upx() {
+    for name in ["a64-static", "a64-dynamic", "arm-static", "arm-dynamic"] {
+        let file = arm_fixture(name);
+        assert_eq!(detect(&file), None, "{name}");
+        // The weak signal that used to fire: the tail of the file.
+        let mut padded = file.clone();
+        padded.extend_from_slice(&[0u8; 8]);
+        assert_eq!(detect(&padded), None, "{name} padded");
+    }
+}
+
+#[test]
+fn arm_binaries_packed_by_the_system_upx_are_found_and_a_changed_magic_says_so() {
+    for name in ["a64", "arm"] {
+        let packed = arm_fixture(&format!("{name}-packed"));
+        let found = detect(&packed).unwrap_or_else(|| panic!("{name} packed"));
+        assert_eq!(found.label(), "UPX", "{name}: {:?}", found.changes);
+        let changed = arm_fixture(&format!("{name}-magic-overwritten"));
+        let found = detect(&changed).unwrap_or_else(|| panic!("{name} changed"));
+        assert_eq!(found.label(), "UPX (header modified)", "{name}");
+        assert!(!found.changes.is_empty());
+    }
+}
+
+#[test]
+fn a_tail_matching_upx_fields_without_a_magic_or_info_line_is_not_upx() {
+    // Both magics gone and no copyright line: only the weak fields remain.
+    let mut file = packed(7, 64);
+    let header = header_of(&file);
+    // Every magic gone and no copyright line: only the weak fields remain.
+    for at in 0..file.len() - 4 {
+        if file[at..at + 4] == *b"UPX!" {
+            file[at..at + 4].copy_from_slice(b"\0\0\0\0");
+        }
+    }
+    assert_eq!(detect(&file), None);
+    // One magic back, or the copyright line, is evidence again.
+    let mut one = file.clone();
+    one[header..header + 4].copy_from_slice(b"UPX!");
+    assert!(detect(&one).is_some());
+    file.extend_from_slice(b"$Info: This file is packed with the UPX executable packer $");
+    assert!(detect(&file).is_some());
+}
