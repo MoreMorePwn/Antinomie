@@ -179,10 +179,18 @@ pub enum NicSlot {
     /// the host bridge, PIIX3 and the display, where a cloud's virtio card
     /// sits.
     Pc,
+    /// 00:0e.0 (`enp0s14`): an arm64 VM's card on `virt`, whatever the
+    /// profile (PC chipset places mean nothing there, and the display takes
+    /// the first free slots). QEMU's igb, the arm64 machines' card, brings
+    /// eight SR-IOV virtual functions from its own place plus 0x80, two
+    /// apart, and refuses a place where the last would pass function 0xff
+    /// ("VF addr overflows", as at 00:19.0): 0e.0 is the highest slot where
+    /// they fit (they take 1e.0 to 1f.6).
+    Virt,
 }
 
 impl NicSlot {
-    pub const ALL: [Self; 4] = [Self::Ich, Self::Pch, Self::Eno1, Self::Pc];
+    pub const ALL: [Self; 5] = [Self::Ich, Self::Pch, Self::Eno1, Self::Pc, Self::Virt];
 
     /// The PCI address, as a `-device` option.
     pub fn address(self) -> &'static str {
@@ -191,6 +199,7 @@ impl NicSlot {
             Self::Pch => "addr=0x1f.0x6",
             Self::Eno1 => "addr=0x19,acpi-index=1",
             Self::Pc => "addr=0x3",
+            Self::Virt => "addr=0xe",
         }
     }
 
@@ -201,6 +210,7 @@ impl NicSlot {
             Self::Pch => "enp0s31f6",
             Self::Eno1 => "eno1",
             Self::Pc => "ens3",
+            Self::Virt => "enp0s14",
         }
     }
 
@@ -215,6 +225,17 @@ impl NicSlot {
             Self::Pch => "PCI 00:1f.6 (enp0s31f6)",
             Self::Eno1 => "PCI 00:19.0, firmware index 1 (eno1)",
             Self::Pc => "PCI 00:03.0 (ens3)",
+            Self::Virt => "PCI 00:0e.0 (enp0s14)",
+        }
+    }
+
+    /// The device and function number on bus 0 (slot times 8 plus function).
+    pub fn devfn(self) -> u16 {
+        match self {
+            Self::Ich | Self::Eno1 => 0x19 << 3,
+            Self::Pch => (0x1f << 3) | 6,
+            Self::Pc => 0x03 << 3,
+            Self::Virt => 0x0e << 3,
         }
     }
 }

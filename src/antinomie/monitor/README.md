@@ -145,7 +145,8 @@ indexes. It boots on the minimal kernel profile it shares with BusyBox (every
 driver it uses built in) and takes its address with ifupdown and dhcpcd on the
 interface its stealth profile's machine would have: the NIC sits at that
 chipset's integrated LAN slot whatever model the profile picks (00:1f.6,
-`enp0s31f6`, for the Intel machines; 00:19.0, `enp0s25`, otherwise), and the
+`enp0s31f6`, for the Intel machines; 00:19.0, `enp0s25`, otherwise; on arm64
+00:0e.0, `enp0s14`, where QEMU's igb fits), and the
 stanza is written when the VM is created, reset or its profile moves the NIC.
 `/tmp` stays on the root disk (a `tmp.mount` drop-in, not a mask), as on BusyBox, so files a
 sample drops there are in the VM's disk for the Disks tab and disk dumps. The

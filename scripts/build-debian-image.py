@@ -227,8 +227,8 @@ def boot_loaders(arch="x86_64"):
 # The installer's interfaces file without its stanza for the wired NIC:
 # provisioning writes that per VM for the interface its stealth profile's NIC
 # slot gets (bundle stealth_support "onboardnic": enp0s25 at PCI 00:19.0,
-# enp0s31f6 at 00:1f.6), so udev names it as on that machine whichever model
-# the profile picks.
+# enp0s31f6 at 00:1f.6; enp0s14 at 00:0e.0 on arm64), so udev names it as on
+# that machine whichever model the profile picks.
 CONSOLE_INTERFACES = """# This file describes the network interfaces available on your system
 # and how to activate them. For more information, see interfaces(5).
 

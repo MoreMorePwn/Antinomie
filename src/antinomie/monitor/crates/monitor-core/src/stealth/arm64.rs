@@ -8,7 +8,7 @@
 //! /proc/cpuinfo's CPU part, the firmware's processor and DMI name the same
 //! machine, and no value is the host's.
 use super::{
-    ARM_MACHINES, ArmKind, ArmMachine, BoardTree, DiskBus, MachineIdentity, MemorySlot,
+    ARM_MACHINES, ArmKind, ArmMachine, BoardTree, DiskBus, MachineIdentity, MemorySlot, NicSlot,
     StealthPreset, StealthProfile, fdt, launch::escape, memory, processor, smbios,
 };
 use std::{path::Path, process::Command};
@@ -230,6 +230,51 @@ pub fn machine_options(identity: &MachineIdentity) -> String {
 /// Altra boards), with the profile's MAC.
 pub fn nic_option(profile: &StealthProfile) -> String {
     format!("igb,netdev=net0,mac={}", profile.mac)
+}
+
+/// QEMU's igb (hw/net/igb.c): eight SR-IOV virtual functions, the first at
+/// the card's own device and function number plus 0x80, the others two apart.
+const IGB_VF_OFFSET: u16 = 0x80;
+const IGB_VF_STRIDE: u16 = 2;
+const IGB_VFS: u16 = 8;
+
+/// Whether QEMU can put its igb at `slot`: its last virtual function must
+/// stay on bus 0 (function 0xff at most), or QEMU exits with "VF addr
+/// overflows" before the VM starts.
+pub fn igb_fits(slot: NicSlot) -> bool {
+    slot.devfn() + IGB_VF_OFFSET + IGB_VF_STRIDE * (IGB_VFS - 1) <= 0xff
+}
+
+/// The `-device` value of an arm64 VM's network card, and a note when it is
+/// not the one the profile asks for. `machine`: the VM presents an arm64
+/// machine, whose card is [`nic_option`]'s igb; otherwise (Transparent) the
+/// profile's own model. `slot`: where a base that names its NIC by slot has
+/// it ([`NicSlot::Virt`] since 0.9.0); none: QEMU picks the first free slot,
+/// where the igb fits. A disk provisioned for 00:19.0 before keeps that place
+/// (its network configuration names the interface udev gives it there) with
+/// the profile's model, which has no virtual functions.
+pub fn nic_device(
+    profile: &StealthProfile,
+    machine: bool,
+    slot: Option<NicSlot>,
+) -> (String, Option<String>) {
+    match slot {
+        _ if !machine => (super::nic_option_for(profile, slot), None),
+        Some(slot) if !igb_fits(slot) => (
+            super::nic_option_for(profile, Some(slot)),
+            Some(format!(
+                "This VM's disk configures its network card at {}, where QEMU's igb (the arm64 \
+                 machine's Intel 82576) does not fit (its SR-IOV functions would pass the bus's \
+                 last address); the card there is QEMU's {}. A VM created again gets the igb \
+                 at {}.",
+                slot.label(),
+                profile.nic.device(),
+                NicSlot::Virt.label()
+            )),
+        ),
+        Some(slot) => (format!("{},{}", nic_option(profile), slot.address()), None),
+        None => (nic_option(profile), None),
+    }
 }
 
 /// Neoverse N1's caches per core: 64 KiB L1 instruction and data, 1 MiB L2.
@@ -822,5 +867,63 @@ mod tests {
                 .iter()
                 .any(|item| item.contains("KPTI"))
         );
+    }
+
+    #[test]
+    fn the_igb_sits_where_its_virtual_functions_fit() {
+        // QEMU 11.0.3 refuses igb at 00:19.0 ("VF addr overflows"): its eight
+        // virtual functions start at its devfn plus 0x80, two apart. 0e.0 is
+        // the highest slot that fits (0x0e starts, 0x0f fails on virt).
+        assert!(igb_fits(NicSlot::Virt));
+        assert!(igb_fits(NicSlot::Pc));
+        for slot in [NicSlot::Ich, NicSlot::Pch, NicSlot::Eno1] {
+            assert!(!igb_fits(slot), "{slot:?}");
+        }
+        assert_eq!(
+            NicSlot::Virt.devfn() + IGB_VF_OFFSET + IGB_VF_STRIDE * 7,
+            0xfe
+        );
+        assert_eq!(
+            (NicSlot::Virt.address(), NicSlot::Virt.interface()),
+            ("addr=0xe", "enp0s14")
+        );
+        assert_eq!(NicSlot::from_interface("enp0s14"), Some(NicSlot::Virt));
+        for preset in [
+            StealthPreset::RealisticServer,
+            StealthPreset::RealisticDesktop,
+            StealthPreset::RealisticLaptop,
+            StealthPreset::CloudVps,
+        ] {
+            let base = profile(preset);
+            let machine = arm_machine(&base).unwrap();
+            let arm = arm_profile(&base, machine, 2, 2048);
+            assert_eq!(
+                nic_device(&arm, true, Some(NicSlot::Virt)),
+                (format!("igb,netdev=net0,mac={},addr=0xe", arm.mac), None),
+                "{preset:?}"
+            );
+            assert_eq!(nic_device(&arm, true, None), (nic_option(&arm), None));
+            // A disk provisioned for 00:19.0 before: the profile's model
+            // there (no virtual functions), and the start log says why.
+            let (nic, note) = nic_device(&arm, true, Some(NicSlot::Ich));
+            assert_eq!(nic, super::super::nic_option_for(&arm, Some(NicSlot::Ich)));
+            assert!(
+                !nic.starts_with("igb") && nic.ends_with(",addr=0x19"),
+                "{nic}"
+            );
+            let note = note.unwrap();
+            assert!(
+                note.contains("enp0s25") && note.contains("enp0s14"),
+                "{note}"
+            );
+        }
+        // Transparent (no arm64 machine): the profile's own model, as before.
+        let plain = StealthProfile::transparent();
+        for slot in [None, Some(NicSlot::Virt), Some(NicSlot::Ich)] {
+            assert_eq!(
+                nic_device(&plain, false, slot),
+                (super::super::nic_option_for(&plain, slot), None)
+            );
+        }
     }
 }

@@ -872,3 +872,39 @@ fn the_x86_appliance_script_is_pinned() {
         "{text}"
     );
 }
+
+#[test]
+fn arm64_provisions_the_slot_where_the_igb_fits_and_x86_keeps_the_machines() {
+    use crate::{api::GuestArch, stealth::StealthPreset};
+    let onboard = vec!["dhcp".to_owned(), "onboardnic".to_owned()];
+    for preset in [
+        StealthPreset::RealisticDesktop,
+        StealthPreset::RealisticLaptop,
+        StealthPreset::RealisticServer,
+    ] {
+        for vendor in ["GenuineIntel", "AuthenticAMD"] {
+            let profile = crate::stealth::StealthProfile::realistic(preset, vendor);
+            assert_eq!(
+                provisioned_interface(&onboard, &profile, GuestArch::X86_64),
+                Some(profile.nic_slot().interface())
+            );
+            assert_eq!(
+                provisioned_interface(&onboard, &profile, GuestArch::AARCH64),
+                Some("enp0s14")
+            );
+            assert_eq!(
+                provisioned_interface(&["dhcp".to_owned()], &profile, GuestArch::AARCH64),
+                None
+            );
+        }
+    }
+    let plain = crate::stealth::StealthProfile::transparent();
+    assert_eq!(
+        provisioned_interface(&onboard, &plain, GuestArch::X86_64),
+        Some("enp0s25")
+    );
+    assert_eq!(
+        provisioned_interface(&onboard, &plain, GuestArch::AARCH64),
+        Some("enp0s14")
+    );
+}

@@ -131,7 +131,7 @@ impl Worker {
                 "",
                 crate::disk_start::Via::Restore,
             );
-            let process = VmProcess::launch_incoming(
+            let mut process = VmProcess::launch_incoming(
                 &self.options,
                 &effective,
                 &bundle,

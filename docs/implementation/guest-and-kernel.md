@@ -323,7 +323,7 @@ unattributed, the gaps and the calls per second are in the report and
 
 | Tier | Runs | Takes (this machine) |
 |---|---|---|
-| quick | the conformance trace suite's oracle groups `user`, `root`, `threads` (`conf-quick`) | about 1 min with the examples built, 5 to 7 min when the render test has to build too |
+| quick | the conformance trace suite's oracle groups `user`, `root`, `threads` (`conf-quick`); on a Debian base also `nic-routed` (0.9.0): a VM of the realistic desktop profile on a Routed network whose card must get a DHCP lease (`guest-run`; on arm64 QEMU's igb at 00:0e.0) | about 1 min with the examples built, 5 to 7 min when the render test has to build too; `nic-routed` adds a VM creation and boot (about a minute on KVM, several under TCG on arm64) |
 | full | quick; `conf-stress-light`, `conf-stress-heavy`, `conf-stress-extreme`, `conf-stress-lossy`, `conf-stress-contended` (0.8.0) (one check and one conformance run each, cleaned up in between); `debug-p2`, `debug-p3`, `audit-stop`, `audit-core`, `uring-status`, `uring-boots`, `tracer-record`, `tracer-qa`, `debugger-live`, `stealth`, `cloud`, `snapshot`, `snapshot-uefi` (Debian bases); `uring-legacy` and `tracer-legacy` on the old base; interop in both directions (`io-old-new-*`: the old host with BASE; this host with the old base: `io-new-old-audit` and the two legacy checks, since an old guest lacks what the other checks need) | about 2 h 10 min plus, the first time, about 15 min to build the old host; the five stress groups take 80 to 95 min of it (light 5-7, heavy 10-24, extreme 35-56, lossy 4-13, contended 14-17) |
 
 Quick is the default for every change. Full is required when a change touches the
@@ -1269,7 +1269,7 @@ machine of its profile's kind instead (`stealth/arm64.rs`, catalog
   is SATA with the machine's model (QEMU's NVMe controller names itself QEMU),
   the network card Intel's 82576 (`igb`, the driver of the boards' I350 and
   I210) with the machine's MAC prefix (a cloud's: random, locally
-  administered). An x86 cloud provider's metadata service and instance state
+  administered), at 00:0e.0 on a Debian base (see the provisioning section). An x86 cloud provider's metadata service and instance state
   are not used for arm64 VMs (a start-log note says so).
 * **Boards** boot on QEMU's device tree, disguised: the launch dumps the tree of
   the same machine, CPUs and memory (`-machine dumpdtb=`), `stealth/fdt.rs`
@@ -1580,10 +1580,26 @@ UEFI disk first). The 15-minute `BOOT_TIMEOUT` leaves a slow host ample room.
 After creation an arm64 disk is edited by the appliance alone: a moved NIC's
 stanza is downloaded, rewritten and uploaded (`set_interface_foreign`); a new
 disk bus changes only the record (arm64 has no GRUB for BIOS, so no debconf
-answer). On `virt` the NIC of a base that names it by slot sits at 00:19.0
-(`enp0s25`) whatever the profile, also beside an arm64 machine's own card
-model (`provisioned_interface` with the base's architecture; the PC slots mean
-nothing there and the display takes the first free slots).
+answer). On `virt` the NIC of a base that names it by slot sits at 00:0e.0
+(`enp0s14`, `NicSlot::Virt`) whatever the profile, also with an arm64
+machine's own card model (`provisioned_interface` with the base's
+architecture; the PC slots mean nothing there and the display takes the first
+free slots). Not 00:19.0, as before ANT-T0424: QEMU's igb, the arm64 machines'
+card, creates eight SR-IOV virtual functions when it is realized, the first at
+its own device and function number plus 0x80 and the others two apart, and
+QEMU 11 refuses a place where the last one passes function 0xff (`VF addr
+overflows`; checked with qemu-system-aarch64 11.0.3: slots 0x03 to 0x0e start,
+0x0f, 0x10 and 0x19 fail). QEMU's igb has no property that turns the virtual
+functions off, so the card moved: 00:0e.0 is the highest slot where they fit
+(they take 1e.0, 1e.2, ... 1f.6, which nothing else on `virt` uses), and the
+x86-64 slots are unchanged (their cards, e1000e and virtio-net, have no virtual
+functions). The launch picks the card in `stealth::arm64::nic_device`: igb
+where `igb_fits`; on a disk provisioned for 00:19.0 before (its stanza names
+`enp0s25`) the profile's own model at that slot, with a start-log note. If
+QEMU exits during a start (a device it refused, a locked disk), the start error
+begins with `QEMU exited (status) before the VM started:` and QEMU's last line
+(`vm/failure.rs`); the TCG speed advice follows only a wait that ran out (a
+reply timeout, or a QMP socket that did not accept within its wait).
 
 ### Fair, progress-sensitive send waits (0.8.0)
 
