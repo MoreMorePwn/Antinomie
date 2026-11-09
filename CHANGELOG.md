@@ -14,6 +14,16 @@ x86 programs by their own table.
 
 ### Host
 
+- **A data folder taken right after its owner let go is no longer refused
+  (ANT-T0423).** The owner lock is a `flock`, and a process another thread had
+  just forked, but not yet exec'd, holds a copy of its file until the exec, so a new
+  owner (the window, the daemon or a command) starting a moment after the old one
+  ended could be told "data folder is already in use ... it left no owner record".
+  Taking the folder now waits up to two seconds for a lock that looks held before
+  it names the owner; a real second owner is still refused, and a free folder
+  does not wait. The indicator list also knows the guest network's gateway, so
+  its DHCP is background there as it is in the network table (ANT-T0418).
+
 - **No false "SIGTRAP handler" debugger check on AArch32 and ia32 programs
   (ANT-T0427).** The debugger-check rule read the `sigaction` handler as one 8-byte
   word, so a compat program's reset of SIGTRAP (`sa_handler=SIG_DFL`, flags set)

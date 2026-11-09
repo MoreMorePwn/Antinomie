@@ -128,7 +128,10 @@ impl Backend {
     ) -> Result<Self, String> {
         // Ownership is checked before anything moves: a directory another
         // process owns is never migrated into or changed (design 2.3).
-        if let Some(owner) = crate::data_owner::current_owner(&options.data_dir)? {
+        if let Some(owner) = crate::data_owner::current_owner_within(
+            &options.data_dir,
+            crate::data_owner::LOCK_GRACE,
+        )? {
             return Err(crate::data_owner::in_use_message(&owner));
         }
         storage::migrate_default_data(&options)?;
@@ -413,6 +416,14 @@ pub(crate) fn acquire_data_owner(
     directory: &std::path::Path,
     claim: &crate::data_owner::OwnerClaim,
 ) -> Result<crate::data_owner::OwnerGuard, String> {
+    acquire_data_owner_within(directory, claim, crate::data_owner::LOCK_GRACE)
+}
+
+pub(crate) fn acquire_data_owner_within(
+    directory: &std::path::Path,
+    claim: &crate::data_owner::OwnerClaim,
+    grace: Duration,
+) -> Result<crate::data_owner::OwnerGuard, String> {
     use std::os::unix::fs::OpenOptionsExt;
     let owner = fs::OpenOptions::new()
         .read(true)
@@ -430,28 +441,17 @@ pub(crate) fn acquire_data_owner(
     {
         return Err("data owner lock must be a regular file".into());
     }
-    // A lock just released can still look held for a moment: a process
-    // being started elsewhere holds a copy of the file until its exec, which
-    // under load can take hundreds of milliseconds. Wait up to two seconds
-    // before calling the folder in use.
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        match rustix::fs::flock(&owner, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => break,
-            Err(rustix::io::Errno::WOULDBLOCK) if Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(rustix::io::Errno::WOULDBLOCK) => {
-                let owner = crate::data_owner::current_owner(directory)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(crate::data_owner::DataOwner { record: None });
-                return Err(crate::data_owner::in_use_message(&owner));
-            }
-            Err(error) => {
-                return Err(format!("data folder cannot be locked: {error}"));
-            }
+    // A lock just released can still look held for a moment (see LOCK_GRACE).
+    match crate::data_owner::flock_within(&owner, grace) {
+        Ok(true) => {}
+        Ok(false) => {
+            let owner = crate::data_owner::current_owner(directory)
+                .ok()
+                .flatten()
+                .unwrap_or(crate::data_owner::DataOwner { record: None });
+            return Err(crate::data_owner::in_use_message(&owner));
         }
+        Err(error) => return Err(format!("data folder cannot be locked: {error}")),
     }
     // The lock is ours; say so. A record that cannot be written costs only the
     // friendly message of the next process, never the session.

@@ -19,6 +19,35 @@ use std::{
 pub const IN_USE: &str = "data folder is already in use";
 
 const LOCK_FILE: &str = ".app-owner.lock";
+
+/// How long a take of the lock waits for it before it calls the folder in use.
+/// The lock file is opened close-on-exec, but a process another thread forks
+/// holds a copy of the descriptor, and so the flock, until its exec; under load
+/// that gap was seen to last hundreds of milliseconds. The previous owner's
+/// own release can also lag a moment behind its exit. Two seconds covers both
+/// with a wide margin and is short beside a real second owner, which keeps the
+/// lock for the whole session: the wait is paid only when the lock is held,
+/// never on the free path.
+pub const LOCK_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Try the exclusive lock without blocking, polling for `grace` while another
+/// descriptor holds it. `Ok(true)` when taken, `Ok(false)` when still held.
+pub(crate) fn flock_within(
+    file: &fs::File,
+    grace: std::time::Duration,
+) -> Result<bool, rustix::io::Errno> {
+    let give_up = std::time::Instant::now() + grace;
+    loop {
+        match rustix::fs::flock(file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => return Ok(true),
+            Err(rustix::io::Errno::WOULDBLOCK) if std::time::Instant::now() < give_up => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(rustix::io::Errno::WOULDBLOCK) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+    }
+}
 const RECORD_MAX: u64 = 16 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +180,15 @@ pub fn remove_record(data_dir: &Path) {
 /// otherwise the lock holder is "unknown". `Ok(None)` means free: a stale record
 /// is ignored.
 pub fn current_owner(data_dir: &Path) -> Result<Option<DataOwner>, String> {
+    current_owner_within(data_dir, std::time::Duration::ZERO)
+}
+
+/// [`current_owner`] that waits up to `grace` for a lock that looks held, for a
+/// caller about to take the folder itself (see [`LOCK_GRACE`]).
+pub fn current_owner_within(
+    data_dir: &Path,
+    grace: std::time::Duration,
+) -> Result<Option<DataOwner>, String> {
     use std::os::unix::fs::OpenOptionsExt;
     let lock = match fs::OpenOptions::new()
         .read(true)
@@ -162,9 +200,9 @@ pub fn current_owner(data_dir: &Path) -> Result<Option<DataOwner>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("{}: {error}", data_dir.join(LOCK_FILE).display())),
     };
-    match rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
-        Ok(()) => Ok(None),
-        Err(rustix::io::Errno::WOULDBLOCK) => Ok(Some(DataOwner {
+    match flock_within(&lock, grace) {
+        Ok(true) => Ok(None),
+        Ok(false) => Ok(Some(DataOwner {
             record: read_record(data_dir).filter(|record| process_alive(record.pid)),
         })),
         Err(error) => Err(format!("cannot probe the data folder lock: {error}")),
@@ -181,10 +219,19 @@ pub fn in_use_message(owner: &DataOwner) -> String {
 /// and must not race a window or a daemon. The directory must exist. Fails with
 /// [`IN_USE`] text when another process owns it.
 pub fn lock_data_dir(data_dir: &Path, claim: &OwnerClaim) -> Result<OwnerGuard, String> {
-    if let Some(owner) = current_owner(data_dir)? {
+    lock_data_dir_within(data_dir, claim, LOCK_GRACE)
+}
+
+/// [`lock_data_dir`] with its own wait for a lock that looks held.
+pub fn lock_data_dir_within(
+    data_dir: &Path,
+    claim: &OwnerClaim,
+    grace: std::time::Duration,
+) -> Result<OwnerGuard, String> {
+    if let Some(owner) = current_owner_within(data_dir, grace)? {
         return Err(in_use_message(&owner));
     }
-    crate::backend::acquire_data_owner(data_dir, claim)
+    crate::backend::acquire_data_owner_within(data_dir, claim, grace)
 }
 
 /// Held by the process that owns the directory: the lock file, plus the duty to
@@ -338,7 +385,8 @@ mod tests {
         assert!(current_owner(&root).unwrap().is_some());
         drop(OwnerGuard::new(root.clone(), lock));
         assert!(!record_path(&root).exists());
-        assert_eq!(current_owner(&root).unwrap(), None);
+        // A child another test forks meanwhile may hold a copy a moment.
+        assert_eq!(current_owner_within(&root, LOCK_GRACE).unwrap(), None);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -353,6 +401,64 @@ mod tests {
         );
         drop(first);
         assert!(lock_data_dir(&root, &claim(OwnerKind::Gui)).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Holds a copy of `file`'s descriptor in a child that was forked but has
+    /// not exec'd yet, for `ms`: the race of a process spawned by another
+    /// thread. Returns the thread that ends when the child is gone.
+    fn fork_holding(root: &Path, ms: u64) -> std::thread::JoinHandle<()> {
+        use std::os::unix::process::CommandExt;
+        let marker = root.join("forked");
+        let seen = marker.clone();
+        let spawner = std::thread::spawn(move || {
+            let mut command = std::process::Command::new("true");
+            unsafe {
+                command.pre_exec(move || {
+                    fs::write(&marker, b"")?;
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    Ok(())
+                });
+            }
+            command.spawn().unwrap().wait().unwrap();
+        });
+        while !seen.exists() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        spawner
+    }
+
+    #[test]
+    fn a_relock_waits_for_a_forked_child_that_still_holds_the_lock() {
+        let root = scratch("fork");
+        let first = lock_data_dir(&root, &claim(OwnerKind::Cli)).unwrap();
+        // Forked while the lock file is open: the child's copy outlives the owner.
+        let spawner = fork_holding(&root, 700);
+        drop(first);
+        // Without a wait the re-lock is refused although nobody owns the folder.
+        let error = lock_data_dir_within(&root, &claim(OwnerKind::Gui), std::time::Duration::ZERO)
+            .err()
+            .unwrap();
+        assert!(error.starts_with(IN_USE), "{error}");
+        assert!(lock_data_dir(&root, &claim(OwnerKind::Gui)).is_ok());
+        spawner.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_real_second_owner_is_still_refused_after_the_wait() {
+        let root = scratch("refused");
+        let _first = lock_data_dir(&root, &claim(OwnerKind::Daemon)).unwrap();
+        let wait = std::time::Duration::from_millis(300);
+        let began = std::time::Instant::now();
+        let error = lock_data_dir_within(&root, &claim(OwnerKind::Gui), wait)
+            .err()
+            .unwrap();
+        assert!(began.elapsed() >= wait, "{:?}", began.elapsed());
+        assert!(
+            error.starts_with(IN_USE) && error.contains("daemon"),
+            "{error}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

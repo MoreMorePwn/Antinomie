@@ -345,6 +345,8 @@ pub struct Collector {
     /// Observations dropped because a type reached [`TYPE_LIMIT`].
     pub omitted: u64,
     counts: BTreeMap<Type, usize>,
+    /// The router of the guest's own NAT network, whose DHCP is the base's.
+    gateway: Option<String>,
 }
 
 fn proto_name(proto: &str) -> &str {
@@ -355,6 +357,14 @@ fn proto_name(proto: &str) -> &str {
 }
 
 impl Collector {
+    /// Tell the collector the guest network's router, so that DHCP to it is
+    /// listed as the base image's background.
+    #[must_use]
+    pub fn with_gateway(mut self, gateway: Option<IpAddr>) -> Self {
+        self.gateway = gateway.map(|gateway| gateway.to_string());
+        self
+    }
+
     fn entry(
         &mut self,
         ty: Type,
@@ -625,7 +635,7 @@ impl Collector {
             indicator.first_us = entry.tallies.values().filter_map(|t| t.first_us).min();
             indicator.last_us = entry.tallies.values().filter_map(|t| t.last_us).max();
             describe(&mut indicator, &entry);
-            indicator.noise = super::baseline::noise(&indicator);
+            indicator.noise = super::baseline::noise_at(&indicator, self.gateway.as_deref());
             set_lookups(&mut indicator, &entry);
             out.push(indicator);
         }
