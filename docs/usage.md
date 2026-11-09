@@ -480,7 +480,12 @@ says so.
   capabilities in x86 and x86-64 programs only; this program is for AArch64"),
   and the Run form warns when they are chosen on an arm64 VM. The other checks
   (metadata, structures, strings, entropy, hardening, rules, identification,
-  disassembly) read arm64 programs.
+  disassembly) read arm64 programs. Disassembly decodes AArch64 and 32-bit ARM
+  (ARM and Thumb, chosen by the ELF mapping symbols, or by the entry point's low
+  bit in a stripped file) with the built-in Capstone, not the host's `objdump`;
+  big-endian ARM is reported as unavailable. A check that is unavailable does not
+  make the analysis **partial**: it shows as unavailable in its own category, and
+  the analysis is partial only when a check stopped short (a limit, a timeout).
 
 An app older than 0.9.0 refuses an arm64 base before it starts QEMU ("this
 Antinomie does not start arm64 VMs yet").

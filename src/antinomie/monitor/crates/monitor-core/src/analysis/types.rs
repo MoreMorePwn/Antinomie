@@ -564,6 +564,23 @@ pub struct AnalysisDisassembly {
 }
 
 impl AnalysisReport {
+    /// Every check finished, and at least one has a result. A check that is
+    /// Unavailable (no tool for this architecture, a tool that is not
+    /// installed) is shown as such in its own category and does not make the
+    /// whole report Partial; a check that stopped short (Partial, Timeout) or
+    /// never ran does.
+    pub fn sections_settled(&self) -> bool {
+        self.sections.iter().all(|section| {
+            matches!(
+                section.state,
+                AnalysisSectionState::Complete | AnalysisSectionState::Unavailable
+            )
+        }) && self
+            .sections
+            .iter()
+            .any(|section| section.state == AnalysisSectionState::Complete)
+    }
+
     /// The section that carries Ghidra's disassembly listing: Decompilation
     /// when the run decompiled, otherwise Disassembly.
     pub fn ghidra_disassembly_section(&self) -> Option<&AnalysisSection> {
@@ -595,12 +612,7 @@ impl AnalysisReport {
                 section.state = AnalysisSectionState::Complete;
             }
         }
-        if self.state == AnalysisState::Partial
-            && self.reason.is_none()
-            && self
-                .sections
-                .iter()
-                .all(|section| section.state == AnalysisSectionState::Complete)
+        if self.state == AnalysisState::Partial && self.reason.is_none() && self.sections_settled()
         {
             self.state = AnalysisState::Complete;
         }

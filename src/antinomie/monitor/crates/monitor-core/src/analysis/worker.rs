@@ -150,11 +150,7 @@ fn worker_main() -> Result<(), String> {
             Path::new("/output/listings"),
         );
     }
-    report.state = if report
-        .sections
-        .iter()
-        .all(|s| s.state == AnalysisSectionState::Complete)
-    {
+    report.state = if report.sections_settled() {
         AnalysisState::Complete
     } else {
         AnalysisState::Partial
