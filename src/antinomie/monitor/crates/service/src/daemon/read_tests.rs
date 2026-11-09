@@ -214,7 +214,7 @@ fn bytes_the_sample_produced_need_the_sensitive_scope_over_the_socket() {
         ),
         (
             "recording.files.content",
-            json!({"run_key": key, "version_id": "v1", "range": {"offset": "0", "len": 4}}),
+            json!({"run_key": key, "version_id": "v1", "range": {"offset": 0, "len": 4}}),
         ),
         (
             "recording.network.packet",
@@ -240,7 +240,7 @@ fn bytes_the_sample_produced_need_the_sensitive_scope_over_the_socket() {
     for artifact in sensitive {
         let params = json!({
             "run_key": key, "artifact_id": artifact["id"],
-            "range": {"offset": "0", "len": 8},
+            "range": {"offset": 0, "len": 8},
         });
         let error = svc
             .service

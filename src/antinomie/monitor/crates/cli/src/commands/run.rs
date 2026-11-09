@@ -45,12 +45,14 @@ pub enum Run {
     /// Upload a library sample into a VM, run it and wait for a settled recording.
     Exec(Exec),
     /// List the recorded runs of the data directory; no engine lock needed.
+    /// Asks the daemon when one answers.
     List(run_read::List),
     /// Show one run: its state, phase and artifacts; `--summary` adds the
-    /// Triage summary. No engine lock needed.
+    /// Triage summary. No engine lock needed. Asks the daemon when one answers.
     Show(run_read::Show),
     /// Write a run's recording as NDJSON and evidence files into --out. No
-    /// engine lock needed.
+    /// engine lock needed. Asks the daemon when one answers; the files are
+    /// written by this command, never by the daemon.
     Export(run_read::Export),
 }
 

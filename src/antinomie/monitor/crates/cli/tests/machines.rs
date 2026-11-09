@@ -163,9 +163,14 @@ fn a_directory_owned_by_another_process_is_exit_21() {
 }
 
 #[test]
-fn a_daemon_flag_is_refused_until_a_daemon_exists() {
+fn a_daemon_serves_vm_list_only_and_the_flag_without_one_is_unavailable() {
     let data = with_vm("daemon");
+    // `vm list` is a read the daemon serves; with none running, --daemon fails.
     let (code, reply) = cli(&data, &["--daemon", "vm", "list"]);
+    assert_eq!(code, 21, "{reply}");
+    assert_eq!(error_code(&reply), "unavailable");
+    // A command that changes a VM runs in its own process, never in the daemon.
+    let (code, reply) = cli(&data, &["--daemon", "vm", "stop", "vm-1"]);
     assert_eq!(code, 1, "{reply}");
     assert_eq!(error_code(&reply), "unsupported");
 }

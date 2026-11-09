@@ -38,7 +38,7 @@ fn caller() -> String {
 /// Where the reads go: the query service in this process, or the daemon that
 /// owns the data directory (design 2.2). Both answer with the same objects.
 enum Via {
-    Direct(QueryService),
+    Direct(Box<QueryService>),
     Daemon(RefCell<SocketClient>),
 }
 
@@ -54,7 +54,7 @@ impl<'a> Client<'a> {
     pub fn new(context: &'a Context) -> Result<Self, CliError> {
         let via = match link::daemon(context)? {
             Some(client) => Via::Daemon(RefCell::new(client)),
-            None => Via::Direct(QueryService::new(context.options.clone())),
+            None => Via::Direct(Box::new(QueryService::new(context.options.clone()))),
         };
         Ok(Self { context, via })
     }
