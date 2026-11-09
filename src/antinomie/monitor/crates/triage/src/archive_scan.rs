@@ -149,6 +149,14 @@ pub fn note_schema_gaps(
     {
         keys.insert(field.key.as_str());
     }
+    // A call with no pointer argument (arm's `cacheflush`, `set_tls`) loses
+    // nothing when the guest has no argument metadata for it.
+    if keys.contains("schema.argument_metadata")
+        && antinomie_monitor_core::syscalls::syscall(event.syscall_nr)
+            .is_some_and(|call| !call.arguments.iter().any(|argument| argument.pointer))
+    {
+        keys.remove("schema.argument_metadata");
+    }
     for key in keys {
         let name = event.syscall_name.as_str();
         let label = match (name, call_args(invocation)) {
@@ -437,5 +445,33 @@ pub mod reason_tests {
             ..source()
         });
         assert!(reasons[0].contains("3 dropped"), "{reasons:?}");
+    }
+}
+
+#[cfg(test)]
+pub mod schema_gap_tests {
+    use super::*;
+    use antinomie_monitor_core::syscalls::{id, Abi};
+
+    fn gap(nr: u64, name: &str) -> BTreeMapGaps {
+        let mut call = crate::tests::call(1, nr, name, 0);
+        let mut field = crate::tests::captured("schema.argument_metadata", "", b"");
+        field.status = Some(4);
+        call.entry.as_mut().unwrap().fields.push(field);
+        let event = crate::trace::representative(&call).unwrap();
+        let mut gaps = std::collections::BTreeMap::new();
+        note_schema_gaps(&mut gaps, &call, event);
+        gaps
+    }
+    type BTreeMapGaps = std::collections::BTreeMap<String, u64>;
+
+    #[test]
+    fn a_scalar_only_call_with_no_metadata_is_not_a_gap_but_a_pointer_call_is() {
+        // arm's private cacheflush(start, end, flags) and set_tls(tls).
+        assert!(gap(id(Abi::Arm, 0x0f0002), "cacheflush").is_empty());
+        assert!(gap(id(Abi::Arm, 0x0f0005), "set_tls").is_empty());
+        // readlink takes a buffer pointer: its missing metadata still counts.
+        let readlink = gap(id(Abi::Arm, 85), "readlink");
+        assert_eq!(readlink.len(), 1, "{readlink:?}");
     }
 }

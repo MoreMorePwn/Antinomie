@@ -334,3 +334,17 @@ pub fn opening_a_config_file_for_writing_without_writing_is_not_a_change() {
     let cut = run(vec![open_truncate(1, "/etc/hosts", 3), close(1, 3)]);
     assert!(has(&cut, "persistence.config_write"));
 }
+
+#[test]
+pub fn a_shell_command_whose_argv_pointers_were_lost_is_still_read_from_its_strings() {
+    // An AArch32 `sh -c` that lost `arg1.ptr[1..]` (the strings were kept).
+    let script = "(crontab -l; echo '* * * * * /tmp/x') | crontab -";
+    let mut lost = shell(1, script);
+    lost.entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .retain(|field| !(field.key.starts_with("arg1.ptr[") && field.key != "arg1.ptr[0]"));
+    assert!(has(&run(vec![shell(1, script)]), "persistence.cron"));
+    assert!(has(&run(vec![lost]), "persistence.cron"));
+}

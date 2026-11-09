@@ -41,6 +41,19 @@ x86 programs by their own table.
   its own heuristic and matched GCC and uClibc ARM builds; it is now marked
   DISPUTED, as its Go claim already was, when the file has no Rust library
   path, panic symbol or backtrace variable.
+
+- **AArch32 `execve` keeps its arguments when the guest lost the argv pointers
+  (ANT-T0429).** Some compat execs were recorded with `arg1.string[1..]` but not
+  `arg1.ptr[1..]`, so a child `sh -c "crontab ..."` showed only `/bin/sh` and the
+  shell-command rules missed it (one Mirai: 39 findings against 62). The argument
+  vector is now read from the strings in order when a pointer is missing; it is
+  still not called complete without the terminating NULL pointer. Calls with no
+  pointer argument (arm `cacheflush`, `set_tls`) no longer count as schema gaps.
+  The compat calls the guest records by address only (readlink buf,
+  `get/setsockopt` optval, `sigaltstack`, `utimensat`, clone's tid pointers,
+  `prlimit64`, `sched_getaffinity`, `_llseek`, `set_robust_list`, TCGETS and
+  TIOCGWINSZ) need a guest recorder change and are listed in
+  `docs/implementation/guest-and-kernel.md`.
 - **A data folder taken right after its owner let go is no longer refused
   (ANT-T0423).** The owner lock is a `flock`, and a process another thread had
   just forked, but not yet exec'd, holds a copy of its file until the exec, so a new

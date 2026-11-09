@@ -615,3 +615,75 @@ fn member_value_reads_a_member_at_its_layouts_own_width() {
         None
     );
 }
+
+#[test]
+fn the_compat_layouts_of_the_common_32_bit_calls_decode_on_both_compat_abis() {
+    // Once the guest captures these buffers (readlink's is text, the rest are
+    // below), the host reads them by the 32-bit inventory on AArch32 and ia32.
+    for arch in ["arm", "x86"] {
+        let line = |layout: &str, data: &[u8]| line_on(arch, layout, data);
+        // prlimit64's old_rlim (rlimit64) and ugetrlimit's rlim (rlimit).
+        let mut wide = [0u8; 16];
+        put(&mut wide, 0, &8_388_608u64.to_le_bytes());
+        put(&mut wide, 8, &u64::MAX.to_le_bytes());
+        let text = line("rlimit64", &wide);
+        assert!(text.contains("rlim_cur=8388608"), "{arch}: {text}");
+        let mut narrow = [0u8; 8];
+        put(&mut narrow, 0, &4096u32.to_le_bytes());
+        put(&mut narrow, 4, &8192u32.to_le_bytes());
+        let text = line("rlimit", &narrow);
+        assert!(
+            text.contains("rlim_cur=4096") && text.contains("rlim_max=8192"),
+            "{arch}: {text}"
+        );
+        // sigaltstack's uss/uoss (stack_t) and set_robust_list's head.
+        let mut stack = [0u8; 12];
+        put(&mut stack, 0, &0x8000u32.to_le_bytes());
+        put(&mut stack, 4, &2i32.to_le_bytes());
+        put(&mut stack, 8, &8192u32.to_le_bytes());
+        let text = line("stack_t", &stack);
+        assert!(
+            text.contains("ss_sp=0x8000") && text.contains("ss_size=8192"),
+            "{text}"
+        );
+        let mut head = [0u8; 12];
+        put(&mut head, 0, &0x12d0070u32.to_le_bytes());
+        put(&mut head, 4, &(-12i32).to_le_bytes());
+        let text = line("robust_list_head", &head);
+        assert!(text.contains("0x12d0070"), "{arch}: {text}");
+        // _llseek's result (loff_t), a get/setsockopt int optval, a clone tid.
+        assert_eq!(line("loff_t", &4096u64.to_le_bytes()), "4096", "{arch}");
+        assert_eq!(line("int", &1u32.to_le_bytes()), "1", "{arch}");
+        assert_eq!(line("pid_t", &700u32.to_le_bytes()), "700", "{arch}");
+        // TIOCGWINSZ's winsize.
+        let mut size = [0u8; 8];
+        put(&mut size, 0, &24u16.to_le_bytes());
+        put(&mut size, 2, &80u16.to_le_bytes());
+        let text = line("winsize", &size);
+        assert!(
+            text.contains("ws_row=24") && text.contains("ws_col=80"),
+            "{arch}: {text}"
+        );
+    }
+    // The compat layouts are the 32-bit ones: an rlimit is 8 bytes, not 16.
+    assert_eq!(layout::stride(crate::syscalls::Abi::Arm, "rlimit"), Some(8));
+    assert_eq!(
+        layout::stride(crate::syscalls::Abi::I386, "rlimit"),
+        Some(8)
+    );
+    assert_eq!(
+        layout::stride(crate::syscalls::Abi::Aarch64, "rlimit"),
+        Some(16)
+    );
+    // x86-64 and AArch64 read their own 64-bit layouts, unchanged.
+    let mut native = [0u8; 16];
+    put(&mut native, 0, &4096u64.to_le_bytes());
+    put(&mut native, 8, &8192u64.to_le_bytes());
+    for arch in ["x86_64", "aarch64"] {
+        let text = line_on(arch, "rlimit", &native);
+        assert!(
+            text.contains("rlim_cur=4096") && text.contains("rlim_max=8192"),
+            "{text}"
+        );
+    }
+}
