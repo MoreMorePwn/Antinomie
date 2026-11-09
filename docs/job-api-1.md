@@ -285,6 +285,11 @@ one. The daemon and the CLI's direct mode use the same index (direct mode opens 
 store read-only and creates nothing), so both print the same `job_id`. A run no job
 made, and a data directory with no job store, show `job_id: null`.
 
+**Held runs (0.9.0).** `RunInfo.held` (optional, untrusted text) is present while a
+run's tree has ended but the run is held open for a copy of its program running
+outside the tree: "Held: persisted copy running (pid 1050, .e)". `state` keeps how
+the tree ended; a reader that knows nothing of `held` sees the run as before.
+
 **Reads from the CLI.** With a daemon at the socket `run list`, `run show`, `run
 export`, `triage` and the other read commands send these operations; `run export`
 never sends an output path: the command pages through `recording.*` and writes the

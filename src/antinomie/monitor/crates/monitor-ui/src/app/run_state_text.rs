@@ -3,13 +3,17 @@
 //! as Run History, the Samples page and Trace show them.
 use antinomie_monitor_core::{RunState, RunSummary, WaitStatus};
 
-pub(super) fn run_status(run: &RunSummary) -> &'static str {
+pub(super) fn run_status(run: &RunSummary) -> std::borrow::Cow<'static, str> {
+    // A run held open for a persisted copy still captures: not "Finished".
+    if let Some(held) = crate::run_state_line::held(run) {
+        return held.into();
+    }
     // The words say what happened: a VM stop that cut a live tree is not a
     // failure of the sample, and Stop run is the user's own act.
     if crate::run_state_line::ended_by_vm_stop(run) {
-        return "Ended by VM stop";
+        return "Ended by VM stop".into();
     }
-    match run.state {
+    let words: &'static str = match run.state {
         RunState::Unknown => "Unknown",
         RunState::Running => "Running",
         RunState::StopRequested => "Stop requested",
@@ -20,7 +24,8 @@ pub(super) fn run_status(run: &RunSummary) -> &'static str {
         RunState::FailedToStart => "Failed to start",
         RunState::LaunchUnconfirmed => "Launch unconfirmed",
         RunState::Interrupted => "Interrupted",
-    }
+    };
+    words.into()
 }
 
 pub(super) fn root_exit(run: &RunSummary) -> String {

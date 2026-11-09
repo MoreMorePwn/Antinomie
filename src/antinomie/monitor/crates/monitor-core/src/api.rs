@@ -1127,6 +1127,18 @@ pub struct RunSummary {
 }
 
 impl RunSummary {
+    /// The run's tree ended but the run is held open for a copy of its
+    /// program outside the tree (`persisted.holding`): it still captures.
+    pub fn held_open(&self) -> bool {
+        self.persisted.as_ref().is_some_and(|copies| copies.holding)
+    }
+
+    /// Stop run may be sent: the run is live, or held open (Stop then ends
+    /// the hold).
+    pub fn stoppable(&self) -> bool {
+        self.state.can_stop() || self.held_open()
+    }
+
     /// Whether the run may be taken off the boot's run list: it is over, saving
     /// failed for it and its recording folder is gone, so nothing of it is left
     /// to protect. Anything else is refused with the reason.

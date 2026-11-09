@@ -24,8 +24,10 @@ x86 programs by their own table.
   (pid, name, who started it, SHA-256), listed as the HIGH Triage finding
   `persistence.copy_running`, and named as the killer in the run-end note. When the tree
   ends while such a copy lives, the run is held open (network capture and route go on)
-  until the copy exits, `run exec`'s run limit, the VM stops or 10 min pass; `run.json`
-  keeps it under `persisted`. On a Routed VM a launch also waits, after the boot wait,
+  until the copy exits, Stop run (offered in the window as for a live run), `run exec`'s
+  run limit, the VM stops or 10 min pass; while held the run reads "Held: persisted copy
+  running (pid N, name)" in Run History, the run header and the sidebar, and `run list`
+  shows `held` (query API `RunInfo.held`). `run.json` keeps it under `persisted`. On a Routed VM a launch also waits, after the boot wait,
   until the guest has its address (the gateway sees it send from its lease or answer
   ARP; `start.network_wait_secs`, 30 s, 0 for off), notes a run that started without a
   network, and Triage's notes count the ENETUNREACH calls and their window. No guest

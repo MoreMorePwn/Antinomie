@@ -1370,6 +1370,13 @@
             "null"
           ],
           "description": "The engine's own error text, truncated to 2 KiB, host paths removed for\nremote callers."
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The run record a failed launch left (Run History lists it as \"Failed to\nstart\"); `None` when the failure is not a launch, or when the launch\nkept no record (nothing was captured)."
         }
       },
       "required": [
@@ -4519,6 +4526,13 @@
             "null"
           ],
           "description": "`RunSummary.recording_error` text, host paths removed. U"
+        },
+        "held": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set while the run's tree has ended but the run is held open for a copy\nof its program running outside the tree (`run.json` `persisted`):\n\"Held: persisted copy running (pid 1050, .e)\". `state` then still says\nhow the tree ended. U"
         }
       },
       "required": [
@@ -4844,6 +4858,13 @@
             "null"
           ],
           "description": "`RunSummary.recording_error` text, host paths removed. U"
+        },
+        "held": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set while the run's tree has ended but the run is held open for a copy\nof its program running outside the tree (`run.json` `persisted`):\n\"Held: persisted copy running (pid 1050, .e)\". `state` then still says\nhow the tree ended. U"
         },
         "execution": {
           "anyOf": [

@@ -73,21 +73,33 @@ impl MonitorApp {
             ],
             None => vec![("No recent run".into(), theme::muted())],
         };
+        // A run of this VM held open for a persisted copy still captures.
+        let held = self
+            .snapshot
+            .runs
+            .iter()
+            .filter(|run| run.vm_id == vm.id)
+            .find_map(crate::run_state_line::held)
+            .map(|words| vec![(words, theme::palette().accent)]);
         let response = sidebar_row(
             ui,
             SidebarRow {
                 mark: RowMark::Dot(color),
                 name: &vm.name,
                 state: Some((word, color)),
-                details: if fallbacks.is_empty() {
-                    vec![machine, last]
-                } else {
-                    // Its own line: the base's label can fill the first.
-                    let badge = vec![(
-                        format!("{} Profile fallback", egui_phosphor::regular::WARNING),
-                        theme::warn(),
-                    )];
-                    vec![machine, badge, last]
+                details: {
+                    let mut lines = if fallbacks.is_empty() {
+                        vec![machine, last]
+                    } else {
+                        // Its own line: the base's label can fill the first.
+                        let badge = vec![(
+                            format!("{} Profile fallback", egui_phosphor::regular::WARNING),
+                            theme::warn(),
+                        )];
+                        vec![machine, badge, last]
+                    };
+                    lines.extend(held);
+                    lines
                 },
                 selected: self.selected.as_ref() == Some(&vm.id),
             },

@@ -1316,6 +1316,7 @@ state from one palette. The words always stay, so colour is never the only cue.
 | State | Colour |
 |---|---|
 | Running, stopping, or still recording after the terminal was closed or the root exited | Blue |
+| Held: the tree ended but a persisted copy runs outside it, and the run still captures | Blue |
 | Finished with exit 0 | Green |
 | Finished with another exit code | Amber |
 | Stopped by you (Stop run) | Grey |
@@ -1388,8 +1389,14 @@ started in the guest:
   capture and route go on, so the copy's traffic is in the run's pcap. The hold
   ends when every copy has exited, when the run limit of `run exec` or Auto mode
   sends its stop (the run then ends at its limit, not as exited), when the VM
-  stops (in the window, stop the VM to end it sooner), or after 10 minutes. The
-  run's notes say when and why it ended. The copy's own system calls
+  stops, or after 10 minutes. The run's notes say when and why it ended.
+- While it is held, Run History, the run's window header, the Samples window's Runs
+  and the VM's sidebar row say **Held: persisted copy running (pid 1050, .e)** in
+  the colour of a live run (during the last look, "Held: looking for persisted
+  copies"), and the run-finished toast waits. **Stop run** (toolbar, Run menu,
+  command palette, the Run History row) is offered for it and works as on a live
+  run: the hold ends and the run reads "Stopped by you at …". The copy itself is
+  not signalled: the guest cannot, so it may still run. The copy's own system calls
   are not recorded (following them would need the guest to trace it), and it may
   still run in the guest after the hold; restore the VM's snapshot.
 
@@ -1993,7 +2000,10 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
 - **Look at recorded runs.** `run list [--vm ID] [--sample SHA256] [--job ID] [--state
   STATE] [--since SPAN] [--limit N] [--cursor C]` lists the recorded runs of the data
   directory, newest first (`--since` takes a span such as `90m`, `24h` or `7d`, or a
-  Unix time in milliseconds). `run show RUN [--summary]` shows one run: its state,
+  Unix time in milliseconds). A run held open for a persisted copy (see *Copies of
+  the program outside the recorded tree*) shows `held` in the STATE column, and its
+  JSON item has `held` ("Held: persisted copy running (pid 1050, .e)") beside
+  `state`, which still says how its tree ended. `run show RUN [--summary]` shows one run: its state,
   whether its recording is `live`, `finalizing`, `complete` or `interrupted`, its
   evidence and `generation`; `--summary` adds the Triage summary. `run export RUN --out
   DIR [--part LIST] [--sensitive]` writes the parts `trace`, `processes`,

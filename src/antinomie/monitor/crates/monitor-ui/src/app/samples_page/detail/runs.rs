@@ -296,7 +296,7 @@ impl MonitorApp {
                     let mut row = crate::run_filter::row(
                         &entry.run,
                         annotation.as_ref(),
-                        run_status(&entry.run),
+                        &run_status(&entry.run),
                         root_exit(&entry.run),
                     );
                     crate::run_filter::append_facts(ui, &entry.run, &mut row);
@@ -346,7 +346,7 @@ impl MonitorApp {
                         .join(" ")
                         .to_lowercase()
                         .cmp(&b.request.args.join(" ").to_lowercase()),
-                    3 => run_status(a).cmp(run_status(b)),
+                    3 => run_status(a).cmp(&run_status(b)),
                     4 => root_exit(a).cmp(&root_exit(b)),
                     6 => shown[ia].role.cmp(shown[ib].role),
                     _ => vm_name(a).cmp(&vm_name(b)),
@@ -428,7 +428,7 @@ impl MonitorApp {
                                 ui.add(
                                     egui::Label::new(crate::run_state_line::text(
                                         run,
-                                        run_status(run),
+                                        &run_status(run),
                                     ))
                                     .selectable(false),
                                 )
@@ -467,8 +467,11 @@ impl MonitorApp {
                                 ) {
                                     *go = Some(Go::Terminal(run.id.clone()));
                                 }
-                                let live = self.snapshot.runs.iter().any(|live| live.id == run.id)
-                                    && run.state.can_stop()
+                                let live = self
+                                    .snapshot
+                                    .runs
+                                    .iter()
+                                    .any(|live| live.id == run.id && live.stoppable())
                                     && !self.closing
                                     && self.running()
                                     && self.pending_kill.is_none();

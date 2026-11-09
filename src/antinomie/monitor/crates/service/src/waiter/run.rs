@@ -135,8 +135,7 @@ pub fn phase(run: &RunSummary) -> Phase {
         RunState::Finished | RunState::Stopped | RunState::TerminalClosed | RunState::Finalized => {
             // A run held open for a copy of the program outside its tree
             // (`persisted`) goes on until the copy exits or `StopRun`.
-            let held = run.persisted.as_ref().is_some_and(|copies| copies.holding);
-            if !held
+            if !run.held_open()
                 && run
                     .execution
                     .as_ref()

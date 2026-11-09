@@ -5,6 +5,27 @@
 //! History's; their colours are the GUI's.
 use antinomie_monitor_core::{RunState, RunSummary, WaitStatus};
 
+/// "Held: persisted copy running (pid 1050, .e)": the run's tree ended but
+/// the run is held open while a copy of its program runs outside the tree
+/// (or while the host takes its last look for one). `None` for any other run.
+pub fn held(run: &RunSummary) -> Option<String> {
+    let copies = run.persisted.as_ref().filter(|copies| copies.holding)?;
+    let alive: Vec<_> = copies.alive().collect();
+    Some(match alive.as_slice() {
+        [] => "Held: looking for persisted copies".into(),
+        [copy] => format!(
+            "Held: persisted copy running (pid {}, {})",
+            copy.pid, copy.name
+        ),
+        [copy, rest @ ..] => format!(
+            "Held: persisted copy running (pid {}, {}; {} more)",
+            copy.pid,
+            copy.name,
+            rest.len()
+        ),
+    })
+}
+
 /// The state line of `run`. `now_ms` is the host time (Unix ms), `ended_ms`
 /// when the process tree ended if known, `alive` the processes the index saw
 /// no exit for.
@@ -46,6 +67,10 @@ pub fn describe(
         Some(time) => format!("{word} · {time} elapsed"),
         None => word.to_owned(),
     };
+    // Still capturing for a copy outside the tree: not "Finished" yet.
+    if let Some(held) = held(run) {
+        return running(&held);
+    }
     match run.state {
         RunState::StopRequested => running("Stopping"),
         // The root program is gone and its children keep the run open.
@@ -252,4 +277,57 @@ pub fn ending(run: &RunSummary) -> Option<Ending> {
             None => Ending::Unknown,
         },
     )
+}
+
+#[cfg(test)]
+mod held_tests {
+    use super::*;
+    use antinomie_monitor_core::persisted_copy::{PersistedCopies, PersistedCopy};
+
+    fn held_run(pids: &[u32]) -> RunSummary {
+        let mut run: RunSummary = serde_json::from_value(serde_json::json!({
+            "id": "r", "vm_id": "v", "boot_id": "b", "session_id": 1,
+            "root_task_cookie": 7, "pid": 700,
+            "request": antinomie_monitor_core::ExecRequest::default(),
+            "directory": "/runs/r", "terminal_eof": true,
+            "state": "Finished", "recording_error": null, "started_ms": 1_000,
+        }))
+        .unwrap();
+        run.persisted = Some(PersistedCopies {
+            copies: pids
+                .iter()
+                .map(|pid| PersistedCopy {
+                    pid: *pid,
+                    name: "Heyiwei".into(),
+                    ..PersistedCopy::default()
+                })
+                .collect(),
+            holding: true,
+            ..PersistedCopies::default()
+        });
+        run
+    }
+
+    #[test]
+    fn a_held_run_reads_held_with_its_copy_and_elapsed_time() {
+        let run = held_run(&[812]);
+        assert_eq!(
+            held(&run).unwrap(),
+            "Held: persisted copy running (pid 812, Heyiwei)"
+        );
+        let line = describe(&run, 61_000, None, None);
+        assert!(
+            line.starts_with("Held: persisted copy running (pid 812, Heyiwei) · "),
+            "{line}"
+        );
+        assert!(!line.contains("Ran for"), "{line}");
+        assert_eq!(
+            held(&held_run(&[812, 813, 814])).unwrap(),
+            "Held: persisted copy running (pid 812, Heyiwei; 2 more)"
+        );
+        let mut ended = run.clone();
+        ended.persisted.as_mut().unwrap().holding = false;
+        assert_eq!(held(&ended), None);
+        assert!(describe(&ended, 61_000, Some(5_000), None).starts_with("Ran for"));
+    }
 }

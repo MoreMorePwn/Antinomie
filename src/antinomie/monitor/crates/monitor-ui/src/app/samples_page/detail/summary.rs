@@ -295,7 +295,7 @@ fn field(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui)) {
 fn outcome_words(run: &RunSummary) -> String {
     let exit = super::super::exit_label(run);
     match run.state {
-        RunState::FailedToStart | RunState::LaunchUnconfirmed => run_status(run).to_owned(),
+        RunState::FailedToStart | RunState::LaunchUnconfirmed => run_status(run).into_owned(),
         RunState::Interrupted | RunState::Finalized | RunState::Stopped => {
             // The root's exit and what was left, where the guest said.
             let how = crate::run_state_line::detail(run).unwrap_or(exit);

@@ -181,7 +181,7 @@ pub fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
             vec![
                 text(&run["run_id"]).chars().take(8).collect(),
                 text(&run["vm_id"]),
-                text(&run["state"]),
+                state_cell(run),
                 text(&run["phase"]),
                 time(&run["started_ms"]),
                 text(&run["program"]),
@@ -215,6 +215,16 @@ pub fn show(arguments: &Show, context: &Context) -> Result<Reply, CliError> {
     Ok(Reply::value(value).with_human(human))
 }
 
+/// The STATE cell: `held` while the run is held open for a persisted copy
+/// (its `state` still says how the tree ended), else the state.
+fn state_cell(run: &Value) -> String {
+    if run["held"].is_string() {
+        "held".into()
+    } else {
+        text(&run["state"])
+    }
+}
+
 fn text(value: &Value) -> String {
     match value {
         Value::Null => "-".into(),
@@ -237,6 +247,7 @@ fn show_text(run: &Value) -> String {
         ("vm", text(&run["vm_id"])),
         ("boot", text(&run["boot_id"])),
         ("state", text(&run["state"])),
+        ("held", text(&run["held"])),
         ("phase", text(&run["phase"])),
         ("started", time(&run["started_ms"])),
         ("ended", time(&run["ended_ms"])),
@@ -832,6 +843,14 @@ fn export_file_contents(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_held_run_lists_as_held_and_shows_why() {
+        let held = json!({"run_id": "r", "state": "finished", "held": "Held: persisted copy running (pid 1050, .e)"});
+        assert_eq!(state_cell(&held), "held");
+        assert!(show_text(&held).contains("Held: persisted copy running (pid 1050, .e)"));
+        assert_eq!(state_cell(&json!({"state": "finished"})), "finished");
+    }
 
     #[test]
     fn since_is_a_span_or_a_unix_time() {

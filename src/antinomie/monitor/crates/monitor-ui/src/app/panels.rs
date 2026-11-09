@@ -714,7 +714,7 @@ fn terminal_header(ui: &mut egui::Ui, terminal: &mut RunTerminal, clipboard_read
                 ui.label(egui::RichText::new(format!("PID {}", terminal.run.pid))
                     .small().color(theme::muted()));
                 ui.separator();
-                ui.label(crate::run_state_line::text(&terminal.run, run_status(&terminal.run)));
+                ui.label(crate::run_state_line::text(&terminal.run, &run_status(&terminal.run)));
                 ui.label(egui::RichText::new(format!("Root: {}", root_exit(&terminal.run)))
                     .small().color(theme::muted()));
                 ui.separator();

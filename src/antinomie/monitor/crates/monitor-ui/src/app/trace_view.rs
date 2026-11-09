@@ -722,7 +722,7 @@ impl MonitorApp {
                                 ui,
                                 egui_phosphor::regular::TERMINAL_WINDOW,
                                 &run.request.path,
-                                Some((run_status(run), crate::run_state_line::color(run))),
+                                Some((&run_status(run), crate::run_state_line::color(run))),
                                 &args,
                             )
                             .on_hover_text(format!(
