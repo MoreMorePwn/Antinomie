@@ -120,3 +120,34 @@ fn the_file_caps_and_options_follow_the_settings() {
     assert_eq!(options.capture_quota_size, 3 << 30);
     assert_eq!(options.shutdown_timeout.as_secs(), 30);
 }
+
+#[test]
+fn the_start_settings_are_shared_and_default_when_absent() {
+    // A file without them: the defaults, and they are not written back.
+    let settings = EngineSettings::default();
+    assert_eq!(settings.start(), crate::api::StartSettings::default());
+    assert!(settings.to_value().get("start").is_none());
+    // They can still be read and set by key.
+    assert_eq!(settings.get("start.tcg_multiplier").unwrap(), 10);
+    let mut changed = settings.clone();
+    changed.set("start.tcg_multiplier", "25").unwrap();
+    changed.set("start.boot_wait_secs", "120").unwrap();
+    assert_eq!(changed.start().tcg_multiplier, 25);
+    assert_eq!(changed.start().boot_wait_secs, 120);
+    assert_eq!(changed.start().guest_connect_secs, 20);
+    // Out of range is refused and changes nothing.
+    assert!(changed.set("start.tcg_multiplier", "0").is_err());
+    assert!(changed.set("start.boot_wait_secs", "601").is_err());
+    assert_eq!(changed.start().tcg_multiplier, 25);
+    // A partial section reads the rest as defaults; the options take it.
+    let dir = scratch("start");
+    std::fs::write(path(&dir), r#"{"start": {"boot_wait_secs": 90}}"#).unwrap();
+    let loaded = load(&dir).unwrap().unwrap();
+    assert_eq!(loaded.start().boot_wait_secs, 90);
+    assert_eq!(loaded.start().tcg_multiplier, 10);
+    let mut options = crate::BackendOptions::default();
+    loaded.apply_to(&mut options);
+    assert_eq!(options.start.boot_wait_secs, 90);
+    std::fs::write(path(&dir), r#"{"start": {"tcg_multiplier": 500}}"#).unwrap();
+    assert!(load(&dir).unwrap_err().contains("TCG multiplier"));
+}

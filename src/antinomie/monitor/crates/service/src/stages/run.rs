@@ -93,7 +93,9 @@ impl<E: Engine> LaneStages<'_, E> {
         let begun = self.waiter.now_ms();
         let limit_ms = crate::waiter::millis(prepared.effective.run_limit);
         let grace_ms = crate::waiter::millis(STOP_RUN_GRACE);
-        let mut dog = Watchdog::new(Stage::Run, begun, None, Some(ENGINE_SILENCE));
+        // ENGINE_SILENCE stretched for a TCG boot, as the guest commands are.
+        let silence = self.waiter.guest_wait(ENGINE_SILENCE);
+        let mut dog = Watchdog::new(Stage::Run, begun, None, Some(silence));
         let mut stop_sent_ms: Option<u64> = None;
         let mut limit_stop = false;
         let mut floor_stop = false;

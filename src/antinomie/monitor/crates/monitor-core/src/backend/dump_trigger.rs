@@ -2,7 +2,6 @@
 //! Dump on suspicious activity, worker side: turns the findings the live judge
 //! queued (see `crate::dump_trigger`) into a core, a memory dump or both,
 //! within the run's budget, and keeps the record in `run.json`.
-use super::worker_guest::GUEST_REPLY_TIMEOUT;
 use super::*;
 use crate::dump_trigger::{
     LiveFinding, RECORDS_MAX, TriggerDump, TriggerLog, TriggerMiss, TriggerRecord,
@@ -286,11 +285,12 @@ impl Worker {
         if pid == 0 {
             return (failed("the call names no process"), true);
         }
+        let timeout = session.reply_timeout();
         let page = match session.list_processes(
             pid.saturating_sub(1),
             &mut self.snapshot,
             &self.sender,
-            GUEST_REPLY_TIMEOUT,
+            timeout,
         ) {
             Ok(page) => page,
             Err(error) => return (failed(format!("process list: {error}")), false),

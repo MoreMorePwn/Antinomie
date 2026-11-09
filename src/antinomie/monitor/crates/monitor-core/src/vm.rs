@@ -877,10 +877,11 @@ impl VmProcess {
         // taking QEMU for dead.
         let mut attempt = 1;
         let mut qmp = loop {
-            match Qmp::connect_with(
+            match Qmp::connect_watched(
                 &self.qmp_path,
                 self.waits.qmp_startup(),
                 self.waits.qmp_reply(),
+                Some(self.child.id()),
             ) {
                 Ok(qmp) => break qmp,
                 Err(error) if is_timeout(&error) && attempt < QMP_ATTEMPTS => attempt += 1,
@@ -938,6 +939,7 @@ impl VmProcess {
                 self.waits.qmp_connect(),
                 self.waits.qmp_reply(),
                 QMP_ATTEMPTS,
+                Some(self.child.id()),
             )
             .map_err(|error| {
                 format!(
@@ -2166,8 +2168,14 @@ FlatView #1
             thread::sleep(Duration::from_millis(300));
             drop(silent);
         });
-        Qmp::connect_retrying(&path, Duration::from_millis(300), Duration::from_secs(5), 3)
-            .expect("the second connection is answered");
+        Qmp::connect_retrying(
+            &path,
+            Duration::from_millis(300),
+            Duration::from_secs(5),
+            3,
+            None,
+        )
+        .expect("the second connection is answered");
         server.join().unwrap();
         // Nothing answers any attempt: the error says how often it was tried.
         let listener = UnixListener::bind(root.join("dead.sock")).unwrap();
@@ -2186,6 +2194,7 @@ FlatView #1
             Duration::from_millis(200),
             Duration::from_secs(5),
             2,
+            None,
         ) {
             Ok(_) => panic!("nothing greeted"),
             Err(error) => error,

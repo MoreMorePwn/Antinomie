@@ -237,6 +237,9 @@ impl<E: Engine> LaneStages<'_, E> {
             Err(StageStop::Abort(error)) => return Err(error),
             Err(_) => Stopped::Unsettled("the lane state could not be used".into()),
         };
+        // A launch given up as silent may have started the program: the stop
+        // ended it, and the job names its run.
+        self.link_late_launch(job);
         if settled != Stopped::Settled {
             // The forced kill leaves the engine in `Failed`: it is asked to
             // stop once more, and that answer is the last one.

@@ -329,18 +329,238 @@ fn the_first_upload_after_boot_is_retried_while_the_disk_is_read_only() {
     let (report, events) = exec(&mut waiter, &plan(), |_| Ok(Some(complete())));
     assert_eq!(report.unwrap().outcome, Outcome::Succeeded);
     assert_eq!(*attempts.lock().unwrap(), 3);
+    // Two retries a second apart: one progress line.
+    assert_eq!(upload_notes(&events).len(), 1);
+}
+
+fn upload_notes(events: &[EventBody]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            EventBody::JobProgress {
+                stage: Stage::Upload,
+                text,
+                ..
+            } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// B13: a guest that is not ready for 30 s is asked once a second, and the
+/// progress says so at most every five seconds, with the count.
+#[test]
+fn a_long_wait_for_the_guest_disk_is_noted_every_few_seconds_not_every_retry() {
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = happy(&clock, 1_000);
+    fake.timed = vec![(
+        40_000,
+        Notification::Snapshot(running_vm(vec![run_summary("r1", "Finished", 0)])),
+    )];
+    let mut react = fake.react.take().unwrap();
+    let attempts = Arc::new(Mutex::new(0u32));
+    let seen = attempts.clone();
+    fake.react = Some(Box::new(move |command, id, queue| {
+        if matches!(command, Command::UploadSample { .. }) {
+            let mut n = seen.lock().unwrap();
+            *n += 1;
+            if *n <= 30 {
+                // Snapshots keep coming while the guest boots.
+                queue.push_back(Notification::Snapshot(running_vm(vec![])));
+                queue.push_back(result(
+                    id,
+                    false,
+                    "guest command 0x1001: Read-only file system (os error 30)",
+                ));
+                return;
+            }
+        }
+        react(command, id, queue);
+    }));
+    let (mut waiter, _) = make(fake);
+    let (report, events) = exec(&mut waiter, &plan(), |_| Ok(Some(complete())));
+    let report = report.unwrap();
+    assert_eq!(report.failure, None);
+    assert_eq!(*attempts.lock().unwrap(), 31);
+    let upload_ms = report.timings.upload_ms.unwrap();
+    assert!(
+        (30_000..32_000).contains(&upload_ms),
+        "one try a second: {upload_ms}"
+    );
+    let notes = upload_notes(&events);
+    assert!((6..=7).contains(&notes.len()), "{notes:?}");
     assert_eq!(
+        notes[0],
+        "the guest is not ready for files yet; trying again"
+    );
+    assert!(notes[1].ends_with("(6 tries so far)"), "{notes:?}");
+}
+
+fn tcg(mut snapshot: Snapshot, factor: f64) -> Snapshot {
+    snapshot.accelerator = Some(antinomie_monitor_core::AcceleratorUsed {
+        record: "tcg".into(),
+        fallback_warning: None,
+        guest_wait_factor: factor,
+    });
+    snapshot
+}
+
+fn booting(mut snapshot: Snapshot) -> Snapshot {
+    snapshot.launch_wait = Some(antinomie_monitor_core::boot_wait::LaunchWait {
+        program: "/tmp/abababab-job.sh".into(),
+        started_ms: 0,
+        text: antinomie_monitor_core::boot_wait::WAIT_TEXT.into(),
+    });
+    snapshot
+}
+
+/// The engine of B3: it holds `Execute` while a Debian guest finishes booting
+/// (`launch_wait`) and answers after the boot wait. `Execute` is command 2.
+fn slow_launch(clock: &Arc<ManualClock>, first: Snapshot) -> Fake {
+    let mut fake = happy(clock, 0);
+    fake.timed.clear();
+    fake.queue.clear();
+    fake.queue.push_back(Notification::Snapshot(first));
+    let mut react = fake.react.take().unwrap();
+    fake.react = Some(Box::new(move |command, id, queue| match command {
+        Command::Execute(_) => {}
+        // A stop lists the runs the engine knows (none started late here).
+        Command::Stop => {
+            queue.push_back(Notification::Snapshot(stopped_vm(vec![])));
+            queue.push_back(result(id, true, "VM stopped"));
+        }
+        _ => react(command, id, queue),
+    }));
+    fake
+}
+
+/// B3: a boot wait longer than the silence limit is not a lost launch.
+#[test]
+fn a_launch_held_for_the_boot_wait_is_answered_not_lost() {
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = slow_launch(&clock, running_vm(vec![]));
+    let mut react = fake.react.take().unwrap();
+    fake.react = Some(Box::new(move |command, id, queue| {
+        if matches!(command, Command::Execute(_)) {
+            queue.push_back(Notification::Snapshot(booting(running_vm(vec![]))));
+        }
+        react(command, id, queue);
+    }));
+    let running = |state, live| running_vm(vec![run_summary("r1", state, live)]);
+    fake.timed = vec![
+        (75_000, Notification::Snapshot(running_vm(vec![]))),
+        (80_000, result(2, true, "launched pid 750")),
+        (80_000, Notification::Snapshot(running("Running", 1))),
+        (82_000, Notification::Snapshot(running("Finished", 0))),
+    ];
+    let (mut waiter, _) = make(fake);
+    let (report, _) = exec(&mut waiter, &plan(), |_| Ok(Some(complete())));
+    let report = report.unwrap();
+    assert_eq!(report.outcome, Outcome::Succeeded, "{:?}", report.failure);
+    assert!(report.timings.launch_ms.unwrap() >= 80_000);
+    assert_eq!(report.run.unwrap().id, "r1");
+}
+
+/// B3 under TCG: the silence is the engine's factor times a minute.
+#[test]
+fn under_tcg_a_launch_may_take_the_stretched_silence() {
+    let clock = Arc::new(ManualClock::new(0));
+    let fake = slow_launch(&clock, tcg(running_vm(vec![]), 10.0));
+    let (mut waiter, _) = make(fake);
+    let running = |state, live| tcg(running_vm(vec![run_summary("r1", state, live)]), 10.0);
+    waiter.engine_mut().timed = vec![
+        (300_000, result(2, true, "launched pid 750")),
+        (300_000, Notification::Snapshot(running("Running", 1))),
+        (302_000, Notification::Snapshot(running("Finished", 0))),
+    ];
+    let (report, _) = exec(&mut waiter, &plan(), |_| Ok(Some(complete())));
+    let report = report.unwrap();
+    assert_eq!(report.outcome, Outcome::Succeeded, "{:?}", report.failure);
+
+    // Never answered: silent after ten minutes, and it says so.
+    let clock = Arc::new(ManualClock::new(0));
+    let (mut waiter, clock) = make(slow_launch(&clock, tcg(running_vm(vec![]), 10.0)));
+    let (report, _) = exec(&mut waiter, &plan(), |_| Ok(None));
+    let report = report.unwrap();
+    // Nothing started late: no run, no warning.
+    assert!(report.run.is_none() && report.warnings.is_empty());
+    let failure = report.failure.unwrap();
+    assert_eq!(failure.code, FailureCode::Internal);
+    assert!(
+        failure
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("within 600 seconds"),
+        "{failure:?}"
+    );
+    assert!(
+        (600_000..605_000).contains(&clock.now_ms()),
+        "{}",
+        clock.now_ms()
+    );
+}
+
+/// B3's orphan: the engine answers `Execute` only after the job gave up on it
+/// (it handles the `Stop` after the launch it is busy with). The run that
+/// started is stopped with the VM and named in the report, not left behind.
+#[test]
+fn a_launch_answered_after_the_job_gave_up_is_stopped_and_reported() {
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = slow_launch(&clock, running_vm(vec![]));
+    let execute = Arc::new(Mutex::new(None::<u64>));
+    let held = execute.clone();
+    let mut react = fake.react.take().unwrap();
+    fake.react = Some(Box::new(move |command, id, queue| match command {
+        Command::Execute(_) => *held.lock().unwrap() = Some(id),
+        Command::Stop => {
+            // The slow launch finishes first, then the stop.
+            if let Some(launch) = held.lock().unwrap().take() {
+                queue.push_back(result(launch, true, "launched pid 750"));
+                queue.push_back(Notification::Snapshot(running_vm(vec![run_summary(
+                    "r1", "Running", 1,
+                )])));
+            }
+            queue.push_back(Notification::Snapshot(stopped_vm(vec![run_summary(
+                "r1",
+                "Interrupted",
+                0,
+            )])));
+            queue.push_back(result(id, true, "VM stopped"));
+        }
+        _ => react(command, id, queue),
+    }));
+    let (mut waiter, _) = make(fake);
+    let (report, events) = exec(&mut waiter, &plan(), |_| Ok(None));
+    let report = report.unwrap();
+    assert_eq!(report.outcome, Outcome::Failed);
+    let failure = report.failure.as_ref().unwrap();
+    assert_eq!(
+        (failure.code, failure.stage),
+        (FailureCode::Internal, Stage::Launch)
+    );
+    assert!(
+        report.settled,
+        "the VM, and with it the program, was stopped"
+    );
+    assert_eq!(report.run.as_ref().map(|run| run.id.as_str()), Some("r1"));
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.code == "late_launch" && w.text.contains("r1")),
+        "{:?}",
+        report.warnings
+    );
+    assert!(
         events
             .iter()
-            .filter(|e| matches!(
-                e,
-                EventBody::JobProgress {
-                    stage: Stage::Upload,
-                    ..
-                }
-            ))
-            .count(),
-        2
+            .any(|e| matches!(e, EventBody::JobRun { run_id, .. } if run_id == "r1"))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, EventBody::JobWarning { code, .. } if code == "late_launch"))
     );
 }
 

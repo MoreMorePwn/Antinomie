@@ -6,7 +6,7 @@ use crate::{
     logging::Logger,
     output::Format,
 };
-use antinomie_monitor_core::BackendOptions;
+use antinomie_monitor_core::{BackendOptions, StartSettings};
 use std::path::PathBuf;
 
 pub struct Context {
@@ -88,7 +88,27 @@ pub fn backend_options(global: &Global, home: Option<&std::path::Path>) -> Backe
     }
     options.force_tcg = global.tcg;
     options.headless = !global.no_headless;
+    options.start = start_settings(global, &options.data_dir);
     options
+}
+
+/// The waits of a VM start and a launch: `settings.json`'s `start` section
+/// (the one the window's Tools > Settings > Advanced edits), with
+/// `--boot-wait` and `--tcg-multiplier` over it. A file that cannot be read
+/// gives the defaults here; the commands that read the file report it.
+fn start_settings(global: &Global, data_dir: &std::path::Path) -> StartSettings {
+    let mut start = antinomie_monitor_core::settings::load(data_dir)
+        .ok()
+        .flatten()
+        .map(|settings| settings.start())
+        .unwrap_or_default();
+    if let Some(seconds) = global.boot_wait {
+        start.boot_wait_secs = seconds;
+    }
+    if let Some(multiplier) = global.tcg_multiplier {
+        start.tcg_multiplier = multiplier;
+    }
+    start
 }
 
 #[cfg(test)]
@@ -124,6 +144,49 @@ mod tests {
         assert_eq!(options.qemu, std::path::Path::new("/q"));
         assert_eq!(options.qemu_img, std::path::Path::new("/qi"));
         assert!(!backend_options(&global(&["--no-headless"]), Some(home)).headless);
+    }
+
+    #[test]
+    fn the_start_waits_come_from_the_settings_file_and_the_flags_win() {
+        let dir = std::env::temp_dir().join(format!("ant-cli-start-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let data = dir.to_str().unwrap();
+        // No file: the defaults.
+        let options = backend_options(&global(&["--data-dir", data]), None);
+        assert_eq!(options.start, StartSettings::default());
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{"start": {"boot_wait_secs": 90, "tcg_multiplier": 20}}"#,
+        )
+        .unwrap();
+        let options = backend_options(&global(&["--data-dir", data]), None);
+        assert_eq!(
+            (options.start.boot_wait_secs, options.start.tcg_multiplier),
+            (90, 20)
+        );
+        let options = backend_options(
+            &global(&[
+                "--data-dir",
+                data,
+                "--boot-wait",
+                "200",
+                "--tcg-multiplier",
+                "30",
+            ]),
+            None,
+        );
+        assert_eq!(
+            (options.start.boot_wait_secs, options.start.tcg_multiplier),
+            (200, 30)
+        );
+        // Out of range is refused by the parser.
+        for bad in [["--boot-wait", "4"], ["--tcg-multiplier", "0"]] {
+            let mut all = vec!["antinomie-cli"];
+            all.extend_from_slice(&bad);
+            all.push("doctor");
+            assert!(Cli::try_parse_from(all).is_err());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

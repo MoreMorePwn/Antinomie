@@ -47,10 +47,24 @@ impl Qmp {
         wait: Duration,
         reply: Duration,
     ) -> Result<Self, String> {
+        Self::connect_watched(path, wait, reply, None)
+    }
+    /// [`Qmp::connect_with`] to the monitor of the QEMU child `qemu`: once it
+    /// has exited, the socket will never come, so the wait ends at once
+    /// instead of after `wait` (minutes under TCG).
+    pub(super) fn connect_watched(
+        path: &Path,
+        wait: Duration,
+        reply: Duration,
+        qemu: Option<u32>,
+    ) -> Result<Self, String> {
         let deadline = std::time::Instant::now() + wait;
         let socket = loop {
             match UnixStream::connect(path) {
                 Ok(socket) => break socket,
+                Err(error) if qemu.is_some_and(child_exited) => {
+                    return Err(format!("{QEMU_GONE}: {error}"));
+                }
                 Err(_) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(50))
                 }
@@ -84,15 +98,18 @@ impl Qmp {
     /// asking again is safe for every command: a QEMU under load (heavy
     /// builds, a restore just loaded) often answers the first connection
     /// late and the second at once. A closed or refused socket is not retried.
+    /// The wait for the socket ends when the QEMU child `qemu` has exited
+    /// ([`Qmp::connect_watched`]).
     pub(super) fn connect_retrying(
         path: &Path,
         wait: Duration,
         reply: Duration,
         attempts: u32,
+        qemu: Option<u32>,
     ) -> Result<Self, String> {
         let mut attempt = 1;
         loop {
-            match Self::connect_with(path, wait, reply) {
+            match Self::connect_watched(path, wait, reply, qemu) {
                 Err(error) if is_timeout(&error) && attempt < attempts => attempt += 1,
                 Err(error) if is_timeout(&error) => {
                     return Err(format!(
@@ -161,6 +178,26 @@ pub(super) fn is_timeout(error: &str) -> bool {
 
 /// How a connection that QEMU's socket never accepted within its wait starts.
 const SOCKET_WAIT_OUT: &str = "QMP socket not ready after";
+
+/// How a connection whose QEMU exited before its socket accepted starts.
+const QEMU_GONE: &str = "QEMU exited before its QMP socket was ready";
+
+/// Whether the child process `pid` has exited. It is left to be reaped by
+/// its owner (`WNOWAIT`); a pid that is no longer waitable was reaped, so it
+/// has exited too.
+pub(super) fn child_exited(pid: u32) -> bool {
+    use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+    let Some(pid) = i32::try_from(pid).ok().and_then(Pid::from_raw) else {
+        return false;
+    };
+    match waitid(
+        WaitId::Pid(pid),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+    ) {
+        Ok(status) => status.is_some(),
+        Err(error) => error == rustix::io::Errno::CHILD,
+    }
+}
 
 /// A QMP error where a wait ran out: a reply that did not come, or a socket
 /// that did not accept in time (not a closed or reset one, which QEMU's exit

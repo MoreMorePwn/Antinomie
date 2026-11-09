@@ -186,6 +186,7 @@ fn a_fallback_to_tcg_raises_one_warning_toast_per_start() {
     let fallen_back = Some(AcceleratorUsed {
         record: "tcg (KVM unavailable)".into(),
         fallback_warning: Some(warning.clone()),
+        guest_wait_factor: 10.0,
     });
     let mut activity = Vec::new();
     app.accept_snapshot(starting(fallen_back.clone()), &mut activity);
@@ -201,6 +202,7 @@ fn a_fallback_to_tcg_raises_one_warning_toast_per_start() {
         starting(Some(AcceleratorUsed {
             record: "tcg".into(),
             fallback_warning: None,
+            guest_wait_factor: 10.0,
         })),
         &mut explicit,
     );

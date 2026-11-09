@@ -5,6 +5,7 @@
 //! `FailedToStart` or `LaunchUnconfirmed` is `launch_failed`.
 use super::{LaneStages, Launched, Prepared, Provisioned, StageStop};
 use crate::{
+    api::spec::Route,
     api::{
         failure::{Failure, FailureCode},
         job::{Job, JobRecording, JobRun, RecordingPhase, Stage},
@@ -14,7 +15,7 @@ use crate::{
     store::JobPatch,
     waiter::{Phase, phase, route_of},
 };
-use antinomie_monitor_core::samples::SampleRef;
+use antinomie_monitor_core::{RunSummary, samples::SampleRef};
 
 fn fail(message: &str, detail: Option<&str>) -> StageStop {
     StageStop::Failed(Failure::new(
@@ -51,6 +52,32 @@ impl<E: Engine> LaneStages<'_, E> {
             ));
         }
         let route = route_of(&request, &run);
+        self.link_run(job, &run, route, RecordingPhase::Live)?;
+        let _ = provisioned;
+        Ok(Launched { run, guest_path })
+    }
+
+    /// A launch given up as silent that started the program after all (the
+    /// lane has stopped the VM since, which ended it): the job names the run
+    /// and says what happened, instead of leaving the recording unreported.
+    pub(super) fn link_late_launch(&mut self, job: &Job) {
+        let Some(run) = self.waiter.late_launch() else {
+            return;
+        };
+        let route = route_of(&run.request, &run);
+        let _ = self.link_run(job, &run, route, RecordingPhase::Interrupted);
+        let warning = crate::waiter::late_launch_warning(&run.id);
+        self.warn(job, &warning.code, &warning.text);
+    }
+
+    /// Record `run` as the job's run and recording, and say so on the stream.
+    fn link_run(
+        &mut self,
+        job: &Job,
+        run: &RunSummary,
+        route: Route,
+        phase: RecordingPhase,
+    ) -> Result<(), StageStop> {
         let store = self.env.store;
         let now = self.waiter.now_ms();
         let key = RunKey::new(&run.vm_id, &run.boot_id, &run.id).map_err(|e| {
@@ -79,7 +106,7 @@ impl<E: Engine> LaneStages<'_, E> {
                         boot_id: run.boot_id.clone(),
                         run_id: run.id.clone(),
                         run_key: key.as_str().to_owned(),
-                        phase: RecordingPhase::Live,
+                        phase,
                         directory: Some(run.directory.display().to_string()),
                     }),
                     ..JobPatch::default()
@@ -88,8 +115,6 @@ impl<E: Engine> LaneStages<'_, E> {
             .map_err(|e| self.store_error(Stage::Launch, e))?;
         store
             .emit_run_started(&job.id, &run.id, Some(run.pid).filter(|p| *p != 0), route)
-            .map_err(|e| self.store_error(Stage::Launch, e))?;
-        let _ = provisioned;
-        Ok(Launched { run, guest_path })
+            .map_err(|e| self.store_error(Stage::Launch, e))
     }
 }

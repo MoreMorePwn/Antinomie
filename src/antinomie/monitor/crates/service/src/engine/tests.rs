@@ -78,7 +78,8 @@ fn a_silent_command_never_answers_and_the_wait_times_out_on_the_fake_clock() {
     assert_eq!(
         waiter.lane_command(Command::Stop),
         Err(WaitError::Silent {
-            what: "Stop".into()
+            what: "Stop".into(),
+            seconds: 60
         })
     );
     assert!(

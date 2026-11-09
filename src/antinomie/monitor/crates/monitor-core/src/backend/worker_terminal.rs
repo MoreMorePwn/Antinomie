@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Commands on a running guest's terminals and runs: input, size, signals, stop and counters.
-use super::worker_guest::GUEST_REPLY_TIMEOUT;
 use super::*;
 
 impl Worker {
@@ -11,7 +10,7 @@ impl Worker {
         data: Vec<u8>,
     ) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         let cookie = session.run_cookie(&run_id)?;
         let run = session.runs.get(&cookie).ok_or("unknown run")?;
         if run.summary.terminal_eof {
@@ -63,7 +62,7 @@ impl Worker {
         cols: u16,
     ) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         if rows == 0 || cols == 0 || rows > 256 || cols > 256 {
             return Err("terminal dimensions must be 1..256".into());
         }
@@ -96,7 +95,7 @@ impl Worker {
     /// Send a signal to a run's process group.
     pub(super) fn signal_run(&mut self, run_id: String, signal: u32) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         if !(1..=64).contains(&signal) {
             return Err("signal must be 1..64".into());
         }
@@ -131,7 +130,7 @@ impl Worker {
     /// Ask the guest to end a run: SIGTERM, then SIGKILL on a guest that escalates.
     pub(super) fn stop_run(&mut self, run_id: String) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         let cookie = session.run_cookie(&run_id)?;
         let run = session.runs.get(&cookie).ok_or("unknown run")?;
         if !run.summary.state.can_stop() {
@@ -187,7 +186,7 @@ impl Worker {
     /// Read the guest recorder counters.
     pub(super) fn recorder_stats(&mut self) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = GUEST_REPLY_TIMEOUT;
+        let timeout = session.reply_timeout();
         let stats_requested = Instant::now();
         let reply = session.request(
             control::STATS,

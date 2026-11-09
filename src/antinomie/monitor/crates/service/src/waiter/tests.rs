@@ -133,11 +133,93 @@ fn a_guest_command_without_a_result_is_silence_after_sixty_seconds() {
     assert_eq!(
         error,
         WaitError::Silent {
-            what: "Stop".into()
+            what: "Stop".into(),
+            seconds: 60
         }
     );
     assert!((60_000..61_000).contains(&clock.now_ms()));
     assert!(error.to_string().contains("60 seconds"));
+}
+
+fn on_tcg(factor: f64) -> Snapshot {
+    Snapshot {
+        accelerator: Some(antinomie_monitor_core::AcceleratorUsed {
+            record: "tcg".into(),
+            fallback_warning: None,
+            guest_wait_factor: factor,
+        }),
+        ..Snapshot::default()
+    }
+}
+
+#[test]
+fn the_silence_is_stretched_by_the_engines_own_factor_under_tcg() {
+    let mut fake = Fake::new(Arc::new(ManualClock::new(0)));
+    fake.queue.push_back(Notification::Snapshot(on_tcg(12.5)));
+    let (mut waiter, clock) = make(fake);
+    waiter.drain().unwrap();
+    assert_eq!(waiter.guest_wait_factor(), 12.5);
+    assert_eq!(waiter.lane_silence(), Duration::from_secs(750));
+    let error = waiter.lane_command(Command::Stop).unwrap_err();
+    assert!((750_000..751_000).contains(&clock.now_ms()));
+    assert!(error.to_string().contains("750 seconds"), "{error}");
+    // KVM (factor 1) and no VM keep the minute; a factor below 1 never shortens it.
+    for snapshot in [on_tcg(1.0), Snapshot::default(), on_tcg(0.0)] {
+        let mut fake = Fake::new(Arc::new(ManualClock::new(0)));
+        fake.queue.push_back(Notification::Snapshot(snapshot));
+        let (mut waiter, _) = make(fake);
+        waiter.drain().unwrap();
+        assert_eq!(waiter.lane_silence(), LANE_SILENCE);
+    }
+}
+
+#[test]
+fn the_engines_boot_wait_is_work_not_silence() {
+    use antinomie_monitor_core::boot_wait::{LaunchWait, WAIT_TEXT};
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = Fake::new(clock.clone());
+    let booting = Snapshot {
+        launch_wait: Some(LaunchWait {
+            program: "/tmp/job.sh".into(),
+            started_ms: 0,
+            text: WAIT_TEXT.into(),
+        }),
+        ..Snapshot::default()
+    };
+    // The engine waits 100 s for the guest to boot, then needs 50 s more.
+    fake.on_send = vec![VecDeque::from([Notification::Snapshot(booting)])];
+    fake.timed = vec![
+        (100_000, Notification::Snapshot(Snapshot::default())),
+        (150_000, result(1, true, "launched pid 9")),
+    ];
+    let (mut waiter, _) = make(fake);
+    assert_eq!(
+        waiter.lane_command(Command::Stop),
+        Ok("launched pid 9".to_owned())
+    );
+    assert_eq!(clock.now_ms(), 150_000);
+    // Silence after the boot wait still counts: 60 s from its end.
+    let mut fake = Fake::new(Arc::new(ManualClock::new(0)));
+    fake.on_send = vec![VecDeque::from([Notification::Snapshot(Snapshot {
+        launch_wait: Some(LaunchWait {
+            program: "/tmp/job.sh".into(),
+            started_ms: 0,
+            text: WAIT_TEXT.into(),
+        }),
+        ..Snapshot::default()
+    })])];
+    fake.timed = vec![(100_000, Notification::Snapshot(Snapshot::default()))];
+    let (mut waiter, clock) = make(fake);
+    assert!(matches!(
+        waiter.lane_command(Command::Stop),
+        Err(WaitError::Silent { seconds: 60, .. })
+    ));
+    // (The last look that saw the wait was one pump before its end.)
+    assert!(
+        (159_000..161_000).contains(&clock.now_ms()),
+        "{}",
+        clock.now_ms()
+    );
 }
 
 #[test]
