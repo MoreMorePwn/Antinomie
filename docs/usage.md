@@ -362,7 +362,17 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    ran) or the guest recorded no hash for it, the program is fetched from the
    guest as usual. The **Specimen source** row of the report's Identity card says
    which happened ("host copy, hash matched guest" or "fetched from guest"); the
-   evidence identity is the guest's hash either way.
+   evidence identity is the guest's hash either way. On a base of contract
+   revision 22 the guest gives the hash of the copy it keeps in its launch reply,
+   so the host copy is used even for a program that exits within milliseconds,
+   and its analysis goes on after the VM stops; an older base sends the hash a
+   little later, and a VM stopped before it arrives ends the analysis.
+   A launch the guest refuses (it cannot load the file) still gets the static
+   analysis you selected: the file is read from the guest's disk (on a
+   revision-22 base the host copy stands in once its hash matches), and the run
+   stays in **Run History** as "Failed to start" with its report, so the analysis
+   can say what the file is. When the file cannot be read either, the run is not
+   kept, as before.
 6. **Attach to process** traces a process that is already running in the guest
    (and its future children); **Capture all** traces all of userspace. Neither
    stops or signals anything. A capture lists the processes it saw as a tree

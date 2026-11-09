@@ -6,13 +6,28 @@ it runs.
 
 ## 0.9.0 — 2026-MM-DD
 
-Runs the bases 0.8.3 runs (contract revision 20) and the bases built by this
-release (contract revision 21), arm64 BusyBox and Debian 13 Minimal among
-them. An app older than 0.9.0 refuses a revision-21 base and an arm64 base
-before it starts a VM. x86-64 bases built by this release also record 32-bit
+Runs the bases 0.8.3 runs (contract revision 20), revision-21 bases and the
+bases built by this release (contract revision 22), arm64 BusyBox and Debian 13
+Minimal among them. An app older than 0.9.0 refuses a revision-21 or 22 base and
+an arm64 base before it starts a VM; on a revision-21 base the revision-22
+features below say they need a newer base. x86-64 bases built by this release also record 32-bit
 x86 programs by their own table.
 
 ### Host
+
+- **Static analysis of a program that exits at once, and of a launch the guest
+  refused (ANT-T0344).** The host copy of an uploaded program replaces the guest
+  transfer once the guest vouches for its hash, and that hash came only with the
+  guest's exec hash record, some time after the exec: a program that exited within
+  milliseconds could end its run and the VM stop before it arrived, and its static
+  analysis was lost with the transfer ("specimen_sha256": null). On a revision-22
+  base the launch reply carries the SHA-256 of the copy the guest keeps, so the host
+  copy is vouched for and analysed on the host at once, whatever happens to the VM.
+  A launch the guest refuses (an ELF it cannot load, a shared object, a missing
+  interpreter) now gets static analysis too when it was selected: the file is
+  acquired from the guest's disk, the run stays in Run History as **Failed to start**
+  with its analysis, and on a revision-22 base the host copy stands in for the
+  transfer. Older bases keep the exec hash record and fetch the file from the guest.
 
 - **A slow TCG boot no longer fails the VM Start at 180 s (ANT-T0442).** The service's
   180 s limit on the VM `Start` command was fixed, so on a busy host the engine's own
@@ -761,6 +776,12 @@ x86 programs by their own table.
   with programs' CLOCK_MONOTONIC carrying the age too (`continuous`); the
   kernel's own monotonic clock, the recorder's timestamps and the host's
   guest-time accounting are unchanged. Bases list `uptime`.
+
+- Patch 54 (contract revision 22): a specimen copy's SHA-256 is taken while it is
+  read and given in its acquisition reply (EXEC flag `SPECIMEN_DIGEST`, ACQUIRE
+  header flag `DIGEST`, 56-byte reply, offered in TRACER_CAPS); the digest may use
+  half the copy's time limit and a slower copy is kept without one. Only
+  `kernel/antinomie/` changes.
 
 ## 0.8.3 — 2026-11-08
 

@@ -1188,6 +1188,52 @@ compat table's layouts).
 * **epoll_ctl (patch 48, B7).** The event is recorded for an operation the
   kernel refuses too.
 
+### Contract revision 22: specimen digests (0.9.0)
+
+Board card ANT-T0344 (from the T0335 evaluation: xmrig exited 127 after 57 ms,
+its report kept `specimen_sha256: null` and its analysis ended with the VM).
+Revision 22 adds flags a host asks for only where the guest offers them; every
+revision-21 request and reply is unchanged, so a revision-21 base still runs on
+this host without the features, and an older host refuses a revision-22 base.
+
+* **Why the hash came too late.** The host copy of an uploaded program replaces
+  the guest transfer once the guest vouches for its hash (`analysis/jobs/host_copy.rs`).
+  The only hash was the HASH_ROOT exec record, which `hash.c`'s worker publishes
+  after it has read the file again: a program that exits within milliseconds
+  ends its run first, and a VM stopped before the record arrives leaves the host
+  copy unvouched and the transfer unfinished. A refused launch has no exec record.
+* **Digest of the specimen copy (patch 54).** The specimen worker
+  (`specimen.c`) already reads the opened image (EXEC) or the path (ACQUIRE)
+  into an immutable copy; with EXEC flag `SPECIMEN_DIGEST` (64, only with
+  `SPECIMEN`) or ACQUIRE header flag `DIGEST` (1) it also feeds each 64 KiB chunk
+  to `lib/crypto`'s SHA-256 as it is read. The acquisition reply is then 56
+  bytes: the old 24 (id, size, status), its reserved word as flags
+  (`SPECIMEN_DIGEST_VALID` 1) and the digest at 24. The digest may use half of
+  the copy's time limit; past that the copy goes on and is kept without a digest
+  (flags 0, zero bytes), so asking for one never costs the copy. TRACER_CAPS
+  offers `SPECIMEN_DIGEST`, which also stands for ACQUIRE's flag.
+* **Host.** `with_tracer_flags()` asks for the digest only on a launch with a
+  specimen; the reply's specimen part (`exec_specimen_reply_len()`) moves the
+  core and debug parts. The digest goes to `Jobs::guest_hash()` right after the
+  host copy is offered, so the copy is adopted at the launch reply and the job
+  is host-side (a VM stop carries it on). A guest that offers the digest can
+  vouch for the host copy even without HASH_ROOT; a desktop run's ACQUIRE asks
+  for it too.
+* **Refused launches.** `Worker::analyze_refused_launch()` runs before
+  `failed_run_launch()` for a launch the guest refused (`FailedToStart`) with
+  static analysis selected: an ACQUIRE of the program's path (with `DIGEST` when
+  offered), the analysis job of the run, the host copy offered only with a
+  digest (a refused launch never records an exec hash, so without one the
+  transfer starts at once). While a job is behind it the run keeps its folder
+  (no "leave no run behind" removal, no `settle_unstarted_analysis()`), and
+  `Session::unstarted_runs` routes its analysis updates to the saved `run.json`
+  and `manifest.json` (`save_run_analysis()`), since the run has no root task
+  and is never in `runs`. A path the guest cannot read either leaves the old
+  behaviour. This part works on every base with specimens (revision 10).
+* **Tools.** `guest-run` takes `"host_copy": true` (the upload at the run's
+  path is the host copy), `"expect_refused": true`, `"no_evidence_wait": true`
+  and `"saved_analysis_wait"` (the saved analyses after the VM stopped).
+
 ### arm64 debugger (0.9.0)
 
 Multi-arch plan cards MA-11 and MA-14: the debug engine, the RSP server, the
