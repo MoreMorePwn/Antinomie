@@ -556,3 +556,34 @@ fn run_export_writes_only_into_out_and_sensitive_bytes_need_the_flag() {
     ));
     assert_eq!(code, 4);
 }
+
+/// `digest` builds the digest a finished run has none of, `--pending` finds the
+/// runs that lack one, and a second call has nothing to do.
+#[test]
+fn digest_builds_the_missing_digest_once() {
+    let fixture = Data::new("digest");
+    let data = fixture.data();
+    let data = data.to_str().unwrap();
+    let digest = fixture.run_dir().join("triage-digest.json");
+    assert!(!digest.exists());
+    let (code, value) = cli(&fixture.args(data, &["digest", "--pending"]));
+    assert_eq!(code, 0, "{value}");
+    let runs = value["result"]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 1, "{value}");
+    assert_eq!(runs[0]["run_id"], RUN);
+    assert!(
+        ["built", "built_partial"].contains(&runs[0]["state"].as_str().unwrap()),
+        "{value}"
+    );
+    let written = antinomie_monitor_core::run_digest::RunDigest::read(&fixture.run_dir()).unwrap();
+    assert!(written.behaviour.is_some() && written.coverage.is_some());
+    // Nothing is left to build, by name or by sweep.
+    let (code, value) = cli(&fixture.args(data, &["digest", "--pending"]));
+    assert_eq!(code, 0, "{value}");
+    assert!(value["result"]["runs"].as_array().unwrap().is_empty());
+    let (code, value) = cli(&fixture.args(data, &["digest", "5f3c9a10"]));
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["result"]["runs"][0]["state"], "current");
+    let (code, _) = cli(&fixture.args(data, &["digest", RUN, "--pending"]));
+    assert_eq!(code, 2, "a run and --pending together are a usage error");
+}

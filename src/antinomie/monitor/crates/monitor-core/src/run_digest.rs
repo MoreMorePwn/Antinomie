@@ -236,6 +236,49 @@ pub struct Lineage {
     pub execs: Vec<LineageExec>,
 }
 
+/// How much of the run the digest was built from, and why not all of it.
+/// A digest written by the background build or the window says so here; one
+/// written before 0.9.0 has no coverage and counts as built from the whole run.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Coverage {
+    /// The index behind the digest was partial (telemetry lost, a size or
+    /// time budget reached, the recording still being saved, ...).
+    pub partial: bool,
+    /// One plain-words reason each; empty when `partial` is false.
+    pub reasons: Vec<String>,
+    /// Calls of the run's program the digest read.
+    pub calls_read: u64,
+    /// A size or time budget stopped the read before the end of the recording.
+    pub budget_reached: bool,
+    /// The partial state can still change (the recording or capture was being
+    /// written): the build is repeated once the recording changes.
+    pub revisit: bool,
+    /// The recording's identity ([`source_stamp`]) when the digest was built.
+    pub source: String,
+}
+
+/// What identifies the state of a run's recording, to tell a digest built from
+/// an older state of it: sizes and times of the files the index reads.
+pub fn source_stamp(run_directory: &Path) -> String {
+    use std::os::unix::fs::MetadataExt;
+    [
+        "telemetry.raw",
+        "artifacts.json",
+        "run.json",
+        "manifest.json",
+    ]
+    .iter()
+    .map(|name| {
+        std::fs::metadata(run_directory.join(name)).map_or_else(
+            |_| "-".to_owned(),
+            |meta| format!("{}.{}.{}", meta.len(), meta.mtime(), meta.mtime_nsec()),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("|")
+}
+
 /// Everything Triage knew about a run when it last read it. A part that was
 /// never computed is `None`, which is not the same as an empty list.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,6 +299,10 @@ pub struct RunDigest {
     /// findings, so it is a run that did not start and not one still unread.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launch_failure: Option<String>,
+    /// How much of the run the digest was built from (0.9.0); `None` for a
+    /// digest of an older build.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<Coverage>,
 }
 
 /// Serialises read-modify-write cycles: the UI updates a digest from short

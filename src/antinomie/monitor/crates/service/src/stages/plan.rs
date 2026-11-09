@@ -137,6 +137,9 @@ pub fn upload_wait(size: u64) -> Duration {
 
 /// `analyse_s` (design 4.1): the Triage scan and the detection engines.
 pub const ANALYSE_WAIT: Duration = Duration::from_secs(900);
+/// The budgeted digest build of a run the scan left none for: its own time
+/// budget (20 minutes) and a minute to finish.
+pub const DIGEST_WAIT: Duration = Duration::from_secs(21 * 60);
 /// `report_s` (design 4.1).
 pub const REPORT_WAIT: Duration = Duration::from_secs(300);
 /// `cleanup_s` (design 4.1).

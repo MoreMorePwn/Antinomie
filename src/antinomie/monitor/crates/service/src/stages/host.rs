@@ -65,6 +65,19 @@ pub trait HostTriage: Send + Sync {
         scan: &ArchiveScan,
         outcomes: &[(Engine, Outcome)],
     ) -> Result<(), String>;
+    /// Make the run's digest when it has none, from a budgeted read of the
+    /// recording (`antinomie_triage::digest_job`): the scan did not leave one
+    /// (Triage was not planned, it failed or ran out of time). `Some` says what
+    /// is missing from it (partial, unreadable); `None` means it is whole or
+    /// was there already. The same build the window and `antinomie-cli digest`
+    /// make.
+    fn ensure_digest(
+        &self,
+        _job: &Job,
+        _cancel: &Arc<AtomicBool>,
+    ) -> Result<Option<String>, String> {
+        Ok(None)
+    }
     /// Build the report for `choices`.
     fn build(
         &self,
@@ -136,6 +149,27 @@ impl HostTriage for RealTriage {
     ) -> Result<(), String> {
         let settings = detection::headless_settings(&self.options.data_dir)?;
         detection::save_digest(saved, scan, &settings, outcomes)
+    }
+
+    fn ensure_digest(&self, job: &Job, cancel: &Arc<AtomicBool>) -> Result<Option<String>, String> {
+        use antinomie_triage::digest_job::{self, Built};
+        let saved = self.open_run(job)?;
+        let built = digest_job::queue().build_blocking(
+            digest_job::Job {
+                run: saved.run,
+                options: self.options.clone(),
+                budget: digest_job::Budget::default(),
+            },
+            cancel,
+        )?;
+        Ok(match built {
+            Built::Partial(reasons) => Some(format!(
+                "the run's digest was built from part of the recording: {}",
+                reasons.join("; ")
+            )),
+            Built::Failed(reason) => Some(format!("the run has no usable digest: {reason}")),
+            Built::Whole | Built::Current | Built::Busy => None,
+        })
     }
 
     fn build(

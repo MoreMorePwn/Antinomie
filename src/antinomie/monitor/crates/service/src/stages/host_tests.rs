@@ -100,6 +100,10 @@ impl HostTriage for Hooked {
         self.real().save_digest(saved, scan, outcomes)
     }
 
+    fn ensure_digest(&self, job: &Job, cancel: &Arc<AtomicBool>) -> Result<Option<String>, String> {
+        self.real().ensure_digest(job, cancel)
+    }
+
     fn build(
         &self,
         saved: &SavedRun,
@@ -607,6 +611,39 @@ fn a_failed_scan_in_a_stage_the_policy_does_not_require_is_a_warning_and_partial
     assert_eq!(a.label, Some(Label::Inconclusive));
     assert!(a.basis.contains("Triage did not run"));
     assert!(done.artifacts.is_empty());
+}
+
+#[test]
+fn a_run_whose_scan_failed_still_gets_its_digest_and_a_partial_one_is_a_warning() {
+    let mut w = world_with("host-digest", |p| p.analysis.required_stages = Vec::new());
+    hook(&mut w, |h| {
+        h.index = Some(Box::new(|_| Err("the index is damaged".into())))
+    });
+    let job = collected(&w, 1);
+    // Telemetry was lost: the recording says so in its manifest.
+    std::fs::write(
+        run_dir(&w).join("manifest.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "run": {"id": RUN, "vm_id": "vm-1", "boot_id": "boot-1"},
+            "health": {"dropped": 1_180_000u64, "storage_dropped_packets": 0},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !run_dir(&w)
+            .join(antinomie_monitor_core::run_digest::FILE)
+            .exists()
+    );
+    let mut waiter = w.engine(|_| {});
+    let done = finished(host(&w, &mut waiter, &job));
+    assert_eq!(done.state, JobState::Partial);
+    let digest = antinomie_monitor_core::run_digest::RunDigest::read(&run_dir(&w))
+        .expect("the digest was built although the scan failed");
+    let coverage = digest.coverage.unwrap();
+    assert!(coverage.partial, "{coverage:?}");
+    assert!(coverage.reasons.iter().any(|r| r.contains("dropped")));
+    assert!(warnings(&w, &job).contains(&"digest_incomplete".to_owned()));
 }
 
 #[test]

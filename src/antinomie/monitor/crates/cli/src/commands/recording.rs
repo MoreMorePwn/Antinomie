@@ -30,6 +30,20 @@ pub const RUN_HELP: &str = "The run: its id or the first characters of it (see `
 /// Shortest run-id prefix that is looked up.
 pub const RUN_PREFIX: usize = 4;
 
+/// Every saved run of the data directory, deleted VMs with kept recordings
+/// included. A VM that cannot be read does not hide the others.
+pub fn list_all_runs(context: &Context) -> Result<Vec<RunSummary>, CliError> {
+    let locations = read_only_locations(&context.options)
+        .map_err(|error| CliError::internal(format!("cannot list the recordings: {error}")))?;
+    let mut runs = Vec::new();
+    for location in &locations {
+        if let Ok(found) = list_runs_read_only(location) {
+            runs.extend(found);
+        }
+    }
+    Ok(runs)
+}
+
 /// The saved run `text` names. Every VM of the data directory is searched,
 /// deleted ones with kept recordings included.
 pub fn find_run(context: &Context, text: &str) -> Result<RunSummary, CliError> {

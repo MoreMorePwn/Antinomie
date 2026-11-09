@@ -30,6 +30,9 @@ pub mod bpf_notes;
 pub mod descriptors;
 pub mod detection;
 pub mod digest;
+pub mod digest_job;
+#[cfg(test)]
+mod digest_job_tests;
 pub mod family;
 pub mod file_activity;
 pub mod file_category;
@@ -403,6 +406,9 @@ pub struct ScanRequest {
     /// journal, no clean-up of stale temporaries. The query API reads this way
     /// (design 5.12.2); the window and the CLI's `triage` keep the journals.
     pub read_only: bool,
+    /// A budget the passes over the calls stop at, leaving a partial index
+    /// ([`scan_progress::ScanStop`]); `None` reads the whole run.
+    pub stop: Option<Arc<scan_progress::ScanStop>>,
 }
 
 impl ScanRequest {
@@ -565,6 +571,8 @@ pub struct ScanData {
     pub partial: bool,
     /// Why the index is partial, one reason each; empty when it is whole.
     pub partial_reasons: Vec<String>,
+    /// The request's budget ([`ScanRequest::stop`]) ended a pass early.
+    pub budget_reached: bool,
     pub process: Vec<ProcessNode>,
     /// Suspicious observations per task, before the findings filter and page.
     pub suspicious: Suspicious,
