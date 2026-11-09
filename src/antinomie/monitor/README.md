@@ -109,8 +109,9 @@ Expensive analysis runs in a mandatory Bubblewrap-isolated worker, with no
 network, no sample execution and bounded CPU, memory, scratch and report output.
 Install `bubblewrap`, `file`, and `binutils` for the available external adapters.
 Built-in parsing handles ELF, PE and Mach-O metadata/structures, strings and
-entropy; unknown formats retain generic triage. `readelf` and `objdump` provide
-supported ELF hardening checks and optional disassembly. File identification is
+entropy; unknown formats retain generic triage. `readelf` provides
+supported ELF hardening checks; disassembly of x86, x86-64, AArch64 and ARM
+is built in (iced-x86 and Capstone), and `objdump` covers other architectures. File identification is
 partial evidence, not a definitive compiler/packer verdict. Rule matches
 (YARA-X) are built in. Capabilities (capa), decompilation (Ghidra) and the other
 optional engines use the system's copy or one installed from **Tools > Analysis

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Built-in disassembly: x86 and x86-64 decoded with iced-x86, other
-//! architectures through objdump; every instruction is one listing row.
+//! AArch64 and ARM through Capstone (`disasm/arm_elf.rs`), anything else
+//! through objdump; every instruction is one listing row.
 use super::listing::ListingWriter;
 use super::*;
 use iced_x86::{
@@ -8,6 +9,10 @@ use iced_x86::{
 };
 use object::{Object, ObjectSection, ObjectSymbol, SectionKind, SymbolKind};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
+
+#[cfg(test)]
+mod arch_tests;
+mod arm_elf;
 
 pub(super) const ICED_VERSION: &str = "iced-x86 1.21";
 
@@ -228,6 +233,12 @@ fn disassemble_rows(section: &mut AnalysisSection, specimen: &[u8], listings: &P
         object::Architecture::X86_64 => 64,
         object::Architecture::I386 => 32,
         object::Architecture::X86_64_X32 => 64,
+        object::Architecture::Aarch64 => {
+            return arm_elf::disassemble(section, &file, listings, true);
+        }
+        object::Architecture::Arm => {
+            return arm_elf::disassemble(section, &file, listings, false);
+        }
         _ => return objdump(section, listings),
     };
     super::progress::tool_started("iced-x86", &[]);

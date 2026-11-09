@@ -14,6 +14,14 @@ x86 programs by their own table.
 
 ### Host
 
+- **Disassembly reads AArch64 and ARM programs, and one unavailable check no
+  longer makes the analysis partial (ANT-T0428).** The Disassembly check called
+  the host's x86-only `objdump` and was "unavailable" for every arm64 and ARM32
+  sample, which also marked the whole run `partial` (exit 11). It now decodes
+  AArch64 and ARM/Thumb with the linked Capstone (x86 and x86-64 output is
+  unchanged), and an analysis is partial only when a check stopped short, not
+  when one is unavailable.
+
 - **Runs know their job, sensitive reads reach the service log, `sample add` goes
   through the daemon, and `run export --sensitive` writes packet and call bytes
   (ANT-T0421).** `run list` showed `job_id: null` and `--job` found nothing; the
