@@ -62,6 +62,9 @@ x86 programs by their own table.
   acquired from the guest's disk, the run stays in Run History as **Failed to start**
   with its analysis, and on a revision-22 base the host copy stands in for the
   transfer. Older bases keep the exec hash record and fetch the file from the guest.
+  A run whose analysis finishes after the VM stopped now has the finished report in
+  its record (`run.json`, `manifest.json`): it kept "acquiring" or "running" there,
+  although its own report was complete.
 
 - **A slow TCG boot no longer fails the VM Start at 180 s (ANT-T0442).** The service's
   180 s limit on the VM `Start` command was fixed, so on a busy host the engine's own
