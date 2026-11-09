@@ -1806,8 +1806,14 @@ shipped yet.
   `findings`, `indicators`, `files`, `network`, `timeline`, `analysis`, `custody`
   and `artifacts` (default: all) as `*.ndjson` files, one row per line, and the
   retained evidence files of `artifacts` into `DIR` and nowhere else; the bytes the
-  sample produced (captured packets, memory and core dumps, file copies, the contents
-  of changed files) are written only with `--sensitive`; `--no-triage` leaves out the
+  sample produced are written only with `--sensitive`: the capture, memory and core
+  files and file copies (`artifacts/`), the contents of changed files (`files/`), the
+  captured bytes of calls (`captured/`, named by `captured.ndjson`) and the frames of
+  the recorded packets (`network-packets-<capture>.ndjson`, one `{n, frame_len,
+  bytes_b64}` line per packet). The frames are capped at 100 000 packets and the
+  captured bytes at 10 000 fields and 256 MiB per export; a file list entry says
+  `truncated` when a cap was reached. With a daemon each of these reads is written to
+  its service log; `--no-triage` leaves out the
   parts that need the Triage index (findings, indicators, files, network, timeline), so
   a very large recording is not indexed in full. `RUN` is as for `triage`.
   These commands are the read-only query API of the job API (`docs/job-api-1.md`,
@@ -1827,8 +1833,13 @@ shipped yet.
   from the recording folder (no lock is needed). `vm list` and `base list` from the
   daemon print the contract's summaries (id, name, base, lane; identity, name,
   architecture), fewer columns than direct mode, which needs the lock and so cannot
-  run beside a daemon. `sample add`, `sample verify`, `sample remove` and `custody
-  verify --export` work in the command: they read or write files by path.
+  run beside a daemon. `run list` shows the `job_id` of the Auto-mode job that made a
+  run, and `--job` finds its runs, both through the daemon and in direct mode (the
+  command reads the job store without writing). With a daemon `sample add FILE`
+  uploads the file and adds it as the socket's caller (`local:<uid>`);
+  `--delete-original` then removes the file after the daemon reported the same
+  SHA-256. `sample verify`, `sample remove` and `custody verify --export` work in the
+  command: they read or write files by path.
 - **A VM lives as long as the command.** In direct mode the engine runs inside the
   command and stops the VM when the command ends, so `vm start` boots the guest, waits
   until it answers, reports how long that took and stops it again; `--hold` keeps it

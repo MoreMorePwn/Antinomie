@@ -14,6 +14,17 @@ x86 programs by their own table.
 
 ### Host
 
+- **Runs know their job, sensitive reads reach the service log, `sample add` goes
+  through the daemon, and `run export --sensitive` writes packet and call bytes
+  (ANT-T0421).** `run list` showed `job_id: null` and `--job` found nothing; the
+  reads now take the job from the job store (the job records its run), in the
+  daemon and in direct mode alike. Every served read of the sample's own bytes
+  (`recording.captured.read`, `files.content`, `network.packet`,
+  `artifact.get` of a capture or core, a sensitive job artifact, `sample.download`)
+  writes one line with the caller, the operation, the run or sample and the size to
+  the daemon's service log, never the bytes. With a daemon, `sample add FILE` uploads
+  the file and calls `sample.add`. `run export --sensitive` also writes the frames of
+  the recorded packets and the captured bytes of calls under `--out`.
 - **Network flows name the process that made them, and a capture names its run
   (ANT-T0397).** The capture is VM-wide and the guest tags no packet, so the app
   now matches each flow on the host to the run's recorded network calls

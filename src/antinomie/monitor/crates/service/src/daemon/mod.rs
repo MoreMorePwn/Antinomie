@@ -383,7 +383,11 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         let staging = Arc::new(staging);
         let intake = Arc::new(Intake::new(&data_dir, Arc::clone(&staging), lane_ram));
         let query = QueryService::new(setup.options.clone())
-            .with_layers(Arc::new(ViewLayers(Arc::clone(&view))));
+            .with_layers(Arc::new(ViewLayers(Arc::clone(&view))))
+            .with_jobs(Arc::new(crate::store::job_index::StoreJobIndex::new(
+                Arc::clone(&store),
+            )))
+            .with_audit(Arc::clone(&log));
         if setup.config.queue.paused_on_start {
             store
                 .set_pause(Some(crate::api::status::PauseReason::Operator))

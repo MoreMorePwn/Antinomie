@@ -14,7 +14,7 @@ mod jobs;
 mod lanes;
 pub(crate) mod link;
 mod render;
-mod submit;
+pub(crate) mod submit;
 
 #[derive(Subcommand, Debug)]
 pub enum Auto {

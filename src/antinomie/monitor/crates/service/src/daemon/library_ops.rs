@@ -44,7 +44,17 @@ impl Service {
             Op::SampleAdd => self.sample_add(value, ctx),
             Op::SampleDownload => {
                 let request: SampleDownloadParams = params(value)?;
-                library::download(&self.data_dir, actor, &request)
+                let reply = library::download(&self.data_dir, actor, &request)?;
+                let sent = reply["range"]["len"].as_u64().unwrap_or(0);
+                crate::audit::record(
+                    Some(&self.log),
+                    actor,
+                    "sample.download",
+                    "sample",
+                    request.sha256.as_str(),
+                    sent,
+                );
+                Ok(reply)
             }
             Op::SampleTag => {
                 let request: SampleTagParams = params(value)?;

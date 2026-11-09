@@ -265,11 +265,33 @@ from the same code direct mode runs, so the CLI prints the same objects either w
 | `base.list` | `{bases: [{identity, name, architecture}]}`; no host path. While the engine still lists them: `unavailable`, `retryable` |
 | `custody.verify` | `{ok, head, problems[]}` plus, for one sample, `sha256`, `entries`, `problem`, `summary`; for the library, `index`, `samples[]`, `broken[]`. Needs `manage` |
 
+**Service log for sensitive reads.** Every served read of the sample's own bytes
+writes one line to the daemon's service log (`antinomie-cli auto daemon` standard
+error, or its log file): `sensitive read: caller=<id> op=<op> run=<vm:boot:run> size=<bytes>`
+for `recording.captured.read`, `recording.files.content`, `recording.network.packet`
+and `recording.artifact.get` of a capture, memory dump, core or file copy;
+`... op=artifact.get job=<job id> ...` for a job artifact with `sensitive: true`
+(`report.get` too); and `... op=sample.download sample=<sha256> ...` for each range
+of an archive. `size` is the number of bytes served (the frame length for a packet).
+A refused read and a read of rows write nothing, a read that the scan still
+builds (`building`) writes nothing yet, and the line never carries the bytes, a
+host path or a name from the sample.
+
+**Runs and jobs.** `RunInfo.job_id` and the `job_id` filter of
+`recording.run.list` come from the job store: a job records its run (`recording`)
+when its lane stage opens it, and the reads find the newest job whose run is that
+one. The daemon and the CLI's direct mode use the same index (direct mode opens the
+store read-only and creates nothing), so both print the same `job_id`. A run no job
+made, and a data directory with no job store, show `job_id: null`.
+
 **Reads from the CLI.** With a daemon at the socket `run list`, `run show`, `run
 export`, `triage` and the other read commands send these operations; `run export`
 never sends an output path: the command pages through `recording.*` and writes the
 files under `--out` itself, and the bytes the sample produced are fetched only with
-`--sensitive` (the scope `artifacts:sensitive` is checked again by the daemon). A
+`--sensitive` (the scope `artifacts:sensitive` is checked again by the daemon, and
+each read is written to its service log). `sample add FILE` sends the file with
+`upload.begin`, `upload.put` and `upload.finish`, then calls `sample.add` with the
+`upload_id`. A
 page that would not fit a 2 MiB line is `payload_too_large` and the command asks
 again for fewer rows.
 
@@ -470,7 +492,7 @@ the read is cancelled.
 | Class | What | Rule |
 |---|---|---|
 | Normal (`read`) | Run, process, finding, indicator, file, network and timeline rows; trace rows and calls; analysis rows; custody entries; packet rows; terminal replay | Strings are untrusted text. Indicator values are raw; the row carries the defanged form and `raw_indicators: true` |
-| Sensitive (`artifacts:sensitive`) | Bytes the sample or guest produced: `captured.read`, `files.content`, `network.packet`, and `artifact.get` of a capture, memory dump, core or file copy | Audit-logged |
+| Sensitive (`artifacts:sensitive`) | Bytes the sample or guest produced: `captured.read`, `files.content`, `network.packet`, and `artifact.get` of a capture, memory dump, core or file copy | Audit-logged: the daemon's service log gets one line per served read |
 | Secret | Guest password, API keys, SOCKS password | Never in any result |
 | Local | Host paths, `directory` | Local socket and CLI only |
 

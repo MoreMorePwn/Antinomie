@@ -247,8 +247,12 @@ fn read_file(path: &Path) -> Result<Vec<u8>, CliError> {
     Ok(bytes)
 }
 
-/// Upload `path` to the daemon; the upload id.
-fn upload(client: &mut Client, path: &Path, context: &Context) -> Result<String, CliError> {
+/// Upload `path` to the daemon; the upload id and the file's SHA-256.
+pub(crate) fn upload(
+    client: &mut Client,
+    path: &Path,
+    context: &Context,
+) -> Result<(String, String), CliError> {
     let bytes = read_file(path)?;
     let sha = hex(&Sha256::digest(&bytes));
     let mut begin = json!({"size": bytes.len(), "sha256": sha});
@@ -270,7 +274,7 @@ fn upload(client: &mut Client, path: &Path, context: &Context) -> Result<String,
     context
         .logger
         .debug(&format!("uploaded {} bytes as {id}", bytes.len()));
-    Ok(id)
+    Ok((id, sha))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -323,7 +327,7 @@ pub fn run(arguments: &Submit, context: &Context) -> Result<Reply, CliError> {
         Some(mut client) => {
             match (&arguments.file, &arguments.sha256) {
                 (Some(path), _) => {
-                    spec["sample"]["upload_id"] = json!(upload(&mut client, path, context)?);
+                    spec["sample"]["upload_id"] = json!(upload(&mut client, path, context)?.0);
                     if spec.get("name").is_none()
                         && let Some(name) = upload_name(path)
                     {

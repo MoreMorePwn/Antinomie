@@ -22,6 +22,7 @@ use antinomie_service::{
     api::error::{ApiError, ErrorCode as ApiCode},
     query::{QueryApi, QueryService, ReadContext, key::RunKey, request::RecordingRead},
     server::client::Client as SocketClient,
+    store::job_index::StoreJobIndex,
 };
 use serde_json::{Value, json};
 use std::{
@@ -33,6 +34,16 @@ use std::{
 fn caller() -> String {
     // SAFETY: `getuid` has no preconditions and cannot fail.
     format!("local:{}", unsafe { libc::getuid() })
+}
+
+/// The query service in this process: the job store (when the data directory
+/// has one) tells it the job of each run, as the daemon's does.
+fn direct_service(context: &Context) -> QueryService {
+    let service = QueryService::new(context.options.clone());
+    match StoreJobIndex::open_read_only(context.data_dir()) {
+        Some(index) => service.with_jobs(std::sync::Arc::new(index)),
+        None => service,
+    }
 }
 
 /// Where the reads go: the query service in this process, or the daemon that
@@ -54,7 +65,7 @@ impl<'a> Client<'a> {
     pub fn new(context: &'a Context) -> Result<Self, CliError> {
         let via = match link::daemon(context)? {
             Some(client) => Via::Daemon(RefCell::new(client)),
-            None => Via::Direct(Box::new(QueryService::new(context.options.clone()))),
+            None => Via::Direct(Box::new(direct_service(context))),
         };
         Ok(Self { context, via })
     }

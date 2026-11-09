@@ -77,6 +77,7 @@ pub struct QueryService {
     pub(super) leases: Arc<Leases>,
     pub(super) layers: Option<Arc<dyn LayerSource>>,
     pub(super) jobs: Option<Arc<dyn JobIndex>>,
+    pub(super) audit: Option<crate::audit::AuditLog>,
     pub(super) scrub: Scrub,
     pub(super) trees: Mutex<super::process::TreeCache>,
     pub(super) scans: super::scan::ScanStore,
@@ -102,6 +103,7 @@ impl QueryService {
             leases: Arc::new(Leases::default()),
             layers: None,
             jobs: None,
+            audit: None,
             trees: Mutex::new(super::process::TreeCache::default()),
             attributions: Mutex::new(super::attribution::AttributionCache::default()),
         }
@@ -116,6 +118,26 @@ impl QueryService {
     pub fn with_jobs(mut self, jobs: Arc<dyn JobIndex>) -> Self {
         self.jobs = Some(jobs);
         self
+    }
+
+    /// Where sensitive reads are written (the daemon's service log): the
+    /// caller, the operation, the run and the size, never the bytes.
+    pub fn with_audit(mut self, log: crate::audit::AuditLog) -> Self {
+        self.audit = Some(log);
+        self
+    }
+
+    /// One line for a sensitive read of `run`.
+    pub(super) fn audit_read(&self, ctx: &ReadContext, op: &str, run: &RunKey, size: u64) {
+        let (vm, boot, id) = run.parts();
+        crate::audit::record(
+            self.audit.as_ref(),
+            &ctx.caller.client_id,
+            op,
+            "run",
+            &format!("{vm}:{boot}:{id}"),
+            size,
+        );
     }
 
     /// Whether a read of the run is open now. Retention (`auto gc`) and
@@ -301,9 +323,11 @@ impl QueryApi for QueryService {
                 .map(P::Invocation),
             R::CapturedRead(p) => {
                 ctx.require(Scope::ArtifactsSensitive)?;
-                self.pool
-                    .run(light, ctx, |c| self.captured_read(&p, c))
-                    .map(P::Bytes)
+                let reply = self.pool.run(light, ctx, |c| self.captured_read(&p, c))?;
+                if let Some(bytes) = &reply.value {
+                    self.audit_read(ctx, "recording.captured.read", &p.run_key, bytes.len);
+                }
+                Ok(P::Bytes(reply))
             }
             R::ProcessTree(p) => self
                 .pool
@@ -359,9 +383,16 @@ impl QueryApi for QueryService {
                 .map(P::Packets),
             R::NetworkPacket(p) => {
                 ctx.require(Scope::ArtifactsSensitive)?;
-                self.pool
-                    .run(heavy, ctx, |c| self.network_packet(&p, c))
-                    .map(P::Packet)
+                let reply = self.pool.run(heavy, ctx, |c| self.network_packet(&p, c))?;
+                if let Some(packet) = &reply.value {
+                    self.audit_read(
+                        ctx,
+                        "recording.network.packet",
+                        &p.run_key,
+                        u64::from(packet.frame_len),
+                    );
+                }
+                Ok(P::Packet(reply))
             }
             // Class T: the Triage scan (card Q-4). A read whose scan is not
             // built yet answers `building`; the scan runs on its own thread.
@@ -391,9 +422,11 @@ impl QueryApi for QueryService {
                 .map(P::Versions),
             R::FilesContent(p) => {
                 ctx.require(Scope::ArtifactsSensitive)?;
-                self.pool
-                    .run(heavy, ctx, |_| self.files_content(&p, ctx))
-                    .map(P::Bytes)
+                let reply = self.pool.run(heavy, ctx, |_| self.files_content(&p, ctx))?;
+                if let Some(bytes) = &reply.value {
+                    self.audit_read(ctx, "recording.files.content", &p.run_key, bytes.len);
+                }
+                Ok(P::Bytes(reply))
             }
             R::NetworkSummary(p) => self
                 .pool

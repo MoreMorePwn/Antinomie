@@ -49,6 +49,16 @@ impl Drop for Svc {
 }
 
 pub(super) fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
+    svc_logged(name, edit, Arc::new(|_: &str| {}))
+}
+
+/// A service whose log (and its query service's audit) is `log`; the query
+/// service knows the jobs of the store, as the daemon's does.
+pub(super) fn svc_logged(
+    name: &str,
+    edit: impl FnOnce(&mut Policy),
+    log: crate::audit::AuditLog,
+) -> Svc {
     let dir = scratch(&format!("daemon-{name}"));
     let data = dir.join("data");
     std::fs::create_dir_all(&data).unwrap();
@@ -78,7 +88,11 @@ pub(super) fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
     let (commands, commands_rx) = mpsc::channel();
     let service = Arc::new(Service {
         data_dir: data.clone(),
-        query: QueryService::new(options.clone()),
+        query: QueryService::new(options.clone())
+            .with_jobs(Arc::new(crate::store::job_index::StoreJobIndex::new(
+                Arc::clone(&store),
+            )))
+            .with_audit(Arc::clone(&log)),
         options,
         config: RwLock::new(ServiceConfig::default()),
         store,
@@ -94,7 +108,7 @@ pub(super) fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
         accelerator: Accelerator::Kvm,
         watch: Default::default(),
         gc_lock: Mutex::new(()),
-        log: Arc::new(|_: &str| {}),
+        log,
     });
     Svc {
         dir,

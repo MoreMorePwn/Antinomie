@@ -4,7 +4,7 @@
 //! the bases. Operations are called as a socket client's request would reach
 //! them, and some over a real Unix socket against the same data directory.
 
-use super::tests::{Svc, call, me, socket_ctx, svc, upload};
+use super::tests::{Svc, call, me, socket_ctx, submit_upload, svc, svc_logged, upload};
 use crate::{
     api::{
         error::ErrorCode,
@@ -26,7 +26,7 @@ use antinomie_triage::tests::{http_pcap, write_rwx_calls};
 use serde_json::{Value, json};
 use std::{
     mem::ManuallyDrop,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -682,4 +682,173 @@ fn the_reads_work_over_a_real_socket_with_the_same_answers() {
     drop(client);
     stop.stop();
     thread.join().unwrap();
+}
+
+/// A service whose log lines are collected.
+fn logged(name: &str) -> (Svc, Arc<Mutex<Vec<String>>>) {
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&lines);
+    let svc = svc_logged(
+        name,
+        |_| {},
+        Arc::new(move |line: &str| sink.lock().unwrap().push(line.to_owned())),
+    );
+    (svc, lines)
+}
+
+#[test]
+fn the_service_log_records_sensitive_reads_with_caller_run_and_size_never_the_bytes() {
+    let (svc, lines) = logged("audit");
+    let data = fixtures(&svc);
+    let run = standard(&data);
+    let key = run.key();
+    let owner = me().client_id;
+    let (vm, boot, id) = key.parts();
+    let triple = format!("{vm}:{boot}:{id}");
+
+    // Reads of the rows and refused reads write nothing.
+    call(&svc, "recording.run.list", json!({})).unwrap();
+    call(&svc, "recording.artifact.list", json!({"run_key": key})).unwrap();
+    let denied = svc
+        .service
+        .call(
+            "recording.captured.read",
+            json!({"run_key": key, "field": "x", "offset": "0", "len": 4}),
+            &reader(),
+        )
+        .unwrap_err();
+    assert_eq!(denied.code, ErrorCode::Forbidden);
+    assert!(lines.lock().unwrap().is_empty(), "{:?}", lines.lock());
+
+    // The bytes of a capture or a core.
+    let listed = call(&svc, "recording.artifact.list", json!({"run_key": key})).unwrap();
+    let mut served = Vec::new();
+    for artifact in listed["items"].as_array().unwrap() {
+        if artifact["sensitive"] != json!(true) {
+            continue;
+        }
+        let reply = call(
+            &svc,
+            "recording.artifact.get",
+            json!({"run_key": key, "artifact_id": artifact["id"], "range": {"offset": 0, "len": 8}}),
+        )
+        .unwrap();
+        served.push((
+            reply["value"]["len"].as_u64().unwrap(),
+            reply["value"]["data_b64"].clone(),
+        ));
+    }
+    assert!(!served.is_empty());
+    // A non-sensitive artifact is read without a line.
+    let before = lines.lock().unwrap().len();
+    assert_eq!(before, served.len());
+
+    // The archive of a sample.
+    let (script, _) = library_with_samples(&svc);
+    let download = call(&svc, "sample.download", json!({"sha256": script})).unwrap();
+    let sent = download["range"]["len"].as_u64().unwrap();
+
+    let lines = lines.lock().unwrap().clone();
+    assert_eq!(lines.len(), served.len() + 1, "{lines:?}");
+    for (line, (len, _)) in lines.iter().zip(&served) {
+        assert_eq!(
+            line,
+            &format!(
+                "sensitive read: caller={owner} op=recording.artifact.get run={triple} size={len}"
+            )
+        );
+    }
+    assert_eq!(
+        lines.last().unwrap(),
+        &format!("sensitive read: caller={owner} op=sample.download sample={script} size={sent}")
+    );
+    // Never the bytes, in either encoding.
+    let archive = download["range"]["data"].as_str().unwrap();
+    for line in &lines {
+        assert!(!line.contains(archive));
+        for (_, b64) in &served {
+            assert!(!line.contains(b64.as_str().unwrap()));
+        }
+    }
+}
+
+#[test]
+fn run_list_shows_the_job_that_made_a_run_the_same_through_the_daemon_and_in_process() {
+    use crate::{
+        api::{
+            ids::LaneId,
+            job::{JobRecording, RecordingPhase},
+        },
+        store::{Eligibility, JobPatch, job_index::StoreJobIndex},
+    };
+    let svc = svc("jobindex", |_| {});
+    let data = fixtures(&svc);
+    let made = add_run(&data, "boot-1", "run-made", 1_700_000_100_000, "Finalized");
+    let other = add_run(&data, "boot-1", "run-other", 1_700_000_000_000, "Finalized");
+    // A job that is running and records the run, as the lane's stages do.
+    let job = submit_upload(&svc);
+    let store = &svc.service.store;
+    let claimed = store
+        .claim_next(&LaneId::new(1), &mut |_| Eligibility::Ready)
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.id, job.id);
+    store
+        .patch(
+            &job.id,
+            JobPatch {
+                recording: Some(JobRecording {
+                    vm_id: VM.into(),
+                    boot_id: made.boot.clone(),
+                    run_id: made.id.clone(),
+                    run_key: made.key().to_string(),
+                    phase: RecordingPhase::Complete,
+                    directory: None,
+                }),
+                ..JobPatch::default()
+            },
+        )
+        .unwrap();
+
+    // The daemon's reads.
+    let list = call(&svc, "recording.run.list", json!({})).unwrap();
+    let job_of = |list: &Value, run: &str| {
+        list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["run_id"] == run)
+            .map(|item| item["job_id"].clone())
+            .unwrap()
+    };
+    assert_eq!(job_of(&list, "run-made"), json!(job.id.as_str()));
+    assert_eq!(job_of(&list, "run-other"), Value::Null);
+    let found = call(&svc, "recording.run.list", json!({"job_id": job.id})).unwrap();
+    assert_eq!(found["items"].as_array().unwrap().len(), 1);
+    assert_eq!(found["items"][0]["run_id"], "run-made");
+
+    // The CLI's direct mode: its own service over the same data directory,
+    // with the job store opened for reading (nothing created, nothing written).
+    let options = svc.service.options.clone();
+    let index = StoreJobIndex::open_read_only(&options.data_dir).expect("the store is there");
+    let direct = crate::query::QueryService::new(options).with_jobs(Arc::new(index));
+    let ctx = ReadContext::local_owner("local:1");
+    for params in [json!({}), json!({"job_id": job.id})] {
+        let in_process = serde_json::to_value(
+            direct
+                .read(
+                    RecordingRead::parse("recording.run.list", params.clone()).unwrap(),
+                    &ctx,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let over_socket = call(&svc, "recording.run.list", params).unwrap();
+        assert_eq!(in_process, over_socket, "the same list both ways");
+    }
+    // Without a job store, direct mode lists runs without jobs and creates none.
+    let bare = Data::new("jobindex-bare");
+    assert!(StoreJobIndex::open_read_only(&bare.root).is_none());
+    assert!(!bare.root.join("service").exists());
+    let _ = other;
 }

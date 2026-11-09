@@ -492,3 +492,191 @@ fn vms_and_bases_are_listed_by_the_daemon_that_owns_the_engine() {
     assert_eq!(value["error"]["code"], "unsupported");
     daemon.stop();
 }
+
+/// The first item of a list reply.
+fn items(value: &Value) -> Vec<Value> {
+    value["result"]["items"]
+        .as_array()
+        .or(value["result"].as_array())
+        .cloned()
+        .unwrap_or_else(|| panic!("no items in {value}"))
+}
+
+#[test]
+fn run_list_shows_the_job_of_a_run_and_job_filters_the_same_through_the_daemon_and_directly() {
+    let fixture = Fixture::new("jobs");
+    let data = fixture.data();
+    let _daemon = Running::start(&fixture);
+    // A job record that names the fixture's run, as the pipeline writes it
+    // when the lane records the run (the job index reads `run_key`).
+    let job = antinomie_service::api::ids::JobId::from_parts(5, [3; 10]).to_string();
+    let key = antinomie_service::query::key::RunKey::new("vm-1", "boot-1", RUN).unwrap();
+    let store = rusqlite::Connection::open(fixture.root.join("data/service/jobs.sqlite")).unwrap();
+    store
+        .execute(
+            "INSERT INTO jobs(id, created_ms, state, priority, wait_s, policy_name, policy_digest,
+                terms_json, max_attempts, client_id, spec_json, canon_json, run_key)
+             VALUES (?1, 1, 'succeeded', 0, 0, 'default', 'd', '{}', 1, 'local:1', '{}', '{}', ?2)",
+            rusqlite::params![job, key.as_str()],
+        )
+        .unwrap();
+    drop(store);
+
+    for tail in [
+        vec!["run", "list"],
+        vec!["run", "list", "--job", job.as_str()],
+        vec!["run", "show", "5f3c9a10"],
+    ] {
+        let (through, direct) = both(&data, &tail);
+        assert_eq!(through.0, 0, "{tail:?}: {}", through.1);
+        assert_eq!(direct.0, 0, "{tail:?}: {}", direct.1);
+        assert_eq!(through.1["result"], direct.1["result"], "{tail:?}");
+    }
+    let (_, listed) = cli(&args(&data, &["--direct", "run", "list"]));
+    assert_eq!(items(&listed)[0]["job_id"], job.as_str());
+    let (_, filtered) = cli(&args(&data, &["--direct", "run", "list", "--job", &job]));
+    assert_eq!(items(&filtered).len(), 1);
+    let none = "j_00000000000000000000000000";
+    let (_, filtered) = cli(&args(&data, &["--direct", "run", "list", "--job", none]));
+    assert!(items(&filtered).is_empty());
+}
+
+#[test]
+fn sample_add_goes_through_the_daemon_as_an_upload_then_sample_add() {
+    use sha2::{Digest, Sha256};
+    let fixture = Fixture::new("add");
+    let data = fixture.data();
+    let _daemon = Running::start(&fixture);
+    let file = fixture.root.join("second.sh");
+    let content = b"#!/bin/sh\necho second\n";
+    std::fs::write(&file, content).unwrap();
+    let sha: String = Sha256::digest(content)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let path = file.to_str().unwrap();
+
+    let (code, added) = cli(&args(
+        &data,
+        &[
+            "--daemon",
+            "sample",
+            "add",
+            path,
+            "--name",
+            "two.sh",
+            "--tag",
+            "verdict=benign",
+        ],
+    ));
+    assert_eq!(code, 0, "{added}");
+    let item = &items(&added)[0];
+    assert_eq!(item["ok"], true);
+    assert_eq!(item["new"], true);
+    assert_eq!(item["sha256"], sha.as_str());
+    assert_eq!(item["name"], "two.sh");
+    assert_eq!(item["size"], content.len());
+    assert!(
+        file.exists(),
+        "the original stays without --delete-original"
+    );
+    // The same file again, direct and through the daemon, is already there,
+    // with the same item.
+    let (code, again) = cli(&args(
+        &data,
+        &["--direct", "sample", "add", path, "--name", "two.sh"],
+    ));
+    assert_eq!(code, 0, "{again}");
+    assert_eq!(items(&again)[0]["new"], false);
+    let (code, third) = cli(&args(
+        &data,
+        &["--daemon", "sample", "add", path, "--name", "two.sh"],
+    ));
+    assert_eq!(code, 0, "{third}");
+    assert_eq!(items(&third)[0], items(&again)[0]);
+    // The library has the tag, and the custody entry names the socket's caller.
+    let (_, shown) = cli(&args(
+        &data,
+        &["--direct", "sample", "show", &sha, "--events"],
+    ));
+    assert_eq!(shown["result"]["tags"][0]["value"], "benign");
+    let uid = antinomie_service::server::own_uid();
+    assert!(
+        shown["result"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["by"] == format!("local:{uid}")),
+        "{shown}"
+    );
+    // --delete-original removes the file after the daemon reported the hash.
+    let doomed = fixture.root.join("doomed.sh");
+    std::fs::write(&doomed, b"#!/bin/sh\necho doomed\n").unwrap();
+    let (code, value) = cli(&args(
+        &data,
+        &[
+            "--daemon",
+            "sample",
+            "add",
+            doomed.to_str().unwrap(),
+            "--delete-original",
+        ],
+    ));
+    assert_eq!(code, 0, "{value}");
+    assert!(!doomed.exists());
+    // A missing file fails that file only, with its code.
+    let missing = fixture.root.join("missing.sh");
+    let (code, value) = cli(&args(
+        &data,
+        &["--daemon", "sample", "add", path, missing.to_str().unwrap()],
+    ));
+    assert_ne!(code, 0, "{value}");
+    assert_eq!(value["error"]["details"]["items"][0]["ok"], true);
+    assert_eq!(value["error"]["details"]["items"][1]["ok"], false);
+}
+
+#[test]
+fn run_export_with_sensitive_writes_the_recorded_packet_frames_the_same_both_ways() {
+    if Command::new("tshark").arg("--version").output().is_err()
+        || Command::new("bwrap").arg("--version").output().is_err()
+    {
+        eprintln!("skipped: tshark and bwrap are needed for the packet reads");
+        return;
+    }
+    let fixture = Fixture::new("packets");
+    let data = fixture.data();
+    let _daemon = Running::start(&fixture);
+    let through = fixture.root.join("through");
+    let direct = fixture.root.join("direct");
+    let plain = fixture.root.join("plain");
+    for (mode, out, sensitive) in [
+        ("--daemon", &through, true),
+        ("--direct", &direct, true),
+        ("--daemon", &plain, false),
+    ] {
+        let mut tail = vec![mode, "run", "export", "5f3c9a10", "--part", "trace,network"];
+        if sensitive {
+            tail.push("--sensitive");
+        }
+        tail.extend(["--out", out.to_str().unwrap()]);
+        let (code, value) = cli(&args(&data, &tail));
+        assert_eq!(code, 0, "{mode}: {value}");
+    }
+    let (a, b) = (tree(&through), tree(&direct));
+    assert_eq!(a, b, "the same files both ways");
+    let frames: Vec<&String> = a
+        .keys()
+        .filter(|k| k.starts_with("network-packets-"))
+        .collect();
+    assert_eq!(frames.len(), 1, "{:?}", a.keys());
+    let text = String::from_utf8_lossy(&a[frames[0]]);
+    let first: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert!(first["n"].is_number() && first["frame_len"].as_u64().unwrap() > 0);
+    assert!(!first["bytes_b64"].as_str().unwrap().is_empty());
+    // Without --sensitive, no frame and no captured byte is written.
+    assert!(
+        tree(&plain)
+            .keys()
+            .all(|k| !k.starts_with("network-packets-") && !k.starts_with("captured"))
+    );
+}
