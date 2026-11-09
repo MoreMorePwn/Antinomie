@@ -844,6 +844,14 @@ impl MonitorApp {
                 .on_hover_text(
                     "How long the first run of a boot waits for a systemd guest to finish booting, at KVM speed (stretched by the TCG multiplier like the other waits). A guest still booting then gets the program anyway, with a warning on the run. Guests without systemd (BusyBox) never wait.",
                 );
+                ui.add(
+                    egui::DragValue::new(&mut self.settings.start.network_wait_secs)
+                        .range(antinomie_monitor_core::StartSettings::NETWORK_WAIT_SECS)
+                        .suffix(" s network wait before a run"),
+                )
+                .on_hover_text(
+                    "How long a run on a Routed VM waits, at KVM speed (stretched by the TCG multiplier), for the guest to have its network address from the gateway's DHCP. A guest without one then gets the program anyway, with a note on the run that its first connections may fail with \"network is unreachable\". 0 starts the program without waiting.",
+                );
                 ui.checkbox(
                     &mut self.settings.start.kvm_fallback,
                     "Use TCG when KVM is unavailable",

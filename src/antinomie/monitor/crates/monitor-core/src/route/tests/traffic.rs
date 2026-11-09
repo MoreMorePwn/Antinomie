@@ -31,6 +31,38 @@ fn the_guest_configures_itself_from_the_gateway_like_qemus_user_network() {
     assert_eq!(rig.guest.arp(Ipv4Addr::new(10, 0, 2, 99)), None);
 }
 
+/// The network wait before a launch (ANT-T0433): the gateway knows the
+/// guest has its address once it sends from it, or answers the gateway's ARP.
+#[test]
+fn the_gateway_sees_when_the_guest_has_its_address() {
+    let mut rig = Rig::new("guest-up");
+    // DHCP from 0.0.0.0 is not an address yet.
+    rig.guest.dhcp().expect("a DHCP offer");
+    assert!(!rig.gateway.guest_has_address());
+    // No probe unless asked: the guest hears nothing from the router.
+    assert!(rig.guest.recv(SHORT).is_none());
+    rig.gateway.probe_guest(true);
+    let deadline = std::time::Instant::now() + WAIT;
+    let asked = loop {
+        let frame = rig
+            .guest
+            .recv(deadline.saturating_duration_since(std::time::Instant::now()))
+            .expect("an ARP request from the gateway");
+        let eth = crate::route::frame::parse_eth(&frame).unwrap();
+        if let Some(arp) = crate::route::frame::parse_arp(eth.payload)
+            && arp.operation == 1
+        {
+            break arp;
+        }
+    };
+    assert_eq!((asked.sender_ip, asked.target_ip), (GATEWAY, GUEST));
+    assert_eq!(asked.sender_mac, GATEWAY_MAC);
+    // Any frame from the leased address shows it (here the guest's own ARP).
+    assert_eq!(rig.guest.arp(GATEWAY), Some(GATEWAY_MAC));
+    rig.gateway.probe_guest(false);
+    assert!(rig.gateway.guest_has_address());
+}
+
 #[test]
 fn a_new_gateway_drops_everything_and_counts_it() {
     let mut rig = Rig::new("drop");

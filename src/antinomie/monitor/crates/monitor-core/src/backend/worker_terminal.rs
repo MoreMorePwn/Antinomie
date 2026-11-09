@@ -132,7 +132,12 @@ impl Worker {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         let timeout = session.reply_timeout();
         let cookie = session.run_cookie(&run_id)?;
-        let run = session.runs.get(&cookie).ok_or("unknown run")?;
+        let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
+        // Its tree ended and the run is held open for a copy outside it:
+        // Stop ends the hold. The guest cannot signal that copy.
+        if run.end_hold("the run was stopped") {
+            return Ok("the run's tree had already ended; the run is no longer held open for the copy outside it, which keeps running in the guest".into());
+        }
         if !run.summary.state.can_stop() {
             return Err("run is no longer available for termination".into());
         }

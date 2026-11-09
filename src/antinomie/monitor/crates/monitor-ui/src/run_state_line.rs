@@ -59,6 +59,7 @@ mod tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             started_ms: Some(1_700_000_000_000),
             clock_anchor: None,
             id: "r".into(),

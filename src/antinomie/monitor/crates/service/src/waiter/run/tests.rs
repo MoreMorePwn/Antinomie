@@ -218,6 +218,45 @@ fn the_run_limit_sends_stop_run_once_and_the_run_still_settles() {
     )));
 }
 
+/// A run whose tree ended while a copy of the sample ran outside it
+/// (`persisted.holding`): the run stays open until the run limit's StopRun
+/// ends the hold, and ends by the limit, not as exited.
+#[test]
+fn a_run_held_open_for_a_persisted_copy_ends_at_the_run_limit() {
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = happy(&clock, 1_000_000);
+    fake.timed.clear();
+    let held = |holding: bool| {
+        let mut run = run_summary("r1", "Finished", 0);
+        run.persisted = Some(antinomie_monitor_core::persisted_copy::PersistedCopies {
+            holding,
+            ..Default::default()
+        });
+        run
+    };
+    // The tree ends 2 s after the launch, its copy keeps running.
+    fake.timed
+        .push((2_000, Notification::Snapshot(running_vm(vec![held(true)]))));
+    let mut react = fake.react.take().unwrap();
+    fake.react = Some(Box::new(move |command, id, queue| {
+        if matches!(command, Command::StopRun { .. }) {
+            queue.push_back(result(id, true, "no longer held open"));
+            queue.push_back(Notification::Snapshot(running_vm(vec![held(false)])));
+        } else {
+            react(command, id, queue);
+        }
+    }));
+    let (mut waiter, _) = make(fake);
+    let (report, _) = exec(&mut waiter, &plan(), |_| Ok(Some(complete())));
+    let report = report.unwrap();
+    assert_eq!(report.outcome, Outcome::Succeeded, "{:?}", report.failure);
+    assert_eq!(report.end_reason, Some(EndReason::RunLimit));
+    let run_ms = report.timings.run_ms.unwrap();
+    assert!((20_000..21_000).contains(&run_ms), "{run_ms}");
+    assert_eq!(phase(&held(true)), Phase::Live);
+    assert_eq!(phase(&held(false)), Phase::Ended);
+}
+
 #[test]
 fn a_run_that_ignores_stop_run_is_lost_after_the_grace() {
     let clock = Arc::new(ManualClock::new(0));

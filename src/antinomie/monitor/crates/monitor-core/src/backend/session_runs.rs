@@ -536,7 +536,14 @@ impl Session {
             // root had exited before it, or obeyed the signal with exit 0.
             run.summary.state =
                 crate::execution::state_after_stop(&execution, run.summary.stopped_by_user);
+            let tree_ended = matches!(
+                crate::execution::state(&execution),
+                RunState::Finished | RunState::Stopped
+            );
             run.summary.execution = Some(execution);
+            if tree_ended {
+                run.begin_final_look();
+            }
             run.record_async_loss();
             run.record_tree_completion();
             run.seal_if_complete();
@@ -634,6 +641,7 @@ mod forget_tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
         }
     }
 

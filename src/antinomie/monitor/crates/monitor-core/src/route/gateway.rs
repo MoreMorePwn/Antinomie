@@ -48,6 +48,8 @@ const DNS_TTL: u32 = 60;
 const DNS_IN_FLIGHT: usize = 16;
 const TICK: Duration = Duration::from_millis(100);
 const MANAGED_WAIT: Duration = managed::WIREPROXY_WAIT;
+/// How often the gateway asks for the guest's address while asked to.
+const GUEST_PROBE: Duration = Duration::from_secs(1);
 
 /// The addresses the gateway uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,6 +156,11 @@ struct Shared {
     counters: Counters,
     claims: Mutex<Claims>,
     waker: Waker,
+    /// Host Unix milliseconds when the guest last showed that it has its
+    /// leased address (it sent from it, or answered ARP for it); 0 before.
+    guest_up_ms: AtomicU64,
+    /// Ask the guest for its address (ARP) about once a second.
+    probe_guest: AtomicBool,
 }
 
 struct Waker(UnixStream);
@@ -221,6 +228,8 @@ impl Gateway {
             counters: Counters::default(),
             claims: Mutex::new(Claims::default()),
             waker: Waker(wake_tx),
+            guest_up_ms: AtomicU64::new(0),
+            probe_guest: AtomicBool::new(false),
         });
         let (events_tx, events) = channel();
         let state = Loop::new(
@@ -277,6 +286,21 @@ impl Gateway {
 
     pub fn kind(&self) -> RouteKind {
         self.shared.current().spec.kind
+    }
+
+    /// The guest has its network address: it sent a packet from the address
+    /// the gateway's DHCP gives it, or answered ARP for it. Until then its
+    /// connections fail with ENETUNREACH (no address, no route).
+    pub fn guest_has_address(&self) -> bool {
+        self.shared.guest_up_ms.load(Ordering::SeqCst) != 0
+    }
+
+    /// While `on`, the gateway asks for the guest's address (an ARP request
+    /// from the router, as any router sends) about once a second, so a guest
+    /// that has its address but sends nothing still shows it.
+    pub fn probe_guest(&self, on: bool) {
+        self.shared.probe_guest.store(on, Ordering::SeqCst);
+        self.shared.waker.wake();
     }
 
     pub fn stats(&self) -> RouteStats {
@@ -568,6 +592,7 @@ impl Loop {
         drop(listener);
         self.shared.linked.store(true, Ordering::SeqCst);
         let mut last_tick = Instant::now();
+        let mut last_probe: Option<Instant> = None;
         while !self.shared.stop.load(Ordering::SeqCst) {
             if !self.wait_for_work() {
                 break;
@@ -584,6 +609,13 @@ impl Loop {
             {
                 last_tick = now;
                 self.tick(now);
+            }
+            if self.shared.probe_guest.load(Ordering::SeqCst)
+                && last_probe.is_none_or(|at| now.duration_since(at) >= GUEST_PROBE)
+            {
+                last_probe = Some(now);
+                let request = frame::build_arp_request(self.mac, self.net.gateway, self.net.guest);
+                self.send(&request);
             }
             if !self.flush() {
                 break;
@@ -733,10 +765,30 @@ impl Loop {
         if eth.src != BROADCAST && eth.src[0] & 1 == 0 {
             self.guest_mac = Some(eth.src);
         }
+        if self.sent_from_lease(eth.ethertype, eth.payload) {
+            let _ = self.shared.guest_up_ms.compare_exchange(
+                0,
+                unix_ms().max(1),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+        }
         match eth.ethertype {
             ETHERTYPE_ARP => self.arp(eth.payload),
             ETHERTYPE_IPV4 => self.ipv4(eth.payload),
             _ => self.count(&self.shared.counters.other_dropped),
+        }
+    }
+
+    /// The frame comes from the address the gateway leases to the guest:
+    /// an ARP message or an IPv4 packet with it as the sender.
+    fn sent_from_lease(&self, ethertype: u16, payload: &[u8]) -> bool {
+        match ethertype {
+            ETHERTYPE_ARP => {
+                frame::parse_arp(payload).is_some_and(|arp| arp.sender_ip == self.net.guest)
+            }
+            ETHERTYPE_IPV4 => frame::parse_ipv4(payload).is_some_and(|ip| ip.src == self.net.guest),
+            _ => false,
         }
     }
 

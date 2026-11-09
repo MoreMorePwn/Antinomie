@@ -14,6 +14,7 @@ fn summary(directory: PathBuf) -> RunSummary {
         triggers: None,
         stopped_by_user: false,
         stopped_at_ms: None,
+        persisted: None,
         started_ms: None,
         clock_anchor: None,
         id: "stalled-run".into(),

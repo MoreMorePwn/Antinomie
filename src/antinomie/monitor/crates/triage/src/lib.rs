@@ -60,6 +60,7 @@ pub mod net_attr_tests;
 pub mod net_tabs;
 pub mod network;
 pub mod network_index;
+pub mod network_reach;
 pub mod normalized;
 pub mod pcap_scan;
 pub mod process_cells;

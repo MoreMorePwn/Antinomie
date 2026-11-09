@@ -14,6 +14,23 @@ x86 programs by their own table.
 
 ### Host
 
+- **Persisted copies outside the recorded tree are found, and runs wait for the
+  guest's network (ANT-T0433).** Malware that persists had its copy started by cron or
+  systemd outside the recorded tree: Mirai's `.e` killed the recorded bots and a
+  `Heyiwei.service` kept running, and the run ended "exited" after 15 to 25 s. The host
+  now lists the guest's processes during a run, reads the program of each new process
+  outside the tree (`/proc/<pid>/exe`, through the existing ACQUIRE command) and hashes
+  it: one that runs the sample or a file the run wrote is named in the run's notes
+  (pid, name, who started it, SHA-256), listed as the HIGH Triage finding
+  `persistence.copy_running`, and named as the killer in the run-end note. When the tree
+  ends while such a copy lives, the run is held open (network capture and route go on)
+  until the copy exits, `run exec`'s run limit, the VM stops or 10 min pass; `run.json`
+  keeps it under `persisted`. On a Routed VM a launch also waits, after the boot wait,
+  until the guest has its address (the gateway sees it send from its lease or answer
+  ARP; `start.network_wait_secs`, 30 s, 0 for off), notes a run that started without a
+  network, and Triage's notes count the ENETUNREACH calls and their window. No guest
+  change; the copy's own calls are still not recorded.
+
 - **A slow TCG boot no longer fails the VM Start at 180 s (ANT-T0442).** The service's
   180 s limit on the VM `Start` command was fixed, so on a busy host the engine's own
   TCG wait for the guest to connect could outlast it and the job failed with "the VM did

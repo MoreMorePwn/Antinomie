@@ -334,6 +334,24 @@ pub fn truncated_elf_note(directory: &Path) -> Option<String> {
         .map(|note| note.trim_end_matches('.').to_owned())
 }
 
+/// The copies of the program the host found outside the recorded tree, from
+/// the run's `run.json` (`persisted`); `None` when it found none.
+pub fn persisted_copies(
+    directory: &Path,
+) -> Option<antinomie_monitor_core::persisted_copy::PersistedCopies> {
+    let run: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
+    serde_json::from_value(run.pointer("/persisted")?.clone()).ok()
+}
+
+/// The launch's wait for the guest's network address, from the run's
+/// `run.json` (`boot_wait.network`).
+pub fn network_wait(directory: &Path) -> Option<antinomie_monitor_core::boot_wait::NetworkWait> {
+    let run: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
+    serde_json::from_value(run.pointer("/boot_wait/network")?.clone()).ok()
+}
+
 /// The run status flags the guest reported, from the run's `run.json`
 /// (`execution.flags`); `None` when the file has none.
 pub fn execution_flags(directory: &Path) -> Option<u64> {

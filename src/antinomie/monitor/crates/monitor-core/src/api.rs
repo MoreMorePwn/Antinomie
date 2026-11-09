@@ -475,9 +475,14 @@ pub struct StartSettings {
     /// booting before it starts the program anyway: 5..=600. Stretched like
     /// every start wait under TCG.
     pub boot_wait_secs: u32,
+    /// Seconds a launch on a Routed VM then waits at KVM speed for the guest
+    /// to have its network address (stretched under TCG): 0..=600, 0 for no
+    /// wait.
+    pub network_wait_secs: u32,
 }
 impl StartSettings {
     pub const BOOT_WAIT_SECS: std::ops::RangeInclusive<u32> = 5..=600;
+    pub const NETWORK_WAIT_SECS: std::ops::RangeInclusive<u32> = 0..=600;
     pub const GUEST_CONNECT_SECS: std::ops::RangeInclusive<u32> = 5..=600;
     pub const TCG_MULTIPLIER: std::ops::RangeInclusive<u32> = 1..=100;
     pub fn validate(&self) -> Result<(), String> {
@@ -489,6 +494,9 @@ impl StartSettings {
         }
         if !Self::BOOT_WAIT_SECS.contains(&self.boot_wait_secs) {
             return Err("boot wait must be 5..600 seconds".into());
+        }
+        if !Self::NETWORK_WAIT_SECS.contains(&self.network_wait_secs) {
+            return Err("network wait must be 0..600 seconds".into());
         }
         Ok(())
     }
@@ -503,6 +511,9 @@ impl Default for StartSettings {
             tcg_multiplier: 10,
             kvm_fallback: true,
             boot_wait_secs: 60,
+            // Debian arm64 under TCG connected ENETUNREACH for 19 s after
+            // its boot wait (ANT-T0420).
+            network_wait_secs: 30,
         }
     }
 }
@@ -1109,6 +1120,10 @@ pub struct RunSummary {
     /// "Stopped by you at 5 min 9 s" whatever time the tree took to end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped_at_ms: Option<u64>,
+    /// Copies of the run's program found running outside its recorded tree,
+    /// and whether the run was held open for them; absent when none was found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persisted: Option<crate::persisted_copy::PersistedCopies>,
 }
 
 impl RunSummary {

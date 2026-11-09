@@ -754,6 +754,9 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     if let Some(end) = super::super::run_end::run_end(scan) {
         report.notes.push(end.text);
     }
+    if let Some(note) = super::super::network_reach::unreachable_note(&scan.signals) {
+        report.notes.push(note);
+    }
     if let Some(crash) = &scan.root_crash {
         report.notes.push(format!(
             "The sample crashed before its first system call: {crash}. No calls of its program were recorded, so the process table, files and findings below are empty because there was nothing to record, not because it did nothing."

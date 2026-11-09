@@ -825,6 +825,7 @@ impl Worker {
         self.check_memory_dump();
         self.poll_disk_job();
         self.host_analysis_tick();
+        self.watch_persisted_copies();
         self.check_run_artifacts();
         self.check_triggers();
         self.poll_flush();

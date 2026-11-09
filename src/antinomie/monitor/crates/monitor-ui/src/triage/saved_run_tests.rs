@@ -34,6 +34,7 @@ fn saved_run(spool: &PacketSpool) -> RunSummary {
         triggers: None,
         stopped_by_user: false,
         stopped_at_ms: None,
+        persisted: None,
         started_ms: Some(1_792_000_000_000),
         clock_anchor: None,
         id: "run-golden".into(),

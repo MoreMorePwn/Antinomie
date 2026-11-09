@@ -51,6 +51,8 @@ pub(crate) struct ProgramRun {
     /// tree as far as telemetry has shown it, to tell which run a core taken
     /// by hand belongs to. Bounded.
     pub(crate) tasks: std::collections::HashSet<u64>,
+    /// Copies of the program outside the recorded tree (`crate::persisted_copy`).
+    pub(crate) persisted: crate::persisted_copy::Watch,
 }
 
 impl ProgramRun {
@@ -93,6 +95,7 @@ impl ProgramRun {
             telemetry_loss: Default::default(),
             tasks: Default::default(),
             watch: None,
+            persisted: Default::default(),
         };
         run.refresh_analysis_metadata()?;
         run.persist_summary()?;
@@ -441,6 +444,12 @@ impl ProgramRun {
         }
         // A dump trigger that took nothing says why, before `run.json` is final.
         self.settle_trigger();
+        if let Some(copies) = self.summary.persisted.as_mut()
+            && copies.holding
+        {
+            copies.holding = false;
+            copies.hold_ended = Some("the recording ended (the VM stopped)".into());
+        }
         // Said once, at the end, where every view of the run shows its notes.
         if let Some(note) = self.telemetry_loss.totals().note() {
             self.add_note(note);
@@ -537,6 +546,7 @@ mod tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -605,6 +615,7 @@ mod tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -665,6 +676,7 @@ mod tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -722,6 +734,7 @@ mod tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -796,6 +809,7 @@ mod tests {
             triggers: None,
             stopped_by_user: true,
             stopped_at_ms: Some(1),
+            persisted: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -872,6 +886,7 @@ mod tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -919,6 +934,7 @@ mod tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -988,6 +1004,7 @@ mod tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

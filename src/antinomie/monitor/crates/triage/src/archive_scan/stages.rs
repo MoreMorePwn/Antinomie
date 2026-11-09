@@ -711,6 +711,10 @@ impl Scan {
         {
             engine.cloud_report(&report, clock_anchor);
         }
+        // The host found copies of the program running outside the tree.
+        if let Some(copies) = persisted_copies(&recording.directory) {
+            engine.persisted_copies(&copies);
+        }
         // A program that died of a signal before its first recorded call leaves no
         // calls to judge: say so, with the signal, instead of an empty report.
         let root_crash = (*scoped_count == 0)
@@ -1021,6 +1025,8 @@ impl Scan {
             last_failed_step: last_failed.map(|step| step.text),
             signals: {
                 signals.run_flags = execution_flags(&recording.directory);
+                signals.persisted = persisted_copies(&recording.directory);
+                signals.network_wait = network_wait(&recording.directory);
                 signals
             },
             schema_gaps: {

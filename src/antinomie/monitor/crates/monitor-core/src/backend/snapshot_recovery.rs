@@ -449,6 +449,7 @@ impl Session {
             pending_capture_id: None,
             boot_id,
             boot_settled: false,
+            network_unseen: false,
             started: Instant::now(),
             pre_ack: crate::pre_ack::PreAckBuffer::new(options.pre_ack),
             quota: crate::quota::QuotaState::new(&options.reduced_keep_calls),
