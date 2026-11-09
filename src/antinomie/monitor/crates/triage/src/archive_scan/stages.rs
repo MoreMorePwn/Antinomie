@@ -805,7 +805,7 @@ impl Scan {
         };
         let ioc = ioc_scan::build(
             ioc_scan::Gathered {
-                collector: std::mem::take(&mut network.ioc),
+                collector: std::mem::take(&mut network.ioc).with_gateway(request.guest_gateway),
                 log: engine.take_ioc(),
                 files: ioc_files,
                 read_hashes,

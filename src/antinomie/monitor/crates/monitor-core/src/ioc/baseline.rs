@@ -123,6 +123,12 @@ pub fn endpoint_noise_at(value: &str, udp: bool, gateway: Option<&str>) -> Optio
 
 /// Why the indicator is the base image's, or `None` when it is the run's.
 pub fn noise(indicator: &Indicator) -> Option<String> {
+    noise_at(indicator, None)
+}
+
+/// [`noise`] for a guest whose NAT network is its own: `gateway` is that
+/// network's router, whose DHCP server the base's client talks to.
+pub fn noise_at(indicator: &Indicator, gateway: Option<&str>) -> Option<String> {
     if !matches!(
         indicator.ty,
         Type::Endpoint | Type::Domain | Type::Url | Type::Tls
@@ -142,7 +148,8 @@ pub fn noise(indicator: &Indicator) -> Option<String> {
     }
     match indicator.ty {
         Type::Endpoint => {
-            endpoint_noise(&indicator.value, indicator.sub.starts_with("udp")).map(str::to_owned)
+            endpoint_noise_at(&indicator.value, indicator.sub.starts_with("udp"), gateway)
+                .map(str::to_owned)
         }
         _ => host(indicator)
             .filter(|host| domain_noise(host))
@@ -178,6 +185,32 @@ mod tests {
             .unwrap_or_else(|| panic!("no {key}"))
             .noise
             .clone()
+    }
+
+    #[test]
+    fn dhcp_to_the_guests_own_gateway_is_background_in_the_indicator_list() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let list = |gateway: Option<IpAddr>| {
+            let mut c = Collector::default().with_gateway(gateway);
+            c.endpoint(ip("192.168.1.1"), 67, "udp", Source::Pcap, seen(None));
+            c.endpoint(ip("192.168.1.1"), 53, "udp", Source::Pcap, seen(None));
+            c.endpoint(ip("192.168.1.9"), 67, "udp", Source::Pcap, seen(None));
+            c.finish()
+        };
+        let own = list(Some(ip("192.168.1.1")));
+        assert!(
+            noise_of(&own, Type::Endpoint, "192.168.1.1:67")
+                .unwrap()
+                .contains("DHCP")
+        );
+        // Only the gateway, only DHCP.
+        assert_eq!(noise_of(&own, Type::Endpoint, "192.168.1.1:53"), None);
+        assert_eq!(noise_of(&own, Type::Endpoint, "192.168.1.9:67"), None);
+        // With no gateway recorded the list knows QEMU's default only.
+        assert_eq!(
+            noise_of(&list(None), Type::Endpoint, "192.168.1.1:67"),
+            None
+        );
     }
 
     #[test]
