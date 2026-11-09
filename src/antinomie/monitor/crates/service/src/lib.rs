@@ -32,6 +32,8 @@ pub mod engine;
 pub mod intake;
 /// Lanes: the state file, the checks and recovery (card P3-4a).
 pub mod lane;
+/// Result files and the command hook (card P4-4).
+pub mod notify;
 /// `QueryApi`, the read-only recording queries (cards Q-1 and later).
 pub mod query;
 /// Resource floors and the queue pause (card P3-5c).

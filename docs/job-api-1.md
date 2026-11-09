@@ -289,7 +289,7 @@ CLI's `auto watch` and `auto gc`):
 | `gc.run` | `manage` | `dry_run?` (default false) | `{dry_run, now_ms, actions: [{kind, job, run, detail, bytes, done}], skipped: [{kind, job, why}], errors[], freed_bytes}`; `kind` is `recording`, `job`, `upload` or `rejected_file` |
 
 Watch folders add the events `engine.alert` with `code` `watch_flood` and
-`watch_folder_refused`.
+`watch_folder_refused`; delivery adds `result_drop_failed` and `hook_failed`.
 
 New `details.reason` values of this binding: `too_many_requests`, `rate_limited`,
 `too_many_connections`, `too_many_subscriptions`, `service_stopping`, `cancelled`.

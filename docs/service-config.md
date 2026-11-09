@@ -129,6 +129,46 @@ deletion is logged (`gc: deleted the recording of job=... run=...`). The daemon
 runs a pass a minute after its start and then every hour; `antinomie-cli auto gc
 --dry-run` prints what a pass would do and `auto gc` runs one now.
 
+## Results and the command hook
+
+```toml
+[results]
+dir = "/srv/antinomie/results"          # absolute
+
+[notify]
+on_finish = ["/usr/local/bin/antinomie-hook", "--flag"]   # absolute path, then fixed arguments
+```
+
+`[results] dir`: a job that ends leaves `<dir>/<yyyy-mm-dd>/<sha8>-<jobid>/`
+(UTC date of the end) holding `job.json` and the job's reports (HTML, PDF, JSON,
+MISP, STIX, Markdown; never the evidence bundle, a capture, a dump or a core). It
+is written under a hidden name and renamed, so a poller never sees a half-written
+drop. Files are 0600 and folders 0700: the consumer runs as the daemon's user, or
+the administrator gives it access to `dir`. A link where `dir` should be is
+refused.
+
+`[notify] on_finish`: the command is run **directly**, without a shell, with
+exactly the arguments you configured; nothing a job controls is in them. Its
+environment is empty except:
+
+| Variable | Value |
+|---|---|
+| `ANTINOMIE_JOB_ID` | the job id |
+| `ANTINOMIE_STATE` | `succeeded`, `partial`, `failed`, `cancelled` or `rejected` |
+| `ANTINOMIE_LABEL` | `clean_observed`, `suspicious`, `malicious`, `inconclusive`, or empty |
+| `ANTINOMIE_SHA256` | the sample's SHA-256, or empty |
+| `ANTINOMIE_RESULT_JSON` | the absolute path of the job's `job.json` |
+
+It runs as the daemon's user with `/dev/null` as input and `/` as its working
+folder (set your own `PATH` in the command if it needs one). After 30 seconds the
+command and what it started (its process group) are killed. Its output (64 KiB of
+each stream, control characters replaced) is appended to the job's `job.log`, and
+its exit code is logged. A drop or hook that fails raises `engine.alert`
+(`result_drop_failed`, `hook_failed`) and never changes the job. Delivery is at
+least once: `notified.json` in the job's folder records what was done, and after a
+restart the jobs that ended in the last 24 hours and were not delivered are
+delivered. Webhooks are not part of 0.9.0.
+
 ## Verdict keys
 
 `[verdict] mapping` is `default` (the mapping of the design: `malicious`,

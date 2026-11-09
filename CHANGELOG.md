@@ -184,6 +184,19 @@ x86 programs by their own table.
   own when none runs); `auto delete JOB [--with-recording]` removes one finished
   job. The daemon runs a pass an hour. See "Auto mode" in docs/usage.md.
 
+- **Result files and the command hook (ANT-T0385).** With `[results] dir` set,
+  every job that ends leaves `<dir>/<yyyy-mm-dd>/<sha8>-<jobid>/` with a copy of
+  its `job.json` and its (non-sensitive) report files, written under a hidden name
+  and renamed into place so a poller never sees half of it. With `[notify]
+  on_finish = ["/abs/path", "arg", ...]` the daemon runs that command when a job
+  ends: directly, without a shell, with an empty environment holding only
+  `ANTINOMIE_JOB_ID`, `ANTINOMIE_STATE`, `ANTINOMIE_LABEL`, `ANTINOMIE_SHA256` and
+  `ANTINOMIE_RESULT_JSON`, as the daemon's user, with no input, a 30-second limit
+  (its process group is killed past it) and its output kept in the job's
+  `job.log`. A failing drop or hook is a log line and an `engine.alert`
+  (`result_drop_failed`, `hook_failed`); it never fails the job. See "Auto mode"
+  in docs/usage.md and docs/service-config.md.
+
 - **`antinomie-cli run list`, `run show` and `run export`, and Triage reads
   through the query API (ANT-T0367, ANT-T0369).** `run list` lists the recorded
   runs of the data directory (`--vm`, `--sample`, `--job`, `--state`, `--since`,

@@ -1956,6 +1956,15 @@ a policy use that policy; other subfolders are ignored. The jobs carry the label
 `watch=<folder name>` and the custody actor `auto:policy-<policy>`. The keys are
 in [service configuration](service-config.md#watch-folders).
 
+**Results and the hook.** With `[results] dir` set, each job that ends leaves
+`<dir>/<date>/<sha8>-<jobid>/` with its `job.json` and its reports, for a program
+that polls a folder. With `[notify] on_finish = ["/path/to/hook"]` the daemon runs
+that program when a job ends, without a shell and with only `ANTINOMIE_JOB_ID`,
+`ANTINOMIE_STATE`, `ANTINOMIE_LABEL`, `ANTINOMIE_SHA256` and
+`ANTINOMIE_RESULT_JSON` (the path of `job.json`) in its environment. It has 30
+seconds, runs as the daemon's user, and what it prints goes to the job's `job.log`.
+A failing hook never fails a job; it raises an `engine.alert` `hook_failed`.
+
 **Retention.** The daemon cleans up after itself once an hour: a recording is
 deleted 14 days after its job ended (through the window's own run deletion; a failed
 job's is kept until its record goes), the oldest recordings go first above 200 GiB,
