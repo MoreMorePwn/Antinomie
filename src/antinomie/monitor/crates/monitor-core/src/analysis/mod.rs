@@ -15,7 +15,7 @@ mod disasm;
 mod disasm_aarch64;
 mod disasm_arm;
 mod elf_facts;
-pub(crate) use elf_facts::file_truncation_note;
+pub(crate) use elf_facts::HostHead;
 #[cfg(test)]
 pub(crate) use elf_facts::fixtures::elf64 as elf64_fixture;
 pub use elf_facts::report_notes;

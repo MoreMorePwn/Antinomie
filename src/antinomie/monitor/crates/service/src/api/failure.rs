@@ -135,6 +135,11 @@ pub struct Failure {
     /// The engine's own error text, truncated to 2 KiB, host paths removed for
     /// remote callers.
     pub detail: Option<String>,
+    /// The run record a failed launch left (Run History lists it as "Failed to
+    /// start"); `None` when the failure is not a launch, or when the launch
+    /// kept no record (nothing was captured).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 /// The longest `Failure.detail`, in bytes.
@@ -157,7 +162,14 @@ impl Failure {
                 }
                 text[..end].to_owned()
             }),
+            run_id: None,
         }
+    }
+
+    /// The same failure naming the run record it left.
+    pub fn with_run(mut self, run_id: &str) -> Self {
+        self.run_id = Some(run_id.to_owned());
+        self
     }
 }
 

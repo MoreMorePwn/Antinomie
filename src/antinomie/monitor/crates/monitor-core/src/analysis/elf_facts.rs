@@ -34,6 +34,10 @@ pub(crate) struct Segment {
 pub(crate) struct Elf {
     pub is_64: bool,
     pub kind: u16,
+    /// `e_machine`.
+    pub machine: u16,
+    /// `e_flags`; for ARM the top byte is the EABI version.
+    pub flags: u32,
     pub entry: u64,
     pub segments: Vec<Segment>,
     /// Whether the program header table itself lies inside the file.
@@ -158,6 +162,8 @@ pub(crate) fn parse(bytes: &[u8]) -> Option<Elf> {
     Some(Elf {
         is_64,
         kind: r.u16(0x10)?,
+        machine: r.u16(0x12)?,
+        flags: r.u32(if is_64 { 0x30 } else { 0x24 })?,
         entry,
         segments,
         table_complete,
@@ -387,18 +393,117 @@ pub(crate) fn tool_obstacles(bytes: &[u8]) -> Vec<String> {
 /// How much of a file's front is read to judge its headers.
 const HEAD_MAX: u64 = 256 * 1024;
 
-/// The truncation sentence for the ELF at `path`, reading only its front;
-/// `None` for a whole file, a file that is no ELF or one that cannot be read.
-pub(crate) fn file_truncation_note(path: &std::path::Path) -> Option<String> {
-    use std::io::Read;
-    let file = std::fs::File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    let mut head = Vec::new();
-    file.take(HEAD_MAX).read_to_end(&mut head).ok()?;
-    let mut elf = parse(&head)?;
-    // The headers were read from the front; the length is the file's.
-    elf.len = len;
-    elf.truncation_note()
+/// The front of a program's host copy and the copy's whole length: enough
+/// to read its ELF headers and interpreter without loading the file.
+pub(crate) struct HostHead {
+    bytes: Vec<u8>,
+    len: u64,
+}
+
+impl HostHead {
+    /// The front of the file at `path`; `None` when it cannot be read.
+    pub(crate) fn of_file(path: &std::path::Path) -> Option<Self> {
+        use std::io::Read;
+        let file = std::fs::File::open(path).ok()?;
+        let len = file.metadata().ok()?.len();
+        let mut bytes = Vec::new();
+        file.take(HEAD_MAX).read_to_end(&mut bytes).ok()?;
+        Some(Self { bytes, len })
+    }
+
+    /// The front of a program already in memory.
+    pub(crate) fn of_bytes(whole: &[u8]) -> Self {
+        let keep = whole
+            .len()
+            .min(usize::try_from(HEAD_MAX).unwrap_or(usize::MAX));
+        Self {
+            bytes: whole[..keep].to_vec(),
+            len: whole.len() as u64,
+        }
+    }
+
+    fn elf(&self) -> Option<Elf> {
+        let mut elf = parse(&self.bytes)?;
+        // The headers were read from the front; the length is the file's.
+        elf.len = self.len;
+        Some(elf)
+    }
+
+    /// What the host's reading of the file says about why a guest could not
+    /// start it. Each part is a sentence, `None` when nothing stands out.
+    pub(crate) fn launch_notes(&self, guest: Option<crate::api::GuestArch>) -> LaunchNotes {
+        let mut notes = LaunchNotes::default();
+        let Some(elf) = self.elf() else {
+            return notes;
+        };
+        notes.truncated = elf.truncation_note();
+        if let Linking::Interpreter(path) = elf.linking(&self.bytes) {
+            notes.interpreter = Some(format!(
+                "It needs the program interpreter {path}, which is not in this guest's base, so the guest reports the program as missing."
+            ));
+        }
+        let machine = u32::from(elf.machine);
+        let bits = if elf.is_64 { 64 } else { 32 };
+        if let Some(guest) = guest {
+            let runs = machine == guest.machine
+                || (guest.machine == crate::api::GuestArch::ELF_AARCH64
+                    && machine == crate::api::GuestArch::ELF_ARM)
+                || (guest.machine == crate::api::GuestArch::ELF_X86_64
+                    && machine == crate::api::GuestArch::ELF_386);
+            if !runs {
+                notes.wrong_arch = Some(format!(
+                    "It is a {bits}-bit {} program, but this VM is {}: wrong architecture for this VM.",
+                    machine_name(machine),
+                    machine_name(guest.machine)
+                ));
+            }
+            if machine == crate::api::GuestArch::ELF_ARM
+                && elf.flags >> 24 == 0
+                && guest.machine == crate::api::GuestArch::ELF_AARCH64
+            {
+                notes.old_abi = Some(
+                    "It is old-ABI ARM (EABI0/OABI), which an arm64 kernel cannot run.".into(),
+                );
+            }
+        }
+        notes
+    }
+}
+
+/// What the host found in a program a guest could not start.
+#[derive(Debug, Default)]
+pub(crate) struct LaunchNotes {
+    pub truncated: Option<String>,
+    pub interpreter: Option<String>,
+    pub wrong_arch: Option<String>,
+    pub old_abi: Option<String>,
+}
+
+impl LaunchNotes {
+    /// The sentences that apply, in the order that explains best.
+    pub(crate) fn sentences(&self, interpreter: bool) -> Vec<&str> {
+        [
+            self.truncated.as_deref(),
+            self.wrong_arch.as_deref(),
+            self.old_abi.as_deref(),
+            self.interpreter.as_deref().filter(|_| interpreter),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+}
+
+fn machine_name(machine: u32) -> String {
+    match machine {
+        3 => "x86 (32-bit)".into(),
+        8 => "MIPS".into(),
+        40 => "ARM".into(),
+        62 => "x86-64".into(),
+        183 => "AArch64".into(),
+        243 => "RISC-V".into(),
+        other => format!("machine {other}"),
+    }
 }
 
 /// The notes a file earns from its own headers, one sentence each: a

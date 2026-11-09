@@ -690,14 +690,22 @@ impl<E: Engine> Waiter<E> {
             .map(|run| run.id.clone())
             .collect();
         let id = self.send(Command::Execute(request))?;
-        self.lane_wait(id, "Execute".into())
-            .map_err(|error| match error {
-                WaitError::Failed(message) => Stop::Failed(Failure::new(
-                    FailureCode::LaunchFailed,
-                    Stage::Launch,
-                    "the guest refused to start the program",
-                    Some(&message),
-                )),
+        if let Err(error) = self.lane_wait(id, "Execute".into()) {
+            return Err(match error {
+                WaitError::Failed(message) => {
+                    // A refusal that kept a "Failed to start" record names it.
+                    let (said, record) = antinomie_monitor_core::split_run_record(&message);
+                    let failure = Failure::new(
+                        FailureCode::LaunchFailed,
+                        Stage::Launch,
+                        "the guest refused to start the program",
+                        Some(said),
+                    );
+                    Stop::Failed(match record {
+                        Some(run_id) => failure.with_run(run_id),
+                        None => failure,
+                    })
+                }
                 silent @ WaitError::Silent { .. } => {
                     // The engine may still start it: the cleanup links it.
                     self.unanswered_launch = Some(super::UnansweredLaunch {
@@ -712,7 +720,8 @@ impl<E: Engine> Waiter<E> {
                     ))
                 }
                 other => Stop::Abort(other),
-            })?;
+            });
+        }
         let launch_wait = self.guest_wait(LAUNCH_WAIT);
         self.wait_until("the run to appear", Some(launch_wait), |snapshot| {
             snapshot.runs.iter().any(|run| !known.contains(&run.id))

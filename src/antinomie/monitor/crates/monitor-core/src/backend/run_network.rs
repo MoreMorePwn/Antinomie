@@ -64,7 +64,12 @@ impl Session {
             // ownership across timeout and prohibit another ambiguous launch.
             self.run_artifacts.insert(0, owner);
         }
-        issues.join("; ")
+        let text = issues.join("; ");
+        if run.summary.state == RunState::FailedToStart {
+            // The record stays in Run History: name it, so the caller can too.
+            return super::launch_failure::with_run_record(&text, &run.summary.id);
+        }
+        text
     }
     pub(super) fn start_run_network(
         &mut self,

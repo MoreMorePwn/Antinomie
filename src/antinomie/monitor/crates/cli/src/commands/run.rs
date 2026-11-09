@@ -455,6 +455,14 @@ fn reply(
             "route": run.route.as_ref().map(|route| route.label.clone()),
         })
     });
+    // A launch the guest refused has no run summary here, but it left a
+    // "Failed to start" record in Run History: its id is the failure's.
+    let failed_run = report
+        .failure
+        .as_ref()
+        .and_then(|failure| failure.run_id.as_deref())
+        .filter(|_| report.run.is_none());
+    let run = run.or_else(|| failed_run.map(|id| json!({"id": id, "state": "failed_to_start"})));
     let artifacts = report.artifacts.as_ref().map(|artifacts| {
         json!({
             "network": serde_json::to_value(artifacts.network_state).unwrap_or(Value::Null),
@@ -506,6 +514,12 @@ fn reply(
             None => String::new(),
         };
         pairs.push(("run", format!("{} {}{exit}{how}", run.id, state_text(run))));
+    }
+    if let Some(id) = failed_run {
+        pairs.push((
+            "run",
+            format!("{id} failed to start (listed in Run History)"),
+        ));
     }
     pairs.push((
         "stages",
@@ -571,6 +585,40 @@ mod tests {
             panic!("not an exec")
         };
         exec
+    }
+
+    #[test]
+    fn a_refused_launch_names_the_failed_to_start_run() {
+        use antinomie_service::api::{failure::FailureCode, job::Stage};
+        let failure = Failure::new(
+            FailureCode::LaunchFailed,
+            Stage::Launch,
+            "the guest refused to start the program",
+            Some("launch rejected by the guest: needs /lib/ld-linux-armhf.so.3"),
+        )
+        .with_run("abc123");
+        let report = RunReport {
+            outcome: Outcome::Failed,
+            failure: Some(failure),
+            warnings: Vec::new(),
+            run: None,
+            artifacts: None,
+            end_reason: None,
+            timings: Default::default(),
+            settled: true,
+        };
+        let output = antinomie_service::waiter::TerminalTail {
+            bytes: Vec::new(),
+            dropped: 0,
+            eof: true,
+        };
+        let record = SampleRecord::default();
+        let reply = reply(&report, &record, None, &output);
+        let result = reply.result();
+        assert_eq!(result["run"]["id"], "abc123");
+        assert_eq!(result["run"]["state"], "failed_to_start");
+        assert_eq!(result["failure"]["run_id"], "abc123");
+        assert!(reply.human.unwrap().contains("abc123 failed to start"));
     }
 
     #[test]

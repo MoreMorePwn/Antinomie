@@ -1032,7 +1032,12 @@ The network capture is the guest's own view on every route.
   for LD_PRELOAD or dlopen, in Identity and on the run. Unpacking says "UPX
   headers are altered (anti-unpacking); restore the UPX! magic and sizes to
   unpack it" for a UPX file whose headers were damaged on purpose. A run that
-  failed to start has a digest that says so and why.
+  failed to start has a digest that says so and why. When the guest refuses
+  a program, the host reads its ELF headers and adds what the guest's error
+  number cannot say: the interpreter the program needs and the base lacks (the
+  guest reports that as a missing program), an old-ABI ARM (EABI0/OABI) program
+  an arm64 kernel cannot run, a cut-off ELF, or the wrong architecture for the
+  VM. That text says it was identified on the host and keeps the guest's words.
 - **Triage › Summary** also names the run's root process from the launch request
   when the recording's launch record cannot (the program and arguments the run
   was asked to start, kept as the first name in its exec history), and the
@@ -1867,7 +1872,9 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   The result says `outcome`: `succeeded` (exit 0), `partial` (exit 11: a piece of evidence
   finished incomplete), or `failed` (exit 10, with `failure.code` such as `no_vm`,
   `upload_failed`, `launch_failed`, `guest_lost`, `recording_failed`, `internal`). It also
-  gives the run (state, exit status, why it ended: `exited` or `run_limit`), the evidence
+  gives the run (state, exit status, why it ended: `exited` or `run_limit`; for a launch the
+  guest refused, `failure.run_id` and `run.id` name the "Failed to start" record, when the
+  launch kept one, and `failure.detail` the explanation), the evidence
   states and paths, the time per stage and the output. `--events` prints the progress as it
   happens, one event of the job API per line (`job.stage`, `job.progress`, `job.run`,
   `job.warning`, `job.finished`; `job_id` is null, `seq` counts from 1), then the result;

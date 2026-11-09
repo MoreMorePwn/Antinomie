@@ -302,11 +302,28 @@ pub fn cloud_profile(directory: &Path) -> bool {
 /// The signal that ended the run's program and whether it dumped core, from
 /// the run's `run.json` (`execution.root_exit`).
 pub fn root_exit_signal(directory: &Path) -> Option<String> {
+    crash_text(&root_exit_status(directory)?)
+}
+
+/// How the run's program ended, from `run.json` (`execution.root_exit`).
+pub fn root_exit_status(directory: &Path) -> Option<antinomie_monitor_core::WaitStatus> {
     let run: serde_json::Value =
         serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
-    let status: antinomie_monitor_core::WaitStatus =
-        serde_json::from_value(run.pointer("/execution/root_exit")?.clone()).ok()?;
-    crash_text(&status)
+    serde_json::from_value(run.pointer("/execution/root_exit")?.clone()).ok()
+}
+
+/// What the run's static analysis said about the program being a cut-off ELF,
+/// without the closing full stop; `None` when it said nothing of the kind or
+/// the run has no analysis.
+pub fn truncated_elf_note(directory: &Path) -> Option<String> {
+    let run: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
+    let report: antinomie_monitor_core::analysis::AnalysisReport =
+        serde_json::from_value(run.pointer("/analysis")?.clone()).ok()?;
+    antinomie_monitor_core::analysis::report_notes(&report)
+        .into_iter()
+        .find(|note| note.contains("ELF is truncated"))
+        .map(|note| note.trim_end_matches('.').to_owned())
 }
 
 /// The run status flags the guest reported, from the run's `run.json`

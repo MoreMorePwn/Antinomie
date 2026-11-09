@@ -14,6 +14,19 @@ x86 programs by their own table.
 
 ### Host
 
+- **A program the guest cannot start says why, and the result names its run
+  (ANT-T0430).** An armhf program on an arm64 base without
+  `/lib/ld-linux-armhf.so.3` used to read "the program or the working directory does
+  not exist", an old-ABI ARM (EABI0/OABI) program "Exec format error" and a cut-off
+  ELF "Bad address". The host now reads the program's ELF headers and says "needs the
+  program interpreter ... (not in this guest's base)", "old-ABI ARM (EABI0/OABI), which
+  an arm64 kernel cannot run", "This ELF is truncated: ..." or "wrong architecture for
+  this VM", marked as identified on the host, and keeps the guest's own error text. The
+  `run exec` result and the Auto job's `failure` carry `run_id` (and `run.id`) of the
+  "Failed to start" record in Run History when the launch kept one. A program that
+  crashed before its first call no longer shows "running" in the Process tree: its row
+  shows the run's signal, and the crash note names a truncated ELF when the static
+  analysis found one.
 - **`run exec --start` no longer loses Debian arm64 launches under TCG
   (ANT-T0425).** About 30% of launches failed with "the engine did not answer
   Execute within 60 seconds": the launch waits for a Debian guest to finish booting

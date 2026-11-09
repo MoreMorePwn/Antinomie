@@ -630,6 +630,30 @@ fn a_launch_the_guest_refuses_or_never_confirms_is_launch_failed() {
     let failure = report.unwrap().failure.unwrap();
     assert_eq!(failure.code, FailureCode::LaunchFailed);
     assert!(failure.detail.unwrap().contains("graphical"));
+    // A refusal that kept no run record names no run.
+    assert_eq!(failure.run_id, None);
+
+    // A refusal that left its "Failed to start" record names it.
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = happy(&clock, 1_000);
+    let mut react = fake.react.take().unwrap();
+    fake.react = Some(Box::new(move |command, id, queue| {
+        if matches!(command, Command::Execute(_)) {
+            queue.push_back(result(
+                id,
+                false,
+                "launch rejected: Exec format error (os error 8) [run record: r9]",
+            ));
+        } else {
+            react(command, id, queue);
+        }
+    }));
+    let (mut waiter, _) = make(fake);
+    let (report, _) = exec(&mut waiter, &plan(), |_| Ok(None));
+    let failure = report.unwrap().failure.unwrap();
+    assert_eq!(failure.code, FailureCode::LaunchFailed);
+    assert_eq!(failure.run_id.as_deref(), Some("r9"));
+    assert!(!failure.detail.unwrap().contains("run record"));
 }
 
 #[test]

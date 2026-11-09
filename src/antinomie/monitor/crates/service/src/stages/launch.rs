@@ -46,9 +46,14 @@ impl<E: Engine> LaneStages<'_, E> {
             .map_err(|message| fail("the launch request is refused", Some(&message)))?;
         let run = self.waiter.launch_request(request.clone())?;
         if phase(&run) == Phase::LaunchFailed {
-            return Err(fail(
-                "the program never started",
-                run.recording_error.as_deref(),
+            return Err(StageStop::Failed(
+                Failure::new(
+                    FailureCode::LaunchFailed,
+                    Stage::Launch,
+                    "the program never started",
+                    run.recording_error.as_deref(),
+                )
+                .with_run(&run.id),
             ));
         }
         let route = route_of(&request, &run);
