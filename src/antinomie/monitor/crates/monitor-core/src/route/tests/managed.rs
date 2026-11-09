@@ -10,15 +10,24 @@ use crate::route::{
 };
 use std::{os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
+/// A port the test can count on keeping: below the kernel's ephemeral range
+/// (32768 and up), where the outgoing connections of every test thread take
+/// theirs, and never handed out twice in this process.
 fn free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
+    static NEXT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+    loop {
+        let step = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let port = 20_000 + (std::process::id() % 40) as u16 * 300 + step % 300;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
 }
 
 fn script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, body).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_exec::make_executable(&path, 0o755);
     path
 }
 
