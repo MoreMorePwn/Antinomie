@@ -618,6 +618,46 @@ fn a_deleted_run_is_listed_again_from_its_record() {
 }
 
 #[test]
+fn a_run_deleted_by_automation_names_the_automation_actor_in_the_custody_log() {
+    let mut rec = Recording::new("by-actor");
+    let dir = rec.run("r1", &rec.sha.clone(), RunArtifacts::default());
+    rec.library
+        .index_runs(&[SeenRun {
+            sha256: rec.sha.clone(),
+            vm_id: VM.into(),
+            vm_name: "vm one".into(),
+            run_id: "r1".into(),
+            started_ms: Some(1000),
+            exit: "Exit 0".into(),
+            directory: dir.display().to_string(),
+        }])
+        .unwrap();
+    let plan = plan_run_deletion(&rec.options, &rec.sha, VM, "r1").unwrap();
+    // A name the log does not accept changes nothing.
+    let refused = delete_run_as(&rec.options, &plan, &keys(&[]), "vm one", false, "root");
+    assert!(refused.is_err());
+    assert!(dir.exists());
+    delete_run_as(
+        &rec.options,
+        &plan,
+        &keys(&[]),
+        "vm one",
+        false,
+        "auto:policy-default",
+    )
+    .unwrap();
+    assert!(!dir.exists());
+    let events = rec.library.events(&rec.sha).unwrap();
+    let deleted = events
+        .iter()
+        .find(|e| matches!(e.event, CustodyEvent::RunDeleted { .. }))
+        .expect("the deletion is in the log");
+    assert_eq!(deleted.by, "auto:policy-default");
+    assert!(rec.library.custody_check(&rec.sha).unwrap().ok());
+    fs::remove_dir_all(&rec.root).unwrap();
+}
+
+#[test]
 fn nothing_outside_the_runs_own_files_is_ever_deleted() {
     let rec = Recording::new("confined");
     // Things that must survive: a sibling run, its files, a capture and a dump

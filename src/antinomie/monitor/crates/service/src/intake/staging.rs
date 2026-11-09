@@ -349,29 +349,40 @@ impl StagingStore {
         let _ = fs::remove_dir_all(self.dir(id));
     }
 
-    /// Delete uploads past their time. Returns how many.
-    pub fn expire(&self) -> usize {
+    /// The upload folders past their time.
+    fn expired_dirs(&self) -> Vec<PathBuf> {
         let now = self.clock.now_ms();
         let Ok(entries) = fs::read_dir(&self.root) else {
-            return 0;
+            return Vec::new();
         };
-        let mut removed = 0;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let meta = fs::read_to_string(path.join(META))
-                .ok()
-                .and_then(|text| serde_json::from_str::<Meta>(&text).ok());
-            let expired = meta.is_none_or(|meta| {
-                now >= meta
-                    .sealed
-                    .as_ref()
-                    .map_or(meta.expires_ms, |s| s.expires_ms)
-            });
-            if expired && fs::remove_dir_all(&path).is_ok() {
-                removed += 1;
-            }
-        }
-        removed
+        entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                let meta = fs::read_to_string(path.join(META))
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<Meta>(&text).ok());
+                meta.is_none_or(|meta| {
+                    now >= meta
+                        .sealed
+                        .as_ref()
+                        .map_or(meta.expires_ms, |s| s.expires_ms)
+                })
+            })
+            .collect()
+    }
+
+    /// How many uploads are past their time (a dry run of [`Self::expire`]).
+    pub fn expired_count(&self) -> usize {
+        self.expired_dirs().len()
+    }
+
+    /// Delete uploads past their time. Returns how many.
+    pub fn expire(&self) -> usize {
+        self.expired_dirs()
+            .into_iter()
+            .filter(|path| fs::remove_dir_all(path).is_ok())
+            .count()
     }
 }
 

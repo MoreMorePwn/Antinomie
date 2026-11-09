@@ -167,6 +167,54 @@ x86 programs by their own table.
   tags the sample `auto:label=...` and `auto:policy=...` in the library, with the
   automation actor in its custody chain. See "Auto mode" in docs/usage.md.
 
+- **Watch folders (ANT-T0383).** A file that appears in a folder named under
+  `[[inbox.watch]]` in `service.toml` becomes a job, as the actor
+  `auto:policy-<policy>` (the label `watch` names the folder). The folder is
+  scanned every 2 seconds; a file is taken only after its size and times have
+  been steady for 3 seconds, and never while its name starts with a dot or ends
+  in `.part`, `.tmp` or `.crdownload`. Nothing is followed out of the folder: a
+  symbolic link, device, FIFO, socket or file with a second hard link is refused
+  and left where it is, a file of another user is refused, and a folder that is
+  writable by everyone, owned by another user, or (without `allow_group_write`)
+  writable by its group is not used at all (`engine.alert`
+  `watch_folder_refused`). Each file is opened relative to its folder without
+  following links and read from that descriptor. After intake the file moves to
+  `inbox/processed/`, is deleted, or is kept (`delete_after`); a file that fails
+  intake moves to `inbox/rejected/` with a `.reason` file and is not tried
+  again. `policy_by_dir` picks the policy from a subfolder named after one
+  (other folders are ignored), `recursive` follows subfolders (8 deep at most),
+  and `watch_rate` jobs a minute is the limit: above it the folder pauses for a
+  minute and `engine.alert` `watch_flood` is raised. `antinomie-cli auto watch
+  list` shows each folder, what it took and what it refused; `auto watch scan`
+  scans now. See "Auto mode" in docs/usage.md and docs/service-config.md.
+
+- **Retention and `auto gc` (ANT-T0384).** The daemon removes what Auto mode
+  leaves behind: recordings of finished jobs after `[retention] recordings_days`
+  (14), through the same run deletion the window uses (a failed job keeps its
+  recording while `keep_failed` is set), the oldest recordings first when they
+  exceed `max_recordings_gib` (200), job records, events and artifacts after
+  `jobs_days` (90), staged uploads after 24 hours and rejected inbox files after
+  7 days. It never touches a job that has not ended, a recording with an open
+  read or whose artifacts are still being written, the sample library or its
+  custody chain; each deletion is logged with the job and run id and recorded in
+  the sample's custody chain under `auto:policy-<name>`. `antinomie-cli auto gc
+  --dry-run` prints the plan; `auto gc` applies it now (with a daemon, or on its
+  own when none runs); `auto delete JOB [--with-recording]` removes one finished
+  job. The daemon runs a pass an hour. See "Auto mode" in docs/usage.md.
+
+- **Result files and the command hook (ANT-T0385).** With `[results] dir` set,
+  every job that ends leaves `<dir>/<yyyy-mm-dd>/<sha8>-<jobid>/` with a copy of
+  its `job.json` and its (non-sensitive) report files, written under a hidden name
+  and renamed into place so a poller never sees half of it. With `[notify]
+  on_finish = ["/abs/path", "arg", ...]` the daemon runs that command when a job
+  ends: directly, without a shell, with an empty environment holding only
+  `ANTINOMIE_JOB_ID`, `ANTINOMIE_STATE`, `ANTINOMIE_LABEL`, `ANTINOMIE_SHA256` and
+  `ANTINOMIE_RESULT_JSON`, as the daemon's user, with no input, a 30-second limit
+  (its process group is killed past it) and its output kept in the job's
+  `job.log`. A failing drop or hook is a log line and an `engine.alert`
+  (`result_drop_failed`, `hook_failed`); it never fails the job. See "Auto mode"
+  in docs/usage.md and docs/service-config.md.
+
 - **`antinomie-cli run list`, `run show` and `run export`, and Triage reads
   through the query API (ANT-T0367, ANT-T0369).** `run list` lists the recorded
   runs of the data directory (`--vm`, `--sample`, `--job`, `--state`, `--since`,

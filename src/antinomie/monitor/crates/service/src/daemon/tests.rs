@@ -33,7 +33,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const SCRIPT: &[u8] = b"#!/bin/sh\necho hello\n";
+pub(super) const SCRIPT: &[u8] = b"#!/bin/sh\necho hello\n";
 
 pub(super) struct Svc {
     pub(super) dir: PathBuf,
@@ -92,6 +92,9 @@ pub(super) fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
         wake: Mutex::new(wake),
         commands: Mutex::new(commands),
         accelerator: Accelerator::Kvm,
+        watch: Default::default(),
+        gc_lock: Mutex::new(()),
+        log: Arc::new(|_: &str| {}),
     });
     Svc {
         dir,
@@ -142,7 +145,7 @@ pub(super) fn upload(svc: &Svc, bytes: &[u8]) -> String {
     id
 }
 
-fn submit_upload(svc: &Svc) -> Job {
+pub(super) fn submit_upload(svc: &Svc) -> Job {
     let id = upload(svc, SCRIPT);
     let reply = call(svc, "job.submit", json!({"sample": {"upload_id": id}})).unwrap();
     assert_eq!(reply["replayed"], false);
@@ -234,10 +237,6 @@ fn unknown_reserved_and_unserved_ops_are_told_apart() {
             "{reserved}"
         );
     }
-    assert_eq!(
-        call(&svc, "job.delete", json!({})).unwrap_err().code,
-        ErrorCode::Unsupported
-    );
     // The library, VM and base reads are served now.
     for served in ["vm.list", "base.list", "sample.list", "custody.verify"] {
         assert!(call(&svc, served, json!({})).is_ok(), "{served}");

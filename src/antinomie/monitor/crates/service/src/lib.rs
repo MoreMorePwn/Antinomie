@@ -34,10 +34,14 @@ pub mod intake;
 pub mod lane;
 /// The sample library and its custody chains as the API serves them.
 pub mod library;
+/// Result files and the command hook (card P4-4).
+pub mod notify;
 /// `QueryApi`, the read-only recording queries (cards Q-1 and later).
 pub mod query;
 /// Resource floors and the queue pause (card P3-5c).
 pub mod resources;
+/// Retention and `auto gc` (card P4-3).
+pub mod retention;
 /// The JSON Schema generated from the types above.
 pub mod schema;
 /// The local socket: framing, limits, connections, subscriptions, the client
@@ -51,5 +55,7 @@ pub mod store;
 pub mod verdict;
 /// The engine waiter: commands, results and the waits a headless caller needs.
 pub mod waiter;
+/// Watch folders (card P4-2).
+pub mod watch;
 /// The watchdog of a lane job (design 4.7.1).
 pub mod watchdog;

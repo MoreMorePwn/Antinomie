@@ -569,6 +569,22 @@ pub fn delete(
     vm_name: &str,
     live: bool,
 ) -> Result<Deleted, String> {
+    delete_as(options, plan_before, keep, vm_name, live, "analyst")
+}
+
+/// [`delete`] with the custody actor that is named in the run's `RunDeleted`
+/// entry (`analyst` for a person; `auto:policy-<name>` for retention).
+pub fn delete_as(
+    options: &BackendOptions,
+    plan_before: &RunPlan,
+    keep: &BTreeSet<String>,
+    vm_name: &str,
+    live: bool,
+    actor: &str,
+) -> Result<Deleted, String> {
+    if !super::actor::is_valid(actor) {
+        return Err(format!("{actor:?} is not a custody actor"));
+    }
     if live {
         return Err("the run is still running; stop it first".into());
     }
@@ -631,7 +647,7 @@ pub fn delete(
     };
     library.record_event(
         &plan.sha256,
-        "analyst",
+        actor,
         CustodyEvent::RunDeleted {
             vm: vm_name.to_owned(),
             run: plan.run_id.clone(),

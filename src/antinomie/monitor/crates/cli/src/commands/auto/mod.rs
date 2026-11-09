@@ -8,6 +8,7 @@ use crate::{context::Context, error::CliError, output::Reply};
 use clap::Subcommand;
 
 mod daemon;
+mod housekeeping;
 mod init;
 mod jobs;
 mod lanes;
@@ -55,6 +56,14 @@ pub enum Auto {
     /// The policies you may submit to.
     #[command(subcommand)]
     Policy(jobs::Policy),
+    /// The watch folders: their state, and a scan now.
+    #[command(subcommand)]
+    Watch(housekeeping::Watch),
+    /// Apply retention now (recordings, job records, rejected files, staged
+    /// uploads); `--dry-run` only prints the plan.
+    Gc(housekeeping::Gc),
+    /// Delete a finished job's record and artifacts (the sample stays).
+    Delete(housekeeping::Delete),
 }
 
 impl Auto {
@@ -85,5 +94,8 @@ pub fn run(auto: &Auto, context: &Context) -> Result<Reply, CliError> {
         Auto::Queue(command) => jobs::queue(command, context),
         Auto::Lane(command) => lanes::run(command, context),
         Auto::Policy(command) => jobs::policy(command, context),
+        Auto::Watch(command) => housekeeping::watch(command, context),
+        Auto::Gc(arguments) => housekeeping::gc(arguments, context),
+        Auto::Delete(arguments) => housekeeping::delete(arguments, context),
     }
 }

@@ -16,7 +16,7 @@ impl ByteStore {
         self.len
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    /// Whether no byte is known.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -27,7 +27,6 @@ impl ByteStore {
     }
 
     /// The run `at` lies in, with its start.
-    #[cfg(any(test, feature = "test-support"))]
     pub fn run_at(&self, at: u64) -> Option<(u64, &Vec<u8>)> {
         self.runs
             .range(..=at)
@@ -36,7 +35,7 @@ impl ByteStore {
             .map(|(start, run)| (*start, run))
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    /// The byte at `at`, when known.
     pub fn get(&self, at: &u64) -> Option<&u8> {
         self.run_at(*at)
             .map(|(start, run)| &run[(*at - start) as usize])

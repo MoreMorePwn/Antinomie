@@ -52,6 +52,10 @@ pub struct Service {
     pub wake: Mutex<mpsc::Sender<()>>,
     pub commands: Mutex<mpsc::Sender<LaneCommand>>,
     pub accelerator: Accelerator,
+    pub watch: crate::watch::WatchHub,
+    /// One retention pass or `job.delete` at a time.
+    pub gc_lock: Mutex<()>,
+    pub log: Arc<dyn Fn(&str) + Send + Sync>,
 }
 
 /// Parse the parameters of an op; an unknown member is named in `field`.
@@ -107,11 +111,14 @@ fn starts_work(op: Op) -> bool {
 }
 
 impl Service {
-    fn wake_lane(&self) {
+    pub(super) fn wake_lane(&self) {
         let _ = crate::store::lock(&self.wake).send(());
     }
 
-    fn submit_context<'a>(&'a self, policies: &'a crate::config::PolicySet) -> SubmitContext<'a> {
+    pub(super) fn submit_context<'a>(
+        &'a self,
+        policies: &'a crate::config::PolicySet,
+    ) -> SubmitContext<'a> {
         let config = self.config.read().unwrap_or_else(|p| p.into_inner());
         SubmitContext {
             policies,
@@ -477,6 +484,7 @@ impl Service {
             Op::QueueStatus => to_value(&self.queue_status()?),
             Op::QueuePause => self.queue_pause(true),
             Op::QueueResume => self.queue_pause(false),
+            Op::JobDelete => self.job_delete(value),
             Op::SampleList
             | Op::SampleGet
             | Op::SampleAdd
@@ -485,10 +493,6 @@ impl Service {
             | Op::CustodyVerify => self.library_op(op, value, ctx),
             Op::VmList => self.vm_list(),
             Op::BaseList => self.base_list(),
-            Op::JobDelete => Err(ApiError::new(
-                ErrorCode::Unsupported,
-                "the daemon does not serve job.delete in 0.9.0",
-            )),
         }
     }
 }
@@ -520,6 +524,9 @@ impl Handler for Service {
             return self.recording(op, value, ctx);
         }
         if let Some(answer) = super::lane_ops::call(self, op, value.clone(), ctx) {
+            return answer;
+        }
+        if let Some(answer) = super::housekeeping::call(self, op, value.clone(), ctx) {
             return answer;
         }
         if reserved(op) {

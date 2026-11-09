@@ -20,15 +20,20 @@
 //! | `SIGUSR1` | The queue's state is written to the log. |
 
 pub mod artifacts;
+mod housekeeping;
 pub mod lane;
 mod lane_ops;
 mod library_ops;
 #[cfg(test)]
 mod read_tests;
+mod notify_thread;
+#[cfg(test)]
+mod p4_tests;
 pub mod runner;
 pub mod service;
 #[cfg(test)]
 mod tests;
+mod watch_env;
 
 use crate::{
     api::{
@@ -86,6 +91,7 @@ pub struct Controls {
     stop: AtomicBool,
     interrupt: AtomicBool,
     engine_lost: AtomicBool,
+    lane_ended: AtomicBool,
 }
 
 impl Controls {
@@ -105,6 +111,13 @@ impl Controls {
     }
     pub fn engine_lost(&self) {
         self.engine_lost.store(true, Ordering::SeqCst);
+    }
+    /// The lane's thread has ended: nothing more will finish.
+    pub fn lane_ended(&self) {
+        self.lane_ended.store(true, Ordering::SeqCst);
+    }
+    pub fn lane_has_ended(&self) -> bool {
+        self.lane_ended.load(Ordering::SeqCst)
     }
     pub fn engine_is_lost(&self) -> bool {
         self.engine_lost.load(Ordering::SeqCst)
@@ -216,6 +229,8 @@ pub struct Daemon<E: Engine + Send + 'static> {
     service: Arc<Service>,
     lane: Option<JoinHandle<Waiter<E>>>,
     server: Option<(StopHandle, JoinHandle<()>)>,
+    /// The watcher, retention and delivery threads; they end on the stop flag.
+    helpers: Vec<JoinHandle<()>>,
     log: Arc<dyn Fn(&str) + Send + Sync>,
     host_grace: Duration,
 }
@@ -409,6 +424,9 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             } else {
                 Accelerator::Tcg
             },
+            watch: Default::default(),
+            gc_lock: Mutex::new(()),
+            log: Arc::clone(&log),
         });
 
         // The socket is bound before the lane starts, so a socket that cannot
@@ -448,6 +466,32 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             let thread = std::thread::spawn(move || server.serve());
             (handle, thread)
         });
+        let mut helpers = Vec::new();
+        // Direct mode runs one job in the command itself: it takes no files
+        // from watch folders and cleans nothing up.
+        if setup.socket.is_some() {
+            let watch = Arc::clone(&service);
+            helpers.push(
+                std::thread::Builder::new()
+                    .name("antinomie-watch".into())
+                    .spawn(move || watch_env::run(watch))
+                    .map_err(|e| format!("no thread for the watch folders: {e}"))?,
+            );
+            let gc = Arc::clone(&service);
+            helpers.push(
+                std::thread::Builder::new()
+                    .name("antinomie-gc".into())
+                    .spawn(move || housekeeping::run(gc))
+                    .map_err(|e| format!("no thread for retention: {e}"))?,
+            );
+        }
+        let notify = Arc::clone(&service);
+        helpers.push(
+            std::thread::Builder::new()
+                .name("antinomie-notify".into())
+                .spawn(move || notify_thread::run(notify))
+                .map_err(|e| format!("no thread for delivery: {e}"))?,
+        );
         log(&format!(
             "daemon ready: data {} socket {}",
             data_dir.display(),
@@ -460,6 +504,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             service,
             lane: Some(lane_thread),
             server,
+            helpers,
             log,
             host_grace: setup.host_grace,
         })
@@ -575,7 +620,14 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         self.service.controls.begin_stop();
         let _ = crate::store::lock(&self.service.wake).send(());
         let thread = self.lane.take().expect("the lane thread is joined once");
-        let waiter = thread.join().map_err(|_| {
+        let waiter = thread.join();
+        // Nothing more can finish; the helpers end (delivery after it has
+        // handled what the lane's last jobs produced).
+        self.service.controls.lane_ended();
+        for helper in self.helpers.drain(..) {
+            let _ = helper.join();
+        }
+        let waiter = waiter.map_err(|_| {
             ApiError::new(
                 crate::api::error::ErrorCode::Internal,
                 "the lane thread panicked",
