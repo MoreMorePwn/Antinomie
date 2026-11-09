@@ -286,8 +286,7 @@ impl FileIndex {
                 call,
                 event,
                 hits,
-                fd,
-                (opened_description, description),
+                (fd, opened_description, description),
                 (None, None),
             );
             return None;
@@ -471,8 +470,7 @@ impl FileIndex {
             call,
             event,
             hits,
-            fd,
-            (opened_description, description),
+            (fd, opened_description, description),
             (transfer, shape),
         );
         if lifecycle_only && !self.changes.contains_key(&group) {
@@ -558,8 +556,7 @@ impl FileIndex {
         call: &InvocationSummary,
         event: &EventSummary,
         hits: &[Hit],
-        fd: Option<u64>,
-        (opened, description): (Option<u64>, Option<u64>),
+        (fd, opened, description): (Option<u64>, Option<u64>, Option<u64>),
         (transfer, shape): (
             Option<file_activity::Transfer>,
             Option<file_activity::Shape>,
