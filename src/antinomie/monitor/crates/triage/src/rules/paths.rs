@@ -888,12 +888,22 @@ pub fn timestamps(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
         _ => false,
     };
     // UTIME_NOW and UTIME_OMIT in both nanosecond fields are not a chosen time.
+    // Two timespecs: 32 bytes of 64-bit words, or 16 bytes of 4-byte words
+    // from a compat program's 32-bit utimensat.
     let now = cx.bytes(2, "").is_some_and(|bytes| {
-        bytes.len() >= 32
-            && [8usize, 24].iter().all(|at| {
-                let nanos = u64::from_le_bytes(bytes[*at..*at + 8].try_into().unwrap_or_default());
-                nanos == 0x3fff_ffff || nanos == 0x3fff_fffe
-            })
+        let (width, nanos_at): (usize, [usize; 2]) = if bytes.len() >= 32 {
+            (8, [8, 24])
+        } else if cx.compat() && bytes.len() >= 16 {
+            (4, [4, 12])
+        } else {
+            return false;
+        };
+        nanos_at.iter().all(|at| {
+            let mut word = [0u8; 8];
+            word[..width].copy_from_slice(&bytes[*at..*at + width]);
+            let nanos = u64::from_le_bytes(word);
+            nanos == 0x3fff_ffff || nanos == 0x3fff_fffe
+        })
     });
     if explicit && !now {
         let path = touch.path.as_str();

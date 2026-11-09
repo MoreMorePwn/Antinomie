@@ -273,6 +273,33 @@ pub(super) fn is_compat(abi: Abi) -> bool {
     matches!(abi, Abi::Arm | Abi::I386)
 }
 
+/// One scalar member of a captured layout, read by the layout's own inventory
+/// (the width and offset of the ABI the layout names): `Some(Some(v))` when
+/// read, `Some(None)` when the layout is known but the bytes do not cover the
+/// member, None when the inventory has no such layout or member. A 32-bit
+/// `compat_sigaction` handler is 4 bytes at 0, an LP64 one 8.
+pub fn member_value(layout: &str, data: &[u8], member: &str) -> Option<Option<u64>> {
+    let schema = schemas(abi_of_layout(layout)?).get(super::layout_type(layout))?;
+    if schema.array || schema.selectors {
+        return None;
+    }
+    let mut items = &schema.root;
+    let mut found = None;
+    for segment in segments(member) {
+        let name = match segment {
+            Segment::Name(name) => name,
+            Segment::Index(index) => format!("[{index}]"),
+        };
+        let item = items.iter().find(|item| item.name == name)?;
+        match &item.body {
+            Body::Leaf(leaf) => found = Some(leaf),
+            Body::Group(inner) | Body::Array(inner) => items = inner,
+        }
+    }
+    let leaf = found.filter(|leaf| !leaf.text)?;
+    Some(bits(data, leaf.bit_offset, leaf.bit_size))
+}
+
 /// The size of one element of a layout on an ABI (an array's stride, a
 /// structure's size), from the inventory.
 pub(super) fn stride(abi: Abi, layout: &str) -> Option<usize> {

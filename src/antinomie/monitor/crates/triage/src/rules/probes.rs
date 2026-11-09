@@ -556,7 +556,7 @@ pub fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         }
         "rt_sigaction" if cx.args[0] == 5 && cx.args[1] != 0 => {
             // A SIGTRAP handler: a breakpoint would be caught by the program.
-            let handler = cx.word(1, "", 0).unwrap_or(2);
+            let handler = cx.member(1, "sa_handler", 0, 0).unwrap_or(2);
             if handler > 1 {
                 task(st, cx).record(new_probe(
                     cx,
@@ -568,7 +568,7 @@ pub fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         }
         // coreutils (`sort`, `df`) ask sysinfo for the memory size: not a check of uptime.
         "sysinfo" if cx.ok && !system_program(cx) => {
-            let seconds = cx.word(0, "", 0).unwrap_or(u64::MAX);
+            let seconds = cx.member(0, "uptime", 0, 0).unwrap_or(u64::MAX);
             if seconds != u64::MAX {
                 let answer = (format!("up {seconds} s"), Some(seconds < 1800));
                 task(st, cx).record(new_probe(cx, Class::Uptime, "sysinfo", Some(answer)));
@@ -675,8 +675,8 @@ pub fn behaviour(cx: &Ctx, st: &mut State) {
 /// The requested sleep, in nanoseconds, of `nanosleep` and `clock_nanosleep`.
 pub fn sleep_ns(cx: &Ctx) -> Option<u64> {
     let argument = cx.argument("rqtp")?;
-    let seconds = cx.word(argument, "", 0)?;
-    let nanos = cx.word(argument, "", 8).unwrap_or(0);
+    let seconds = cx.member(argument, "tv_sec", 0, 0)?;
+    let nanos = cx.member(argument, "tv_nsec", 8, 4).unwrap_or(0);
     // An absolute sleep (TIMER_ABSTIME) is a time of day, not a length.
     if cx.name == "clock_nanosleep" && cx.arg("flags") & 1 != 0 {
         return None;
