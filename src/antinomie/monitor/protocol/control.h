@@ -38,7 +38,9 @@
  * read of an event descriptor names its records' layout; the compat
  * structures of common compat calls are captured by their ILP32 layouts. */
 /* Revision 22: the SHA-256 of a specimen copy in its acquisition reply
- * (EXEC_SPECIMEN_DIGEST, ACQUIRE DIGEST), offered in TRACER_CAPS. */
+ * (EXEC_SPECIMEN_DIGEST, ACQUIRE DIGEST), offered in TRACER_CAPS; the dump
+ * trigger's exit hold (EXEC_EXIT_HOLD, EXIT_HOLD, lifecycle.exit_hold,
+ * CORE_EXIT_HELD), offered in TRACER_CAPS. */
 #define ANTC_REVISION 22
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
@@ -100,6 +102,9 @@
 #define ANTC_SPECIMEN_DIGEST_SIZE 56
 /* Acquisition reply flag at 20: the SHA-256 at 24 is the copy's. */
 #define ANTC_SPECIMEN_DIGEST_VALID 1
+/* Revision 22 (TRACER_CAPS offers it): the run's processes wait at their
+ * exit for the dump trigger (EXIT_HOLD below). No request bytes. */
+#define ANTC_EXEC_EXIT_HOLD 128
 #define ANTC_CORE_STATUS 0x1060
 #define ANTC_CORE_READ 0x1061
 #define ANTC_CORE_RELEASE 0x1062
@@ -141,6 +146,30 @@
 /* Revision 21: the core is the ELF32 file (ELFCLASS32 EM_ARM) of an AArch32
  * task of an arm64 guest, as fs/compat_binfmt_elf.c writes it. */
 #define ANTC_CORE_COMPAT_ELF32 0x100
+/* Revision 22: the core of a process held at its exit (EXIT_HOLD), written by
+ * the process itself with the exit core's writer: every page, resident or
+ * not; RESIDENT_ONLY is clear. */
+#define ANTC_CORE_EXIT_HELD 0x200
+/* EXIT_HOLD (revision 22, with EXEC_EXIT_HOLD): header flags=0, u64 cookie
+ * at 8, u32 action at 16, u32 reserved=0 at 20; empty reply.
+ * ARM / DISARM: cookie is a run's root cookie (-ESRCH: no such run); DISARM
+ * also releases its held processes. RELEASE: cookie is a held process's
+ * (its leader's task cookie, or that of the task that sent its hold record),
+ * or 0 for every held process (-ESRCH: none with that cookie).
+ * In an armed run, a process that ends (exit_group, its last thread's exit,
+ * a fatal or core-dumping signal; never SIGKILL, never one whose own exit
+ * core is armed) first sends lifecycle.exit_hold, a scalar of
+ * EXIT_HOLD_MS | (u64)wait_status << 32, in its leader's process, then waits
+ * at most EXIT_HOLD_MS, before anything of it is torn down, for CORE_CAPTURE
+ * of its identity (the core is written by the process itself: CORE_EXIT_HELD,
+ * status and read as a manual core's) or RELEASE. A stopped run (STOP_RUN),
+ * SIGKILL and the timeout end the wait. At most eight processes wait at once.
+ */
+#define ANTC_EXIT_HOLD 0x1068
+#define ANTC_EXIT_HOLD_ARM 1
+#define ANTC_EXIT_HOLD_DISARM 2
+#define ANTC_EXIT_HOLD_RELEASE 3
+#define ANTC_EXIT_HOLD_MS 50
 #define ANTC_RESOURCES 0x1070
 #define ANTC_RESOURCES_SIZE 96
 #define ANTC_RESOURCES_MEMORY_VALID 1

@@ -266,7 +266,15 @@ impl Worker {
         }
         let offered = control::tracer_offer(self.snapshot.guest_tracer)?;
         let tracer_hashing = offered & (control::EXEC_HASH_ROOT | control::EXEC_HASH_WRITES);
-        let args = control::with_tracer_flags(control::execute_analysis(&wire, specimen)?, offered);
+        let mut args =
+            control::with_tracer_flags(control::execute_analysis(&wire, specimen)?, offered);
+        // A core on suspicious activity holds the run's processes at their
+        // exit, so one that ends a millisecond after its match keeps its core.
+        let trigger_core = request.dump_trigger.as_ref().is_some_and(|plan| plan.core);
+        let exit_hold = trigger_core && offered & control::EXEC_EXIT_HOLD != 0;
+        if exit_hold {
+            args = control::with_exec_flag(args, control::EXEC_EXIT_HOLD);
+        }
         let specimen_reply = control::exec_specimen_reply_len(control::request_flags(&args));
         let digest_offered = offered & control::EXEC_SPECIMEN_DIGEST != 0;
         // Refused before the run exists, so Run History lists nothing for it.
@@ -314,7 +322,11 @@ impl Worker {
             terminal_eof: false,
             state: RunState::Unknown,
             recording_error: Some("execution has not been acknowledged".into()),
-            notes: Vec::new(),
+            // An older base has no exit hold: the trigger works as before.
+            notes: (trigger_core && !exit_hold)
+                .then(|| crate::dump_trigger::NO_EXIT_HOLD.to_string())
+                .into_iter()
+                .collect(),
             // The identity the guest shows, for reading the result against it.
             machine: Some(crate::stealth::MachineRecord::of(
                 &crate::stealth::arm64::shown_profile(

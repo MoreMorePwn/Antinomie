@@ -35,6 +35,12 @@ const PENDING_MAX: usize = 4096;
 const QUEUE_MAX: usize = 64;
 /// The trigger records one run keeps.
 pub const RECORDS_MAX: usize = 32;
+/// How long a process the guest holds at its exit (contract revision 22) is
+/// kept for a match that may still arrive before it is let go: calls of one
+/// process can reach the host through more than one ring.
+pub(crate) const HOLD_GRACE: Duration = Duration::from_millis(15);
+/// The note of a run whose base cannot hold a process at its exit.
+pub const NO_EXIT_HOLD: &str = "Dump trigger: this base cannot hold a process at its exit (that needs a base of guest contract revision 22), so a process that exits within milliseconds of a match ends before its core can be taken.";
 
 /// How unusual a match must be to trigger: the Triage tiers, lowest first.
 /// (Triage has no tier above High.)
@@ -295,6 +301,9 @@ pub(crate) struct Watch {
     /// When each process was last seen to exit, by thread group id, on the
     /// guest clock: says how late a dump was.
     exits: HashMap<u32, u64>,
+    /// Processes the guest holds at their exit, by thread group id: the task
+    /// cookie that sent the hold record, and when it came.
+    pub(crate) held: HashMap<u32, (u64, Instant)>,
     /// The run is over and its notes say what the trigger did.
     pub settled: bool,
 }
@@ -317,6 +326,7 @@ impl Watch {
             queue: VecDeque::new(),
             lost: 0,
             exits: HashMap::new(),
+            held: HashMap::new(),
             settled: false,
         }
     }
@@ -327,6 +337,43 @@ impl Watch {
             self.exits.clear();
         }
         self.exits.insert(pid, guest_ns);
+    }
+
+    /// The guest holds process `pid` at its exit (its task `cookie` said so):
+    /// what of it still waits for an exit is judged now, since it is ending.
+    pub(crate) fn hold(&mut self, pid: u32, cookie: u64) {
+        if self.held.len() >= PENDING_MAX {
+            self.held.clear();
+        }
+        self.held.insert(pid, (cookie, Instant::now()));
+        let mut entries: Vec<EventSummary> = Vec::new();
+        self.pending.retain(|_, entry| {
+            if entry.pid == pid {
+                entries.push(entry.clone());
+                false
+            } else {
+                true
+            }
+        });
+        entries.sort_by_key(|entry| (entry.timestamp_ns, entry.call_id));
+        for entry in entries {
+            self.judge_events(&[entry]);
+        }
+    }
+
+    /// The held processes no match came for within `grace`, to be let go: the
+    /// task cookies of their hold records. A process with a match queued stays.
+    pub(crate) fn releases(&mut self, grace: Duration) -> Vec<u64> {
+        let wanted: HashSet<u32> = self.queue.iter().map(|finding| finding.pid).collect();
+        let mut released = Vec::new();
+        self.held.retain(|pid, (cookie, at)| {
+            if wanted.contains(pid) || at.elapsed() < grace {
+                return true;
+            }
+            released.push(*cookie);
+            false
+        });
+        released
     }
 
     /// Why a dump of the process `finding` named came too late.
@@ -463,6 +510,13 @@ impl crate::run::ProgramRun {
                 .any(|field| field.key == "lifecycle.task_exit")
         {
             watch.exit(event.pid, event.timestamp_ns);
+        }
+        if event
+            .fields
+            .iter()
+            .any(|field| field.key == "lifecycle.exit_hold")
+        {
+            watch.hold(event.pid, event.task_cookie);
         }
         if self.assembler.just_finished {
             watch.event(event.clone());

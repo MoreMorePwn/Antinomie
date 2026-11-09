@@ -1596,8 +1596,15 @@ in the run's notes and shown in the run's features and in the finding's Details
 with the reason ("The process exited 120 ms after the match, before the core
 could be taken."), and the next match may still dump. A match is judged the
 moment its call arrives and the worker wakes every millisecond while a run waits
-for one, but a program that matches and exits within a few tens of
-milliseconds can still be gone before the guest can pause it.
+for one. On a base of contract revision 22, a run that asks for a core holds
+each of its processes at its exit, before anything of it is torn down, for at
+most 50 ms, until the host has judged that process's last calls: a process that
+writes its cron entry and exits a millisecond later still has its core taken
+(its note says "held at its exit"), and one no rule matched is let go at once.
+Under heavy host load the host can answer after the 50 ms, and the process is
+then gone as before. On an older base the run's notes say the base cannot hold
+a process at its exit, and a program that matches and exits within a few tens of
+milliseconds can be gone before the guest can pause it.
 
 A core is partial when the guest could not read every page: it copies only the
 pages that are in memory when it reads them (never swapped-out or untouched

@@ -13,9 +13,13 @@
 //! * `compat`: the same program built for the 32-bit ABI (i386 on x86-64,
 //!   AArch32 on arm64), when FIXTURE32 is given and exists (a host without
 //!   the 32-bit compiler builds none: "SKIP compat");
-//! * `quiet`: `sh -c 'sleep 2'`, which matches nothing at High.
+//! * `quiet`: `sh -c 'sleep 2'`, which matches nothing at High;
+//! * `fast` (a base of guest contract revision 22 or later, else SKIP):
+//!   FIXTURE writes its cron entry and exits at once (SECONDS 0, about a
+//!   millisecond later): the guest holds it at its exit (EXEC_EXIT_HOLD), so
+//!   its core is still taken, and the run's note says it was held.
 //!
-//! The first three must have one trigger record whose core was written
+//! The first three and `fast` must have one trigger record whose core was written
 //! (complete, or partial: pages not resident have no bytes); the
 //! last none, and a note saying the trigger was armed but never matched. Every
 //! program is benign. The data folder must be new and disposable.
@@ -305,13 +309,35 @@ fn check(bundle: &str, data: &str, native: &str, compat: Option<&str>) -> Result
         vec!["-c".into(), "sleep 2".into()],
         None,
     ));
+    let holds = d
+        .snapshot
+        .guest_kernel
+        .as_ref()
+        .and_then(|kernel| kernel.revision)
+        .is_some_and(|revision| revision >= 22);
+    if holds {
+        cases.push((
+            "fast",
+            "/tmp/trigger-native".into(),
+            vec!["antinomie-fast".into(), "0".into()],
+            Some("persistence.cron"),
+        ));
+    } else {
+        println!("SKIP fast: the base has no exit hold (revision 22)");
+    }
     for (name, path, args, rule) in cases {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let outcome = d.start(&path, &args).and_then(|id| {
             let run = d.settled(&vm_id, &id)?;
             println!("RUN {name} {id}: {}", describe(&run));
             match rule {
-                Some(rule) => fired(&run, rule),
+                Some(rule) => fired(&run, rule).and_then(|()| {
+                    // The exit hold is what made the core possible.
+                    if name == "fast" && !run.notes.iter().any(|n| n.contains("held at its exit")) {
+                        return Err("the fast program's note does not say it was held".into());
+                    }
+                    Ok(())
+                }),
                 None => quiet(&run),
             }
         });

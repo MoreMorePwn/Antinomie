@@ -127,9 +127,12 @@ impl CoreStatus {
             || !(1..=6).contains(&result.state)
             || result.size > LOGICAL_LIMIT
             // 0x100: revision 21's ELF32 core of an AArch32 task (COMPAT_ELF32).
-            || result.flags & if manual { !0x17f } else { !0x10f } != 0
+            // 0x200: revision 22's core of a process held at its exit
+            // (EXIT_HELD), written by the exit writer: not resident-only.
+            || result.flags & if manual { !0x37f } else { !0x10f } != 0
             || if manual {
-                result.flags & 0x51 != 0x50
+                result.flags & 0x11 != 0x10
+                    || result.flags & (0x40 | 0x200) == 0
                     || result.wait_status != 0
                     || result.signal != 0
                     || (result.state >= 3 && result.flags & 0x20 == 0)

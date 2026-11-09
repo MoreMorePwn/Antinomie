@@ -1234,6 +1234,55 @@ this host without the features, and an older host refuses a revision-22 base.
   path is the host copy), `"expect_refused": true`, `"no_evidence_wait": true`
   and `"saved_analysis_wait"` (the saved analyses after the VM stopped).
 
+### Contract revision 22: the dump trigger's exit hold (0.9.0)
+
+Board card ANT-T0342 (from T0334: P2PInfect matched High twice and got no core,
+its process had exited; host handling is about 1 ms on an idle host and 106-421
+ms under load).
+
+* **Arming.** EXEC flag `EXIT_HOLD` (128, offered in TRACER_CAPS) arms the run
+  at its launch (`launch_init()`, `ant_run_exit_hold()`), so a program that
+  exits within milliseconds is armed before its first instruction; the card's
+  "control opcode arms a run" is the command `EXIT_HOLD` (0x1068: ARM, DISARM,
+  RELEASE), whose ARM arms a run already running. The host sets the flag on a
+  run whose dump trigger asks for a core.
+* **The hold (patch 55, `exit_hold.c`).** Every way a process ends already
+  reaches the process core's exit hook `ant_monitor_core_exit()`
+  (`do_group_exit()`, the last thread's `do_exit()`, `do_coredump()`), so the
+  hold sits there and no stock file changes. A process of an armed run (once per
+  process: the leader's `exit_held`; never for SIGKILL or a pending fatal signal,
+  a process whose own exit core is armed, a task without an `mm`, a kernel or
+  io_uring worker) publishes `lifecycle.exit_hold` (`50 | wait_status << 32`) and
+  waits, killable, at most `ANTC_EXIT_HOLD_MS` (50) in one of eight slots, before
+  anything of it is torn down (PF_EXITING is not even set yet). `CORE_CAPTURE`
+  of its identity (the leader's cookie, start time and tgid, as PROCESS_LIST
+  gives them) is answered by `ant_exit_hold_claim()` before the manual capture
+  path: a live handle (`ant_core_held_create()`, flags MANUAL | EXIT_HELD 0x200,
+  not RESIDENT_ONLY) handed to the parked process, which writes it itself with
+  the exit core's writer (`ant_core_held_write()`, `ant_coredump_to_file()`:
+  thread rendezvous, every page) and goes on exiting; status, read and release
+  are a manual core's. RELEASE (by the hold record's task cookie or the
+  leader's), DISARM, STOP_RUN and SIGKILL end the wait.
+* **Host.** `Watch::hold()` takes the record (`watch_event()`), judges at once
+  what of that process still waits for an exit, and keeps the process held;
+  `check_triggers()` hands the findings to `take_trigger()` first (its core
+  request finds the held process in the process list and reaches it through
+  the claim; the note says "held at its exit"), then releases the held
+  processes no finding names once `HOLD_GRACE` (15 ms, for calls arriving
+  through another ring) has passed (`Watch::releases()`, `release_held()`). A
+  match over the budget or in the cooldown releases its process on the next
+  turn. The manual status check accepts EXIT_HELD without RESIDENT_ONLY. On a
+  base that does not offer the flag the run's notes say so (`NO_EXIT_HOLD`).
+* **Cost and limits.** Each process exit of an armed run waits until the host
+  releases it (one worker turn after the grace, about 15-20 ms on an idle host)
+  or 50 ms. A host slower than 50 ms (heavy load) misses the process as before.
+  A process whose exit core is armed (Core dump on exit, the root) is not held:
+  its exit core is its dump. A process that other processes share memory with
+  is written as the exit core always is.
+* **Tools.** `trigger-check` (triage example) has a `fast` case on a revision-22
+  base: the fixture writes its cron entry and exits at once (`SECONDS` 0); its
+  core must be written and its note must say it was held.
+
 ### arm64 debugger (0.9.0)
 
 Multi-arch plan cards MA-11 and MA-14: the debug engine, the RSP server, the

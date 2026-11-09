@@ -15,6 +15,17 @@ x86 programs by their own table.
 
 ### Host
 
+- **The dump trigger catches a process that exits a millisecond after its match
+  (ANT-T0342).** A process that wrote its cron entry and exited 1 ms later was gone
+  before its core could be requested (the host answers in about a millisecond on an
+  idle host, a hundred or more under load). On a revision-22 base a run that asks for
+  a core on suspicious activity holds each of its processes at its exit, before
+  anything of it is torn down, for at most 50 ms: the host judges the process's last
+  calls, then asks for its core, which the process writes itself, whole, or lets it
+  go at once when no rule matched. The run's note says "held at its exit". SIGKILL, a
+  stopped run and a process whose Core dump on exit is armed are never held. An older
+  base keeps the old behaviour and the run's notes say so.
+
 - **Static analysis of a program that exits at once, and of a launch the guest
   refused (ANT-T0344).** The host copy of an uploaded program replaces the guest
   transfer once the guest vouches for its hash, and that hash came only with the
@@ -782,6 +793,13 @@ x86 programs by their own table.
   header flag `DIGEST`, 56-byte reply, offered in TRACER_CAPS); the digest may use
   half the copy's time limit and a slower copy is kept without one. Only
   `kernel/antinomie/` changes.
+- Patch 55 (contract revision 22): the dump trigger's exit hold. A run armed for it
+  (EXEC flag `EXIT_HOLD`, or the `EXIT_HOLD` command) parks each process that ends,
+  in the process core's exit hook (`ant_monitor_core_exit()`: exit_group, the last
+  thread's exit, a fatal or core-dumping signal), after a `lifecycle.exit_hold`
+  record, for at most 50 ms; a `CORE_CAPTURE` of its identity makes it write its own
+  core with the exit core's writer (core flag `EXIT_HELD` 0x200, read as a manual
+  core), `EXIT_HOLD` RELEASE lets it go. No stock kernel file changes.
 
 ## 0.8.3 — 2026-11-08
 

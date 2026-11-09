@@ -25,10 +25,19 @@ pub(crate) const ACQUIRE_DIGEST: u32 = 1;
 pub(crate) const SPECIMEN_DIGEST_SIZE: usize = 56;
 /// Acquisition reply flag (at 20): the SHA-256 at 24 is the copy's.
 const SPECIMEN_DIGEST_VALID: u32 = 1;
+/// EXEC flag (TRACER_CAPS, revision 22): the run's processes wait at their
+/// exit for the dump trigger, at most [`EXIT_HOLD_MS`], until the host asks
+/// for a core of one ([`CORE_CAPTURE`]) or lets it go ([`exit_hold_release`]).
+pub(crate) const EXEC_EXIT_HOLD: u32 = 128;
+/// The exit hold's command (revision 22): ARM, DISARM or RELEASE.
+pub(crate) const EXIT_HOLD: u32 = 0x1068;
+const EXIT_HOLD_RELEASE: u32 = 3;
+/// The longest a process of an armed run waits at its exit.
+pub(crate) const EXIT_HOLD_MS: u64 = 50;
 /// The optional EXEC flags every launch asks for when the guest offers them.
 const EXEC_OPTIONAL: u32 = EXEC_HASH_ROOT | EXEC_HASH_WRITES | EXEC_SHELL_JOB;
 /// The optional EXEC flags this host knows; others a guest offers are ignored.
-const EXEC_KNOWN: u32 = EXEC_OPTIONAL | EXEC_SPECIMEN_DIGEST;
+const EXEC_KNOWN: u32 = EXEC_OPTIONAL | EXEC_SPECIMEN_DIGEST | EXEC_EXIT_HOLD;
 pub(crate) const TRACER_CAPS: u32 = 0x10a0;
 pub(crate) const TRACER_CAPS_SIZE: usize = 32;
 const TRACER_ABI: u32 = 1;
@@ -403,6 +412,22 @@ pub(crate) fn with_tracer_flags(mut encoded: Vec<u8>, offered: u32) -> Vec<u8> {
         wanted |= offered & EXEC_SPECIMEN_DIGEST;
     }
     encoded[4..8].copy_from_slice(&(flags | wanted).to_le_bytes());
+    encoded
+}
+/// EXIT_HOLD RELEASE of the process whose task `cookie` sent the hold record.
+pub(crate) fn exit_hold_release(cookie: u64) -> Vec<u8> {
+    let mut args = header(0);
+    args.extend(cookie.to_le_bytes());
+    args.extend(EXIT_HOLD_RELEASE.to_le_bytes());
+    args.extend(0u32.to_le_bytes());
+    args
+}
+/// Add EXEC flag `flag` to an encoded EXEC request.
+pub(crate) fn with_exec_flag(mut encoded: Vec<u8>, flag: u32) -> Vec<u8> {
+    let flags = request_flags(&encoded) | flag;
+    if encoded.len() >= 8 {
+        encoded[4..8].copy_from_slice(&flags.to_le_bytes());
+    }
     encoded
 }
 /// Size of the specimen part of an EXEC reply for request flags `flags`.
@@ -1126,6 +1151,10 @@ mod tests {
             ("ANTC_ACQUIRE_DIGEST", ACQUIRE_DIGEST),
             ("ANTC_SPECIMEN_DIGEST_SIZE", SPECIMEN_DIGEST_SIZE as u32),
             ("ANTC_SPECIMEN_DIGEST_VALID", SPECIMEN_DIGEST_VALID),
+            ("ANTC_EXEC_EXIT_HOLD", EXEC_EXIT_HOLD),
+            ("ANTC_EXIT_HOLD", EXIT_HOLD),
+            ("ANTC_EXIT_HOLD_RELEASE", EXIT_HOLD_RELEASE),
+            ("ANTC_EXIT_HOLD_MS", EXIT_HOLD_MS as u32),
             ("ANTC_EXEC_DEBUG", EXEC_DEBUG),
             ("ANTC_REVISION", REVISION),
             ("ANTC_PROCESS_LIST", PROCESS_LIST),
