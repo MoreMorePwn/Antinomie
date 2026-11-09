@@ -55,6 +55,7 @@ pub fn argument_vector(call: &InvocationSummary, event: &EventSummary) -> Option
     let field = |key: String| fields.iter().find(|field| field.key == key).copied();
     let exhausted = field(format!("arg{argument}.vector")).is_some();
     let mut arguments = Vec::new();
+    let mut unproven = false;
     for index in 0..=MAX_ARGUMENTS {
         let pointer = field(format!("arg{argument}.ptr[{index}]"));
         let value = pointer
@@ -65,19 +66,31 @@ pub fn argument_vector(call: &InvocationSummary, event: &EventSummary) -> Option
                 value[..width].copy_from_slice(bytes);
                 u64::from_le_bytes(value)
             });
-        let Some(value) = value else {
+        // A pointer the collector never recorded (an AArch32 execve can lose
+        // `ptr[1..]` while keeping the strings, listed after the envp) does
+        // not end the vector while its string is there: the strings in order
+        // are the argument vector, which is then not proven complete.
+        let lost = pointer.is_none();
+        if value.is_none() && !lost {
             return Some(Argv {
                 arguments,
                 complete: false,
             });
-        };
-        if value == 0 {
-            let complete = !exhausted && !arguments.is_empty();
+        }
+        if lost && field(format!("arg{argument}.string[{index}]")).is_none() {
+            return Some(Argv {
+                arguments,
+                complete: false,
+            });
+        }
+        if value == Some(0) {
+            let complete = !exhausted && !arguments.is_empty() && !unproven;
             return Some(Argv {
                 arguments,
                 complete,
             });
         }
+        unproven |= lost;
         let text = field(format!("arg{argument}.string[{index}]")).and_then(|string| {
             let data = trace::covered_preview(string);
             let end = data.iter().position(|byte| *byte == 0)?;
@@ -877,6 +890,50 @@ pub mod tests {
         ]);
         let event = trace::representative(&exec).unwrap();
         assert_eq!(command_line(&exec, event).as_deref(), Some("crontab -l"));
+        // An AArch32 execve that lost `ptr[1..]` but kept the strings, listed
+        // after the envp: the strings in order are the argument vector, which
+        // is not proven complete (no terminating NULL pointer).
+        let lost = |with_null: bool| {
+            let mut exec = crate::tests::path_call(1, arm, "execve", 0, "/bin/sh");
+            let mut fields = vec![narrow(0, 0x1000), string(0, b"/bin/sh\0")];
+            fields.push(crate::tests::captured("arg2.string[0]", "", b"PATH=/bin\0"));
+            fields.push(string(1, b"-c\0"));
+            fields.push(string(2, b"crontab -l\0"));
+            if with_null {
+                fields.push(narrow(3, 0));
+            }
+            exec.entry.as_mut().unwrap().fields.extend(fields);
+            exec
+        };
+        let exec = lost(false);
+        let event = trace::representative(&exec).unwrap();
+        let vector = argument_vector(&exec, event).unwrap();
+        assert_eq!(
+            vector.arguments,
+            [
+                Some("/bin/sh".to_owned()),
+                Some("-c".to_owned()),
+                Some("crontab -l".to_owned())
+            ]
+        );
+        assert!(!vector.complete);
+        assert_eq!(command_line(&exec, event), None);
+        // The same, ended by the NULL pointer at the right index: proof of the
+        // end still does not cover the pointers that were lost.
+        let exec = lost(true);
+        let event = trace::representative(&exec).unwrap();
+        let vector = argument_vector(&exec, event).unwrap();
+        assert_eq!(vector.arguments.len(), 3);
+        assert!(!vector.complete);
+        // A string whose pointer is lost and that is itself missing ends the vector.
+        let mut exec = lost(false);
+        exec.entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .retain(|field| field.key != "arg1.string[2]");
+        let event = trace::representative(&exec).unwrap();
+        assert_eq!(argument_vector(&exec, event).unwrap().arguments.len(), 2);
         // An ia32 program's execve on an x86-64 guest: the same.
         let narrow = |index: u64, value: u32| {
             crate::tests::captured(

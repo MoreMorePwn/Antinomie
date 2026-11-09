@@ -1169,6 +1169,19 @@ compat table's layouts).
   inventories. Still recorded by address only: the rest of the audit's list
   (msgsnd/msgrcv's compat `msgbuf`, clone's TID pointers, perf_event_open, bpf
   and the others).
+  AArch32 evaluation (ANT-T0429): the compat rules above are the whole of what
+  the guest records of a compat call, so these are recorded by address only
+  and show as "schema gaps" (thousands per run): `readlink` buf, `get/setsockopt`
+  optval/optlen, `sigaltstack`, `utimensat` (an `old_timespec[2]` layout the
+  inventories lack), clone's `parent_tidptr`/`child_tidptr`, `prlimit64` and
+  `ugetrlimit`, `sched_getaffinity` (`cpumask` is unsupported), `_llseek`'s
+  result, `set_robust_list`, and the `ioctl` TCGETS/TIOCGWINSZ of both arm64
+  ABIs. That needs compat rules in the recorder (a guest change); the host
+  already reads the layouts it needs (`stack_t`, `rlimit`, `rlimit64`,
+  `robust_list_head`, `loff_t`, `int`, `winsize`, `termios`). The host does not
+  count a call with no pointer argument (arm's `cacheflush`, `set_tls`) as a
+  schema gap, and an exec whose AArch32 `argv` pointers were not recorded keeps
+  its argument strings in order (the vector is then not proven complete).
   `tests/monitor/compat-calls-fixture.c` (i686 and armhf builds) makes every
   call of patches 49 to 51; `tests/monitor/compat-calls-check.py` checks its
   recording (`event-dump` output).
