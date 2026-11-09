@@ -7,7 +7,9 @@
  *
  *   nonresident-core-fixture DIR [PAGES]
  *
- * It writes DIR/nonresident-data (PAGES pages, default 256, each starting with
+ * It sets its own coredump_filter to include private file mappings (0x37:
+ * Linux's default 0x33 leaves them out of every core), writes
+ * DIR/nonresident-data (PAGES pages, default 256, each starting with
  * "page N"), maps it private and read-only, reads every page, then asks the
  * kernel to reclaim them (MADV_PAGEOUT: clean file pages leave memory and the
  * page cache), prints "NONRESIDENT READY <address> <pages>" and sleeps until
@@ -46,6 +48,11 @@ int main(int argc, char **argv)
 		pages = strtoul(argv[2], NULL, 10);
 	if (!pages || pages > 65536)
 		return 2;
+	fd = open("/proc/self/coredump_filter", O_WRONLY);
+	if (fd < 0 || write(fd, "0x37", 4) != 4)
+		perror("coredump_filter");
+	if (fd >= 0)
+		close(fd);
 	snprintf(path, sizeof(path), "%s/nonresident-data", argv[1]);
 	unlink(path);
 	fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0600);

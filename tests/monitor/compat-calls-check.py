@@ -126,8 +126,11 @@ IPC_OLD = {"ia32": [("ipc", 2, "ipc.control", 56, ""), ("ipc", 2, "ipc.control",
 # Revision 22 (patch 56). The fixture's link points at its work directory,
 # so readlink's text starts with "/". _llseek moved to offset 1; utimensat set
 # 1 s and 2 s; getsockopt's int is 4 bytes; termios is 36 bytes, winsize 8.
+# ia32's readlink is x86-64's (its native twin records arg1.data); AArch32's,
+# which arm64 lacks, goes through the compat rules (arg1.buf).
+READLINK = {"ia32": ("readlink", 2, "arg1.data", None, "/".encode().hex()),
+            "arm": ("readlink", 2, "arg1.buf", None, "/".encode().hex())}
 REV22 = [
-    ("readlink", 2, "arg1.buf", None, "/".encode().hex()),
     ("setsockopt", 1, "arg3.optval", 4, "00100000"),
     ("getsockopt", 1, "arg4.optlen", 4, "04000000"),
     ("getsockopt", 2, "arg4.optlen", 4, "04000000"),
@@ -148,7 +151,7 @@ REV22 = [
 ]
 CALLS = ({name for name, *_ in COMMON} | {name for name, _ in STAT64_CALLS}
          | {"epoll_wait", "epoll_pwait", "ipc"})
-CALLS_22 = {name for name, *_ in REV22}
+CALLS_22 = {name for name, *_ in REV22} | {"readlink"}
 
 
 def parse(text):
@@ -176,7 +179,7 @@ def check(events, abi, revision=22):
         (call, 2, key, STAT64[abi], "") for call, key in STAT64_CALLS]
     calls = set(CALLS)
     if revision >= 22:
-        expected += REV22
+        expected += REV22 + [READLINK[abi]]
         calls |= CALLS_22
     for call, phase, key, size, prefix in expected:
         found = [event["fields"].get(key) for event in events
