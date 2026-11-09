@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Antinomie Auto mode daemon as a system service (a dedicated user on a
+# dedicated host). The user-level variant is antinomie-auto.user.service.
+#
+# Install (as root), with the dedicated user in the kvm group:
+#   useradd --system --create-home --home-dir /var/lib/antinomie \
+#           --shell /usr/sbin/nologin --groups kvm antinomie
+#   install -m 0755 antinomie-cli /usr/local/bin/antinomie-cli
+#   install -m 0644 antinomie-auto.service /etc/systemd/system/
+#   systemctl daemon-reload
+# Prepare the lane once, as that user, with the daemon stopped (docs/auto-mode.md):
+#   sudo -u antinomie -H antinomie-cli --data-dir /var/lib/antinomie base install ...
+#   sudo -u antinomie -H antinomie-cli --data-dir /var/lib/antinomie auto init --base ...
+#   systemctl enable --now antinomie-auto.service
+#
+# Whatever a sample escapes to is this user's: give it no sudo, no keys and no other
+# data (docs/security.md, "Unattended use").
+
+[Unit]
+Description=Antinomie Auto mode daemon (unattended malware analysis in VMs)
+Documentation=https://github.com/MoreMorePwn/antinomie/blob/main/docs/auto-mode.md
+After=local-fs.target
+# A crash loop stops after five starts in five minutes instead of spinning.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=antinomie
+Group=antinomie
+# /dev/kvm belongs to the kvm group.
+SupplementaryGroups=kvm
+# The data folder is /var/lib/antinomie (0700, created and owned by the unit).
+StateDirectory=antinomie
+StateDirectoryMode=0700
+Environment=HOME=/var/lib/antinomie
+ExecStart=/usr/local/bin/antinomie-cli --data-dir /var/lib/antinomie --log-format text auto daemon
+# SIGHUP reloads service.toml and policies/; SIGUSR1 writes the queue to the journal.
+ExecReload=/bin/kill -HUP $MAINPID
+
+# A crash or a non-zero exit restarts the daemon (startup recovery finishes the
+# job and the disk layer it left); a stop through systemctl does not.
+Restart=on-failure
+RestartSec=10
+
+# QEMU is a child of the daemon. SIGTERM goes to the daemon alone, which stops
+# the running job through the engine, stops the VM and exits; only what is still
+# alive when the time is up is killed, QEMU included (SIGKILL to the whole group).
+# The stop path is the 120 s VM stop plus, for a job already in its host stages,
+# up to 120 s (shutdown_host_grace_s) and the disk-layer step: 360 s is the floor
+# (with [daemon] shutdown = "drain", raise it above drain_timeout_s).
+KillMode=mixed
+TimeoutStopSec=360
+# A QEMU the kernel kills for memory is the daemon's job to handle (guest_lost);
+# it must not stop the whole service.
+OOMPolicy=continue
+
+# Hardening (design A1). The data folder is the only writable place.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# Add the folders a watch folder, the result drop or a log file use, with
+# `systemctl edit antinomie-auto`:
+#   [Service]
+#   ReadWritePaths=/srv/drop /srv/results   (a list adds to StateDirectory)
+PrivateTmp=yes
+UMask=0077
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+# No capability is needed: QEMU opens /dev/kvm by group, bubblewrap uses
+# unprivileged user namespaces.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# QEMU's user-mode network and the local socket need these four.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# bubblewrap makes user, mount, pid, ipc, uts and network namespaces.
+RestrictNamespaces=user mnt pid ipc uts net
+# Not PrivateDevices: that would hide /dev/kvm. A closed device policy lists what
+# QEMU, the pseudo-terminals and the bubblewrap workers open.
+DevicePolicy=closed
+DeviceAllow=/dev/kvm rw
+DeviceAllow=/dev/null rw
+DeviceAllow=/dev/zero rw
+DeviceAllow=/dev/full rw
+DeviceAllow=/dev/random r
+DeviceAllow=/dev/urandom r
+DeviceAllow=/dev/tty rw
+DeviceAllow=/dev/ptmx rw
+DeviceAllow=char-pts rw
+# Deliberately not set: MemoryDenyWriteExecute (QEMU's TCG and the YARA-X engine
+# generate code at run time), ProcSubset (the resource floors read /proc/meminfo)
+# and SystemCallFilter (bubblewrap needs mount and namespace calls).
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

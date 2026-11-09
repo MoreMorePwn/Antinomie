@@ -1658,6 +1658,70 @@ column repeated. The HTML prints on a landscape page. The exports of runs and
 samples have a **Tactic** column for ATT&CK techniques (named in text, with the
 colour as a chip in HTML and a bar in PDF).
 
+## Command line and automation (0.9.0)
+
+`antinomie-cli` runs the engine without a window: for scripts, for a server with no
+display, and for Auto mode, where a sample goes in and a report comes out. This
+section takes you from install to a running daemon; the [Command line](#command-line-090)
+section below is the reference for every command and exit code, and [Auto mode](auto-mode.md)
+explains the pipeline, policies, retention and failure codes.
+
+**Install.** The release archive holds `antinomie-monitor` (the window) and
+`antinomie-cli` side by side. `./install.sh` puts both on your path as `antinomie` and
+`antinomie-cli` in `~/.local/bin` (`./install.sh --uninstall` removes them; your data
+stays). Or run `./antinomie-cli` from the unpacked folder. `antinomie-cli --version`
+prints the app version; `antinomie-cli --help` lists the commands. QEMU, bubblewrap
+and the other tools are the same as for the window (see [Dependencies and analysis
+tools](#dependencies-and-analysis-tools)); the CLI needs no display, GTK or window system.
+
+**Check the host with `doctor`.** `antinomie-cli doctor` lists each runtime tool and who
+owns the data folder, and exits 20 when a required one is missing. For an unattended
+host say what you need: `antinomie-cli doctor --require qemu,qemu-img,bubblewrap,kvm`.
+A missing KVM is only a warning by default (VMs then run with TCG, slowly).
+
+**Use a data folder of its own.** `--data-dir PATH` selects it (the default is
+`$HOME/antinomie`, the window's). One process owns a data folder at a time, so give
+automation `~/auto`, `/var/lib/antinomie` or similar, never the window's folder.
+
+**The first job.** Install a base into the folder, make the lane VM, and submit one
+sample; the command runs the job itself and exits with its code.
+
+```text
+antinomie-cli --data-dir ~/auto base install ./bases/busybox
+antinomie-cli --data-dir ~/auto auto init --base busybox
+antinomie-cli --data-dir ~/auto auto submit ./sample.elf --verdict-exit --out ./report
+echo $?     # 0 clean_observed, 30 suspicious, 31 malicious, 32 inconclusive, 10 failed, 11 partial
+```
+
+`auto init` makes a VM, boots it once, and takes the clean snapshot that every job
+starts from; it also writes `policies/default.toml`. The report files (HTML and JSON by
+default) are in `./report`. See [Auto mode](#auto-mode-090) for the job commands.
+
+**The daemon.** For a queue that stays up, run `antinomie-cli --data-dir ~/auto auto
+daemon` (in the foreground; under systemd it is a service, see [Run it under
+systemd](auto-mode.md#run-it-under-systemd)). `auto submit`, `auto status`, `auto wait`
+and the other `auto` commands then talk to it over its socket, and `antinomie-cli ...
+config validate` checks `service.toml` and the policies before you reload it with
+`SIGHUP`.
+
+**Watch folders.** Add a folder to `service.toml` and every stable file dropped in it
+becomes a job under the policy you name:
+
+```toml
+[[inbox.watch]]
+path = "/srv/drop/default"
+policy = "default"
+```
+
+Files that are still growing, links, devices and files of other users are never
+taken, and a file the intake rejects moves to `rejected/` with a `.reason` file. The
+rules are in [Auto mode](auto-mode.md#watch-folders); `antinomie-cli auto watch list` shows each
+folder's state.
+
+**Before you leave it running,** read [Unattended use](security.md#unattended-use):
+the daemon's user, what the systemd unit restricts, which routes jobs may use, and what
+leaves the machine.
+
 ## Command line (0.9.0)
 
 `antinomie-cli` is the headless front end: the same engine as the window, with no
@@ -1708,8 +1772,8 @@ per line: a list command prints its items and then a last line
 | 130 | interrupted | Interrupted with Ctrl-C |
 
 **Commands in this build.** This list is what `antinomie-cli --help` shows; the
-`auto` commands are in [Auto mode](#auto-mode-090) below. The web layer is not
-shipped yet.
+`auto` commands are in [Auto mode](#auto-mode-090) below, and the walk-through from
+install to a daemon is [above](#command-line-and-automation-090). The web layer is not shipped yet.
 
 - `doctor [--require tool,...]` lists the runtime tools and exits 20 when a
   required one is missing. Without `--require` the tools the window also treats as
@@ -1903,6 +1967,9 @@ reset to a clean snapshot first, the recording is analysed, and a report and a
 label come out. Give it a data folder of its own (`--data-dir`), never the one
 the window uses: one process owns a data folder at a time, and the daemon keeps
 it for as long as it runs.
+
+The pipeline, policies, retention, failure codes and troubleshooting are in
+[Auto mode](auto-mode.md); this section lists the commands.
 
 **The daemon.** `antinomie-cli --data-dir ~/auto auto daemon` runs in the
 foreground until it is stopped; put it in the background with your service

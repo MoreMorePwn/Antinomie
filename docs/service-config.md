@@ -3,10 +3,10 @@
 [← Back to the overview](../README.md)
 
 > **Status in 0.9.0.** The files, their keys and `antinomie-cli config validate`
-> exist and are checked, and `antinomie-cli auto daemon` reads them: the socket,
-> the queue limits, the resource floors, the shutdown keys and the reload on
-> `SIGHUP`. Watch folders, retention, result files and notifications are parsed
-> and checked but the daemon does not act on them yet.
+> are checked, and `antinomie-cli auto daemon` acts on all of them: the socket, the
+> queue limits, the resource floors, the shutdown keys, the reload on `SIGHUP`, watch
+> folders, retention, result files and the `on_finish` command. Webhooks are parsed
+> and checked but not built. [Auto mode](auto-mode.md) explains them.
 
 Headless mode reads two kinds of file from the data directory. A person writes
 them; the program never rewrites them.

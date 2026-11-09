@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Example <data>/service.toml. Every key shown has its default; the file is
+# optional. Check it with: antinomie-cli --data-dir <data> config validate
+# Reference: docs/service-config.md. An unknown key is an error.
+
+[daemon]
+# socket = "<data>/run/antinomie.sock"
+lanes = 1
+shutdown = "cancel"          # or "drain": finish the running job first
+drain_timeout_s = 600
+shutdown_host_grace_s = 120
+
+[queue]
+max_queued = 1000
+per_client_queued = 100
+paused_on_start = false
+
+[resources]
+min_free_disk_gib = 20
+# min_free_ram_mib = 4096    # default: the VM's RAM plus 2048
+require_kvm = true
+
+[retention]
+jobs_days = 90
+recordings_days = 14
+max_recordings_gib = 200
+keep_failed = true
+
+# A folder to drop samples into (absolute path, owned by the daemon's user, not
+# writable by others). Add it to ReadWritePaths in the unit.
+# [[inbox.watch]]
+# path = "/srv/drop/default"
+# policy = "default"
+# delete_after = "move"      # or "delete", "keep"
+
+# A copy of job.json and the reports for every finished job.
+# [results]
+# dir = "/srv/results"
+
+# A command run when a job ends: argv, never a shell; five ANTINOMIE_* variables.
+# [notify]
+# on_finish = ["/usr/local/bin/antinomie-hook"]
+
+[log]
+level = "info"
+format = "text"

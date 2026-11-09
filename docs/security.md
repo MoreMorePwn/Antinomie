@@ -272,6 +272,69 @@ library deletes its archive but keeps its record and custody log. To remove
 everything, quit Antinomie, then delete the data directory, any disk or
 recording folders you chose, the cache and any old backup.
 
+## Unattended use
+
+Auto mode (`antinomie-cli auto daemon`, see [Auto mode](auto-mode.md)) runs samples
+with nobody watching. Everything above applies; this section adds what an unattended
+host needs.
+
+**The daemon's user.** A sample that escapes QEMU runs as the user that runs QEMU,
+which is the daemon's user. Whatever that user can reach is exposed: the sample
+library, every recording, API keys, and anything else in its home. Run the daemon as
+a dedicated user (`antinomie` in the shipped system unit) with no sudo, no SSH keys
+and no other data, on a host, VM or container that holds nothing else you need. Keep
+QEMU and the host kernel updated. Do not run it as root: no part of it needs to be.
+
+**Hardening that ships.** The unit files in `packaging/` (see [Run it under
+systemd](auto-mode.md#run-it-under-systemd)) set `NoNewPrivileges`, an empty
+capability set, `ProtectSystem=strict` with the data folder as the only writable place,
+`ProtectHome`, `PrivateTmp`, no kernel tunables, modules, logs or control groups,
+`RestrictAddressFamilies` to `AF_UNIX`, `AF_INET`, `AF_INET6` and `AF_NETLINK`,
+`RestrictNamespaces` to what bubblewrap makes, and a closed device policy that lists
+`/dev/kvm` and the few pseudo-devices QEMU and the sandboxes open (the user unit has
+no device policy, because a user manager cannot set one). They limit what an escape
+can touch; they do not make an escape harmless. `systemd-analyze security
+antinomie-auto.service` scores them.
+
+**Who can talk to the daemon.** Only its own user: the socket is mode 0600 in a 0700
+folder, and the daemon checks the user id of every connection. The daemon never opens
+a path a client names, checks each request strictly and bounds the socket (message
+size, requests, connections and subscriptions). Any program that runs as that user
+acts with every right, so a service that other people reach through it needs its own
+authentication layer.
+
+**Routes.** A job may use only `drop` (the default: attempts are captured and dropped)
+or `inet_sim` (simulated services). The live routes (Internet, Tor, VPN, SOCKS5) and
+NAT are refused by `config validate`, so an unattended sample cannot reach a third
+party. The lane VM is on a routed network, which drops everything between runs.
+
+**Inputs.** Samples arrive over the socket in pieces or from a watch folder, and are
+checked (size, type, architecture) before they enter the library. A watch folder must
+belong to the daemon's user and not be writable by others; the daemon never follows a
+link, never opens a FIFO or a device and refuses a file with more than one hard link or
+another owner. A sample never runs on the host: it is decrypted in memory and sent
+into the guest. The guest file name is the hash prefix plus a sanitised name.
+
+**What leaves the machine.** By default nothing: the daemon itself makes no request
+to any server (no update check, no catalog or rule download, no symbol or address
+lookup, and the IOC check uses the offline datasets you installed). What can leave:
+
+| What | Where | When |
+|---|---|---|
+| A sample's own network traffic | The simulated services (`inet_sim`), or nowhere (`drop`) | Always inside the host; not to the internet in 0.9.0 |
+| Bases, rules, analysis tools and datasets | Their hosts, as in [What the app itself contacts](#what-the-app-itself-contacts) | Only when an administrator runs `base download`, `rules update` or a similar command |
+| The result drop | A folder on this machine, mode 0600 in 0700 folders (`[results] dir`) | When configured |
+| The command hook | Whatever the command does with the job id, state, label, hash and the path of `job.json` | When `[notify] on_finish` is set; the command is yours |
+| Reports and recordings | Wherever you copy them | They are malware evidence: handle them as in [Sensitive data](#sensitive-data-and-where-it-lives) |
+
+There is no telemetry and no crash reporting. Logs carry hashes, ids, durations and
+error text, never sample bytes, terminal output, keys or passwords.
+
+**Keeping it small.** Retention deletes recordings after 14 days and job records after
+90 by default (`[retention]`); the library is never touched. Run `auto gc --dry-run` to
+see what a pass would remove. A file `run/PAUSE` in the data folder, or `auto queue
+pause`, stops new jobs within seconds.
+
 ## Device profile limits
 
 A device profile changes what the guest can read of its hardware identity
