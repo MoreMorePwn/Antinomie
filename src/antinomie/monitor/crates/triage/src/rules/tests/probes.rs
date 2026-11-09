@@ -540,3 +540,195 @@ pub fn the_hypervisor_flag_is_expected_under_a_cloud_profile() {
     assert!(lines.contains("expected under a cloud profile"), "{lines}");
     assert!(lines.contains("looks real"), "{lines}");
 }
+
+/// A compat call's id, with the buffer it captured under a layout name.
+fn compat_call(
+    abi: antinomie_monitor_core::syscalls::Abi,
+    number: u64,
+    name: &str,
+    args: [u64; 6],
+    key: &str,
+    layout: &str,
+    data: &[u8],
+) -> InvocationSummary {
+    let id = antinomie_monitor_core::syscalls::id(abi, number);
+    let mut row = sys(1, id, name, args, 0);
+    row.entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured(key, layout, data));
+    row
+}
+
+#[test]
+pub fn a_compat_sigaction_reads_its_handler_as_four_bytes() {
+    use antinomie_monitor_core::syscalls::Abi;
+    // The Go runtime's reset before an execve: sa_handler=SIG_DFL, sa_flags=
+    // SA_ONSTACK|SA_RESTART|SA_SIGINFO|SA_RESTORER; 8 bytes read as one word
+    // would be handler|flags<<32.
+    let reset = |abi: Abi, number: u64, layout: &str, handler: u32| {
+        let mut act = handler.to_le_bytes().to_vec();
+        act.extend(0x1800_0004u32.to_le_bytes());
+        act.extend([0; 12]);
+        compat_call(
+            abi,
+            number,
+            "rt_sigaction",
+            [5, 0x1000, 0, 8, 0, 0],
+            "arg1.sigaction",
+            layout,
+            &act,
+        )
+    };
+    for (abi, number, layout) in [
+        (Abi::Arm, 174, "linux-6.12.94/arm/compat_sigaction"),
+        (Abi::I386, 174, "linux-6.12.94/x86/compat_sigaction"),
+    ] {
+        assert!(
+            !has(
+                &run(vec![reset(abi, number, layout, 0)]),
+                "evasion.debugger_check"
+            ),
+            "{layout}: SIG_DFL"
+        );
+        // SIG_IGN is 1: still no handler.
+        assert!(!has(
+            &run(vec![reset(abi, number, layout, 1)]),
+            "evasion.debugger_check"
+        ));
+        // A real handler still counts.
+        let out = run(vec![reset(abi, number, layout, 0x0001_2345)]);
+        assert!(has(&out, "evasion.debugger_check"), "{layout}: handler");
+        assert!(detail(rows(&out, "evasion.debugger_check")[0])
+            .join("\n")
+            .contains("SIGTRAP handler installed"));
+    }
+    // The 64-bit layouts are unchanged: handler 0 with flags set is no handler,
+    // a handler address is one.
+    for layout in [
+        "linux-6.12.94/x86_64/sigaction",
+        "linux-6.12.94/aarch64/sigaction",
+    ] {
+        let mut act = vec![0u8; 8];
+        act.extend(0x1800_0004u64.to_le_bytes());
+        act.extend([0; 16]);
+        let none = with_layout(
+            sys(1, 13, "rt_sigaction", [5, 0x1000, 0, 8, 0, 0], 0),
+            "arg1.sigaction",
+            layout,
+            &act,
+        );
+        assert!(!has(&run(vec![none]), "evasion.debugger_check"), "{layout}");
+        act[..8].copy_from_slice(&0x40_1000u64.to_le_bytes());
+        let set = with_layout(
+            sys(1, 13, "rt_sigaction", [5, 0x1000, 0, 8, 0, 0], 0),
+            "arg1.sigaction",
+            layout,
+            &act,
+        );
+        assert!(has(&run(vec![set]), "evasion.debugger_check"), "{layout}");
+    }
+}
+
+fn with_layout(
+    mut row: InvocationSummary,
+    key: &str,
+    layout: &str,
+    data: &[u8],
+) -> InvocationSummary {
+    row.entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured(key, layout, data));
+    row
+}
+
+#[test]
+pub fn compat_sysinfo_and_sleeps_read_their_own_widths() {
+    use antinomie_monitor_core::syscalls::Abi;
+    // AArch32 sysinfo: uptime is a 4-byte long at 0, next to loads[0].
+    let mut info = 45u32.to_le_bytes().to_vec();
+    info.extend(0xffff_ffffu32.to_le_bytes());
+    info.resize(64, 0);
+    let id = antinomie_monitor_core::syscalls::id(Abi::Arm, 116);
+    let row = with_layout_exit(
+        sys(1, id, "sysinfo", [0x1000, 0, 0, 0, 0, 0], 0),
+        "arg0.data",
+        "linux-6.12.94/arm/sysinfo",
+        &info,
+    );
+    let out = run(vec![row]);
+    assert!(detail(rows(&out, "evasion.sandbox_probe")[0])
+        .join("\n")
+        .contains("up 45 s"));
+    // ia32 nanosleep(600 s): two 4-byte words, a long sleep; 8 bytes read as
+    // one word would also be 600 but a nanosecond in the high word must not
+    // turn a 2 s sleep into one.
+    let sleep = |seconds: u32, nanos: u32| {
+        let mut data = seconds.to_le_bytes().to_vec();
+        data.extend(nanos.to_le_bytes());
+        compat_call(
+            Abi::I386,
+            162,
+            "nanosleep",
+            [0x1000, 0, 0, 0, 0, 0],
+            "arg0.data",
+            "linux-6.12.94/x86/old_timespec",
+            &data,
+        )
+    };
+    assert!(has(&run(vec![sleep(600, 0)]), "evasion.long_sleep"));
+    assert!(!has(
+        &run(vec![sleep(2, 500_000_000)]),
+        "evasion.long_sleep"
+    ));
+}
+
+#[test]
+pub fn a_compat_utimensat_of_utime_now_is_not_a_timestomp() {
+    use antinomie_monitor_core::syscalls::Abi;
+    let stamps = |nanos: [u32; 2]| {
+        let mut data = Vec::new();
+        for n in nanos {
+            data.extend(1_700_000_000u32.to_le_bytes());
+            data.extend(n.to_le_bytes());
+        }
+        let mut row = compat_call(
+            Abi::Arm,
+            348,
+            "utimensat",
+            [0xffff_ff9c, 0x2000, 0x1000, 0, 0, 0],
+            "arg2.times",
+            "linux-6.12.94/arm/old_timespec[2]",
+            &data,
+        );
+        let path = with_path(call(1, 348, "utimensat", 0), "arg1.path", "/etc/cron.d/x");
+        row.entry
+            .as_mut()
+            .unwrap()
+            .fields
+            .extend(path.entry.unwrap().fields);
+        row
+    };
+    assert!(!has(
+        &run(vec![stamps([0x3fff_ffff, 0x3fff_ffff])]),
+        "evasion.timestomp"
+    ));
+    assert!(has(&run(vec![stamps([0, 0])]), "evasion.timestomp"));
+}
+
+fn with_layout_exit(
+    mut row: InvocationSummary,
+    key: &str,
+    layout: &str,
+    data: &[u8],
+) -> InvocationSummary {
+    row.exit
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured(key, layout, data));
+    row
+}

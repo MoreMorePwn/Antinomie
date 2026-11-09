@@ -14,6 +14,14 @@ x86 programs by their own table.
 
 ### Host
 
+- **No false "SIGTRAP handler" debugger check on AArch32 and ia32 programs
+  (ANT-T0427).** The debugger-check rule read the `sigaction` handler as one 8-byte
+  word, so a compat program's reset of SIGTRAP (`sa_handler=SIG_DFL`, flags set)
+  read as handler|flags<<32 and every child of an ARM32 Go program got a finding.
+  Rules now read `sigaction`, `sysinfo`, sleep and select timeouts, `timerfd_settime`
+  and `utimensat` members by the width of the layout the guest captured them with
+  (4-byte words for a compat program, 8 for a native or time64 one).
+
 - **Runs know their job, sensitive reads reach the service log, `sample add` goes
   through the daemon, and `run export --sensitive` writes packet and call bytes
   (ANT-T0421).** `run list` showed `job_id: null` and `--job` found nothing; the

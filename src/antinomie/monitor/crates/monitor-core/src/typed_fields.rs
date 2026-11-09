@@ -52,7 +52,7 @@ pub use arrays::{
 };
 pub use bpf::{attach_type_name, attr_member as bpf_attr_member, map_type_name, prog_type_name};
 pub(crate) use layout::{LSM_ATTR, LSM_FLAGS};
-pub use layout::{abi_of_layout, compat_gap};
+pub use layout::{abi_of_layout, compat_gap, member_value};
 pub use records::capability_name;
 pub use signals::signal_name;
 pub use sockaddr::sockaddr;

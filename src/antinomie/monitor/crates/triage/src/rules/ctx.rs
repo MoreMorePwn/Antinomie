@@ -257,6 +257,41 @@ impl<'a> Ctx<'a> {
         ))
     }
 
+    /// Whether the call is a compat one (AArch32 on arm64, ia32 on x86-64):
+    /// its `long` and pointer are 4 bytes.
+    pub fn compat(&self) -> bool {
+        syscalls::table_of(self.event.syscall_nr)
+            .is_some_and(|table| matches!(table.abi, syscalls::Abi::Arm | syscalls::Abi::I386))
+    }
+
+    /// A scalar member of an argument's pointee, read by the layout the
+    /// guest captured it with, so a compat program's 4-byte members and a
+    /// 64-bit time structure each read at their own width. `native_at` and
+    /// `compat_at` are the byte offsets read as a 64-bit and a 32-bit word
+    /// when the inventory has no such layout (a field without a layout
+    /// name; a compat layout the inventory lacks). None when not captured.
+    pub fn member(
+        &self,
+        argument: usize,
+        member: &str,
+        native_at: usize,
+        compat_at: usize,
+    ) -> Option<u64> {
+        let field = self.field(argument, "")?;
+        let bytes = trace::covered_preview(field);
+        if let Some(read) =
+            antinomie_monitor_core::typed_fields::member_value(&field.layout, bytes, member)
+        {
+            return read;
+        }
+        if self.compat() {
+            let word = bytes.get(compat_at..compat_at + 4)?;
+            Some(u64::from(u32::from_le_bytes(word.try_into().ok()?)))
+        } else {
+            self.word(argument, "", native_at)
+        }
+    }
+
     /// The socket address the call was given or got back.
     pub fn address(&self, argument: usize) -> Option<sigma_events::Address> {
         sigma_events::address(self.call, self.name, argument)

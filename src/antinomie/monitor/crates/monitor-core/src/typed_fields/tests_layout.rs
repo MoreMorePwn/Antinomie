@@ -570,3 +570,48 @@ fn msghdr_and_the_iovec_mmsghdr_and_epoll_arrays() {
     assert_eq!(summary.heading, "2 messages, 120 bytes");
     assert_eq!(summary.items[1], "20 bytes in 3 buffers");
 }
+
+#[test]
+fn member_value_reads_a_member_at_its_layouts_own_width() {
+    // compat_sigaction: 4-byte handler at 0 and flags at 4.
+    let mut act = [0u8; 20];
+    put(&mut act, 0, &0x1234u32.to_le_bytes());
+    put(&mut act, 4, &0x1800_0004u32.to_le_bytes());
+    for layout in [
+        "linux-6.12.94/arm/compat_sigaction",
+        "linux-6.12.94/x86/compat_sigaction",
+    ] {
+        assert_eq!(member_value(layout, &act, "sa_handler"), Some(Some(0x1234)));
+        assert_eq!(
+            member_value(layout, &act, "sa_flags"),
+            Some(Some(0x1800_0004))
+        );
+        // Bytes that stop short of the member.
+        assert_eq!(member_value(layout, &act[..2], "sa_handler"), Some(None));
+    }
+    // LP64: an 8-byte handler.
+    let mut wide = [0u8; 32];
+    put(&mut wide, 0, &0x1_0000_1234u64.to_le_bytes());
+    assert_eq!(
+        member_value("linux-6.12.94/aarch64/sigaction", &wide, "sa_handler"),
+        Some(Some(0x1_0000_1234))
+    );
+    // A nested member, and the two timespec widths of one compat ABI.
+    let mut spec = [0u8; 16];
+    put(&mut spec, 0, &7u32.to_le_bytes());
+    assert_eq!(
+        member_value("linux-6.12.94/arm/old_timespec", &spec, "tv_sec"),
+        Some(Some(7))
+    );
+    put(&mut spec, 0, &9u64.to_le_bytes());
+    assert_eq!(
+        member_value("linux-6.12.94/arm/timespec", &spec, "tv_sec"),
+        Some(Some(9))
+    );
+    // Unknown layout or member: None, so the caller picks its fallback.
+    assert_eq!(member_value("", &spec, "tv_sec"), None);
+    assert_eq!(
+        member_value("linux-6.12.94/arm/timespec", &spec, "nope"),
+        None
+    );
+}

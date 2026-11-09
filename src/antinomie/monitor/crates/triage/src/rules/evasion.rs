@@ -148,14 +148,14 @@ pub fn sleep(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         "nanosleep" | "clock_nanosleep" => probes::sleep_ns(cx),
         // select(0, NULL, NULL, NULL, timeval)
         "select" if cx.args[0] == 0 => cx
-            .word(4, "", 0)
+            .member(4, "tv_sec", 0, 0)
             .map(|seconds| seconds.saturating_mul(1_000_000_000)),
         // poll(NULL, 0, timeout in milliseconds)
         "poll" if cx.args[1] == 0 => Some((cx.args[2] as i32).max(0) as u64 * 1_000_000),
         "alarm" => Some(cx.args[0].saturating_mul(1_000_000_000)),
         // timerfd_settime: it_value is the second timespec of the structure
         "timerfd_settime" => cx
-            .word(2, "", 16)
+            .member(2, "it_value.tv_sec", 16, 8)
             .map(|seconds| seconds.saturating_mul(1_000_000_000)),
         _ => None,
     };
