@@ -182,6 +182,8 @@ pub struct NetAttribution {
     window: Option<(u64, u64)>,
     /// Addresses the run's own DNS answers gave to a name, by address.
     names_at: BTreeMap<IpAddr, Vec<String>>,
+    /// The router of the guest's own NAT network, whose DHCP is background.
+    gateway: Option<IpAddr>,
 }
 
 fn unspecified(ip: IpAddr) -> bool {
@@ -200,7 +202,14 @@ impl NetAttribution {
             by_port,
             window: None,
             names_at: BTreeMap::new(),
+            gateway: None,
         }
+    }
+
+    /// The guest's own router: its DHCP ports are the base image's background.
+    pub fn with_gateway(mut self, gateway: Option<IpAddr>) -> Self {
+        self.gateway = gateway;
+        self
     }
 
     /// The attribution of the calls a scan collected, with host times from
@@ -387,7 +396,11 @@ impl NetAttribution {
     /// NTP name got.
     pub fn background(&self, endpoint: (IpAddr, u16), udp: bool) -> Option<(&'static str, String)> {
         let value = antinomie_monitor_core::ioc::kind::ip_port(endpoint.0, endpoint.1);
-        if let Some(why) = baseline::endpoint_noise(&value, udp) {
+        if let Some(why) = baseline::endpoint_noise_at(
+            &value,
+            udp,
+            self.gateway.map(|gateway| gateway.to_string()).as_deref(),
+        ) {
             return Some((
                 crate::summary::indicators::background_kind(&value, why),
                 why.to_owned(),
@@ -700,6 +713,32 @@ mod tests {
         let raw = attribution.source_of(&key(false, ("203.0.113.77", 22), (5 * SEC, 6 * SEC)));
         assert_eq!(raw, Source::Unattributed);
         assert_eq!(raw.label(), "Unattributed");
+    }
+
+    #[test]
+    fn dhcp_to_the_guests_own_gateway_is_background_and_only_that_gateway() {
+        let dhcp = key(true, ("192.168.1.1", 67), (5 * SEC, 5 * SEC));
+        // The profile's network: its router is the DHCP server.
+        let own = NetAttribution::default().with_gateway(Some(ip("192.168.1.1")));
+        assert_eq!(own.source_of(&dhcp).label(), "Base image background: DHCP");
+        let reply = key(true, ("192.168.1.1", 68), (5 * SEC, 5 * SEC));
+        assert_eq!(own.source_of(&reply).label(), "Base image background: DHCP");
+        // Another host of that network, another port, or TCP stay the run's.
+        for other in [
+            key(true, ("192.168.1.9", 67), (5 * SEC, 5 * SEC)),
+            key(true, ("192.168.1.1", 443), (5 * SEC, 5 * SEC)),
+            key(false, ("192.168.1.1", 67), (5 * SEC, 5 * SEC)),
+        ] {
+            assert_eq!(own.source_of(&other), Source::Unattributed);
+        }
+        // With no gateway recorded, QEMU's default 10.0.2.2 is all it knows.
+        let none = NetAttribution::default();
+        assert_eq!(none.source_of(&dhcp), Source::Unattributed);
+        let default = key(true, ("10.0.2.2", 67), (5 * SEC, 5 * SEC));
+        assert_eq!(
+            none.source_of(&default).label(),
+            "Base image background: DHCP"
+        );
     }
 
     #[test]

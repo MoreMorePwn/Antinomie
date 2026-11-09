@@ -15,7 +15,7 @@ const LONG: Duration = Duration::from_secs(60);
 fn script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, body).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_exec::make_executable(&path, 0o755);
     path
 }
 

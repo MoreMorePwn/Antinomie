@@ -828,7 +828,9 @@ The network capture is the guest's own view on every route.
   those that were only opened, read or probed); **Hide stdio**, **Hide library**
   and **Changed only** narrow it, the filter matches the path and any other name
   the file was given, and the order can be first or last touched, most calls or
-  path. Choose a file to see its history as a graph: one box for each stretch of
+  path. A call made through a descriptor (a write after the file was renamed, by
+  any thread or a `dup`) stays in the history of the file it was opened on.
+  Choose a file to see its history as a graph: one box for each stretch of
   the same call by the same process (create, open, read, write ×3, rename, delete),
   joined in the order the calls happened, on a lane for each process involved.
   Process names (`name (pid · tid)`) stay at the left of the graph, cut to fit (the
@@ -1073,7 +1075,9 @@ The network capture is the guest's own view on every route.
   `recvfrom`, `bind`), matched by address and protocol, with time telling processes apart when several made calls to one address (the host's estimate of the guest's clock can be seconds off, so a single caller is believed whatever the clocks say): a process as
   `name (pid · tid)` (a click opens it in Details; several processes show the
   first and `+N`), **Base image background: NTP** (or DHCP, apt: the traffic the
-  Summary's Indicators set apart, and a base program's own flows), or
+  Summary's Indicators set apart, and a base program's own flows; DHCP to the
+  gateway of a profile's own guest network counts too, read from the run's
+  record), or
   **Unattributed** when no recorded call matches, as for a raw socket. Filter it
   with `network.source`, `network.source_kind` (`process`, `background`,
   `unattributed`), `network.source_process` and `network.source_pid`. A run

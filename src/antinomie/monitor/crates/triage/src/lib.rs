@@ -378,6 +378,9 @@ pub struct ScanRequest {
     /// The kernel revision of the run's base, when the run recorded it: from
     /// revision 18 a read or write with no position record is a stream.
     pub kernel_revision: Option<u32>,
+    /// The router of the guest's own NAT network, when the VM's profile set
+    /// one: its DHCP ports are the base image's background like 10.0.2.2's.
+    pub guest_gateway: Option<std::net::IpAddr>,
     /// The launch the run was asked for: the root's pid, the program path and
     /// its arguments. Names the root when the recording has no launch record
     /// of it (its end record, or the whole event, never arrived).

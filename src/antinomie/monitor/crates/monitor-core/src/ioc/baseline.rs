@@ -101,10 +101,19 @@ fn host(indicator: &Indicator) -> Option<String> {
 
 /// Why a UDP endpoint is the base's: DHCP to the QEMU server, or NTP.
 pub fn endpoint_noise(value: &str, udp: bool) -> Option<&'static str> {
+    endpoint_noise_at(value, udp, None)
+}
+
+/// [`endpoint_noise`] for a guest whose NAT network is its own: `gateway` is
+/// that network's router, the DHCP server the base's client talks to.
+pub fn endpoint_noise_at(value: &str, udp: bool, gateway: Option<&str>) -> Option<&'static str> {
     let (address, port) = value.rsplit_once(':')?;
     let port = port.parse::<u16>().ok()?;
     if udp && port == 123 {
         return Some("NTP, the base image's clock sync");
+    }
+    if udp && matches!(port, 67 | 68) && gateway.is_some_and(|gateway| gateway == address) {
+        return Some("DHCP, the base image's address request");
     }
     ENDPOINTS
         .iter()
