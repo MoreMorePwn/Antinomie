@@ -1231,6 +1231,11 @@ this host without the features, and an older host refuses a revision-22 base.
   and `manifest.json` (`save_run_analysis()`), since the run has no root task
   and is never in `runs`. A path the guest cannot read either leaves the old
   behaviour. This part works on every base with specimens (revision 10).
+* **After the VM stops.** A host-side job a VM stop carries on (`detach_host_side()`)
+  now has its queue marked `session_ended`, so its final report goes into its run's
+  `run.json` and `manifest.json` (`save_run_analysis()`); that flag was never set
+  before, and a run whose analysis finished after the stop kept "acquiring" or
+  "running" in its record while its `report.json` was complete.
 * **Tools.** `guest-run` takes `"host_copy": true` (the upload at the run's
   path is the host copy), `"expect_refused": true`, `"no_evidence_wait": true`
   and `"saved_analysis_wait"` (the saved analyses after the VM stopped).
