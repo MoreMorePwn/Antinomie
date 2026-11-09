@@ -17,6 +17,11 @@ pub struct RunEnvironment {
     /// How the VM's network card is connected ("Routed", "NAT", "Isolated").
     pub network: String,
     pub stealth: String,
+    /// The router of the guest's own network, when the VM's profile gives it
+    /// one (the default 10.0.2.2 is not written): the address the base's DHCP
+    /// client talks to. Written only when set, so older records keep their hash.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub guest_gateway: String,
     /// The accelerator the boot actually used (`kvm`, `tcg`, or `tcg (KVM
     /// unavailable)`). Written only when known, so a run record made before
     /// this (and its hash) is what it was.
@@ -98,6 +103,11 @@ impl RunEnvironment {
             }
             .into(),
             stealth: vm.stealth.preset.label().into(),
+            guest_gateway: if vm.stealth.nat.network.is_empty() {
+                String::new()
+            } else {
+                vm.stealth.nat.gateway.clone()
+            },
             accelerator: inputs.accelerator.unwrap_or_default().into(),
             base_name: inputs
                 .base_name
@@ -177,6 +187,26 @@ mod tests {
         assert_eq!(first.hash, same.hash);
         first.cpus = 4;
         assert_ne!(first.hash, first.compute_hash());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_guest_network_gateway_is_recorded_only_when_the_profile_sets_one() {
+        let dir = std::env::temp_dir().join(format!("ant-env-{}", crate::storage::unique_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut vm = vm();
+        let plain = RunEnvironment::capture(&inputs(&vm, &dir));
+        assert_eq!(plain.guest_gateway, "");
+        // An unset gateway leaves the record, and so its hash, as it was.
+        assert!(
+            !serde_json::to_string(&plain)
+                .unwrap()
+                .contains("guest_gateway")
+        );
+        vm.stealth.nat = crate::stealth::NatNetwork::home();
+        let home = RunEnvironment::capture(&inputs(&vm, &dir));
+        assert_eq!(home.guest_gateway, "192.168.1.1");
+        assert_ne!(home.hash, plain.hash);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

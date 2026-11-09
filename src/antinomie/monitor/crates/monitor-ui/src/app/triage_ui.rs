@@ -121,6 +121,8 @@ impl MonitorApp {
                 .as_ref()
                 .and_then(|environment| environment.kernel_revision),
         );
+        self.triage
+            .set_guest_gateway(antinomie_triage::ScanRequest::guest_gateway_of(&run));
         self.triage.set_curl(&self.options.curl);
         if self.triage.take_rule_manager() {
             self.open_library(crate::workspace::LibraryPage::Rules);

@@ -160,6 +160,11 @@ impl TriageView {
         self.scan_request.kernel_revision = revision;
     }
 
+    /// The router of the selected run's own guest network (`None`: the default).
+    pub(crate) fn set_guest_gateway(&mut self, gateway: Option<std::net::IpAddr>) {
+        self.scan_request.guest_gateway = gateway;
+    }
+
     /// The launch the selected run was asked for, to name its root process
     /// when the recording holds no launch record of it.
     pub(crate) fn set_launch(&mut self, run: Option<&antinomie_monitor_core::RunSummary>) {

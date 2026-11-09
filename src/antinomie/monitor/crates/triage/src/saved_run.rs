@@ -178,6 +178,13 @@ impl ScanRequest {
             .and_then(|environment| environment.kernel_revision)
     }
 
+    /// The router of the run's own guest network, when its VM profile set one.
+    pub fn guest_gateway_of(run: &RunSummary) -> Option<std::net::IpAddr> {
+        run.environment
+            .as_ref()
+            .and_then(|environment| environment.guest_gateway.parse().ok())
+    }
+
     /// The request the GUI's Triage holds for the saved `run` with `settings`
     /// and no filter, sort or page: the index the tables and the export read.
     pub fn for_run(input: &TriageInput<'_>, run: &RunSummary, settings: &TriageSettings) -> Self {
@@ -186,6 +193,7 @@ impl ScanRequest {
         request.apply_settings(settings);
         request.launch = Self::launch_of(Some(run));
         request.kernel_revision = Self::kernel_revision_of(run);
+        request.guest_gateway = Self::guest_gateway_of(run);
         request
     }
 }

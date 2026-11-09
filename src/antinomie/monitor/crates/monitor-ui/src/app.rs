@@ -792,6 +792,9 @@ impl eframe::App for MonitorApp {
                 .as_ref()
                 .and_then(|environment| environment.kernel_revision)
         }));
+        self.triage.set_guest_gateway(
+            triage_run.and_then(antinomie_triage::ScanRequest::guest_gateway_of),
+        );
         antinomie_monitor_core::file_before_store::set_limits(self.settings.before_limits());
         self.triage
             .set_toast_high(self.settings.toast_high_findings);

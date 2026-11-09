@@ -52,6 +52,23 @@ x86 programs by their own table.
   A base that cannot load is listed with the reason (Library page, `base
   list`) and no longer hides the others.
 
+- **A file's history keeps every call after a rename (ANT-T0419).** Triage >
+  Files > Per-file history listed a file twice, or lost calls, when a program
+  renamed a file and then wrote through the descriptor it had opened before (a
+  ransomware that writes a trailer after renaming to its own extension, with
+  worker threads sharing the descriptor or a `dup` of it). Those writes carry no
+  file identity and the name they were opened by no longer led to the file. A
+  call made by descriptor now follows the descriptor to the file it was opened
+  on, whatever thread made it and whatever the file is called now.
+
+- **DHCP to a custom guest network's gateway is base image background
+  (ANT-T0418).** With a profile that gives the guest its own NAT network (a home
+  network's 192.168.1.0/24, say), the base's DHCP traffic to that network's
+  router (`192.168.1.1:67` and `:68`) showed as **Unattributed** in Triage >
+  Network > Endpoints. The run record now keeps the VM's gateway and the Source
+  column reads it, so that traffic is **Base image background: DHCP** like
+  10.0.2.2's. Runs saved before this keep QEMU's default address only.
+
 - **The data folder says who owns it.** The process that takes the data folder
   writes `run/owner.json` (its pid, whether it is the window, a daemon or a
   command, when it started) and removes it on a clean exit. A second Antinomie

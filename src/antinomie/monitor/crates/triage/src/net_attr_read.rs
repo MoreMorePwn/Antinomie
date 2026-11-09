@@ -73,7 +73,9 @@ pub fn read_calls(
         .ok()
         .flatten()
         .and_then(|facts| facts.ended_ms);
-    Ok(net_attr::NetAttribution::from_log(&log.net, clock).within(started_ms, ended_ms))
+    Ok(net_attr::NetAttribution::from_log(&log.net, clock)
+        .within(started_ms, ended_ms)
+        .with_gateway(request.guest_gateway))
 }
 
 #[cfg(test)]
