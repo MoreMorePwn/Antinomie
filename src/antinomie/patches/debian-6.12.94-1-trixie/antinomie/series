@@ -90,3 +90,9 @@
 0051-antinomie-capture-compat-futex-timeouts-aarch32-epoll-waits-and-sysv-ipc-control-records.patch
 0052-antinomie-show-a-desktop-or-laptop-machine-s-devices-for-qemu-s.patch
 0053-antinomie-boot-the-guest-its-boot-age-ago-and-step-to-the-present-at-the-first-launch.patch
+# Contract revision 22 in 0.9.0: specimen digests, the exit hold of the dump trigger, the compat
+# structures of the AArch32 evaluation, cores with non-resident pages
+0054-antinomie-give-a-specimen-copy-s-sha-256-in-its-acquisition-reply.patch
+0055-antinomie-hold-an-exiting-process-of-a-dump-trigger-run-until-the-host-has-judged-it.patch
+0056-antinomie-capture-the-compat-structures-the-aarch32-evaluation-found-recorded-by-address-only.patch
+0057-antinomie-read-non-resident-pages-into-a-live-core-on-request-and-count-what-a-core-lacks.patch

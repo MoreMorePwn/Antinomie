@@ -40,6 +40,85 @@ pub struct CoreLimits {
     /// Revision 21: the guest writes ELF32 cores of AArch32 tasks (arm64 guests only).
     #[serde(default)]
     pub compat_elf32: bool,
+    /// Revision 22: `CORE_STATUS` can append what a core lacks (COVERAGE).
+    #[serde(default)]
+    pub coverage: bool,
+    /// Revision 22: a live core can read the pages that are not in memory too.
+    #[serde(default)]
+    pub nonresident: bool,
+}
+
+/// What a core lacks, as the guest counted it (CORE_STATUS COVERAGE,
+/// contract revision 22): the host need not open the file to say it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CoreCoverage {
+    /// Threads of the process whose registers are not in the core's notes.
+    pub threads_lost: u32,
+    /// Pages selected but not kept; None when the guest did not count them
+    /// (a core its exit writer wrote).
+    pub pages_unavailable: Option<u32>,
+    /// Pages that were not in memory and were read in (Read non-resident pages).
+    pub pages_read_in: u32,
+}
+
+impl CoreCoverage {
+    /// The coverage words of a status reply (16 bytes).
+    pub fn parse(words: &[u8]) -> Result<Self, String> {
+        use crate::parser::u32_at;
+        let word = |offset| u32_at(words, offset).map_err(|error| error.to_string());
+        if words.len() != 16 || word(12)? != 0 {
+            return Err("invalid process-core coverage counts".into());
+        }
+        let unavailable = word(4)?;
+        Ok(Self {
+            threads_lost: word(0)?,
+            pages_unavailable: (unavailable != u32::MAX).then_some(unavailable),
+            pages_read_in: word(8)?,
+        })
+    }
+
+    /// The words of a partial core's message, from the guest's counts.
+    pub fn text(&self, threads: u32, read_nonresident: bool) -> String {
+        let contexts = if self.threads_lost > 0 {
+            format!(
+                "{threads} of {} thread contexts were captured ({} lost)",
+                threads + self.threads_lost,
+                self.threads_lost
+            )
+        } else {
+            format!(
+                "all {threads} thread context{} captured",
+                if threads == 1 { " was" } else { "s were" }
+            )
+        };
+        let read_in = if self.pages_read_in > 0 {
+            format!(
+                "; {} page{} not in memory {} read in",
+                self.pages_read_in,
+                if self.pages_read_in == 1 { "" } else { "s" },
+                if self.pages_read_in == 1 {
+                    "was"
+                } else {
+                    "were"
+                }
+            )
+        } else {
+            String::new()
+        };
+        let pages = match self.pages_unavailable {
+            Some(0) => "every selected page has its bytes".to_owned(),
+            Some(count) if read_nonresident => format!(
+                "{count} selected page{} have no bytes: never touched, or beyond the budget or the deadline",
+                if count == 1 { "" } else { "s" }
+            ),
+            Some(count) => format!(
+                "{count} selected page{} have no bytes: not in memory when read (tick Read non-resident pages to read them in), or never touched",
+                if count == 1 { "" } else { "s" }
+            ),
+            None => "the guest did not count the pages it left out".to_owned(),
+        };
+        format!("Partial: {contexts}; {pages}{read_in}.")
+    }
 }
 
 impl CoreLimits {
@@ -55,6 +134,8 @@ impl CoreLimits {
         chunked: false,
         fast_read: false,
         compat_elf32: false,
+        coverage: false,
+        nonresident: false,
     };
 
     /// Decode a `CORE_CAPS` reply (48 bytes).
@@ -78,10 +159,13 @@ impl CoreLimits {
             chunked: flags & 8 != 0,
             fast_read: flags & 16 != 0,
             compat_elf32: flags & 32 != 0,
+            coverage: flags & 64 != 0,
+            nonresident: flags & 128 != 0,
         };
         if word(0)? != 1
-            // 32: revision 21's ELF32 cores of AArch32 tasks (`compat_elf32`).
-            || flags & !0x3f != 0
+            // 32: revision 21's ELF32 cores of AArch32 tasks (`compat_elf32`);
+            // 64, 128: revision 22's COVERAGE and NONRESIDENT.
+            || flags & !0xff != 0
             || flags & 5 != 5
             || !(CORE_LEGACY_SIZE..=CORE_MAX_SUPPORTED).contains(&limits.max_size)
             || limits.pool_size < limits.max_size
@@ -459,6 +543,29 @@ pub fn ended_without_core(outcome: &CoreOutcome, live: bool) -> CoreReason {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_guest_s_coverage_counts_read_as_plain_words() {
+        let mut words = Vec::new();
+        for word in [0u32, u32::MAX, 0, 0] {
+            words.extend(word.to_le_bytes());
+        }
+        let exit = CoreCoverage::parse(&words).unwrap();
+        assert_eq!(
+            exit.pages_unavailable, None,
+            "an exit core's writer does not count"
+        );
+        assert!(exit.text(2, false).contains("did not count"));
+        words[4..8].copy_from_slice(&7u32.to_le_bytes());
+        let resident = CoreCoverage::parse(&words).unwrap();
+        assert!(
+            resident
+                .text(1, false)
+                .contains("tick Read non-resident pages")
+        );
+        words[12] = 1;
+        assert!(CoreCoverage::parse(&words).is_err());
+        assert!(CoreCoverage::parse(&words[..12]).is_err());
+    }
     use super::*;
 
     fn caps(max: u64, flags: u32) -> Vec<u8> {
@@ -487,7 +594,10 @@ mod tests {
         assert!(CoreLimits::parse(&caps(32 * MIB, 0x1f)).is_err());
         // Revision 21's COMPAT_ELF32 bit (32) is known; the next one is not.
         assert!(CoreLimits::parse(&caps(128 * MIB, 0x3f)).is_ok());
-        assert!(CoreLimits::parse(&caps(128 * MIB, 0x5f)).is_err());
+        // 64 and 128: revision 22's COVERAGE and NONRESIDENT; 256 is unknown.
+        let current = CoreLimits::parse(&caps(128 * MIB, 0xff)).unwrap();
+        assert!(current.coverage && current.nonresident);
+        assert!(CoreLimits::parse(&caps(128 * MIB, 0x11f)).is_err());
         let mut bad = caps(128 * MIB, 0x1f);
         bad[0] = 2;
         assert!(CoreLimits::parse(&bad).is_err());

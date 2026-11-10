@@ -6,10 +6,11 @@ it runs.
 
 ## 0.9.0 — 2026-MM-DD
 
-Runs the bases 0.8.3 runs (contract revision 20) and the bases built by this
-release (contract revision 21), arm64 BusyBox and Debian 13 Minimal among
-them. An app older than 0.9.0 refuses a revision-21 base and an arm64 base
-before it starts a VM. x86-64 bases built by this release also record 32-bit
+Runs the bases 0.8.3 runs (contract revision 20), revision-21 bases and the
+bases built by this release (contract revision 22), arm64 BusyBox and Debian 13
+Minimal among them. An app older than 0.9.0 refuses a revision-21 or 22 base and
+an arm64 base before it starts a VM; on a revision-21 base the revision-22
+features below say they need a newer base. x86-64 bases built by this release also record 32-bit
 x86 programs by their own table.
 
 ### Host
@@ -77,6 +78,57 @@ x86 programs by their own table.
   ARP; `start.network_wait_secs`, 30 s, 0 for off), notes a run that started without a
   network, and Triage's notes count the ENETUNREACH calls and their window. No guest
   change; the copy's own calls are still not recorded.
+
+- **The dump trigger catches a process that exits a millisecond after its match
+  (ANT-T0342).** A process that wrote its cron entry and exited 1 ms later was gone
+  before its core could be requested (the host answers in about a millisecond on an
+  idle host, a hundred or more under load). On a revision-22 base a run that asks for
+  a core on suspicious activity holds each of its processes at its exit, before
+  anything of it is torn down, for at most 50 ms (400 ms under TCG, an arm64 guest): the host judges the process's last
+  calls, then asks for its core, which the process writes itself, whole, or lets it
+  go at once when no rule matched. The run's note says "held at its exit". SIGKILL, a
+  stopped run and a process whose Core dump on exit is armed are never held. An older
+  base keeps the old behaviour and the run's notes say so.
+
+- **Read non-resident pages into a live core, and the counts of what a core lacks
+  (ANT-T0343).** A core taken while the process runs (the dump trigger's, or **Dump
+  core**) had only the pages that were in memory, so it was usually Partial
+  ("pages unavailable under resident-only"). On a revision-22 base the new **Read
+  non-resident pages** box (Run program > Dumps, under the trigger's core, and in the
+  Dump core dialog) has the guest read swapped-out and dropped file pages in, as a
+  core on exit does, within the budget and the deadline; the core's record says
+  which policy it used. The guest now counts what a core lacks (thread contexts
+  lost, pages left out, pages read in) and the partial core's message gives those
+  counts without opening the file. On an older base the box is disabled and a
+  request for it is taken resident-only with an issue that says so. A live core whose
+  every thread context and page was kept is now Complete: the guest counted the
+  contexts before it knew the file's size, so every live core read as one whose
+  contexts were lost and was marked Partial.
+
+- **Fewer schema gaps in 32-bit ARM runs (ANT-T0443).** On a revision-22 arm64 base
+  the structures of readlink, getsockopt and setsockopt, sigaltstack, clone's TID
+  pointers, prlimit64, ugetrlimit, setrlimit, _llseek, set_robust_list, utimensat
+  and the CPU-affinity calls of an AArch32 program (and of an ia32 one on x86-64)
+  are decoded instead of shown as schema gaps, and so are the terminal ioctls of a
+  tty for both arm64 ABIs (the console of an arm64 guest included). The layout
+  inventories name `old_timespec[2]`.
+
+- **Static analysis of a program that exits at once, and of a launch the guest
+  refused (ANT-T0344).** The host copy of an uploaded program replaces the guest
+  transfer once the guest vouches for its hash, and that hash came only with the
+  guest's exec hash record, some time after the exec: a program that exited within
+  milliseconds could end its run and the VM stop before it arrived, and its static
+  analysis was lost with the transfer ("specimen_sha256": null). On a revision-22
+  base the launch reply carries the SHA-256 of the copy the guest keeps, so the host
+  copy is vouched for and analysed on the host at once, whatever happens to the VM.
+  A launch the guest refuses (an ELF it cannot load, a shared object, a missing
+  interpreter) now gets static analysis too when it was selected: the file is
+  acquired from the guest's disk, the run stays in Run History as **Failed to start**
+  with its analysis, and on a revision-22 base the host copy stands in for the
+  transfer. Older bases keep the exec hash record and fetch the file from the guest.
+  A run whose analysis finishes after the VM stopped now has the finished report in
+  its record (`run.json`, `manifest.json`): it kept "acquiring" or "running" there,
+  although its own report was complete.
 
 - **A slow TCG boot no longer fails the VM Start at 180 s (ANT-T0442).** The service's
   180 s limit on the VM `Start` command was fixed, so on a busy host the engine's own
@@ -825,6 +877,30 @@ x86 programs by their own table.
   with programs' CLOCK_MONOTONIC carrying the age too (`continuous`); the
   kernel's own monotonic clock, the recorder's timestamps and the host's
   guest-time accounting are unchanged. Bases list `uptime`.
+
+- Patch 54 (contract revision 22): a specimen copy's SHA-256 is taken while it is
+  read and given in its acquisition reply (EXEC flag `SPECIMEN_DIGEST`, ACQUIRE
+  header flag `DIGEST`, 56-byte reply, offered in TRACER_CAPS); the digest may use
+  half the copy's time limit and a slower copy is kept without one. Only
+  `kernel/antinomie/` changes.
+- Patch 57 (contract revision 22): CORE_CAPTURE's policy word takes NONRESIDENT (2),
+  which reads a page the no-fault probe does not find in with `get_dump_page()`
+  (core flag `NONRESIDENT` 0x400 instead of `RESIDENT_ONLY`); CORE_STATUS header
+  flag `COVERAGE` (2) appends the thread contexts lost, the pages left out and the
+  pages read in; CORE_CAPS offers both (64, 128). Only `kernel/antinomie/` changes.
+- Patch 56 (contract revision 22): the compat structures of readlink, getsockopt
+  and setsockopt, sigaltstack, clone, prlimit64, ugetrlimit, setrlimit, _llseek,
+  set_robust_list, utimensat and sched_get/setaffinity, and the terminal ioctls of a
+  tty for compat programs, are captured by their ILP32 layouts; a tty is known by
+  the tty layer's own ioctl too (arm64's ttyAMA console). Only `recorder.c` changes.
+- Patch 55 (contract revision 22): the dump trigger's exit hold. A run armed for it
+  (EXEC flag `EXIT_HOLD`, or the `EXIT_HOLD` command) parks each process that ends,
+  in the process core's exit hook (`ant_monitor_core_exit()`: exit_group, the last
+  thread's exit, a fatal or core-dumping signal), after a `lifecycle.exit_hold`
+  record, for at most the run's hold time (EXEC trailer `hold_ms`, 1-1000; the host
+  sends 50 ms, scaled by 8 under TCG); a `CORE_CAPTURE` of its identity makes it write its own
+  core with the exit core's writer (core flag `EXIT_HELD` 0x200, read as a manual
+  core), `EXIT_HOLD` RELEASE lets it go. No stock kernel file changes.
 
 ## 0.8.3 — 2026-11-08
 

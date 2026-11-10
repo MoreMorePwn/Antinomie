@@ -162,7 +162,7 @@ impl MonitorApp {
                         self.send(Command::DebugAttach { identity });
                     }
                 }
-                captures::ProcessAction::DumpCore(identity, max_size, timeout_ms) => {
+                captures::ProcessAction::DumpCore(identity, max_size, timeout_ms, nonresident) => {
                     if self.snapshot.boot_id.as_ref() == Some(&identity.boot_id)
                         && self.manual_core_unavailable().is_none()
                     {
@@ -174,6 +174,7 @@ impl MonitorApp {
                                     target: identity,
                                     max_size,
                                     timeout_ms,
+                                    read_nonresident: nonresident,
                                     ..ProcessCoreRequest::default()
                                 },
                             });

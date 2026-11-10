@@ -10,6 +10,12 @@
 // AF_UNIX socket pair, a loopback UDP socket, an epoll instance, a private
 // message queue, semaphore set and shared memory segment (removed at the end)
 // and a child that exits at once.
+// Contract revision 22 (guest patch 56) adds readlink, getsockopt and
+// setsockopt, sigaltstack, clone's TID pointers, prlimit64, ugetrlimit,
+// setrlimit, _llseek, set_robust_list, utimensat, sched_getaffinity and
+// sched_setaffinity, and the terminal ioctls on its own terminal (it saves
+// and restores what it changes: its alternate signal stack, robust list,
+// limits and CPU mask stay as they were).
 // It prints "compat calls done" and exits 0; tests/monitor/compat-calls-check.py
 // checks the recording.
 //
@@ -22,11 +28,14 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/sem.h>
@@ -36,6 +45,7 @@
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -347,6 +357,76 @@ static void futex_epoll_ipc_calls(void)
         shmctl(segment, IPC_RMID, NULL);
 }
 
+// The revision 22 calls (guest patch 56), raw so that the compat variants
+// run.
+static void rev22_calls(void)
+{
+    char target[300], link[300], buf[64];
+    static char altstack[16384];
+    struct { uint32_t sp; int32_t flags; uint32_t size; } stack = {0, 0, 0}, old_stack;
+    struct { uint32_t list, futex_offset, pending; } head, *old_head = NULL;
+    uint32_t old_head_len = 0, rlim32[2] = {0, 0}, mask[8];
+    uint64_t rlim[2] = {0, 0};
+    long long position = 0;
+    struct { int32_t sec, nsec; } times[2] = {{1, 0}, {2, 0}};
+    int sv[2], value = 4096, out = 0, fd;
+    socklen_t length = sizeof out;
+    uint32_t parent_tid = 0;
+    struct termios terminal;
+    struct winsize window;
+    long kid, written;
+
+    path(target, sizeof target, "rev22-target");
+    path(link, sizeof link, "rev22-link");
+    fd = open(target, O_CREAT | O_RDWR | O_TRUNC, 0600);
+    if (fd >= 0) {
+        if (write(fd, "rev22", 5) < 0)
+            perror("write");
+        syscall(SYS__llseek, fd, 0, 1, &position, SEEK_SET);
+        close(fd);
+    }
+    unlink(link);
+    if (symlink(target, link) == 0)
+        syscall(SYS_readlink, link, buf, sizeof buf);
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0) {
+        syscall(SYS_setsockopt, sv[0], SOL_SOCKET, SO_SNDBUF, &value, sizeof value);
+        syscall(SYS_getsockopt, sv[0], SOL_SOCKET, SO_SNDBUF, &out, &length);
+        close(sv[0]);
+        close(sv[1]);
+    }
+    stack.sp = (uint32_t)(uintptr_t)altstack;
+    stack.size = sizeof altstack;
+    if (syscall(SYS_sigaltstack, NULL, &old_stack) == 0) {
+        syscall(SYS_sigaltstack, &stack, NULL);
+        syscall(SYS_sigaltstack, &old_stack, &stack);
+    }
+    syscall(SYS_prlimit64, 0, RLIMIT_NOFILE, NULL, rlim);
+    if (syscall(SYS_ugetrlimit, RLIMIT_NOFILE, rlim32) == 0)
+        syscall(SYS_setrlimit, RLIMIT_NOFILE, rlim32);
+    head.list = (uint32_t)(uintptr_t)&head;
+    head.futex_offset = 0;
+    head.pending = 0;
+    if (syscall(SYS_get_robust_list, 0, &old_head, &old_head_len) == 0) {
+        syscall(SYS_set_robust_list, &head, sizeof head);
+        syscall(SYS_set_robust_list, old_head, old_head_len);
+    }
+    syscall(SYS_utimensat, AT_FDCWD, target, times, 0);
+    written = syscall(SYS_sched_getaffinity, 0, sizeof mask, mask);
+    if (written > 0)
+        syscall(SYS_sched_setaffinity, 0, written, mask);
+    // Its own terminal (the app's terminal of the run), when it has one.
+    syscall(SYS_ioctl, 1, TCGETS, &terminal);
+    syscall(SYS_ioctl, 1, TIOCGWINSZ, &window);
+    // A child by clone() with CLONE_PARENT_SETTID, as fork() but raw.
+    kid = syscall(SYS_clone, CLONE_PARENT_SETTID | SIGCHLD, 0, &parent_tid, 0, 0);
+    if (kid == 0)
+        syscall(SYS_exit, 0);
+    if (kid > 0)
+        waitpid(kid, NULL, 0);
+    unlink(link);
+    unlink(target);
+}
+
 int main(int argc, char **argv)
 {
     snprintf(work, sizeof work, "%s", argc > 1 ? argv[1] : "/tmp");
@@ -355,6 +435,7 @@ int main(int argc, char **argv)
     timer_and_wait_calls();
     message_calls();
     futex_epoll_ipc_calls();
+    rev22_calls();
     printf("compat calls done\n");
     return 0;
 }

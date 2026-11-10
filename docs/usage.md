@@ -362,7 +362,17 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    ran) or the guest recorded no hash for it, the program is fetched from the
    guest as usual. The **Specimen source** row of the report's Identity card says
    which happened ("host copy, hash matched guest" or "fetched from guest"); the
-   evidence identity is the guest's hash either way.
+   evidence identity is the guest's hash either way. On a base of contract
+   revision 22 the guest gives the hash of the copy it keeps in its launch reply,
+   so the host copy is used even for a program that exits within milliseconds,
+   and its analysis goes on after the VM stops; an older base sends the hash a
+   little later, and a VM stopped before it arrives ends the analysis.
+   A launch the guest refuses (it cannot load the file) still gets the static
+   analysis you selected: the file is read from the guest's disk (on a
+   revision-22 base the host copy stands in once its hash matches), and the run
+   stays in **Run History** as "Failed to start" with its report, so the analysis
+   can say what the file is. When the file cannot be read either, the run is not
+   kept, as before.
 6. **Attach to process** traces a process that is already running in the guest
    (and its future children); **Capture all** traces all of userspace. Neither
    stops or signals anything. A capture lists the processes it saw as a tree
@@ -1683,14 +1693,29 @@ in the run's notes and shown in the run's features and in the finding's Details
 with the reason ("The process exited 120 ms after the match, before the core
 could be taken."), and the next match may still dump. A match is judged the
 moment its call arrives and the worker wakes every millisecond while a run waits
-for one, but a program that matches and exits within a few tens of
-milliseconds can still be gone before the guest can pause it.
+for one. On a base of contract revision 22, a run that asks for a core holds
+each of its processes at its exit, before anything of it is torn down, for at
+most 50 ms (400 ms on a TCG guest, such as an arm64 one, where every answer is
+slower), until the host has judged that process's last calls: a process that
+writes its cron entry and exits a millisecond later still has its core taken
+(its note says "held at its exit"), and one no rule matched is let go at once.
+Under heavy host load the host can answer after that time, and the process is
+then gone as before. On an older base the run's notes say the base cannot hold
+a process at its exit, and a program that matches and exits within a few tens of
+milliseconds can be gone before the guest can pause it.
 
 A core is partial when the guest could not read every page: it copies only the
 pages that are in memory when it reads them (never swapped-out or untouched
 pages) and the thread contexts it could park. The core's message says which part
-is missing, thread contexts or pages, with the counts. There is no setting for
-this policy; reading pages that are not resident needs a guest change.
+is missing, thread contexts or pages, with the counts. On a base of contract
+revision 22, **Read non-resident pages** (under the trigger's core, and in the
+**Dump core** dialog of a running process) reads the pages that are not in memory
+in as well, from swap or from the file a page belongs to, as a core on exit does;
+it takes longer and stays within the core's budget and deadline. Pages the
+process never touched hold nothing and stay out. On such a base the guest also
+counts what the core lacks, and the message gives its counts (thread contexts
+lost, pages left out, pages read in) without opening the core file. On an older
+base the box is disabled: the guest reads resident pages only.
 
 The dumps a trigger took are listed in the run's `artifacts.json` under
 `trigger_dumps` (the same records as `triggers` in `run.json`); `core_state`

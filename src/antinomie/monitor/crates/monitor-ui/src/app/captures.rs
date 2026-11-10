@@ -32,6 +32,8 @@ pub(super) struct ProcessPicker {
     pub core_budget: u32,
     pub core_timeout_ms: u32,
     pub core_picked: Option<u32>,
+    /// Dump core: read the pages that are not in memory too (revision 22).
+    pub core_nonresident: bool,
     /// Why the action is not available, said in the window; set each frame.
     pub unavailable: Option<&'static str>,
     /// Ctrl+D while the debugger picker is open: attach the selected process.
@@ -58,7 +60,8 @@ pub(super) enum ProcessPurpose {
 pub(super) enum ProcessAction {
     Refresh(u32),
     Attach(GuestProcessIdentity),
-    DumpCore(GuestProcessIdentity, u32, u32),
+    /// The process, budget, deadline and whether to read non-resident pages.
+    DumpCore(GuestProcessIdentity, u32, u32, bool),
     Debug(GuestProcessIdentity),
 }
 
@@ -126,8 +129,15 @@ impl ProcessPicker {
                 }
                 if core {
                     ui.add(egui::Label::new("Briefly pause this process, capture a native ELF core, then resume.").wrap())
-                        .on_hover_text("Its threads are paused too. Resident memory only; unavailable pages remain marked.");
+                        .on_hover_text("Its threads are paused too. Resident memory only unless Read non-resident pages is ticked; unavailable pages remain marked.");
                     let limits = core_context.limits;
+                    let nonresident = limits.is_some_and(|limits| limits.nonresident);
+                    if !nonresident {
+                        self.core_nonresident = false;
+                    }
+                    ui.add_enabled(nonresident, egui::Checkbox::new(&mut self.core_nonresident, "Read non-resident pages"))
+                        .on_hover_text("Also read the pages that are not in memory (swapped out, or file pages the kernel dropped) while the process is paused. Slower; bounded by the budget and the deadline. Pages never touched stay out.")
+                        .on_disabled_hover_text("Needs a base of guest contract revision 22: this guest copies only the pages that are in memory.");
                     // Start from the remembered default, and follow a guest that lowers it.
                     if self.core_budget == 0
                         || limits.is_some_and(|limits| u64::from(self.core_budget) > limits.max_size)
@@ -326,7 +336,7 @@ impl ProcessPicker {
                     {
                         if let Some(identity) = self.selected.clone() {
                             action = Some(if core {
-                                ProcessAction::DumpCore(identity, self.core_budget, self.core_timeout_ms)
+                                ProcessAction::DumpCore(identity, self.core_budget, self.core_timeout_ms, self.core_nonresident)
                             } else if debug {
                                 ProcessAction::Debug(identity)
                             } else {

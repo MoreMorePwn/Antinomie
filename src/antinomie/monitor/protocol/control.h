@@ -37,7 +37,16 @@
  * any other ioctl whose number encodes a size has those bytes captured, and a
  * read of an event descriptor names its records' layout; the compat
  * structures of common compat calls are captured by their ILP32 layouts. */
-#define ANTC_REVISION 21
+/* Revision 22: the SHA-256 of a specimen copy in its acquisition reply
+ * (EXEC_SPECIMEN_DIGEST, ACQUIRE DIGEST), offered in TRACER_CAPS; the dump
+ * trigger's exit hold (EXEC_EXIT_HOLD, EXIT_HOLD, lifecycle.exit_hold,
+ * CORE_EXIT_HELD), offered in TRACER_CAPS; the compat structures of readlink,
+ * get/setsockopt, sigaltstack, clone, prlimit64, ugetrlimit, setrlimit,
+ * _llseek, set_robust_list, utimensat, sched_get/setaffinity and a tty's
+ * terminal ioctls, and the terminal ioctls of every tty (fields only); the
+ * non-resident core policy (CORE_CAPTURE policy 2, CORE_NONRESIDENT) and the
+ * coverage counts of CORE_STATUS COVERAGE, offered in CORE_CAPS. */
+#define ANTC_REVISION 22
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -90,6 +99,18 @@
 #define ANTC_EXEC_HASH_ROOT 8
 #define ANTC_EXEC_HASH_WRITES 16
 #define ANTC_EXEC_SHELL_JOB 32
+/* Revision 22 (TRACER_CAPS offers it): with EXEC_SPECIMEN, the specimen
+ * reply is ANTC_SPECIMEN_DIGEST_SIZE bytes and carries the copy's SHA-256. */
+#define ANTC_EXEC_SPECIMEN_DIGEST 64
+/* ACQUIRE header flag (revision 22, offered as EXEC_SPECIMEN_DIGEST). */
+#define ANTC_ACQUIRE_DIGEST 1
+#define ANTC_SPECIMEN_DIGEST_SIZE 56
+/* Acquisition reply flag at 20: the SHA-256 at 24 is the copy's. */
+#define ANTC_SPECIMEN_DIGEST_VALID 1
+/* Revision 22 (TRACER_CAPS offers it): the run's processes wait at their
+ * exit for the dump trigger (EXIT_HOLD below). It appends u32 hold_ms
+ * (1..EXIT_HOLD_MS_MAX), u32 reserved=0 after the core trailer. */
+#define ANTC_EXEC_EXIT_HOLD 128
 #define ANTC_CORE_STATUS 0x1060
 #define ANTC_CORE_READ 0x1061
 #define ANTC_CORE_RELEASE 0x1062
@@ -131,6 +152,51 @@
 /* Revision 21: the core is the ELF32 file (ELFCLASS32 EM_ARM) of an AArch32
  * task of an arm64 guest, as fs/compat_binfmt_elf.c writes it. */
 #define ANTC_CORE_COMPAT_ELF32 0x100
+/* Revision 22: the core of a process held at its exit (EXIT_HOLD), written by
+ * the process itself with the exit core's writer: every page, resident or
+ * not; RESIDENT_ONLY is clear. */
+#define ANTC_CORE_EXIT_HELD 0x200
+/* Revision 22: CORE_CAPTURE policy word (at 36). RESIDENT (1) copies the pages
+ * in memory only; NONRESIDENT (2, CORE_CAPS NONRESIDENT) reads a page that is
+ * not in memory in, from swap or the page cache, as the exit core's writer
+ * does, bounded by the budget and the deadline; a page never touched stays
+ * out. Its core has CORE_NONRESIDENT instead of RESIDENT_ONLY. */
+#define ANTC_CORE_POLICY_RESIDENT 1
+#define ANTC_CORE_POLICY_NONRESIDENT 2
+#define ANTC_CORE_NONRESIDENT 0x400
+#define ANTC_CORE_CAPS_COVERAGE 64
+#define ANTC_CORE_CAPS_NONRESIDENT 128
+/* CORE_STATUS header flag COVERAGE (CORE_CAPS COVERAGE): 16 more bytes, after
+ * STORED's part when both are asked: u32 thread contexts lost (threads of the
+ * process whose registers are not in the core's notes), u32 pages selected
+ * but not kept (0xffffffff: not counted, an exit core), u32 pages read in
+ * under the non-resident policy, u32 reserved=0; all zero until the state is
+ * terminal. */
+#define ANTC_CORE_STATUS_COVERAGE 2
+#define ANTC_CORE_STATUS_COVERAGE_SIZE 16
+/* EXIT_HOLD (revision 22, with EXEC_EXIT_HOLD): header flags=0, u64 cookie
+ * at 8, u32 action at 16, u32 hold_ms at 20 (ARM only, 0: EXIT_HOLD_MS; else
+ * 0); empty reply.
+ * ARM / DISARM: cookie is a run's root cookie (-ESRCH: no such run); DISARM
+ * also releases its held processes. RELEASE: cookie is a held process's
+ * (its leader's task cookie, or that of the task that sent its hold record),
+ * or 0 for every held process (-ESRCH: none with that cookie).
+ * In an armed run, a process that ends (exit_group, its last thread's exit,
+ * a fatal or core-dumping signal; never SIGKILL, never one whose own exit
+ * core is armed) first sends lifecycle.exit_hold, a scalar of
+ * hold_ms | (u64)wait_status << 32, in its leader's process, then waits
+ * at most the run's hold_ms (the host's longer one under TCG), before anything
+ * of it is torn down, for CORE_CAPTURE
+ * of its identity (the core is written by the process itself: CORE_EXIT_HELD,
+ * status and read as a manual core's) or RELEASE. A stopped run (STOP_RUN),
+ * SIGKILL and the timeout end the wait. At most eight processes wait at once.
+ */
+#define ANTC_EXIT_HOLD 0x1068
+#define ANTC_EXIT_HOLD_ARM 1
+#define ANTC_EXIT_HOLD_DISARM 2
+#define ANTC_EXIT_HOLD_RELEASE 3
+#define ANTC_EXIT_HOLD_MS 50
+#define ANTC_EXIT_HOLD_MS_MAX 1000
 #define ANTC_RESOURCES 0x1070
 #define ANTC_RESOURCES_SIZE 96
 #define ANTC_RESOURCES_MEMORY_VALID 1
@@ -509,6 +575,11 @@
  * EXEC_SPECIMEN appends u32 max_size, u32 timeout_ms after argv/env.
  * Its reply appends the 24-byte acquisition reply to the normal 24 bytes.
  * Acquisition failure never changes the execution result.
+ * EXEC_SPECIMEN_DIGEST (with EXEC_SPECIMEN only, else -EINVAL) makes that
+ * acquisition reply 56 bytes: u32 flags at 20 (SPECIMEN_DIGEST_VALID) and the
+ * SHA-256 of the copied bytes at 24, taken while they are read. The digest
+ * may use half of timeout_ms; a copy that takes longer is kept without one
+ * (flags 0, zero bytes), as is a failed copy.
  * EXEC_CORE appends u32 max_size (1..max_core_bytes from CORE_CAPS, 1..64MiB
  * without it), u32 timeout_ms (1..max_timeout_ms from CORE_CAPS, 1..5000
  * without it),
@@ -612,9 +683,11 @@
  * completed immutable buffers remain readable. Snapshot operations must
  * reject an in-flight manual capture before pausing/restoring the VM.
  *
- * ACQUIRE: header flags=0, uid at 8, gid at 12, u32 path_len at 16,
- * reserved=0 at 20, absolute path at 24, then u32 max_size, timeout_ms.
- * Acquisition reply: u64 id, u64 size, i32 status, u32 reserved=0.
+ * ACQUIRE: header flags=0 or ACQUIRE_DIGEST, uid at 8, gid at 12, u32
+ * path_len at 16, reserved=0 at 20, absolute path at 24, then u32 max_size,
+ * timeout_ms.
+ * Acquisition reply: u64 id, u64 size, i32 status, u32 reserved=0; with
+ * ACQUIRE_DIGEST 56 bytes, as EXEC_SPECIMEN_DIGEST's.
  * Ready status=0 has nonzero id; unavailable negative errno has id/size=0.
  * max_size is 1..128MiB (1..64MiB before revision 19); timeout_ms is
  * 1..5000. Initial exec captures the

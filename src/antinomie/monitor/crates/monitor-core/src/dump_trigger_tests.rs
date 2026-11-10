@@ -384,3 +384,35 @@ fn whole_events_reach_the_watch_whether_live_or_held_before_the_launch_answer() 
     crate::storage::flush_json().unwrap();
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+/// Revision 22's exit hold: a held process has what of it still waits for an
+/// exit judged at once, keeps its hold while a match for it is queued, and is
+/// let go once the grace passes with none.
+#[test]
+fn a_held_process_is_judged_at_once_and_let_go_only_without_a_match() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let plan = DumpTrigger::default();
+    let mut watch = Watch::with_judge(Box::new(OpenJudge(seen)), &plan, &keep());
+    let openat = 257;
+    // An entry with no exit yet would wait ENTRY_GRACE; the hold judges it now.
+    watch.event(event(1, 1, openat));
+    assert!(watch.queue.is_empty());
+    watch.hold(7, 0x77);
+    assert_eq!(
+        watch.queue.len(),
+        1,
+        "the pending openat is judged at the hold"
+    );
+    assert!(watch.pending.is_empty());
+    // A match is queued for it: no release, however long it waits.
+    assert!(watch.releases(Duration::ZERO).is_empty());
+    assert!(watch.held.contains_key(&7));
+    // Once the worker took the match, a held process with none is let go.
+    watch.queue.clear();
+    assert!(
+        watch.releases(Duration::from_secs(60)).is_empty(),
+        "inside the grace"
+    );
+    assert_eq!(watch.releases(Duration::ZERO), vec![0x77]);
+    assert!(watch.held.is_empty());
+}

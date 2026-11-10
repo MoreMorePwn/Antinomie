@@ -107,6 +107,7 @@ pub fn effective(job: &Job, policy: &Policy) -> Effective {
         core_max_size: (core || trigger_core).then(|| core_max_mib.saturating_mul(1 << 20)),
         core_timeout_ms: (core || trigger_core).then_some(core_timeout_ms),
         dump_trigger: trigger,
+        core_nonresident: false,
         debug_on_start: false,
         route: Some(core_kind(o.route.unwrap_or(policy.network.route))),
         host_copy: None,

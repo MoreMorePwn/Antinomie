@@ -15,8 +15,46 @@ pub(crate) const EXEC_HASH_WRITES: u32 = 16;
 /// shell (parent init, its own process group in a session whose leader is
 /// gone) instead of as a child of kthreadd leading its own session.
 pub(crate) const EXEC_SHELL_JOB: u32 = 32;
-/// The optional EXEC flags this host knows; others a guest offers are ignored.
+/// EXEC flag (TRACER_CAPS, revision 22): with a specimen, its reply carries
+/// the SHA-256 of the copy ([`SPECIMEN_DIGEST_SIZE`] bytes). ACQUIRE takes the
+/// same digest through its header flag [`ACQUIRE_DIGEST`] when this is offered.
+pub(crate) const EXEC_SPECIMEN_DIGEST: u32 = 64;
+/// ACQUIRE header flag: reply with the copy's SHA-256.
+pub(crate) const ACQUIRE_DIGEST: u32 = 1;
+/// An acquisition reply with its digest: the 24 bytes, then the SHA-256.
+pub(crate) const SPECIMEN_DIGEST_SIZE: usize = 56;
+/// Acquisition reply flag (at 20): the SHA-256 at 24 is the copy's.
+const SPECIMEN_DIGEST_VALID: u32 = 1;
+/// EXEC flag (TRACER_CAPS, revision 22): the run's processes wait at their
+/// exit for the dump trigger, at most [`EXIT_HOLD_MS`], until the host asks
+/// for a core of one ([`CORE_CAPTURE`]) or lets it go ([`exit_hold_release`]).
+pub(crate) const EXEC_EXIT_HOLD: u32 = 128;
+/// The exit hold's command (revision 22): ARM, DISARM or RELEASE.
+pub(crate) const EXIT_HOLD: u32 = 0x1068;
+const EXIT_HOLD_RELEASE: u32 = 3;
+/// How long a process of an armed run waits at its exit on a KVM guest, ms;
+/// a TCG guest, slower in everything, gets it scaled
+/// ([`exit_hold_ms`]), up to the guest's [`EXIT_HOLD_MS_MAX`].
+pub(crate) const EXIT_HOLD_MS: u64 = 50;
+pub(crate) const EXIT_HOLD_MS_MAX: u32 = 1000;
+/// The hold time of a guest `scale` times slower than KVM.
+pub(crate) fn exit_hold_ms(scale: u32) -> u32 {
+    (EXIT_HOLD_MS as u32)
+        .saturating_mul(scale.max(1))
+        .min(EXIT_HOLD_MS_MAX)
+}
+/// Arm the exit hold of an encoded EXEC request: the flag and its trailer
+/// (u32 hold_ms, u32 zero), which follows the core trailer.
+pub(crate) fn with_exit_hold(encoded: Vec<u8>, hold_ms: u32) -> Vec<u8> {
+    let mut encoded = with_exec_flag(encoded, EXEC_EXIT_HOLD);
+    encoded.extend(hold_ms.to_le_bytes());
+    encoded.extend(0u32.to_le_bytes());
+    encoded
+}
+/// The optional EXEC flags every launch asks for when the guest offers them.
 const EXEC_OPTIONAL: u32 = EXEC_HASH_ROOT | EXEC_HASH_WRITES | EXEC_SHELL_JOB;
+/// The optional EXEC flags this host knows; others a guest offers are ignored.
+const EXEC_KNOWN: u32 = EXEC_OPTIONAL | EXEC_SPECIMEN_DIGEST | EXEC_EXIT_HOLD;
 pub(crate) const TRACER_CAPS: u32 = 0x10a0;
 pub(crate) const TRACER_CAPS_SIZE: usize = 32;
 const TRACER_ABI: u32 = 1;
@@ -40,13 +78,17 @@ pub(crate) const RESOURCES_SIZE: usize = 96;
 /// (`ANT_SPECIMEN_MAX`). This is the one place the number is written:
 /// [`REVISION`] follows it until a later revision is added.
 pub(crate) const LARGE_SPECIMEN_REVISION: u32 = 19;
-/// The first revision whose task-exit records name the sender of the signal
-/// that ended a task (`lifecycle.signal.*`, `lifecycle.kernel_log`) and whose
-/// recorder decodes the generic file ioctls and arch_prctl ARCH_CET_STATUS.
-/// An older guest records neither; the host needs no request to tell them apart.
-pub(crate) const FATAL_SIGNAL_REVISION: u32 = 21;
+// Revision 21 named the sender of the signal that ended a task
+// (`lifecycle.signal.*`, `lifecycle.kernel_log`) and decoded the generic file
+// ioctls and arch_prctl ARCH_CET_STATUS: an older guest records neither, and
+// the host needs no request to tell them apart.
+/// The first revision whose specimen acquisitions can carry the copy's
+/// SHA-256 ([`EXEC_SPECIMEN_DIGEST`], offered in TRACER_CAPS), whose runs can
+/// hold an exiting task for the dump trigger and whose cores can read pages
+/// that are not resident. Each is asked for only where the guest offers it.
+pub(crate) const EXIT_HOLD_REVISION: u32 = 22;
 /// Guest contract revision this host implements (`ANTC_REVISION`).
-pub const REVISION: u32 = FATAL_SIGNAL_REVISION;
+pub const REVISION: u32 = EXIT_HOLD_REVISION;
 pub(crate) const PROCESS_LIST: u32 = 0x1050;
 pub(crate) const CAPTURE_ATTACH: u32 = 0x1051;
 pub(crate) const CAPTURE_ALL: u32 = 0x1052;
@@ -58,10 +100,24 @@ pub(crate) const CORE_CANCEL: u32 = 0x1065;
 pub(crate) const CORE_CAPS: u32 = 0x1066;
 /// `CORE_STATUS` header flag: append the stored byte count (reply of 96 bytes).
 pub(crate) const CORE_STATUS_STORED: u32 = 1;
+/// `CORE_STATUS` header flag (revision 22, CORE_CAPS COVERAGE): append what
+/// the core lacks, 16 bytes after the stored count's part.
+pub(crate) const CORE_STATUS_COVERAGE: u32 = 2;
+/// CORE_CAPTURE policies: the pages in memory only, or every page read in
+/// (revision 22, CORE_CAPS NONRESIDENT).
+pub(crate) const CORE_POLICY_RESIDENT: u32 = 1;
+pub(crate) const CORE_POLICY_NONRESIDENT: u32 = 2;
 /// `CORE_STATUS` for a handle; `extended` asks for the stored byte count, which
 /// only a guest that advertised it understands.
 pub(crate) fn core_status(id: u64, extended: bool) -> Vec<u8> {
-    let mut args = header(u32::from(extended) * CORE_STATUS_STORED);
+    core_status_with(id, extended, false)
+}
+/// [`core_status`], also asking for the coverage counts when `coverage` (only
+/// a guest whose CORE_CAPS offers them).
+pub(crate) fn core_status_with(id: u64, extended: bool, coverage: bool) -> Vec<u8> {
+    let mut args = header(
+        u32::from(extended) * CORE_STATUS_STORED + u32::from(coverage) * CORE_STATUS_COVERAGE,
+    );
     args.extend(id.to_le_bytes());
     args
 }
@@ -76,7 +132,14 @@ pub(crate) fn core_capture(
     args.extend(request.target.tgid.to_le_bytes());
     args.extend(request.max_size.to_le_bytes());
     args.extend(request.timeout_ms.to_le_bytes());
-    args.extend(1u32.to_le_bytes());
+    args.extend(
+        if request.read_nonresident {
+            CORE_POLICY_NONRESIDENT
+        } else {
+            CORE_POLICY_RESIDENT
+        }
+        .to_le_bytes(),
+    );
     args.extend(nonce[0].to_le_bytes());
     args.extend(nonce[1].to_le_bytes());
     Ok(args)
@@ -377,12 +440,47 @@ pub(crate) fn tracer_offer(caps: Option<crate::api::GuestTracerCaps>) -> Result<
 /// Nothing is added for a guest that offers none, so an older guest never
 /// sees a flag it would reject.
 pub(crate) fn with_tracer_flags(mut encoded: Vec<u8>, offered: u32) -> Vec<u8> {
-    let wanted = offered & EXEC_OPTIONAL;
-    if wanted != 0 && encoded.len() >= 8 {
-        let flags = u32::from_le_bytes(encoded[4..8].try_into().expect("flags")) | wanted;
+    if encoded.len() < 8 {
+        return encoded;
+    }
+    let flags = u32::from_le_bytes(encoded[4..8].try_into().expect("flags"));
+    let mut wanted = offered & EXEC_OPTIONAL;
+    // The digest is of the specimen copy: only a launch that keeps one asks.
+    if flags & 1 != 0 {
+        wanted |= offered & EXEC_SPECIMEN_DIGEST;
+    }
+    encoded[4..8].copy_from_slice(&(flags | wanted).to_le_bytes());
+    encoded
+}
+/// EXIT_HOLD RELEASE of the process whose task `cookie` sent the hold record.
+pub(crate) fn exit_hold_release(cookie: u64) -> Vec<u8> {
+    let mut args = header(0);
+    args.extend(cookie.to_le_bytes());
+    args.extend(EXIT_HOLD_RELEASE.to_le_bytes());
+    args.extend(0u32.to_le_bytes());
+    args
+}
+/// Add EXEC flag `flag` to an encoded EXEC request.
+pub(crate) fn with_exec_flag(mut encoded: Vec<u8>, flag: u32) -> Vec<u8> {
+    let flags = request_flags(&encoded) | flag;
+    if encoded.len() >= 8 {
         encoded[4..8].copy_from_slice(&flags.to_le_bytes());
     }
     encoded
+}
+/// Size of the specimen part of an EXEC reply for request flags `flags`.
+pub(crate) fn exec_specimen_reply_len(flags: u32) -> usize {
+    match (flags & 1 != 0, flags & EXEC_SPECIMEN_DIGEST != 0) {
+        (false, _) => 0,
+        (true, false) => 24,
+        (true, true) => SPECIMEN_DIGEST_SIZE,
+    }
+}
+/// The request flags of an encoded EXEC or ACQUIRE.
+pub(crate) fn request_flags(encoded: &[u8]) -> u32 {
+    encoded.get(4..8).map_or(0, |flags| {
+        u32::from_le_bytes(flags.try_into().expect("flags"))
+    })
 }
 /// Decode a TRACER_CAPS reply (32 bytes). Flags this host does not know are
 /// kept out, so they are never sent back.
@@ -396,7 +494,7 @@ pub(crate) fn tracer_caps(reply: &[u8]) -> Result<crate::api::GuestTracerCaps, S
         return Err("unknown tracer capabilities ABI".into());
     }
     Ok(crate::api::GuestTracerCaps {
-        exec_flags: word(4)? & EXEC_OPTIONAL,
+        exec_flags: word(4)? & EXEC_KNOWN,
         hash_file_max_size: word(8)?,
         hash_queue_count: word(12)?,
         hash_pending_max_size: u64_at(reply, 16).map_err(|e| e.to_string())?,
@@ -404,8 +502,19 @@ pub(crate) fn tracer_caps(reply: &[u8]) -> Result<crate::api::GuestTracerCaps, S
 }
 /// The ACQUIRE request for `path`; `max_size` from [`specimen_request`].
 pub(crate) fn acquire(path: &str, uid: u32, gid: u32, max_size: u32) -> Result<Vec<u8>, String> {
+    acquire_with(path, uid, gid, max_size, false)
+}
+/// [`acquire`], asking for the copy's SHA-256 when `digest` (only for a guest
+/// whose TRACER_CAPS offers [`EXEC_SPECIMEN_DIGEST`]).
+pub(crate) fn acquire_with(
+    path: &str,
+    uid: u32,
+    gid: u32,
+    max_size: u32,
+    digest: bool,
+) -> Result<Vec<u8>, String> {
     string(path, true)?;
-    let mut encoded = header(0);
+    let mut encoded = header(if digest { ACQUIRE_DIGEST } else { 0 });
     encoded.extend(uid.to_le_bytes());
     encoded.extend(gid.to_le_bytes());
     encoded.extend(
@@ -422,10 +531,33 @@ pub(crate) fn acquire(path: &str, uid: u32, gid: u32, max_size: u32) -> Result<V
 pub(crate) fn acquisition(reply: &[u8]) -> Result<(u64, u64), String> {
     acquisition_bounded(reply, u64::from(SPECIMEN_MAX_SIZE))
 }
+/// Split an acquisition reply that may carry the copy's SHA-256
+/// ([`SPECIMEN_DIGEST_SIZE`] bytes) into the 24-byte reply and the digest as
+/// lowercase hex, `None` when the guest kept none (a copy that took too long,
+/// or a failed one). A 24-byte reply has no digest.
+pub(crate) fn split_digest(reply: &[u8]) -> Result<(Vec<u8>, Option<String>), String> {
+    use crate::parser::u32_at;
+    if reply.len() != SPECIMEN_DIGEST_SIZE {
+        return Ok((reply.to_vec(), None));
+    }
+    let flags = u32_at(reply, 20).map_err(|e| e.to_string())?;
+    let digest = &reply[24..];
+    let valid = match flags {
+        SPECIMEN_DIGEST_VALID => true,
+        0 if digest.iter().all(|&byte| byte == 0) => false,
+        _ => return Err("invalid acquisition digest flags".into()),
+    };
+    let mut plain = reply[..24].to_vec();
+    plain[20..24].fill(0);
+    let hex = valid.then(|| digest.iter().map(|byte| format!("{byte:02x}")).collect());
+    Ok((plain, hex))
+}
 /// [`acquisition`] of a specimen the guest was asked to keep up to
 /// `max_size` bytes: its refusal of a larger file (EFBIG) says so.
 pub(crate) fn specimen_acquisition(reply: &[u8], max_size: u32) -> Result<(u64, u64), String> {
     const EFBIG: i32 = 27;
+    let (reply, _) = split_digest(reply)?;
+    let reply = reply.as_slice();
     acquisition(reply).map_err(|error| {
         let refused = reply.len() == 24
             && crate::parser::u32_at(reply, 16).is_ok_and(|status| status as i32 == -EFBIG);
@@ -943,6 +1075,97 @@ mod tests {
         assert!(tracer_caps(&abi).is_err());
     }
     #[test]
+    fn the_specimen_digest_is_asked_for_only_with_a_specimen_the_guest_offers_it_for() {
+        let mut request = ExecRequest {
+            path: "/bin/true".into(),
+            ..Default::default()
+        };
+        request.analysis.enabled = true;
+        let offered = EXEC_HASH_ROOT | EXEC_SPECIMEN_DIGEST;
+        let with_specimen = execute_analysis(&request, Some(LEGACY_SPECIMEN_MAX_SIZE)).unwrap();
+        let asked = with_tracer_flags(with_specimen.clone(), offered);
+        assert_eq!(
+            request_flags(&asked),
+            1 | EXEC_HASH_ROOT | EXEC_SPECIMEN_DIGEST
+        );
+        assert_eq!(exec_specimen_reply_len(request_flags(&asked)), 56);
+        // An older guest offers no digest: the reply keeps its 24 bytes.
+        let old = with_tracer_flags(with_specimen, EXEC_HASH_ROOT);
+        assert_eq!(exec_specimen_reply_len(request_flags(&old)), 24);
+        // A launch without a specimen never sends the flag (the guest refuses it).
+        let plain = execute_analysis(&request, None).unwrap();
+        let asked = with_tracer_flags(plain, offered);
+        assert_eq!(request_flags(&asked), EXEC_HASH_ROOT);
+        assert_eq!(exec_specimen_reply_len(request_flags(&asked)), 0);
+        // TRACER_CAPS keeps the digest flag among the known offers.
+        let mut caps = vec![0; TRACER_CAPS_SIZE];
+        caps[0..4].copy_from_slice(&1u32.to_le_bytes());
+        caps[4..8].copy_from_slice(&(EXEC_SPECIMEN_DIGEST | 0x400).to_le_bytes());
+        assert_eq!(tracer_caps(&caps).unwrap().exec_flags, EXEC_SPECIMEN_DIGEST);
+        // ACQUIRE asks with its header flag only when told to.
+        assert_eq!(request_flags(&acquire("/bin/true", 0, 0, 4096).unwrap()), 0);
+        assert_eq!(
+            request_flags(&acquire_with("/bin/true", 0, 0, 4096, true).unwrap()),
+            ACQUIRE_DIGEST
+        );
+    }
+    #[test]
+    fn the_exit_hold_trailer_follows_the_core_trailer_and_scales_under_tcg() {
+        let mut request = ExecRequest {
+            path: "/bin/true".into(),
+            core_dump_on_exit: true,
+            ..Default::default()
+        };
+        request.core_max_size = Some(64 << 20);
+        let plain = execute_analysis(&request, None).unwrap();
+        let held = with_exit_hold(plain.clone(), exit_hold_ms(1));
+        assert_eq!(request_flags(&held), 2 | EXEC_EXIT_HOLD);
+        assert_eq!(held.len(), plain.len() + 8);
+        assert_eq!(&held[plain.len()..plain.len() + 4], &50u32.to_le_bytes());
+        assert_eq!(&held[plain.len() + 4..], &[0; 4]);
+        assert_eq!(
+            (exit_hold_ms(8), exit_hold_ms(100)),
+            (400, EXIT_HOLD_MS_MAX)
+        );
+        let release = exit_hold_release(9);
+        assert_eq!(release.len(), 24);
+        assert_eq!(&release[16..20], &3u32.to_le_bytes());
+    }
+    #[test]
+    fn an_acquisition_reply_gives_its_digest_and_keeps_its_old_checks() {
+        let mut reply = vec![0u8; SPECIMEN_DIGEST_SIZE];
+        reply[0..8].copy_from_slice(&7u64.to_le_bytes());
+        reply[8..16].copy_from_slice(&4096u64.to_le_bytes());
+        reply[20..24].copy_from_slice(&SPECIMEN_DIGEST_VALID.to_le_bytes());
+        reply[24..].copy_from_slice(&[0xab; 32]);
+        let (plain, digest) = split_digest(&reply).unwrap();
+        assert_eq!(plain.len(), 24);
+        assert_eq!(digest.as_deref(), Some("ab".repeat(32).as_str()));
+        assert_eq!(specimen_acquisition(&reply, 1 << 20).unwrap(), (7, 4096));
+        // A copy kept without a digest (it took too long): flags 0, zeros.
+        let mut none = reply.clone();
+        none[20..].fill(0);
+        assert_eq!(split_digest(&none).unwrap().1, None);
+        assert_eq!(specimen_acquisition(&none, 1 << 20).unwrap(), (7, 4096));
+        // Bytes without the flag, or an unknown flag, are malformed.
+        let mut stray = none.clone();
+        stray[30] = 1;
+        assert!(split_digest(&stray).is_err());
+        let mut unknown = reply.clone();
+        unknown[20] = 3;
+        assert!(split_digest(&unknown).is_err());
+        // The old 24-byte reply has no digest and parses as before.
+        assert_eq!(split_digest(&reply[..24]).unwrap().1, None);
+        // A refused copy keeps its errno, digest or not.
+        let mut refused = vec![0u8; SPECIMEN_DIGEST_SIZE];
+        refused[16..20].copy_from_slice(&(-27i32).to_le_bytes());
+        assert!(
+            specimen_acquisition(&refused, 1 << 20)
+                .unwrap_err()
+                .contains("larger than")
+        );
+    }
+    #[test]
     fn constants_match_the_shared_control_header() {
         let header = include_str!("../../../protocol/control.h");
         let define = |name: &str| -> u32 {
@@ -984,6 +1207,18 @@ mod tests {
             ("ANTC_EXEC_HASH_ROOT", EXEC_HASH_ROOT),
             ("ANTC_EXEC_HASH_WRITES", EXEC_HASH_WRITES),
             ("ANTC_EXEC_SHELL_JOB", EXEC_SHELL_JOB),
+            ("ANTC_EXEC_SPECIMEN_DIGEST", EXEC_SPECIMEN_DIGEST),
+            ("ANTC_ACQUIRE_DIGEST", ACQUIRE_DIGEST),
+            ("ANTC_SPECIMEN_DIGEST_SIZE", SPECIMEN_DIGEST_SIZE as u32),
+            ("ANTC_SPECIMEN_DIGEST_VALID", SPECIMEN_DIGEST_VALID),
+            ("ANTC_EXEC_EXIT_HOLD", EXEC_EXIT_HOLD),
+            ("ANTC_EXIT_HOLD", EXIT_HOLD),
+            ("ANTC_EXIT_HOLD_RELEASE", EXIT_HOLD_RELEASE),
+            ("ANTC_EXIT_HOLD_MS", EXIT_HOLD_MS as u32),
+            ("ANTC_EXIT_HOLD_MS_MAX", EXIT_HOLD_MS_MAX),
+            ("ANTC_CORE_STATUS_COVERAGE", CORE_STATUS_COVERAGE),
+            ("ANTC_CORE_POLICY_RESIDENT", CORE_POLICY_RESIDENT),
+            ("ANTC_CORE_POLICY_NONRESIDENT", CORE_POLICY_NONRESIDENT),
             ("ANTC_EXEC_DEBUG", EXEC_DEBUG),
             ("ANTC_REVISION", REVISION),
             ("ANTC_PROCESS_LIST", PROCESS_LIST),

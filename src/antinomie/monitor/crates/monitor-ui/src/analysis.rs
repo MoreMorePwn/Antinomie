@@ -292,10 +292,26 @@ fn trigger_selection(
             core_ok,
             egui::Checkbox::new(&mut plan.core, "Core of the process that triggered it"),
         )
-        .on_hover_text("A core of the process whose call matched, taken while it runs. Native programs on x86-64 and arm64 guests, and 32-bit ARM programs on an arm64 guest (not ia32 or x32 on an x86-64 guest); bounded by the budget. The guest copies only pages that are in memory when it reads them (not swapped-out or untouched ones), so the core is usually marked Partial, and its message says which part is missing. A process that exits within milliseconds of the match can be gone before the core is taken; the run says so. Reading pages that are not resident would need a guest change.")
+        .on_hover_text("A core of the process whose call matched, taken while it runs. Native programs on x86-64 and arm64 guests, and 32-bit ARM programs on an arm64 guest (not ia32 or x32 on an x86-64 guest); bounded by the budget. The guest copies only pages that are in memory when it reads them (not swapped-out or untouched ones) unless Read non-resident pages is ticked, so the core is often marked Partial, and its message says which part is missing. On a revision-22 base a process that ends is held at its exit for up to 50 ms, so one that exits right after the match still has its core taken; on an older base it can be gone first, and the run says so.")
         .on_disabled_hover_text(core_unavailable_reason(core_ok));
         if !core_ok {
             plan.core = false;
+        }
+        if plan.core {
+            let nonresident = capabilities
+                .core_limits
+                .is_some_and(|limits| limits.nonresident);
+            ui.indent("dump-trigger-nonresident", |ui| {
+                ui.add_enabled(
+                    nonresident,
+                    egui::Checkbox::new(&mut request.core_nonresident, "Read non-resident pages"),
+                )
+                .on_hover_text("Also read the pages of the process that are not in memory (swapped out, or file pages the kernel dropped) into the core, as an exit core does. Reading from swap or disk takes longer and is bounded by the budget and the deadline; pages the process never touched hold nothing and stay out.")
+                .on_disabled_hover_text("Needs a base of guest contract revision 22: this guest copies only the pages that are in memory.");
+            });
+            if !nonresident {
+                request.core_nonresident = false;
+            }
         }
         if !plan.memory && !plan.core {
             ui.colored_label(crate::theme::warn(), "Pick a memory dump, a core, or both.");

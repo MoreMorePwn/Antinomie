@@ -40,7 +40,7 @@ Every request starts with the existing 8-byte control header, flags zero.
 
 | Command | Arguments after header | Return |
 | --- | --- | --- |
-| CORE_STATUS (0x1060) | u64 handle ID | 80-byte status below; header flags `1` (STORED) appends the stored byte count (96 bytes) |
+| CORE_STATUS (0x1060) | u64 handle ID | 80-byte status below; header flags `1` (STORED) appends the stored byte count (96 bytes); `2` (COVERAGE, revision 22, CORE_CAPS 64) appends 16 bytes after it: u32 thread contexts lost, u32 pages left out (0xffffffff: not counted, an exit core), u32 pages read in, u32 zero; zero until the core is terminal |
 | CORE_CAPS (0x1066) | none | 48-byte capability reply (see Budget, limits and reasons) |
 | CORE_READ (0x1061) | u64 ID, u64 offset, u32 capacity, u32 reserved zero | Specimen-compatible 24-byte framing plus data; capacity 1..16328 |
 | CORE_RELEASE (0x1062) | u64 ID | Empty success reply; cancels/removes retained ownership |
@@ -55,7 +55,7 @@ Every request starts with the existing 8-byte control header, flags zero.
 | 52 | i32 | Capture status, zero or negative errno |
 | 56 | i32 | Original Linux wait status |
 | 60 | u32 | Fatal signal, or zero for normal exit |
-| 64 | u32 | Coverage flags: 1 root only, 2 native ELF64, 4 filtered memory, 8 coverage gap (and the higher flags of control.h; revision 20: 0x80 native ELF32, the core of a 32-bit guest, instead of 2) |
+| 64 | u32 | Coverage flags: 1 root only, 2 native ELF64, 4 filtered memory, 8 coverage gap (and the higher flags of control.h; revision 20: 0x80 native ELF32, the core of a 32-bit guest, instead of 2; revision 22: 0x200 EXIT_HELD, a manual core a process held at its exit wrote itself with the exit writer, every page read, so 0x40 resident-only is clear) |
 | 68 | u32 | Root thread-group PID |
 | 72 | u32 | Thread contexts retained in complete ELF notes |
 | 76 | u32 | Reserved zero |
@@ -77,7 +77,7 @@ The guest derives what it accepts from its memory and says so with `CORE_CAPS`
 | Offset | Type | Meaning |
 | --- | --- | --- |
 | 0 | u32 | ABI, 1 |
-| 4 | u32 | Flags: 1 BUDGET, 2 STATUS_STORED, 4 LONG_TIMEOUT, 8 CHUNKED, 16 FAST_READ |
+| 4 | u32 | Flags: 1 BUDGET, 2 STATUS_STORED, 4 LONG_TIMEOUT, 8 CHUNKED, 16 FAST_READ, 32 COMPAT_ELF32 (revision 21), 64 COVERAGE and 128 NONRESIDENT (revision 22: CORE_CAPTURE policy 2 reads pages that are not in memory in, core flag 0x400) |
 | 8 | u64 | Largest budget of one handle: half of RAM less 128 MiB, clamped to 64 MiB..1 GiB |
 | 16 | u64 | Pool: the budgets of open handles add up to at most twice that |
 | 24 / 28 | u32 | Handles (4) / longest deadline (60000 ms) |

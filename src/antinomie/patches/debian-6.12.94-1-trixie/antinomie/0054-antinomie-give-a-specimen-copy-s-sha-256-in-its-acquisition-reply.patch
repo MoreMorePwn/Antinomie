@@ -1,0 +1,343 @@
+Description: antinomie: give a specimen copy's SHA-256 in its acquisition reply
+ The host keeps its own copy of a program it uploaded and uses it for
+ static analysis instead of the guest transfer once the guest vouches for
+ the copy's hash. The only hash the guest gave was the exec hash record,
+ which its hash worker publishes some time after the exec: a program that
+ exits within milliseconds can end its run, and the VM can stop, before
+ that record arrives, and its analysis is then lost with the guest
+ transfer. A launch the guest refuses gives no exec hash at all.
+ .
+ The specimen copy is read from the file the kernel opened for the exec
+ (or, for ACQUIRE, by path) and kept unchanged. The worker that reads it
+ now also takes the SHA-256 of each chunk as it is read, while the bytes
+ are in the cache, when the host asks for it: EXEC flag SPECIMEN_DIGEST
+ (with SPECIMEN only) and ACQUIRE header flag DIGEST. The acquisition
+ reply then has 56 bytes: the 24 it had, its reserved word as flags
+ (DIGEST_VALID) and the digest. The digest may use half of the copy's
+ time limit; a copy that takes longer is kept without one, so asking for
+ a digest never costs the copy. TRACER_CAPS offers SPECIMEN_DIGEST, which
+ also stands for ACQUIRE's flag: an older guest rejects both flags.
+ .
+ No kernel file outside kernel/antinomie is hooked: specimen.c computes
+ the digest (lib/crypto's SHA-256, already selected for the hash
+ records), control.c accepts the flags and sizes the replies.
+ .
+ Contract: revision 22. The flags are optional and offered; without them
+ every request and reply is as in revision 21.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-10
+
+---
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index cddcb0a34..6fb4ad66a 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -319,7 +319,11 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 		return -EINVAL;
+ 	flags = get_unaligned_le32(args + 4);
+ 	if (flags & ~(ANTC_EXEC_SPECIMEN | ANTC_EXEC_CORE | ANTC_EXEC_DEBUG |
+-		      ANTC_EXEC_HASH_ROOT | ANTC_EXEC_HASH_WRITES | ANTC_EXEC_SHELL_JOB))
++		      ANTC_EXEC_HASH_ROOT | ANTC_EXEC_HASH_WRITES | ANTC_EXEC_SHELL_JOB |
++		      ANTC_EXEC_SPECIMEN_DIGEST))
++		return -EINVAL;
++	/* The digest is of the specimen copy: it needs one. */
++	if ((flags & ANTC_EXEC_SPECIMEN_DIGEST) && !(flags & ANTC_EXEC_SPECIMEN))
+ 		return -EINVAL;
+ 	if (flags & ANTC_EXEC_DEBUG) {
+ 		error = ant_debug_launch_check();
+@@ -370,6 +374,8 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 		}
+ 		specimen = ant_specimen_create(get_unaligned_le32(args + offset),
+ 					       get_unaligned_le32(args + offset + 4));
++		if (flags & ANTC_EXEC_SPECIMEN_DIGEST)
++			ant_specimen_want_digest(specimen);
+ 		launch->specimen = specimen;
+ 		offset += 8;
+ 	}
+@@ -432,10 +438,9 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	put_unaligned_le32(session->pid, reply + 16);
+ 	put_unaligned_le32(0, reply + 20);
+ 	*reply_len = 24;
+-	if (flags & ANTC_EXEC_SPECIMEN) {
+-		ant_specimen_reply(specimen, reply + 24);
+-		*reply_len = 48;
+-	}
++	if (flags & ANTC_EXEC_SPECIMEN)
++		*reply_len += ant_specimen_reply(specimen, reply + 24,
++						 flags & ANTC_EXEC_SPECIMEN_DIGEST);
+ 	if (flags & ANTC_EXEC_CORE) {
+ 		ant_core_reply(core, reply + *reply_len);
+ 		*reply_len += 24;
+@@ -676,7 +681,7 @@ static int command(const void *data, size_t args_len, void *reply,
+ 	if (args_len < ANTC_HEADER_SIZE || get_unaligned_le16(args) != ANTC_VERSION ||
+ 	    get_unaligned_le16(args + 2) != ANTC_HEADER_SIZE)
+ 		return opcode == ANTC_RUN_STATUS ? -EINVAL : -EPROTO;
+-	if (opcode != ANTC_UPLOAD_BEGIN && opcode != ANTC_EXEC &&
++	if (opcode != ANTC_UPLOAD_BEGIN && opcode != ANTC_EXEC && opcode != ANTC_ACQUIRE &&
+ 	    opcode != ANTC_DEBUG_ATTACH && opcode != ANTC_DEBUG_DETACH &&
+ 	    opcode != ANTC_DEBUG_CONT && opcode != ANTC_DEBUG_REGS_READ &&
+ 	    opcode != ANTC_CORE_STATUS && get_unaligned_le32(args + 4))
+@@ -692,6 +697,7 @@ static int command(const void *data, size_t args_len, void *reply,
+ 	case ANTC_EXEC:
+ 		if (capacity < 24 +
+ 		    (get_unaligned_le32(args + 4) & ANTC_EXEC_SPECIMEN ? 24 : 0) +
++		    (get_unaligned_le32(args + 4) & ANTC_EXEC_SPECIMEN_DIGEST ? 32 : 0) +
+ 		    (get_unaligned_le32(args + 4) & ANTC_EXEC_CORE ? 24 : 0) +
+ 		    (get_unaligned_le32(args + 4) & ANTC_EXEC_DEBUG ? 16 : 0))
+ 			return -EMSGSIZE;
+@@ -718,14 +724,15 @@ static int command(const void *data, size_t args_len, void *reply,
+ 		memset(reply, 0, ANTC_TRACER_CAPS_SIZE);
+ 		put_unaligned_le32(ANTC_TRACER_ABI, reply);
+ 		put_unaligned_le32(ANTC_EXEC_HASH_ROOT | ANTC_EXEC_HASH_WRITES |
+-				   ANTC_EXEC_SHELL_JOB, reply + 4);
++				   ANTC_EXEC_SHELL_JOB | ANTC_EXEC_SPECIMEN_DIGEST, reply + 4);
+ 		put_unaligned_le32(ANTC_HASH_FILE_MAX, reply + 8);
+ 		put_unaligned_le32(ANTC_HASH_QUEUE, reply + 12);
+ 		put_unaligned_le64(ANTC_HASH_PENDING_MAX, reply + 16);
+ 		*reply_len = ANTC_TRACER_CAPS_SIZE;
+ 		return 0;
+ 	case ANTC_ACQUIRE:
+-		if (capacity < 24)
++		if (capacity < (get_unaligned_le32(args + 4) & ANTC_ACQUIRE_DIGEST ?
++				ANTC_SPECIMEN_DIGEST_SIZE : 24))
+ 			return -EMSGSIZE;
+ 		return ant_specimen_acquire(args, args_len, reply, reply_len);
+ 	case ANTC_SPECIMEN_READ:
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 9de274a8c..251bd5d3b 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -37,7 +37,9 @@
+  * any other ioctl whose number encodes a size has those bytes captured, and a
+  * read of an event descriptor names its records' layout; the compat
+  * structures of common compat calls are captured by their ILP32 layouts. */
+-#define ANTC_REVISION 21
++/* Revision 22: the SHA-256 of a specimen copy in its acquisition reply
++ * (EXEC_SPECIMEN_DIGEST, ACQUIRE DIGEST), offered in TRACER_CAPS. */
++#define ANTC_REVISION 22
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+@@ -90,6 +92,14 @@
+ #define ANTC_EXEC_HASH_ROOT 8
+ #define ANTC_EXEC_HASH_WRITES 16
+ #define ANTC_EXEC_SHELL_JOB 32
++/* Revision 22 (TRACER_CAPS offers it): with EXEC_SPECIMEN, the specimen
++ * reply is ANTC_SPECIMEN_DIGEST_SIZE bytes and carries the copy's SHA-256. */
++#define ANTC_EXEC_SPECIMEN_DIGEST 64
++/* ACQUIRE header flag (revision 22, offered as EXEC_SPECIMEN_DIGEST). */
++#define ANTC_ACQUIRE_DIGEST 1
++#define ANTC_SPECIMEN_DIGEST_SIZE 56
++/* Acquisition reply flag at 20: the SHA-256 at 24 is the copy's. */
++#define ANTC_SPECIMEN_DIGEST_VALID 1
+ #define ANTC_CORE_STATUS 0x1060
+ #define ANTC_CORE_READ 0x1061
+ #define ANTC_CORE_RELEASE 0x1062
+@@ -509,6 +519,11 @@
+  * EXEC_SPECIMEN appends u32 max_size, u32 timeout_ms after argv/env.
+  * Its reply appends the 24-byte acquisition reply to the normal 24 bytes.
+  * Acquisition failure never changes the execution result.
++ * EXEC_SPECIMEN_DIGEST (with EXEC_SPECIMEN only, else -EINVAL) makes that
++ * acquisition reply 56 bytes: u32 flags at 20 (SPECIMEN_DIGEST_VALID) and the
++ * SHA-256 of the copied bytes at 24, taken while they are read. The digest
++ * may use half of timeout_ms; a copy that takes longer is kept without one
++ * (flags 0, zero bytes), as is a failed copy.
+  * EXEC_CORE appends u32 max_size (1..max_core_bytes from CORE_CAPS, 1..64MiB
+  * without it), u32 timeout_ms (1..max_timeout_ms from CORE_CAPS, 1..5000
+  * without it),
+@@ -612,9 +627,11 @@
+  * completed immutable buffers remain readable. Snapshot operations must
+  * reject an in-flight manual capture before pausing/restoring the VM.
+  *
+- * ACQUIRE: header flags=0, uid at 8, gid at 12, u32 path_len at 16,
+- * reserved=0 at 20, absolute path at 24, then u32 max_size, timeout_ms.
+- * Acquisition reply: u64 id, u64 size, i32 status, u32 reserved=0.
++ * ACQUIRE: header flags=0 or ACQUIRE_DIGEST, uid at 8, gid at 12, u32
++ * path_len at 16, reserved=0 at 20, absolute path at 24, then u32 max_size,
++ * timeout_ms.
++ * Acquisition reply: u64 id, u64 size, i32 status, u32 reserved=0; with
++ * ACQUIRE_DIGEST 56 bytes, as EXEC_SPECIMEN_DIGEST's.
+  * Ready status=0 has nonzero id; unavailable negative errno has id/size=0.
+  * max_size is 1..128MiB (1..64MiB before revision 19); timeout_ms is
+  * 1..5000. Initial exec captures the
+diff --git a/kernel/antinomie/specimen.c b/kernel/antinomie/specimen.c
+index b8702d59f..782692a35 100644
+--- a/kernel/antinomie/specimen.c
++++ b/kernel/antinomie/specimen.c
+@@ -1,4 +1,5 @@
+ // SPDX-License-Identifier: GPL-2.0-only
++#include <crypto/sha2.h>
+ #include <linux/antinomie_monitor.h>
+ #include <linux/completion.h>
+ #include <linux/cred.h>
+@@ -14,6 +15,7 @@
+ #include <linux/unaligned.h>
+ #include <linux/vmalloc.h>
+ #include <linux/workqueue.h>
++#include "control_wire.h"
+ #include "specimen.h"
+ 
+ #define ANT_SPECIMEN_MAX (128U * 1024 * 1024)
+@@ -35,6 +37,9 @@ struct ant_specimen {
+ 	unsigned long touched, deadline;
+ 	int status;
+ 	bool canceled, ready, denied, started;
++	/* The SHA-256 of the copy, taken while it is read (SPECIMEN_DIGEST). */
++	bool digest_wanted, digest_ok;
++	u8 digest[SHA256_DIGEST_SIZE];
+ };
+ 
+ /* Protects publication, timeout, exclusion ownership and global reservations.
+@@ -107,7 +112,12 @@ static void specimen_copy(struct work_struct *work)
+ 	struct ant_specimen *specimen = container_of(work, struct ant_specimen, work);
+ 	const struct cred *old_cred = override_creds(specimen->cred);
+ 	struct file *file = specimen->file;
+-	loff_t pos = 0, len;
++	/* The digest may use half the time limit: past it the copy goes on
++	 * without one, so asking for a digest never costs the copy itself. */
++	unsigned long digest_until = jiffies + msecs_to_jiffies(specimen->timeout_ms / 2);
++	struct sha256_state sha;
++	bool digesting = specimen->digest_wanted;
++	loff_t pos = 0, start, len;
+ 	ssize_t count;
+ 	int status = 0;
+ 	bool published = false;
+@@ -170,21 +180,31 @@ static void specimen_copy(struct work_struct *work)
+ 		status = -ENOMEM;
+ 		goto out;
+ 	}
++	if (digesting)
++		sha256_init(&sha);
+ 	while (pos < len) {
+ 		if (specimen_canceled(specimen)) {
+ 			status = -ETIMEDOUT;
+ 			goto out;
+ 		}
++		start = pos;
+ 		count = kernel_read(file, specimen->data + pos,
+ 				    min_t(loff_t, len - pos, 64 * 1024), &pos);
+ 		if (count <= 0) {
+ 			status = count < 0 ? count : -ENODATA;
+ 			goto out;
+ 		}
++		if (digesting && time_after(jiffies, digest_until))
++			digesting = false;
++		if (digesting)
++			sha256_update(&sha, specimen->data + start, count);
+ 		cond_resched();
+ 	}
+ 	if (i_size_read(file_inode(file)) != len)
+ 		status = -ESTALE;
++	/* The digest is of the bytes kept, whatever the file holds later. */
++	if (!status && digesting)
++		sha256_final(&sha, specimen->digest);
+ out:
+ 	revert_creds(old_cred);
+ 	mutex_lock(&specimen_lock);
+@@ -200,6 +220,7 @@ static void specimen_copy(struct work_struct *work)
+ 		specimen->status = status;
+ 		if (!status) {
+ 			specimen->len = len;
++			specimen->digest_ok = digesting;
+ 			specimen->id = ++next_id;
+ 			specimen->touched = jiffies;
+ 			specimen->ready = true;
+@@ -250,6 +271,15 @@ struct ant_specimen *ant_specimen_create(u32 max_size, u32 timeout_ms)
+ 	return specimen;
+ }
+ 
++/* Take the copy's SHA-256 while it is read (EXEC_SPECIMEN_DIGEST, ACQUIRE
++ * DIGEST), before the copy is started.
++ */
++void ant_specimen_want_digest(struct ant_specimen *specimen)
++{
++	if (!IS_ERR_OR_NULL(specimen))
++		specimen->digest_wanted = true;
++}
++
+ void ant_specimen_arm(struct ant_specimen *specimen)
+ {
+ 	if (IS_ERR_OR_NULL(specimen))
+@@ -325,18 +355,28 @@ void ant_monitor_specimen_exec(struct file *file)
+ 	specimen_wait(specimen);
+ }
+ 
+-void ant_specimen_reply(struct ant_specimen *specimen, void *reply)
++/* The acquisition reply: 24 bytes, or with @digest the 56 of
++ * ANTC_SPECIMEN_DIGEST_SIZE (flags at 20, the SHA-256 at 24). Returns its size.
++ */
++size_t ant_specimen_reply(struct ant_specimen *specimen, void *reply, bool digest)
+ {
+-	memset(reply, 0, 24);
++	size_t size = digest ? ANTC_SPECIMEN_DIGEST_SIZE : 24;
++
++	memset(reply, 0, size);
+ 	if (IS_ERR(specimen)) {
+ 		put_unaligned_le32(PTR_ERR(specimen), reply + 16);
+-		return;
++		return size;
+ 	}
+ 	mutex_lock(&specimen_lock);
+ 	put_unaligned_le64(specimen->ready ? specimen->id : 0, reply);
+ 	put_unaligned_le64(specimen->ready ? specimen->len : 0, reply + 8);
+ 	put_unaligned_le32(specimen->status, reply + 16);
++	if (digest && specimen->ready && specimen->digest_ok) {
++		put_unaligned_le32(ANTC_SPECIMEN_DIGEST_VALID, reply + 20);
++		memcpy(reply + 24, specimen->digest, SHA256_DIGEST_SIZE);
++	}
+ 	mutex_unlock(&specimen_lock);
++	return size;
+ }
+ 
+ void ant_specimen_finish(struct ant_specimen *specimen, bool executed)
+@@ -366,11 +406,14 @@ int ant_specimen_acquire(const u8 *args, size_t args_len, void *reply,
+ 	struct ant_specimen *specimen;
+ 	struct cred *cred;
+ 	struct group_info *groups;
+-	u32 path_len;
++	u32 path_len, flags;
+ 	int status;
+ 
+ 	if (args_len < 32 || get_unaligned_le32(args + 20))
+ 		return -EINVAL;
++	flags = get_unaligned_le32(args + 4);
++	if (flags & ~ANTC_ACQUIRE_DIGEST)
++		return -EINVAL;
+ 	path_len = get_unaligned_le32(args + 16);
+ 	if (!path_len || path_len > PATH_MAX || path_len != args_len - 32 ||
+ 	    args[24] != '/' || memchr(args + 24, 0, path_len))
+@@ -379,6 +422,8 @@ int ant_specimen_acquire(const u8 *args, size_t args_len, void *reply,
+ 				       get_unaligned_le32(args + 28 + path_len));
+ 	if (IS_ERR(specimen))
+ 		goto reply;
++	if (flags & ANTC_ACQUIRE_DIGEST)
++		ant_specimen_want_digest(specimen);
+ 	specimen->path = kmemdup_nul(args + 24, path_len, GFP_KERNEL);
+ 	cred = prepare_creds();
+ 	if (!specimen->path || !cred) {
+@@ -416,8 +461,7 @@ int ant_specimen_acquire(const u8 *args, size_t args_len, void *reply,
+ 	schedule_work(&specimen->work);
+ 	specimen_wait(specimen);
+ reply:
+-	ant_specimen_reply(specimen, reply);
+-	*reply_len = 24;
++	*reply_len = ant_specimen_reply(specimen, reply, flags & ANTC_ACQUIRE_DIGEST);
+ 	ant_specimen_finish(specimen, true);
+ 	return 0;
+ fail:
+diff --git a/kernel/antinomie/specimen.h b/kernel/antinomie/specimen.h
+index 331209884..bb5f07e04 100644
+--- a/kernel/antinomie/specimen.h
++++ b/kernel/antinomie/specimen.h
+@@ -6,7 +6,8 @@ struct ant_specimen;
+ struct ant_specimen *ant_specimen_create(u32 max_size, u32 timeout_ms);
+ void ant_specimen_arm(struct ant_specimen *specimen);
+ void ant_specimen_disarm(struct ant_specimen *specimen);
+-void ant_specimen_reply(struct ant_specimen *specimen, void *reply);
++void ant_specimen_want_digest(struct ant_specimen *specimen);
++size_t ant_specimen_reply(struct ant_specimen *specimen, void *reply, bool digest);
+ void ant_specimen_finish(struct ant_specimen *specimen, bool executed);
+ int ant_specimen_acquire(const u8 *args, size_t args_len, void *reply,
+ 			 size_t *reply_len);

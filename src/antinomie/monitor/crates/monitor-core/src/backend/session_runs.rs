@@ -290,6 +290,11 @@ impl Session {
     }
     /// The run `id` has `report` as its analysis, in memory and saved.
     pub(super) fn run_analysis(&mut self, id: &str, report: &crate::analysis::AnalysisReport) {
+        if let Some(directory) = self.unstarted_runs.get(id) {
+            // A refused launch has no live run: its saved record takes the report.
+            let _ = crate::analysis::jobs::save_run_analysis(directory, id, report);
+            return;
+        }
         if let Some(run) = self.runs.values_mut().find(|r| r.summary.id == id) {
             run.summary.analysis = Some(report.clone());
             if let Err(error) = run.refresh_analysis_metadata() {

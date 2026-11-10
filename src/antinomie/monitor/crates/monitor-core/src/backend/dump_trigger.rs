@@ -59,6 +59,7 @@ impl Worker {
         };
         let mut found = Vec::new();
         let mut over = Vec::new();
+        let mut releases = Vec::new();
         for (cookie, run) in &mut session.runs {
             let ended = !run.summary.state.is_live() && run.recording_complete();
             let Some(watch) = run.watch.as_mut() else {
@@ -71,6 +72,9 @@ impl Worker {
                 watch.flush();
                 over.push(*cookie);
             }
+            // A held process no match came for goes on with its exit.
+            let grace = watch.hold_grace;
+            releases.extend(watch.releases(grace));
             while let Some(finding) = watch.queue.pop_front() {
                 found.push((*cookie, finding));
             }
@@ -85,10 +89,29 @@ impl Worker {
         for (cookie, finding) in found {
             self.take_trigger(cookie, finding);
         }
+        self.release_held(releases);
         for cookie in over {
             self.note_settled_trigger(cookie);
         }
         self.settle_triggers();
+    }
+
+    /// Let processes the guest holds at their exit go on (EXIT_HOLD
+    /// RELEASE). A lost or refused release costs nothing but the hold's time:
+    /// the guest lets them go after at most [`control::EXIT_HOLD_MS`].
+    fn release_held(&mut self, cookies: Vec<u64>) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        for cookie in cookies {
+            let _ = session.request_typed(
+                control::EXIT_HOLD,
+                &control::exit_hold_release(cookie),
+                &mut self.snapshot,
+                &self.sender,
+                Duration::from_millis(control::EXIT_HOLD_MS),
+            );
+        }
     }
 
     /// A run that is over says in its notes when its trigger took nothing.
@@ -118,6 +141,13 @@ impl Worker {
             return;
         };
         let now = unix_ms();
+        // A process the guest holds at its exit is still whole: the core
+        // request below reaches it there, and its hold ends with the core.
+        let hold = run
+            .watch
+            .as_mut()
+            .and_then(|watch| watch.held.remove(&finding.pid));
+        let held = hold.is_some();
         let log = run.summary.triggers.get_or_insert_with(TriggerLog::default);
         let cooling = log.records.last().is_some_and(|last| {
             now < last
@@ -140,6 +170,10 @@ impl Worker {
                 && let Err(error) = run.persist_summary()
             {
                 self.snapshot.last_error = Some(error);
+            }
+            // No dump: a held process is let go on the next turn.
+            if let (Some(hold), Some(watch)) = (hold, run.watch.as_mut()) {
+                watch.held.insert(finding.pid, hold);
             }
             return;
         }
@@ -187,10 +221,11 @@ impl Worker {
             }
         }
         let note = format!(
-            "Dump triggered by {} ({}) in process {}: {}.",
+            "Dump triggered by {} ({}) in process {}{}: {}.",
             finding.rule,
             finding.tier.label(),
             finding.pid,
+            if held { " (held at its exit)" } else { "" },
             [("memory", &record.memory), ("core", &record.core)]
                 .iter()
                 .filter_map(|(name, dump)| dump.as_ref().map(|dump| match &dump.error {
@@ -309,6 +344,11 @@ impl Worker {
             source_run_id: (pid == root_pid).then(|| run_id.to_owned()),
             max_size: max_size.unwrap_or(64 << 20),
             timeout_ms: timeout_ms.unwrap_or(5000),
+            read_nonresident: session
+                .runs
+                .values()
+                .find(|run| run.summary.id == run_id)
+                .is_some_and(|run| run.summary.request.core_nonresident),
         };
         match session.queue_manual_core(request) {
             Ok(id) => {

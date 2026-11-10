@@ -1176,8 +1176,9 @@ compat table's layouts).
   inventories lack), clone's `parent_tidptr`/`child_tidptr`, `prlimit64` and
   `ugetrlimit`, `sched_getaffinity` (`cpumask` is unsupported), `_llseek`'s
   result, `set_robust_list`, and the `ioctl` TCGETS/TIOCGWINSZ of both arm64
-  ABIs. That needs compat rules in the recorder (a guest change); the host
-  already reads the layouts it needs (`stack_t`, `rlimit`, `rlimit64`,
+  ABIs. Contract revision 22 (patch 56, ANT-T0443) adds those compat rules (see
+  "Contract revision 22: the compat structures of the AArch32 evaluation"); the
+  host already read the layouts they need (`stack_t`, `rlimit`, `rlimit64`,
   `robust_list_head`, `loff_t`, `int`, `winsize`, `termios`). The host does not
   count a call with no pointer argument (arm's `cacheflush`, `set_tls`) as a
   schema gap, and an exec whose AArch32 `argv` pointers were not recorded keeps
@@ -1187,6 +1188,193 @@ compat table's layouts).
   recording (`event-dump` output).
 * **epoll_ctl (patch 48, B7).** The event is recorded for an operation the
   kernel refuses too.
+
+### Contract revision 22: specimen digests (0.9.0)
+
+Board card ANT-T0344 (from the T0335 evaluation: xmrig exited 127 after 57 ms,
+its report kept `specimen_sha256: null` and its analysis ended with the VM).
+Revision 22 adds flags a host asks for only where the guest offers them; every
+revision-21 request and reply is unchanged, so a revision-21 base still runs on
+this host without the features, and an older host refuses a revision-22 base.
+
+* **Why the hash came too late.** The host copy of an uploaded program replaces
+  the guest transfer once the guest vouches for its hash (`analysis/jobs/host_copy.rs`).
+  The only hash was the HASH_ROOT exec record, which `hash.c`'s worker publishes
+  after it has read the file again: a program that exits within milliseconds
+  ends its run first, and a VM stopped before the record arrives leaves the host
+  copy unvouched and the transfer unfinished. A refused launch has no exec record.
+* **Digest of the specimen copy (patch 54).** The specimen worker
+  (`specimen.c`) already reads the opened image (EXEC) or the path (ACQUIRE)
+  into an immutable copy; with EXEC flag `SPECIMEN_DIGEST` (64, only with
+  `SPECIMEN`) or ACQUIRE header flag `DIGEST` (1) it also feeds each 64 KiB chunk
+  to `lib/crypto`'s SHA-256 as it is read. The acquisition reply is then 56
+  bytes: the old 24 (id, size, status), its reserved word as flags
+  (`SPECIMEN_DIGEST_VALID` 1) and the digest at 24. The digest may use half of
+  the copy's time limit; past that the copy goes on and is kept without a digest
+  (flags 0, zero bytes), so asking for one never costs the copy. TRACER_CAPS
+  offers `SPECIMEN_DIGEST`, which also stands for ACQUIRE's flag.
+* **Host.** `with_tracer_flags()` asks for the digest only on a launch with a
+  specimen; the reply's specimen part (`exec_specimen_reply_len()`) moves the
+  core and debug parts. The digest goes to `Jobs::guest_hash()` right after the
+  host copy is offered, so the copy is adopted at the launch reply and the job
+  is host-side (a VM stop carries it on). A guest that offers the digest can
+  vouch for the host copy even without HASH_ROOT; a desktop run's ACQUIRE asks
+  for it too.
+* **Refused launches.** `Worker::analyze_refused_launch()` runs before
+  `failed_run_launch()` for a launch the guest refused (`FailedToStart`) with
+  static analysis selected: an ACQUIRE of the program's path (with `DIGEST` when
+  offered), the analysis job of the run, the host copy offered only with a
+  digest (a refused launch never records an exec hash, so without one the
+  transfer starts at once). While a job is behind it the run keeps its folder
+  (no "leave no run behind" removal, no `settle_unstarted_analysis()`), and
+  `Session::unstarted_runs` routes its analysis updates to the saved `run.json`
+  and `manifest.json` (`save_run_analysis()`), since the run has no root task
+  and is never in `runs`. A path the guest cannot read either leaves the old
+  behaviour. This part works on every base with specimens (revision 10).
+* **After the VM stops.** A host-side job a VM stop carries on (`detach_host_side()`)
+  now has its queue marked `session_ended`, so its final report goes into its run's
+  `run.json` and `manifest.json` (`save_run_analysis()`); that flag was never set
+  before, and a run whose analysis finished after the stop kept "acquiring" or
+  "running" in its record while its `report.json` was complete. The run's own
+  last write (`complete_finalize()`, on the flush thread after the stop) takes
+  that settled report too when the job finished first (`settled_analysis()`), so
+  neither order leaves the record behind (seen on an arm64 fast-exit run).
+* **Tools.** `guest-run` takes `"host_copy": true` (the upload at the run's
+  path is the host copy), `"expect_refused": true`, `"no_evidence_wait": true`
+  and `"saved_analysis_wait"` (the saved analyses after the VM stopped).
+
+### Contract revision 22: non-resident pages in live cores, coverage counts (0.9.0)
+
+Board card ANT-T0343 (from T0334: the Rekoobe and RotaJakiro trigger cores were
+partial, "thread contexts lost / pages unavailable under resident-only", and the
+host had to open the core file to count).
+
+* **Policy (patch 57).** CORE_CAPTURE's policy word (at 36) takes NONRESIDENT
+  (2) besides RESIDENT (1). `pin_resident_ranges()` (`manual_core.c`), in the
+  owner thread's own context while the others are parked, retries a page the
+  no-fault probe (`get_user_pages_fast_only()`) does not find with
+  `get_dump_page()`, which takes the mmap lock itself and reads the page in from
+  swap or its file, as the exit core's writer reads every page; it returns
+  nothing for a page never touched (an anonymous `pte_none`, the zero page),
+  which stays out. The probe budget, the page budget (`max_size` pages) and the
+  capture's deadline bound it as before. The core has `CORE_NONRESIDENT` (0x400)
+  instead of `RESIDENT_ONLY` (0x40); the host's manual status accepts either (or
+  EXIT_HELD).
+* **Counts.** The live writer counts the pages it left out (a probe that found
+  nothing, and the tail past the probe or page budget) and the pages it read in
+  (the reads it made: one read of a file page can map its neighbours too, the
+  kernel's fault-around, which the next probes then find in memory)
+  (`struct ant_coredump_live` `unavailable`, `faulted`); `ant_core_live_finish()`
+  and the exit core's path keep the thread contexts lost (expected less retained
+  notes; `ant_core_live_finish()` now sets the expected size before it counts the
+  notes: it counted none before, so every live core was marked partial with its
+  thread contexts lost). CORE_STATUS header flag COVERAGE (2) appends them (16 bytes after
+  STORED's part: lost, left out or 0xffffffff for a core the exit writer wrote,
+  read in, zero), all zero until the state is terminal. CORE_CAPS offers
+  COVERAGE (64) and NONRESIDENT (128).
+* **Host.** `ProcessCoreRequest::read_nonresident` (and the record's
+  `read_nonresident`) sends policy 2; `ExecRequest::core_nonresident` is the
+  dump trigger's box. A guest without CORE_CAPS NONRESIDENT gets policy 1 and the
+  record an issue (`NO_NONRESIDENT`). The manual status asks for COVERAGE where
+  offered (`CoreStatus::parse_manual_coverage()`), keeps it in the record
+  (`ProcessCoreCapture::coverage`), and a partial core's message is
+  `CoreCoverage::text()` instead of parsing the file (`coverage_detail()` stays for
+  older guests and exit cores).
+* **UI.** Run program > Dumps: **Read non-resident pages** under the trigger's
+  core; the Dump core dialog has the same box. Both are disabled on a base that
+  does not offer it.
+* **Check.** `core-coverage-check BUNDLE DATA FIXTURE` with
+  `tests/monitor/nonresident-core-fixture.c` (a 256-page file mapped, read, then
+  reclaimed with MADV_PAGEOUT): a resident-only core counts those pages as left
+  out and reads none in; a non-resident one reads them in, has flag 0x400 and
+  holds every page's bytes.
+
+### Contract revision 22: the compat structures of the AArch32 evaluation (0.9.0)
+
+Board card ANT-T0443 (split from ANT-T0429, finding A1). Patch 56 changes only
+`recorder.c` (and names the captures in `control_wire.h`'s revision comment).
+
+* **Compat rules.** readlink's buffer at exit (bytes, the result's length),
+  setsockopt's value at entry (optlen bytes), sigaltstack's `stack_t` (12 bytes)
+  in and out (`arg0.stack`, `arg1.stack`), prlimit64's `rlimit64` records
+  (`arg2.new_rlim` at entry, `arg3.old_rlim` at exit), ugetrlimit's and
+  setrlimit's `rlimit` (8), _llseek's `loff_t` result (`arg3.result`),
+  set_robust_list's `robust_list_head` (12), utimensat's two 32-bit times
+  (`arg2.utimes`, `old_timespec[2]`, a layout the generator now inventories on
+  every architecture) and sched_setaffinity's and sched_getaffinity's masks
+  (`arg2.cpu_mask`, `unsigned_long[]`: compat_ulong_t words; `cpumask` stays
+  unsupported, the native capture names the mask the same way). A rule without
+  a layout (`COMPAT_BYTES`) records opaque bytes (encoding 1).
+* **Handlers.** getsockopt (`compat_getsockopt()`): `arg4.optlen` at entry and
+  at exit, and the value the call wrote, as many bytes as optlen then says
+  (`int` when it is 4 bytes, else bytes). clone (`compat_clone()`, CLONE_BACKWARDS
+  on both compat ABIs): `arg2.parent_tid` (pid_t) and `arg2.pidfd` at exit, the
+  child TID pointers `arg4.child_tid` / `arg4.clear_child_tid` as
+  ASYNC_UNOBSERVED, as the native exit records them. ioctl (`compat_ioctl()`):
+  a tty's terminal requests (termios, termios2, winsize, pid_t, FIONREAD's int,
+  one layout on ILP32 and LP64) through the native code's `tty_shape()`; any
+  other compat request keeps no field.
+* **Terminals.** `tty_file_of()` also takes a file whose `unlocked_ioctl` is the
+  tty layer's `tty_ioctl()`: arm64's console (ttyAMA, major 204) had its native
+  terminal ioctls recorded as NO_DECODER gaps. A terminal request on a file that
+  is not a tty keeps its gap marker as before.
+* **Check.** `tests/monitor/compat-calls-fixture.c` makes every call above
+  (`rev22_calls()`, restoring its alternate stack, robust list, limit and CPU
+  mask), and `compat-calls-check.py` expects their fields (`--revision 21` for
+  an older base).
+
+### Contract revision 22: the dump trigger's exit hold (0.9.0)
+
+Board card ANT-T0342 (from T0334: P2PInfect matched High twice and got no core,
+its process had exited; host handling is about 1 ms on an idle host and 106-421
+ms under load).
+
+* **Arming.** EXEC flag `EXIT_HOLD` (128, offered in TRACER_CAPS) arms the run
+  at its launch (`launch_init()`, `ant_run_exit_hold()`), so a program that
+  exits within milliseconds is armed before its first instruction; the card's
+  "control opcode arms a run" is the command `EXIT_HOLD` (0x1068: ARM, DISARM,
+  RELEASE), whose ARM arms a run already running. The host sets the flag on a
+  run whose dump trigger asks for a core.
+* **The hold (patch 55, `exit_hold.c`).** Every way a process ends already
+  reaches the process core's exit hook `ant_monitor_core_exit()`
+  (`do_group_exit()`, the last thread's `do_exit()`, `do_coredump()`), so the
+  hold sits there and no stock file changes. A process of an armed run (once per
+  process: the leader's `exit_held`; never for SIGKILL or a pending fatal signal,
+  a process whose own exit core is armed, a task without an `mm`, a kernel or
+  io_uring worker) publishes `lifecycle.exit_hold` (`hold_ms | wait_status << 32`)
+  and waits, killable, at most the run's `hold_ms` in one of eight slots: the
+  EXEC trailer after the core trailer (u32 `hold_ms` 1-1000, u32 zero), or
+  `ANTC_EXIT_HOLD_MS` (50) for an EXIT_HOLD ARM without one; the host sends 50 ms
+  under KVM and 50 times the TCG time scale (8: 400 ms) under TCG, where the
+  first arm64 TCG check's held process was answered after 58 ms, before
+  anything of it is torn down (PF_EXITING is not even set yet). `CORE_CAPTURE`
+  of its identity (the leader's cookie, start time and tgid, as PROCESS_LIST
+  gives them) is answered by `ant_exit_hold_claim()` before the manual capture
+  path: a live handle (`ant_core_held_create()`, flags MANUAL | EXIT_HELD 0x200,
+  not RESIDENT_ONLY) handed to the parked process, which writes it itself with
+  the exit core's writer (`ant_core_held_write()`, `ant_coredump_to_file()`:
+  thread rendezvous, every page) and goes on exiting; status, read and release
+  are a manual core's. RELEASE (by the hold record's task cookie or the
+  leader's), DISARM, STOP_RUN and SIGKILL end the wait.
+* **Host.** `Watch::hold()` takes the record (`watch_event()`), judges at once
+  what of that process still waits for an exit, and keeps the process held;
+  `check_triggers()` hands the findings to `take_trigger()` first (its core
+  request finds the held process in the process list and reaches it through
+  the claim; the note says "held at its exit"), then releases the held
+  processes no finding names once `HOLD_GRACE` (15 ms, scaled like the hold
+  under TCG, for calls arriving through another ring) has passed (`Watch::releases()`, `release_held()`). A
+  match over the budget or in the cooldown releases its process on the next
+  turn. The manual status check accepts EXIT_HELD without RESIDENT_ONLY. On a
+  base that does not offer the flag the run's notes say so (`NO_EXIT_HOLD`).
+* **Cost and limits.** Each process exit of an armed run waits until the host
+  releases it (one worker turn after the grace, about 15-20 ms on an idle host)
+  or 50 ms. A host slower than 50 ms (heavy load) misses the process as before.
+  A process whose exit core is armed (Core dump on exit, the root) is not held:
+  its exit core is its dump. A process that other processes share memory with
+  is written as the exit core always is.
+* **Tools.** `trigger-check` (triage example) has a `fast` case on a revision-22
+  base: the fixture writes its cron entry and exits at once (`SECONDS` 0); its
+  core must be written and its note must say it was held.
 
 ### arm64 debugger (0.9.0)
 

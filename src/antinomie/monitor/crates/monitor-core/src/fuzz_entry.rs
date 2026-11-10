@@ -194,6 +194,7 @@ pub fn control_wire(data: &[u8]) {
     let _ = crate::control::capture_status(data, 1);
     let _ = crate::control::tracer_caps(data);
     let _ = crate::control::acquisition(data);
+    let _ = crate::control::split_digest(data);
     let _ = crate::control::acquisition_bounded(data, 1 << 20);
     let _ = crate::control::info(data);
     let _ = crate::control::arch_caps(data);

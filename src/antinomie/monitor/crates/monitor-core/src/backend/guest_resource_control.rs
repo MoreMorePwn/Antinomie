@@ -73,6 +73,7 @@ impl Session {
             core_max_size: None,
             core_timeout_ms: None,
             dump_trigger: None,
+            core_nonresident: false,
             debug_on_start: false,
             route: None,
             host_copy: None,

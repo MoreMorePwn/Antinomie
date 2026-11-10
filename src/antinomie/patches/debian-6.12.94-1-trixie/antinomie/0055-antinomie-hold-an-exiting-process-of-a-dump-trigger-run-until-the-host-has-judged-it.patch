@@ -1,0 +1,689 @@
+Description: antinomie: hold an exiting process of a dump-trigger run until the host has judged it
+ The host's dump trigger judges each call as it arrives and asks for a
+ core of the process that made a suspicious one. On an idle host that
+ takes about a millisecond, under load a hundred or more: a process that
+ exits a millisecond after writing its cron entry is gone before the
+ request comes, and its core is lost.
+ .
+ A run can now be armed for an exit hold: EXEC flag EXIT_HOLD at the
+ launch, or the EXIT_HOLD command's ARM for a running run. A process of
+ an armed run that ends (exit_group, the exit of its last thread, a
+ fatal or core-dumping signal) first publishes lifecycle.exit_hold and
+ then waits, at the start of its exit and before any of it is torn down,
+ for at most the run's hold time: the EXEC trailer's hold_ms (1 to 1000;
+ the host gives 50 ms under KVM and more under TCG, where everything is
+ slower), or 50 ms for an ARM without one. The host asks for its core as for any live process
+ (CORE_CAPTURE by its identity): the process then writes the core itself
+ with the exit core's writer, into a live handle flagged EXIT_HELD, and
+ goes on exiting. Or the host lets it go (EXIT_HOLD RELEASE, by the leader's task cookie or that of the task that sent the
+ record), which is what it does at once for a process no rule matched. SIGKILL, a process
+ whose own exit core is armed, a stopped run (STOP_RUN) and the timeout
+ end the wait; a process is held once, and at most eight wait at a time.
+ .
+ The hold sits in the process core's exit hook, ant_monitor_core_exit(),
+ which every way a process ends already reaches (do_group_exit(), the
+ last thread's do_exit(), do_coredump()): no stock kernel file changes.
+ exit_hold.c keeps the held processes; manual_core.c hands a held
+ process's CORE_CAPTURE to it; process_core.c makes and writes the held
+ core; run.c keeps the run's arming; control.c takes the flag and the
+ command; state.h marks a process as offered.
+ .
+ Contract: revision 22. The flag and the command are offered in
+ TRACER_CAPS; an older guest rejects both.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-10
+
+---
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 16ad7cf3b..f3e97032b 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -22,6 +22,7 @@ obj-y += specimen.o
+ obj-y += observer.o
+ obj-y += process_core.o
+ obj-y += manual_core.o
++obj-y += exit_hold.o
+ obj-$(CONFIG_COREDUMP) += core_writer.o
+ obj-y += resources.o
+ obj-y += hash.o
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index 6fb4ad66a..c7443b428 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -33,6 +33,7 @@
+ #include "process_core.h"
+ #include "run.h"
+ #include "debug.h"
++#include "exit_hold.h"
+ #include "state.h"
+ 
+ #define ANT_SESSION_MAX 64
+@@ -59,6 +60,9 @@ struct ant_launch {
+ 	struct pid *job_session;
+ 	u32 hash_flags;
+ 	bool debug;
++	/* EXEC_EXIT_HOLD: how long the run's processes wait at their exit
++	 * (exit_hold.c), 0 when they do not. */
++	u32 exit_hold_ms;
+ };
+ 
+ static LIST_HEAD(sessions);
+@@ -300,6 +304,8 @@ static int launch_init(struct subprocess_info *info, struct cred *cred)
+ 	ant_core_bind(launch->core, session->task_cookie);
+ 	/* Before the exec: the program's own image is hashed at its commit. */
+ 	ant_run_hash_flags(current, launch->hash_flags);
++	if (launch->exit_hold_ms)
++		ant_run_exit_hold(session->task_cookie, launch->exit_hold_ms);
+ 	/* Last: the new program parks at its first return to user mode. */
+ 	return launch->debug ? ant_debug_launch() : 0;
+ }
+@@ -320,7 +326,7 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	flags = get_unaligned_le32(args + 4);
+ 	if (flags & ~(ANTC_EXEC_SPECIMEN | ANTC_EXEC_CORE | ANTC_EXEC_DEBUG |
+ 		      ANTC_EXEC_HASH_ROOT | ANTC_EXEC_HASH_WRITES | ANTC_EXEC_SHELL_JOB |
+-		      ANTC_EXEC_SPECIMEN_DIGEST))
++		      ANTC_EXEC_SPECIMEN_DIGEST | ANTC_EXEC_EXIT_HOLD))
+ 		return -EINVAL;
+ 	/* The digest is of the specimen copy: it needs one. */
+ 	if ((flags & ANTC_EXEC_SPECIMEN_DIGEST) && !(flags & ANTC_EXEC_SPECIMEN))
+@@ -367,8 +373,9 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	error = vector_arg(args, args_len, &offset, envc, &launch->envp);
+ 	if (error)
+ 		goto fail;
++	/* Trailers in order: specimen, core, exit hold; nothing may follow. */
+ 	if (flags & ANTC_EXEC_SPECIMEN) {
+-		if (args_len - offset != (flags & ANTC_EXEC_CORE ? 16 : 8)) {
++		if (args_len - offset < 8) {
+ 			error = -EINVAL;
+ 			goto fail;
+ 		}
+@@ -382,7 +389,7 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	if (flags & ANTC_EXEC_CORE) {
+ 		u32 max_size, timeout_ms;
+ 
+-		if (args_len - offset != 8) {
++		if (args_len - offset < 8) {
+ 			error = -EINVAL;
+ 			goto fail;
+ 		}
+@@ -397,6 +404,21 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 		launch->core = core;
+ 		offset += 8;
+ 	}
++	if (flags & ANTC_EXEC_EXIT_HOLD) {
++		u32 hold_ms;
++
++		if (args_len - offset < 8 || get_unaligned_le32(args + offset + 4)) {
++			error = -EINVAL;
++			goto fail;
++		}
++		hold_ms = get_unaligned_le32(args + offset);
++		if (!hold_ms || hold_ms > ANTC_EXIT_HOLD_MS_MAX) {
++			error = -EINVAL;
++			goto fail;
++		}
++		launch->exit_hold_ms = hold_ms;
++		offset += 8;
++	}
+ 	if (offset != args_len) {
+ 		error = -EINVAL;
+ 		goto fail;
+@@ -635,6 +657,9 @@ static int stop_run(const u8 *args, size_t args_len)
+ 	 */
+ 	/* A debugger of this run steps aside first, so the signal is not stopped on. */
+ 	ant_debug_run_stop(root_cookie);
++	/* A process held at its exit goes on with it, as SIGTERM asks. */
++	ant_run_exit_hold(root_cookie, 0);
++	ant_exit_hold_release_run(root_cookie);
+ 	error = ant_run_signal(root_cookie, SIGTERM, &issued);
+ 	if (issued) {
+ 		ant_monitor_run_stopped(root_cookie);
+@@ -724,7 +749,8 @@ static int command(const void *data, size_t args_len, void *reply,
+ 		memset(reply, 0, ANTC_TRACER_CAPS_SIZE);
+ 		put_unaligned_le32(ANTC_TRACER_ABI, reply);
+ 		put_unaligned_le32(ANTC_EXEC_HASH_ROOT | ANTC_EXEC_HASH_WRITES |
+-				   ANTC_EXEC_SHELL_JOB | ANTC_EXEC_SPECIMEN_DIGEST, reply + 4);
++				   ANTC_EXEC_SHELL_JOB | ANTC_EXEC_SPECIMEN_DIGEST |
++				   ANTC_EXEC_EXIT_HOLD, reply + 4);
+ 		put_unaligned_le32(ANTC_HASH_FILE_MAX, reply + 8);
+ 		put_unaligned_le32(ANTC_HASH_QUEUE, reply + 12);
+ 		put_unaligned_le64(ANTC_HASH_PENDING_MAX, reply + 16);
+@@ -744,6 +770,8 @@ static int command(const void *data, size_t args_len, void *reply,
+ 		return terminal_command(opcode, args, args_len, reply, capacity, reply_len);
+ 	case ANTC_STOP_RUN:
+ 		return stop_run(args, args_len);
++	case ANTC_EXIT_HOLD:
++		return ant_exit_hold_command(args, args_len);
+ 	case ANTC_RUN_STATUS: {
+ 		u64 root_cookie;
+ 		int error;
+@@ -807,7 +835,7 @@ static int __init ant_control_init(void)
+ 		ANTC_DEBUG_REGS_WRITE, ANTC_DEBUG_MEM_READ, ANTC_DEBUG_MEM_WRITE,
+ 		ANTC_DEBUG_BP_SET, ANTC_DEBUG_BP_CLEAR, ANTC_DEBUG_AUXV, ANTC_DEBUG_CONFIG,
+ 		ANTC_DEBUG_EVENTS, ANTC_DEBUG_THREAD_CTL, ANTC_DEBUG_SESSIONS,
+-		ANTC_DEBUG_BP_LIST, ANTC_TRACER_CAPS, ANTC_ARCH_INFO };
++		ANTC_DEBUG_BP_LIST, ANTC_TRACER_CAPS, ANTC_ARCH_INFO, ANTC_EXIT_HOLD };
+ 	int i, error;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(opcodes); i++) {
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 251bd5d3b..df6097439 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -38,7 +38,9 @@
+  * read of an event descriptor names its records' layout; the compat
+  * structures of common compat calls are captured by their ILP32 layouts. */
+ /* Revision 22: the SHA-256 of a specimen copy in its acquisition reply
+- * (EXEC_SPECIMEN_DIGEST, ACQUIRE DIGEST), offered in TRACER_CAPS. */
++ * (EXEC_SPECIMEN_DIGEST, ACQUIRE DIGEST), offered in TRACER_CAPS; the dump
++ * trigger's exit hold (EXEC_EXIT_HOLD, EXIT_HOLD, lifecycle.exit_hold,
++ * CORE_EXIT_HELD), offered in TRACER_CAPS. */
+ #define ANTC_REVISION 22
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+@@ -100,6 +102,10 @@
+ #define ANTC_SPECIMEN_DIGEST_SIZE 56
+ /* Acquisition reply flag at 20: the SHA-256 at 24 is the copy's. */
+ #define ANTC_SPECIMEN_DIGEST_VALID 1
++/* Revision 22 (TRACER_CAPS offers it): the run's processes wait at their
++ * exit for the dump trigger (EXIT_HOLD below). It appends u32 hold_ms
++ * (1..EXIT_HOLD_MS_MAX), u32 reserved=0 after the core trailer. */
++#define ANTC_EXEC_EXIT_HOLD 128
+ #define ANTC_CORE_STATUS 0x1060
+ #define ANTC_CORE_READ 0x1061
+ #define ANTC_CORE_RELEASE 0x1062
+@@ -141,6 +147,33 @@
+ /* Revision 21: the core is the ELF32 file (ELFCLASS32 EM_ARM) of an AArch32
+  * task of an arm64 guest, as fs/compat_binfmt_elf.c writes it. */
+ #define ANTC_CORE_COMPAT_ELF32 0x100
++/* Revision 22: the core of a process held at its exit (EXIT_HOLD), written by
++ * the process itself with the exit core's writer: every page, resident or
++ * not; RESIDENT_ONLY is clear. */
++#define ANTC_CORE_EXIT_HELD 0x200
++/* EXIT_HOLD (revision 22, with EXEC_EXIT_HOLD): header flags=0, u64 cookie
++ * at 8, u32 action at 16, u32 hold_ms at 20 (ARM only, 0: EXIT_HOLD_MS; else
++ * 0); empty reply.
++ * ARM / DISARM: cookie is a run's root cookie (-ESRCH: no such run); DISARM
++ * also releases its held processes. RELEASE: cookie is a held process's
++ * (its leader's task cookie, or that of the task that sent its hold record),
++ * or 0 for every held process (-ESRCH: none with that cookie).
++ * In an armed run, a process that ends (exit_group, its last thread's exit,
++ * a fatal or core-dumping signal; never SIGKILL, never one whose own exit
++ * core is armed) first sends lifecycle.exit_hold, a scalar of
++ * hold_ms | (u64)wait_status << 32, in its leader's process, then waits
++ * at most the run's hold_ms (the host's longer one under TCG), before anything
++ * of it is torn down, for CORE_CAPTURE
++ * of its identity (the core is written by the process itself: CORE_EXIT_HELD,
++ * status and read as a manual core's) or RELEASE. A stopped run (STOP_RUN),
++ * SIGKILL and the timeout end the wait. At most eight processes wait at once.
++ */
++#define ANTC_EXIT_HOLD 0x1068
++#define ANTC_EXIT_HOLD_ARM 1
++#define ANTC_EXIT_HOLD_DISARM 2
++#define ANTC_EXIT_HOLD_RELEASE 3
++#define ANTC_EXIT_HOLD_MS 50
++#define ANTC_EXIT_HOLD_MS_MAX 1000
+ #define ANTC_RESOURCES 0x1070
+ #define ANTC_RESOURCES_SIZE 96
+ #define ANTC_RESOURCES_MEMORY_VALID 1
+diff --git a/kernel/antinomie/exit_hold.c b/kernel/antinomie/exit_hold.c
+new file mode 100644
+index 000000000..81a40e74a
+--- /dev/null
++++ b/kernel/antinomie/exit_hold.c
+@@ -0,0 +1,195 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* The exit hold of a run's dump trigger (contract revision 22).
++ *
++ * The host's dump trigger judges each call as it arrives and asks for a core
++ * of the process that made a suspicious one. A process that exits a
++ * millisecond after that call is gone before the request comes. In a run armed
++ * for it (EXEC flag EXIT_HOLD, or the EXIT_HOLD command), a process that ends
++ * (exit_group, the last thread's exit, a fatal signal, a core-dumping signal)
++ * is parked here, at the start of its exit and before anything of it is torn
++ * down, for at most the run's hold time (ANTC_EXIT_HOLD_MS unless the host
++ * chose another, up to ANTC_EXIT_HOLD_MS_MAX): the exit-hold record tells the host,
++ * which then asks for the core as for any live process (CORE_CAPTURE by its
++ * identity) or lets it go (EXIT_HOLD RELEASE). The core is written by the
++ * parked task itself, with the exit core's writer, so its address space and
++ * threads are whole. SIGKILL, a process whose own exit core is armed, and a
++ * task with no address space are never held; a killed or stopped run releases
++ * at once. At most ANT_EXIT_HOLD_SLOTS tasks wait at a time; the next ones
++ * exit unheld.
++ */
++#include <linux/antinomie_monitor.h>
++#include <linux/completion.h>
++#include <linux/jiffies.h>
++#include <linux/sched.h>
++#include <linux/sched/signal.h>
++#include <linux/spinlock.h>
++#include <linux/unaligned.h>
++#include "control_wire.h"
++#include "exit_hold.h"
++#include "notes.h"
++#include "process_core.h"
++#include "run.h"
++#include "state.h"
++
++#define ANT_EXIT_HOLD_SLOTS 8
++
++struct ant_exit_hold {
++	struct completion done;
++	struct ant_core *core;
++	/* cookie: the leader's (the process's identity); thread_cookie: the
++	 * task that sent the hold record, which RELEASE may name instead.
++	 */
++	u64 cookie, thread_cookie, root_cookie, start_ns;
++	u32 tgid;
++	bool used, released;
++};
++
++static DEFINE_SPINLOCK(hold_lock);
++static struct ant_exit_hold holds[ANT_EXIT_HOLD_SLOTS];
++
++static struct ant_exit_hold *hold_find(const struct ant_core_identity *identity)
++{
++	unsigned int i;
++
++	for (i = 0; i < ANT_EXIT_HOLD_SLOTS; i++)
++		if (holds[i].used && !holds[i].released && !holds[i].core &&
++		    holds[i].cookie == identity->cookie &&
++		    holds[i].start_ns == identity->start_ns && holds[i].tgid == identity->tgid)
++			return &holds[i];
++	return NULL;
++}
++
++bool ant_exit_hold(int wait_status, const kernel_siginfo_t *siginfo)
++{
++	/* The process's identity is its leader's, as PROCESS_LIST gives it. */
++	struct task_struct *leader = current->group_leader;
++	struct ant_task_state *state = ant_state(leader);
++	struct ant_exit_hold *hold = NULL;
++	struct ant_core *core;
++	u32 hold_ms = ant_run_holds_exit(current);
++	unsigned int i;
++
++	if (READ_ONCE(state->exit_held) || !hold_ms || !current->mm ||
++	    (current->flags & (PF_KTHREAD | PF_USER_WORKER)) || ant_monitor_core_pending(current))
++		return false;
++	/* Once per process: its exit reaches the core hook more than once, and
++	 * from more than one thread (a sibling zapped by exit_group).
++	 */
++	WRITE_ONCE(state->exit_held, true);
++	if (fatal_signal_pending(current))
++		return false;
++	spin_lock(&hold_lock);
++	for (i = 0; i < ANT_EXIT_HOLD_SLOTS; i++)
++		if (!holds[i].used) {
++			hold = &holds[i];
++			init_completion(&hold->done);
++			hold->core = NULL;
++			hold->cookie = READ_ONCE(state->cookie);
++			hold->thread_cookie = READ_ONCE(ant_state(current)->cookie);
++			hold->root_cookie = ant_run_root_cookie(current);
++			hold->start_ns = leader->start_boottime;
++			hold->tgid = task_tgid_nr(current);
++			hold->released = false;
++			hold->used = true;
++			break;
++		}
++	spin_unlock(&hold_lock);
++	if (!hold)
++		return false;
++	/* The host learns of the hold from the record, then decides. */
++	ant_monitor_lifecycle_note("lifecycle.exit_hold", hold_ms | (u64)(u32)wait_status << 32);
++	wait_for_completion_killable_timeout(&hold->done, msecs_to_jiffies(hold_ms));
++	spin_lock(&hold_lock);
++	core = hold->core;
++	hold->used = false;
++	spin_unlock(&hold_lock);
++	if (!core)
++		return false;
++	ant_core_held_write(core, wait_status, siginfo);
++	ant_core_put(core);
++	return true;
++}
++
++int ant_exit_hold_claim(const struct ant_core_identity *identity, void *reply)
++{
++	struct ant_exit_hold *hold;
++	struct ant_core *core;
++	bool found;
++
++	spin_lock(&hold_lock);
++	found = hold_find(identity) != NULL;
++	spin_unlock(&hold_lock);
++	if (!found)
++		return -ESRCH;
++	core = ant_core_held_create(identity);
++	if (IS_ERR(core))
++		return PTR_ERR(core);
++	ant_core_reply(core, reply);
++	spin_lock(&hold_lock);
++	hold = hold_find(identity);
++	if (hold) {
++		/* The parked task writes the core and drops this reference. */
++		hold->core = core;
++		complete(&hold->done);
++	}
++	spin_unlock(&hold_lock);
++	if (hold)
++		return 0;
++	/* The hold ended while the handle was made: the host gets no handle. */
++	ant_core_discard(core);
++	return -ESRCH;
++}
++
++int ant_exit_hold_command(const u8 *args, size_t args_len)
++{
++	u64 cookie;
++	u32 action, hold_ms;
++	unsigned int i, released = 0;
++
++	if (args_len != 24)
++		return -EINVAL;
++	cookie = get_unaligned_le64(args + 8);
++	action = get_unaligned_le32(args + 16);
++	/* ARM's hold time; 0 is the default. The other actions take none. */
++	hold_ms = get_unaligned_le32(args + 20);
++	if ((action != ANTC_EXIT_HOLD_ARM && hold_ms) || hold_ms > ANTC_EXIT_HOLD_MS_MAX)
++		return -EINVAL;
++	switch (action) {
++	case ANTC_EXIT_HOLD_ARM:
++	case ANTC_EXIT_HOLD_DISARM:
++		if (!cookie)
++			return -EINVAL;
++		if (action == ANTC_EXIT_HOLD_DISARM)
++			ant_exit_hold_release_run(cookie);
++		return ant_run_exit_hold(cookie, action == ANTC_EXIT_HOLD_ARM ?
++					 hold_ms ?: ANTC_EXIT_HOLD_MS : 0);
++	case ANTC_EXIT_HOLD_RELEASE:
++		spin_lock(&hold_lock);
++		for (i = 0; i < ANT_EXIT_HOLD_SLOTS; i++)
++			if (holds[i].used && !holds[i].released && !holds[i].core &&
++			    (!cookie || holds[i].cookie == cookie ||
++			     holds[i].thread_cookie == cookie)) {
++				holds[i].released = true;
++				complete(&holds[i].done);
++				released++;
++			}
++		spin_unlock(&hold_lock);
++		return released || !cookie ? 0 : -ESRCH;
++	default:
++		return -EINVAL;
++	}
++}
++
++void ant_exit_hold_release_run(u64 root_cookie)
++{
++	unsigned int i;
++
++	spin_lock(&hold_lock);
++	for (i = 0; i < ANT_EXIT_HOLD_SLOTS; i++)
++		if (holds[i].used && !holds[i].released && !holds[i].core &&
++		    holds[i].root_cookie == root_cookie) {
++			holds[i].released = true;
++			complete(&holds[i].done);
++		}
++	spin_unlock(&hold_lock);
++}
+diff --git a/kernel/antinomie/exit_hold.h b/kernel/antinomie/exit_hold.h
+new file mode 100644
+index 000000000..99e49cf8b
+--- /dev/null
++++ b/kernel/antinomie/exit_hold.h
+@@ -0,0 +1,23 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef ANT_EXIT_HOLD_H
++#define ANT_EXIT_HOLD_H
++
++#include <linux/signal_types.h>
++#include <linux/types.h>
++
++struct ant_core_identity;
++
++/* exit_hold.c: park a process of an armed run at its exit until the host asks
++ * for its core or lets it go. True when the parked task wrote a core.
++ */
++bool ant_exit_hold(int wait_status, const kernel_siginfo_t *siginfo);
++/* CORE_CAPTURE of a held process: hand it a core handle (reply: the 24-byte
++ * arm reply). -ESRCH when no held process has that identity.
++ */
++int ant_exit_hold_claim(const struct ant_core_identity *identity, void *reply);
++/* EXIT_HOLD command (control_wire.h). */
++int ant_exit_hold_command(const u8 *args, size_t args_len);
++/* Let every held process of a run go (STOP_RUN, DISARM). */
++void ant_exit_hold_release_run(u64 root_cookie);
++
++#endif
+diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
+index 8041c9915..409048273 100644
+--- a/kernel/antinomie/manual_core.c
++++ b/kernel/antinomie/manual_core.c
+@@ -25,6 +25,7 @@
+ #include "control_wire.h"
+ #include "process_core.h"
+ #include "debug.h"
++#include "exit_hold.h"
+ #include "state.h"
+ #include "user_read.h"
+ 
+@@ -681,6 +682,13 @@ int ant_manual_command(u32 opcode, const u8 *args, size_t args_len,
+ 	}
+ 	if (!admission || error != -ESRCH)
+ 		return error;
++	/* A process the dump trigger holds at its exit writes its own core. */
++	error = ant_exit_hold_claim(&identity, reply);
++	if (error != -ESRCH) {
++		if (!error)
++			*reply_len = 24;
++		return error;
++	}
+ 	mutex_lock(&manual_lock);
+ 	if (!manual_worker || active_manual) {
+ 		error = manual_worker ? -EBUSY : -EAGAIN;
+diff --git a/kernel/antinomie/notes.h b/kernel/antinomie/notes.h
+index cf7d0c1d9..a34206ab6 100644
+--- a/kernel/antinomie/notes.h
++++ b/kernel/antinomie/notes.h
+@@ -23,6 +23,10 @@ bool ant_monitor_identity_last(struct ant_async_event *ev, u64 *nr);
+ /* Publish one record in the calling task's own traced call. */
+ bool ant_monitor_note(const char *key, const char *layout, const void *data,
+ 		      size_t len);
++/* A scalar lifecycle record of the calling task, inside a traced call or not
++ * (the exit hold's record: exit_hold.c).
++ */
++void ant_monitor_lifecycle_note(const char *key, u64 value);
+ /* Publish one record for an earlier call, from a worker. ctx comes from
+  * ant_monitor_async_capture_alloc() and is reused for any number of records.
+  */
+diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
+index 32cebc788..e8743e3e4 100644
+--- a/kernel/antinomie/process_core.c
++++ b/kernel/antinomie/process_core.c
+@@ -20,6 +20,7 @@
+ #include <linux/vmalloc.h>
+ #include <linux/workqueue.h>
+ #include "control_wire.h"
++#include "exit_hold.h"
+ #include "process_core.h"
+ #include "run.h"
+ #include "state.h"
+@@ -313,6 +314,39 @@ struct ant_core *ant_core_live_create(const struct ant_core_identity *identity)
+ 	return core;
+ }
+ 
++/* The core of a process held at its exit (exit_hold.c): a live handle, as
++ * CORE_CAPTURE makes one, that the parked task writes itself with the exit
++ * core's writer, which reads every page, resident or not.
++ */
++struct ant_core *ant_core_held_create(const struct ant_core_identity *identity)
++{
++	struct ant_core *core = ant_core_live_create(identity);
++
++	if (IS_ERR(core))
++		return core;
++	mutex_lock(&core_lock);
++	core->flags = (core->flags & ~ANTC_CORE_RESIDENT_ONLY) | ANTC_CORE_EXIT_HELD;
++	mutex_unlock(&core_lock);
++	return core;
++}
++
++/* A handle nobody will write or read: off the list, and freed. */
++void ant_core_discard(struct ant_core *core)
++{
++	bool removed = false;
++
++	mutex_lock(&core_lock);
++	WRITE_ONCE(core->canceled, true);
++	if (!list_empty(&core->node)) {
++		list_del_init(&core->node);
++		removed = true;
++	}
++	mutex_unlock(&core_lock);
++	if (removed)
++		ant_core_put(core);
++	ant_core_put(core);
++}
++
+ int ant_core_live_lookup(const struct ant_core_identity *identity, bool admission,
+ 			 struct ant_core **result)
+ {
+@@ -807,6 +841,24 @@ void ant_core_live_finish(struct ant_core *core, int error, u32 thread_count, bo
+ 	mutex_unlock(&core_lock);
+ }
+ 
++/* The held task writes the core the host asked for (ant_exit_hold()). */
++void ant_core_held_write(struct ant_core *core, int wait_status,
++			 const kernel_siginfo_t *siginfo)
++{
++	u32 threads = get_nr_threads(current);
++	struct file *file = NULL;
++	int error = ant_core_live_prepare(core, &file);
++
++	if (!error) {
++		ant_core_live_begin(core);
++		error = ant_coredump_to_file(file, RLIM_INFINITY, wait_status, siginfo,
++					     core->deadline);
++	}
++	if (file)
++		fput(file);
++	ant_core_live_finish(core, error, threads, false);
++}
++
+ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+ {
+ 	struct ant_core *core, *selected = NULL;
+@@ -818,6 +870,11 @@ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+ 	if ((siginfo && siginfo->si_signo == SIGKILL) ||
+ 	    (!siginfo && (wait_status & 0x7f) == SIGKILL))
+ 		return false;
++	/* A process of a run armed for the dump trigger's exit hold waits for
++	 * the host first; a core it was asked for is then its core.
++	 */
++	if (ant_exit_hold(wait_status, siginfo))
++		return true;
+ 	if (!ant_state(current)->root_process || !current->mm ||
+ 	    (current->flags & PF_USER_WORKER))
+ 		return false;
+diff --git a/kernel/antinomie/process_core.h b/kernel/antinomie/process_core.h
+index 5a8b8d6b2..5b82bc330 100644
+--- a/kernel/antinomie/process_core.h
++++ b/kernel/antinomie/process_core.h
+@@ -80,6 +80,10 @@ static inline int ant_coredump_to_file(struct file *file, unsigned long limit,
+ #endif
+ 
+ struct ant_core *ant_core_live_create(const struct ant_core_identity *identity);
++struct ant_core *ant_core_held_create(const struct ant_core_identity *identity);
++void ant_core_held_write(struct ant_core *core, int wait_status,
++			 const kernel_siginfo_t *siginfo);
++void ant_core_discard(struct ant_core *core);
+ int ant_core_live_lookup(const struct ant_core_identity *identity, bool admission,
+ 			 struct ant_core **result);
+ void ant_core_put(struct ant_core *core);
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 9e4f9d1a6..1b0ddb658 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -2584,6 +2584,11 @@ static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
+ 	ctx->busy = false;
+ }
+ 
++void ant_monitor_lifecycle_note(const char *key, u64 value)
++{
++	lifecycle(ant_state(current)->monitor, key, value);
++}
++
+ u64 ant_monitor_parent_call_id(void)
+ {
+ 	struct ant_task *ctx = ant_state(current)->monitor;
+diff --git a/kernel/antinomie/run.c b/kernel/antinomie/run.c
+index 2464d6d02..107ae027a 100644
+--- a/kernel/antinomie/run.c
++++ b/kernel/antinomie/run.c
+@@ -41,6 +41,8 @@ struct ant_run {
+ 	bool stop_armed;
+ 	/* EXEC flags HASH_ROOT and HASH_WRITES the run was launched with. */
+ 	u32 hash_flags;
++	/* The dump trigger's exit hold (exit_hold.c), ms; 0: none. */
++	u32 exit_hold_ms;
+ 	u32 stop_passes;
+ 	unsigned long kill_at, kill_hard;
+ };
+@@ -137,6 +139,28 @@ void ant_run_hash_flags(struct task_struct *task, u32 flags)
+ 		WRITE_ONCE(run->hash_flags, flags);
+ }
+ 
++/* Arm (@hold_ms) or disarm (0) the exit hold of run @root_cookie. */
++int ant_run_exit_hold(u64 root_cookie, u32 hold_ms)
++{
++	struct ant_run *run;
++	unsigned long flags;
++
++	spin_lock_irqsave(&run_lock, flags);
++	run = find_run(root_cookie);
++	if (run)
++		WRITE_ONCE(run->exit_hold_ms, hold_ms);
++	spin_unlock_irqrestore(&run_lock, flags);
++	return run ? 0 : -ESRCH;
++}
++
++/* How long @task's run holds its processes at their exit, ms; 0: not. */
++u32 ant_run_holds_exit(struct task_struct *task)
++{
++	struct ant_run *run = READ_ONCE(ant_state(task)->run);
++
++	return run ? READ_ONCE(run->exit_hold_ms) : 0;
++}
++
+ /* A task that has left its run (ant_run_exit() detached it) still closes its
+  * files afterwards, in exit_task_work(): its root cookie finds the run.
+  */
+diff --git a/kernel/antinomie/run.h b/kernel/antinomie/run.h
+index 519e3c441..3fa18484a 100644
+--- a/kernel/antinomie/run.h
++++ b/kernel/antinomie/run.h
+@@ -15,6 +15,8 @@ void ant_run_core_arm(u64 root_cookie, bool armed);
+ u64 ant_run_root_cookie(struct task_struct *task);
+ void ant_run_hash_flags(struct task_struct *task, u32 flags);
+ bool ant_run_hashes(struct task_struct *task, u32 flag);
++int ant_run_exit_hold(u64 root_cookie, u32 hold_ms);
++u32 ant_run_holds_exit(struct task_struct *task);
+ void ant_run_async_start(u64 root_cookie);
+ void ant_run_async_finish(u64 root_cookie);
+ void ant_run_async_loss(u64 root_cookie);
+diff --git a/kernel/antinomie/state.h b/kernel/antinomie/state.h
+index 0f7a6bf11..c0e2d7e65 100644
+--- a/kernel/antinomie/state.h
++++ b/kernel/antinomie/state.h
+@@ -62,6 +62,8 @@ struct ant_task_state {
+ 	atomic64_t packet_seq;
+ 	bool root_process;
+ 	bool counted;
++	/* The process's exit was offered to the dump trigger's hold (exit_hold.c). */
++	bool exit_held;
+ };
+ 
+ extern int ant_task_state_offset;
