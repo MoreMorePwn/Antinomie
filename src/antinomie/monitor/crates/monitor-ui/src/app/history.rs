@@ -99,7 +99,7 @@ impl MonitorApp {
                         .join(" ")
                         .to_lowercase()
                         .cmp(&b.request.args.join(" ").to_lowercase()),
-                    4 => run_status(a).cmp(run_status(b)),
+                    4 => run_status(a).cmp(&run_status(b)),
                     _ => root_exit(a).cmp(&root_exit(b)),
                 }
             });
@@ -640,7 +640,10 @@ impl MonitorApp {
     }
 
     pub(super) fn live_history_run(&self, run: &RunSummary) -> bool {
-        self.snapshot.runs.iter().any(|live| live.id == run.id) && run.state.is_live()
+        self.snapshot
+            .runs
+            .iter()
+            .any(|live| live.id == run.id && (live.state.is_live() || live.held_open()))
     }
 }
 
@@ -675,6 +678,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         triggers: run.triggers.clone(),
         stopped_by_user: run.stopped_by_user,
         stopped_at_ms: run.stopped_at_ms,
+        persisted: run.persisted.clone(),
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run

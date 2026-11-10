@@ -384,6 +384,7 @@ impl Recording {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             started_ms: Some(1000),
             clock_anchor: None,
             id: id.into(),

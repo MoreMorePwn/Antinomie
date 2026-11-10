@@ -83,9 +83,12 @@ impl Worker {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         let boot_id = session.boot_id.clone();
         self.launch_checks(&mut request)?;
-        let boot_wait = self.wait_for_boot(&request.path)?;
+        let mut boot_wait = self.wait_for_boot(&request.path)?;
+        let network = self.wait_for_network(&request.path)?;
         let mut plan = self.plan_launch(&request)?;
         plan.summary.notes.extend(boot_wait.timeout_note());
+        plan.summary.notes.extend(network.timeout_note());
+        boot_wait.network = Some(network);
         plan.summary.boot_wait = Some(boot_wait);
         let sent = self.send_launch(&request, plan)?;
         let ack = self.register_run(&request, sent)?;
@@ -341,6 +344,7 @@ impl Worker {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             execution: None,
             analysis: selected
                 .then(|| crate::analysis::jobs::new_report(&request.path, &request.analysis)),
@@ -377,6 +381,7 @@ impl Worker {
         let LaunchShape {
             inline_acquisition,
             tracer_hashing,
+            supported,
             ..
         } = shape;
         let guest_arch = session.disk_bundle.arch;
@@ -420,6 +425,21 @@ impl Worker {
                 artifacts,
                 (RunState::FailedToStart, error),
             ));
+        }
+        // What runs before the launch is not the run's: the persisted-copy
+        // watch compares later process lists with it (a guest that hashes
+        // nothing gives it nothing to compare, so it is not listed then).
+        if tracer_hashing != 0 && supported {
+            let listed = session
+                .list_processes(0, &mut self.snapshot, &self.sender, timeout)
+                .ok();
+            let launched_is_sample = request.sample.is_some()
+                && request.preloaded.is_empty()
+                && !request.run_in.guest_desktop();
+            run.persisted = crate::persisted_copy::Watch::with_baseline(
+                listed.as_ref().map(|page| page.processes.as_slice()),
+                launched_is_sample,
+            );
         }
         // Every error text below is final: a guest rejection says the launch
         // did not happen, only an unanswered or malformed one leaves it unknown.

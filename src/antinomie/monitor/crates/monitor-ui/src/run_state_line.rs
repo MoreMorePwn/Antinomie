@@ -22,6 +22,10 @@ fn state_tone(run: &RunSummary) -> Option<Tone> {
     if run.recording_error.is_some() && !run.state.never_recorded() && !ticks(run) {
         return Some(Tone::Warn);
     }
+    // Held open for a persisted copy: still capturing, the colour of a live run.
+    if run.held_open() {
+        return Some(Tone::Accent);
+    }
     match run.state {
         RunState::Running | RunState::StopRequested | RunState::TerminalClosed => {
             Some(Tone::Accent)
@@ -59,6 +63,7 @@ mod tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
             started_ms: Some(1_700_000_000_000),
             clock_anchor: None,
             id: "r".into(),

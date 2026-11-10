@@ -319,7 +319,12 @@ impl Worker {
                     .get(&cookie)
                     .and_then(|run| run.summary.execution.as_ref()),
             );
+            // A copy of the program outside the tree is alive: the run's
+            // network capture and route go on while it is held open.
+            let held =
+                owner.tree_complete && session.runs.get(&cookie).is_some_and(ProgramRun::held_open);
             if owner.tree_complete
+                && !held
                 && owner.network.is_some()
                 && owner
                     .last_network_stop
@@ -337,7 +342,7 @@ impl Worker {
             }
             // The run's tree ended: its route is released and the record
             // keeps what the gateway counted.
-            let released = owner.tree_complete && session.release_run_route(&mut owner);
+            let released = owner.tree_complete && !held && session.release_run_route(&mut owner);
             if (changed || released)
                 && let Err(error) = owner.save()
             {

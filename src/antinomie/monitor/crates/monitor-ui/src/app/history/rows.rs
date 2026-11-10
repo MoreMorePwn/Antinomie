@@ -92,7 +92,7 @@ impl MonitorApp {
                 let mut row = crate::run_filter::row(
                     run,
                     annotation.as_ref(),
-                    run_status(run),
+                    &run_status(run),
                     root_exit(run),
                 );
                 crate::run_filter::append_facts(ui, run, &mut row);
@@ -208,7 +208,7 @@ impl MonitorApp {
         row.col(|ui| {
             let detail = [execution_detail(run), crate::run_recording::tooltip(run)];
             ui.add(
-                egui::Label::new(crate::run_state_line::text(run, run_status(run)))
+                egui::Label::new(crate::run_state_line::text(run, &run_status(run)))
                     .selectable(false)
                     .sense(egui::Sense::hover()),
             )
@@ -250,8 +250,10 @@ impl MonitorApp {
                 ui,
                 egui_phosphor::regular::STOP,
                 "Stop run and descendants",
-                self.snapshot.runs.iter().any(|live| live.id == run.id)
-                    && run.state.can_stop()
+                self.snapshot
+                    .runs
+                    .iter()
+                    .any(|live| live.id == run.id && live.stoppable())
                     && !self.closing
                     && self.running()
                     && self.pending_kill.is_none(),
@@ -278,7 +280,7 @@ impl MonitorApp {
             }
             let annotation = crate::evidence::annotation(ui, &run.directory);
             let fields =
-                crate::run_filter::row(run, annotation.as_ref(), run_status(run), root_exit(run));
+                crate::run_filter::row(run, annotation.as_ref(), &run_status(run), root_exit(run));
             // A run of a library sample can be noted: the note goes to that sample.
             let note = run.request.sample.as_ref().map(|sample| {
                 (

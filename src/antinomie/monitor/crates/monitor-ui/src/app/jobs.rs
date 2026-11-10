@@ -438,7 +438,7 @@ impl MonitorApp {
                 .find(|run| run.id == id);
             return match run {
                 Some(run) => {
-                    let detail = run_state_text::run_status(run).to_owned();
+                    let detail = run_state_text::run_status(run).into_owned();
                     match run.state {
                         RunState::FailedToStart
                         | RunState::LaunchUnconfirmed
@@ -570,5 +570,5 @@ fn actionable_run(run: &RunSummary, snapshot: &Snapshot) -> bool {
         && snapshot.active_vm.as_ref() == Some(&run.vm_id)
         && snapshot.boot_id.as_ref() == Some(&run.boot_id)
         && run.root_task_cookie != 0
-        && run.state.can_stop()
+        && run.stoppable()
 }

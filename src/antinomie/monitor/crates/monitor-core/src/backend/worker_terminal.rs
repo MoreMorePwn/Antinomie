@@ -132,7 +132,23 @@ impl Worker {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         let timeout = session.reply_timeout();
         let cookie = session.run_cookie(&run_id)?;
-        let run = session.runs.get(&cookie).ok_or("unknown run")?;
+        let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
+        // Its tree ended and the run is held open for a copy outside it:
+        // Stop ends the hold. The guest cannot signal that copy.
+        if run.end_hold("the run was stopped") {
+            // As a Stop of a live run: the run reads "Stopped by you".
+            run.summary.state = RunState::Stopped;
+            run.summary.stopped_by_user = true;
+            run.summary.stopped_at_ms.get_or_insert_with(super::unix_ms);
+            if let Some(log) = run.custody.as_mut() {
+                log.action(
+                    crate::samples::ActionKind::Kill,
+                    "Stop: the run held open for a persisted copy was ended",
+                );
+            }
+            run.persist_summary()?;
+            return Ok("the run's tree had already ended; the run is no longer held open for the copy outside it, which keeps running in the guest".into());
+        }
         if !run.summary.state.can_stop() {
             return Err("run is no longer available for termination".into());
         }

@@ -4526,6 +4526,13 @@
             "null"
           ],
           "description": "`RunSummary.recording_error` text, host paths removed. U"
+        },
+        "held": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set while the run's tree has ended but the run is held open for a copy\nof its program running outside the tree (`run.json` `persisted`):\n\"Held: persisted copy running (pid 1050, .e)\". `state` then still says\nhow the tree ended. U"
         }
       },
       "required": [
@@ -4851,6 +4858,13 @@
             "null"
           ],
           "description": "`RunSummary.recording_error` text, host paths removed. U"
+        },
+        "held": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set while the run's tree has ended but the run is held open for a copy\nof its program running outside the tree (`run.json` `persisted`):\n\"Held: persisted copy running (pid 1050, .e)\". `state` then still says\nhow the tree ended. U"
         },
         "execution": {
           "anyOf": [

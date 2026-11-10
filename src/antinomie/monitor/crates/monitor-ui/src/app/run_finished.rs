@@ -89,7 +89,8 @@ impl MonitorApp {
         ctx.data_mut(|data| {
             let seen = data.get_temp_mut_or_default::<Seen>(egui::Id::new("run-finished-seen"));
             for run in &self.snapshot.runs {
-                if run.state.is_live() {
+                // A run held open for a persisted copy has not finished yet.
+                if run.state.is_live() || run.held_open() {
                     seen.going.insert(run.id.clone());
                     continue;
                 }

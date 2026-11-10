@@ -220,3 +220,49 @@ fn run_lists_say_who_ended_the_run() {
     unknown.state = RunState::Interrupted;
     assert_eq!(run_status(&unknown), "Interrupted");
 }
+
+/// A run whose tree ended while a persisted copy runs outside it is held
+/// open (ANT-T0433): it reads "Held: …", not "Finished", and Stop run is
+/// offered for it as for a live run.
+#[test]
+fn a_run_held_open_for_a_persisted_copy_reads_held_and_can_be_stopped() {
+    use super::super::run_state_text::run_status;
+    use antinomie_monitor_core::persisted_copy::{PersistedCopies, PersistedCopy};
+    let mut app = app();
+    observer_fixture(&mut app);
+    let mut held = run("held");
+    held.state = RunState::Finished;
+    held.persisted = Some(PersistedCopies {
+        copies: vec![PersistedCopy {
+            pid: 1050,
+            name: ".e".into(),
+            ..PersistedCopy::default()
+        }],
+        holding: true,
+        ..PersistedCopies::default()
+    });
+    assert_eq!(
+        run_status(&held),
+        "Held: persisted copy running (pid 1050, .e)"
+    );
+    assert_eq!(
+        crate::run_state_line::color(&held),
+        crate::run_state_line::color(&run("live"))
+    );
+    app.snapshot.runs = vec![held.clone()];
+    assert_eq!(app.kill_target().unwrap().id, "held");
+    app.request_kill(None);
+    let Some(Confirm::KillRun(target)) = app.confirm.take() else {
+        panic!("kill confirmation");
+    };
+    app.submit_kill(target);
+    assert!(matches!(&app.submitted[..], [Command::StopRun { run_id }] if run_id == "held"));
+    // The last look before the hold is decided reads as held too.
+    held.persisted.as_mut().unwrap().copies.clear();
+    assert_eq!(run_status(&held), "Held: looking for persisted copies");
+    // Once the hold ends the run reads as it ended, and is no target.
+    held.persisted.as_mut().unwrap().holding = false;
+    assert_eq!(run_status(&held), "Finished");
+    app.snapshot.runs = vec![held];
+    assert!(app.kill_target().is_none());
+}

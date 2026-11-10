@@ -261,6 +261,7 @@ fn program_run(name: &str, plan: Option<DumpTrigger>) -> (crate::run::ProgramRun
         triggers: None,
         stopped_by_user: false,
         stopped_at_ms: None,
+        persisted: None,
         started_ms: None,
         clock_anchor: None,
         id: "run".into(),

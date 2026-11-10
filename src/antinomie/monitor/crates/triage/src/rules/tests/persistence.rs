@@ -348,3 +348,52 @@ pub fn a_shell_command_whose_argv_pointers_were_lost_is_still_read_from_its_stri
     assert!(has(&run(vec![shell(1, script)]), "persistence.cron"));
     assert!(has(&run(vec![lost]), "persistence.cron"));
 }
+
+/// The host found the sample's copy running outside the tree (Mirai `.e`,
+/// ANT-T0420 run f3c4b489): a HIGH row named after the copy and its starter.
+#[test]
+fn a_persisted_copy_the_host_found_is_a_high_finding() {
+    use crate::rules::{Engine, Options};
+    use crate::FdState;
+    use antinomie_monitor_core::persisted_copy::{CopyOf, PersistedCopies, PersistedCopy};
+    let copies = PersistedCopies {
+        copies: vec![PersistedCopy {
+            pid: 1050,
+            name: ".e".into(),
+            parent_pid: 1,
+            parent_name: Some("systemd".into()),
+            copy_of: Some(CopyOf::Sample),
+            sha256: "ab".repeat(32),
+            size: 4096,
+            start_boot_ns: 20 * SECOND,
+            children: 2,
+            ..PersistedCopy::default()
+        }],
+        hold_ended: Some("every copy outside the tree exited".into()),
+        ..PersistedCopies::default()
+    };
+    let mut engine = Engine::new(Options {
+        show_info: true,
+        ..Default::default()
+    });
+    engine.persisted_copies(&copies);
+    let out = engine.finish(&FdState::default());
+    assert_eq!(
+        tier(&out, "persistence.copy_running").as_deref(),
+        Some("high")
+    );
+    let row = rows(&out, "persistence.copy_running")[0];
+    assert_eq!(text(row, "finding.object"), "pid 1050 \".e\"");
+    assert_eq!(
+        text(row, "finding.what"),
+        "pid 1050 \".e\" runs a copy of the sample outside the recorded tree, started by pid 1 \"systemd\""
+    );
+    assert_eq!(count(row), 3);
+    // Nothing found: no row.
+    let mut quiet = Engine::new(Options::default());
+    quiet.persisted_copies(&PersistedCopies::default());
+    assert!(!has(
+        &quiet.finish(&FdState::default()),
+        "persistence.copy_running"
+    ));
+}

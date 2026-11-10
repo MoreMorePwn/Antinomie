@@ -558,6 +558,22 @@ Pick the route in the Run form (**Network > Route**); the default comes from
 * A **Test** button for each route brings it up the way a run would and says
   whether it answers.
 
+**Network wait before a run (0.9.0).** A program started before the guest has
+its address gets "network is unreachable" (ENETUNREACH) for every connection: a
+Debian guest under TCG can take 20 s after its boot wait to finish DHCP, and a bot
+that kills the DHCP client early leaves the run with no network at all. The
+gateway is the guest's DHCP server and router, so on a Routed VM the launch waits,
+after the boot wait, until the guest has its address: it has sent a packet from
+the address the gateway's DHCP gives, or answers the router's ARP request for it
+(the gateway asks once a second while it waits; nothing runs in the guest). The
+wait is **Tools > Settings > Advanced > network wait before a run**
+(`start.network_wait_secs`, 30 s at KVM speed by default, stretched by the TCG
+multiplier; 0 turns it off). A guest that still has no address then gets the
+program anyway, with a note on the run, and later launches of the same boot do
+not wait again. `run.json` records the wait under `boot_wait.network`. Triage's
+notes count the calls that failed with ENETUNREACH, say from when to when, whether
+the network came up later, and what the wait did.
+
 A route that cannot start stops the run with the reason; Antinomie never falls
 back to another route, and in particular never to the plain Internet. The route
 is checked before the sample starts. Over Tor, VPN and SOCKS5, UDP other than DNS
@@ -1333,6 +1349,7 @@ state from one palette. The words always stay, so colour is never the only cue.
 | State | Colour |
 |---|---|
 | Running, stopping, or still recording after the terminal was closed or the root exited | Blue |
+| Held: the tree ended but a persisted copy runs outside it, and the run still captures | Blue |
 | Finished with exit 0 | Green |
 | Finished with another exit code | Amber |
 | Stopped by you (Stop run) | Grey |
@@ -1372,6 +1389,52 @@ list and Summary, Triage's state line and the reports:
   while the tree was alive. The words give what the root did and how many
   processes were left; the run's pcap is closed at the stop and its route counts
   are still written.
+
+### Copies of the program outside the recorded tree (0.9.0)
+
+The guest records only the launched program and its descendants. Malware that
+persists (a cron entry, a systemd unit, an init script) has its copy started by
+cron or systemd, outside that tree: the copy can kill the recorded processes
+(Mirai's `.e` does) or keep running as a service after the tree exited. The host
+looks for such copies itself, with the guest commands it already has and nothing
+started in the guest:
+
+- Just before the launch it lists the guest's processes. While the run goes on
+  it lists them every 3 s; a process that was not there before the launch and is
+  not in the recorded tree is read (the guest kernel opens `/proc/<pid>/exe`, the
+  way static analysis reads the sample) and hashed on the host.
+- It is a copy when that SHA-256 is the launched program's (for a library
+  sample), or that of a file the run wrote (the guest's hash at the file's last
+  close). Names are never enough, and a file the run copied from a program the
+  tree had run (BusyBox's `cp` copying busybox) does not count. At most 64
+  programs are read per run, and only those of the size of one of the run's
+  images are read whole.
+- The run's notes name each copy: "pid 1050 ".e" runs a copy of the sample
+  outside the recorded tree (started by pid 1049 "cron", uid 0, SHA-256 …)".
+  Triage lists it as the HIGH finding **Persisted copy running outside the
+  recorded tree** (`persistence.copy_running`), and the run-end note says when a
+  recorded process was killed by that copy.
+- When the guest says the tree ended, the host takes one last look (a few
+  seconds, at most 30) before the run reads as ended, so a copy started just
+  before the end (a short installer that starts its service and exits) is found
+  too.
+- When the tree ends while a copy is alive, the run is **held open**: its network
+  capture and route go on, so the copy's traffic is in the run's pcap. The hold
+  ends when every copy has exited, when the run limit of `run exec` or Auto mode
+  sends its stop (the run then ends at its limit, not as exited), when the VM
+  stops, or after 10 minutes. The run's notes say when and why it ended.
+- While it is held, Run History, the run's window header, the Samples window's Runs
+  and the VM's sidebar row say **Held: persisted copy running (pid 1050, .e)** in
+  the colour of a live run (during the last look, "Held: looking for persisted
+  copies"), and the run-finished toast waits. **Stop run** (toolbar, Run menu,
+  command palette, the Run History row) is offered for it and works as on a live
+  run: the hold ends and the run reads "Stopped by you at …". The copy itself is
+  not signalled: the guest cannot, so it may still run. The copy's own system calls
+  are not recorded (following them would need the guest to trace it), and it may
+  still run in the guest after the hold; restore the VM's snapshot.
+
+`run.json` keeps what was found under `persisted` (each copy's pid, name, parent,
+uid, SHA-256, size, when it was seen and whether it ended, and the hold).
 
 ## 5. Samples
 
@@ -1991,7 +2054,10 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
 - **Look at recorded runs.** `run list [--vm ID] [--sample SHA256] [--job ID] [--state
   STATE] [--since SPAN] [--limit N] [--cursor C]` lists the recorded runs of the data
   directory, newest first (`--since` takes a span such as `90m`, `24h` or `7d`, or a
-  Unix time in milliseconds). `run show RUN [--summary]` shows one run: its state,
+  Unix time in milliseconds). A run held open for a persisted copy (see *Copies of
+  the program outside the recorded tree*) shows `held` in the STATE column, and its
+  JSON item has `held` ("Held: persisted copy running (pid 1050, .e)") beside
+  `state`, which still says how its tree ended. `run show RUN [--summary]` shows one run: its state,
   whether its recording is `live`, `finalizing`, `complete` or `interrupted`, its
   evidence and `generation`; `--summary` adds the Triage summary. `run export RUN --out
   DIR [--part LIST] [--sensitive]` writes the parts `trace`, `processes`,

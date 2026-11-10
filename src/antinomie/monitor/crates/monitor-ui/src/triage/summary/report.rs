@@ -448,6 +448,9 @@ pub(super) fn content(
             ui.add_space(14.0);
             let mut shown = view.notes.clone();
             shown.extend(super::run_end::run_end(scan).map(|end| end.text));
+            shown.extend(antinomie_triage::network_reach::unreachable_note(
+                &scan.signals,
+            ));
             let shot = view.run_facts.screenshot.clone();
             if notes(
                 ui,

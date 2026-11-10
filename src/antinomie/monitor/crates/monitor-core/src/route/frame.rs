@@ -295,6 +295,16 @@ pub fn build_arp_reply(mac: Mac, ip: Ipv4Addr, to_mac: Mac, to_ip: Ipv4Addr) -> 
     build_eth(to_mac, mac, ETHERTYPE_ARP, &arp)
 }
 
+/// A broadcast ARP request from `mac`/`ip` asking who has `target`.
+pub fn build_arp_request(mac: Mac, ip: Ipv4Addr, target: Ipv4Addr) -> Vec<u8> {
+    let mut arp = vec![0, 1, 8, 0, 6, 4, 0, 1];
+    arp.extend_from_slice(&mac);
+    arp.extend_from_slice(&ip.octets());
+    arp.extend_from_slice(&[0; 6]);
+    arp.extend_from_slice(&target.octets());
+    build_eth(BROADCAST, mac, ETHERTYPE_ARP, &arp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

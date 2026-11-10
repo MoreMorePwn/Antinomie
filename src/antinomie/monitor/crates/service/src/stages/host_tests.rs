@@ -201,6 +201,7 @@ pub(super) fn recording(w: &W, sample_sha: &str, telemetry: bool) -> PathBuf {
         triggers: None,
         stopped_by_user: false,
         stopped_at_ms: None,
+        persisted: None,
         started_ms: Some(1_792_000_000_000),
         clock_anchor: None,
         id: RUN.into(),

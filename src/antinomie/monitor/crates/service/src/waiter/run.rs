@@ -133,10 +133,13 @@ pub fn phase(run: &RunSummary) -> Phase {
         RunState::FailedToStart | RunState::LaunchUnconfirmed => Phase::LaunchFailed,
         RunState::Interrupted => Phase::Lost,
         RunState::Finished | RunState::Stopped | RunState::TerminalClosed | RunState::Finalized => {
-            if run
-                .execution
-                .as_ref()
-                .is_none_or(|execution| execution.live_task_count == 0)
+            // A run held open for a copy of the program outside its tree
+            // (`persisted`) goes on until the copy exits or `StopRun`.
+            if !run.held_open()
+                && run
+                    .execution
+                    .as_ref()
+                    .is_none_or(|execution| execution.live_task_count == 0)
             {
                 Phase::Ended
             } else {

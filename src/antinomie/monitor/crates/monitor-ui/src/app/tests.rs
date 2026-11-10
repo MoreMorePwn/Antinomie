@@ -344,6 +344,7 @@ pub(super) fn run(id: &str) -> RunSummary {
         triggers: None,
         stopped_by_user: false,
         stopped_at_ms: None,
+        persisted: None,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),

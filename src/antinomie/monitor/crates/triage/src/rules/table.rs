@@ -359,6 +359,7 @@ pub const SPECS: &[Spec] = &[
         &["T1546.017", "DET0375"],
     )
     .allow(PACKAGERS),
+    rule("persistence.copy_running", 1, T::High, C::Persistence, &[]),
     rule(
         "persistence.pam",
         1,

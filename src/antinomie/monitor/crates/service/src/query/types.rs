@@ -135,6 +135,12 @@ pub struct RunInfo {
     pub exit: Option<RunExit>,
     /// `RunSummary.recording_error` text, host paths removed. U
     pub end_reason: Option<String>,
+    /// Set while the run's tree has ended but the run is held open for a copy
+    /// of its program running outside the tree (`run.json` `persisted`):
+    /// "Held: persisted copy running (pid 1050, .e)". `state` then still says
+    /// how the tree ended. U
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<String>,
 }
 
 /// From `RunExecution`. All N.

@@ -135,6 +135,11 @@ impl Session {
                 match run.assembler.ingest(&packet) {
                     Ok(event) => {
                         run.watch_event(event.as_ref());
+                        if let Some(event) = event.as_ref()
+                            && let Some(hash) = crate::kernel_notes::file_hash(event)
+                        {
+                            run.persisted.learn(event.call_id, &hash);
+                        }
                         note_guest_loss(&mut snapshot.health, event.as_ref());
                         if let Some(hash) = event.as_ref().and_then(launch_image_hash) {
                             self.analysis

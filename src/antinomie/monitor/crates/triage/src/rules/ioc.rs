@@ -366,6 +366,76 @@ impl Engine {
         }
     }
 
+    /// One HIGH row per copy of the program the host found running outside
+    /// the recorded tree (`run.json` `persisted`).
+    pub fn persisted_copies(
+        &mut self,
+        copies: &antinomie_monitor_core::persisted_copy::PersistedCopies,
+    ) {
+        use antinomie_monitor_core::persisted_copy::CopyOf;
+        for copy in &copies.copies {
+            let of = copy.copy_of.unwrap_or(CopyOf::Sample);
+            let mut detail = vec![
+                format!(
+                    "Its program has SHA-256 {} ({} bytes), {}.",
+                    copy.sha256,
+                    copy.size,
+                    match of {
+                        CopyOf::Sample => "the same as the program the run launched",
+                        CopyOf::Written => "the same as a file the run wrote, as the guest hashed it when its last writer closed it",
+                    }
+                ),
+                format!(
+                    "The host read it from the guest (/proc/{}/exe) because the process was not running before the launch and is not in the recorded tree; it was {} with uid {}.",
+                    copy.pid,
+                    copy.started_by(),
+                    copy.uid
+                ),
+                if copy.ended {
+                    "It had exited before the run ended.".into()
+                } else {
+                    "It was still running when the run ended, and may still run in the guest.".into()
+                },
+                "Its own system calls are not in this recording: the guest traces only the launched tree.".into(),
+            ];
+            if copy.children > 0 {
+                detail.push(format!(
+                    "It forked {} more process{} under the same name.",
+                    copy.children,
+                    if copy.children == 1 { "" } else { "es" }
+                ));
+            }
+            if let Some(why) = &copies.hold_ended {
+                detail.push(format!(
+                    "The run was kept open after its tree ended while a copy ran, until {why}."
+                ));
+            }
+            self.host_row_from(
+                "persistence.copy_running",
+                (
+                    copy.who(),
+                    format!(
+                        "{} runs {} outside the recorded tree, {}",
+                        copy.who(),
+                        of.label(),
+                        copy.started_by()
+                    ),
+                ),
+                (copy.start_boot_ns, 1 + u64::from(copy.children), copy.start_boot_ns),
+                detail,
+                &format!("outside the recorded tree ({})", copy.who()),
+                "the host's process list and its hash of the process's program (run.json persisted)",
+            );
+        }
+        if copies.more > 0 {
+            self.notes.push(format!(
+                "{} more processes outside the recorded tree ran a copy of the program; only the first {} are listed.",
+                copies.more,
+                copies.copies.len()
+            ));
+        }
+    }
+
     /// One row for something the host saw, not a task: VM-wide, from the
     /// gateway's report.
     /// The run's program died of a signal before its first recorded system call.
@@ -424,6 +494,26 @@ impl Engine {
         detail: Vec<String>,
         process: &str,
     ) {
+        self.host_row_from(
+            rule,
+            (object, summary),
+            (first_ns, count, last_ns),
+            detail,
+            process,
+            "cloud-metadata.json in the run's folder",
+        );
+    }
+
+    /// [`host_row_as`](Self::host_row_as) with the evidence it rests on.
+    pub fn host_row_from(
+        &mut self,
+        rule: &'static str,
+        (object, summary): (String, String),
+        (first_ns, count, last_ns): (u64, u64, u64),
+        detail: Vec<String>,
+        process: &str,
+        evidence: &str,
+    ) {
         let Some(spec) = spec(rule) else {
             debug_assert!(false, "unclassified rule {rule}");
             return;
@@ -467,7 +557,7 @@ impl Engine {
             ret: None,
             high_confidence: true,
             outcome: "seen by the host".into(),
-            evidence: "cloud-metadata.json in the run's folder".into(),
+            evidence: evidence.into(),
             gaps,
             detail,
             siblings: 0,

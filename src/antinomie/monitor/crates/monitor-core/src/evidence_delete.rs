@@ -720,6 +720,7 @@ mod tests {
             triggers: None,
             stopped_by_user: false,
             stopped_at_ms: None,
+            persisted: None,
         };
         atomic_json(&dir.join("run.json"), &run).unwrap();
         dir

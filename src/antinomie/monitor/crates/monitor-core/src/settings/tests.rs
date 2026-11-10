@@ -145,6 +145,11 @@ fn the_start_settings_are_shared_and_default_when_absent() {
     assert!(changed.set("start.tcg_multiplier", "0").is_err());
     assert!(changed.set("start.boot_wait_secs", "601").is_err());
     assert_eq!(changed.start().tcg_multiplier, 25);
+    // The network wait defaults to 30 s, can be turned off, and is bounded.
+    assert_eq!(changed.start().network_wait_secs, 30);
+    changed.set("start.network_wait_secs", "0").unwrap();
+    assert_eq!(changed.start().network_wait_secs, 0);
+    assert!(changed.set("start.network_wait_secs", "601").is_err());
     // A partial section reads the rest as defaults; the options take it.
     let dir = scratch("start");
     std::fs::write(path(&dir), r#"{"start": {"boot_wait_secs": 90}}"#).unwrap();

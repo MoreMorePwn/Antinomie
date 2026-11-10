@@ -46,11 +46,19 @@ pub struct SignalNotes {
     pub parent_death: Vec<(u32, u8)>,
     /// The run status flags from `run.json`; `None` for a run without them.
     pub run_flags: Option<u64>,
+    /// Copies of the program the host found outside the recorded tree
+    /// (`run.json` `persisted`).
+    pub persisted: Option<antinomie_monitor_core::persisted_copy::PersistedCopies>,
+    /// Network calls that failed for want of a network, and the wait for the
+    /// guest's address before the launch (`run.json` `boot_wait.network`).
+    pub unreachable: crate::network_reach::Unreachable,
+    pub network_wait: Option<antinomie_monitor_core::boot_wait::NetworkWait>,
 }
 
 impl SignalNotes {
     /// Remember `invocation` when it sends a signal or asks for a parent-death signal.
     pub fn observe(&mut self, invocation: &InvocationSummary, event: &EventSummary) {
+        self.unreachable.observe(invocation, event);
         let name = event.syscall_name.as_str();
         if !matches!(
             name,
@@ -383,14 +391,27 @@ pub fn recorded(
         } else {
             format!("pid {} \"{}\"", sender.pid, sender.comm)
         };
+        // The host found the sender running the sample's program (or a file
+        // the run wrote) outside the tree: its persistence ended the original.
+        let copy = notes
+            .persisted
+            .as_ref()
+            .and_then(|copies| copies.by_pid(sender.pid))
+            .filter(|_| traced.is_none());
+        let place = match copy {
+            Some(copy) => format!(
+                "a process outside the recorded tree that runs {} ({}): the sample's persisted copy",
+                copy.copy_of
+                    .unwrap_or(antinomie_monitor_core::persisted_copy::CopyOf::Sample)
+                    .label(),
+                copy.started_by()
+            ),
+            None if traced.is_some() => "in the recorded tree".into(),
+            None => "a process outside the recorded tree".into(),
+        };
         return Some(format!(
-            "sent by {name} (uid {}, {}; {})",
+            "sent by {name} (uid {}, {place}; {})",
             sender.uid,
-            if traced.is_some() {
-                "in the recorded tree"
-            } else {
-                "a process outside the recorded tree"
-            },
             record.code_name()
         ));
     }
@@ -525,6 +546,48 @@ pub mod tests {
         assert_eq!(
             text,
             "sent by pid 1203 \"redtail\" (uid 0, a process outside the recorded tree; SI_USER)"
+        );
+    }
+
+    /// Mirai `.e` (ARM evaluation, run f3c4b489): the bots are SIGKILLed by
+    /// pid 1050, which the host found running the sample outside the tree.
+    #[test]
+    fn a_sender_the_host_found_running_a_copy_is_named_as_the_persisted_copy() {
+        use antinomie_monitor_core::persisted_copy::{CopyOf, PersistedCopies, PersistedCopy};
+        let tree = [process(668, "a")];
+        let mut notes = SignalNotes {
+            persisted: Some(PersistedCopies {
+                copies: vec![PersistedCopy {
+                    pid: 1050,
+                    name: ".e".into(),
+                    parent_pid: 1049,
+                    parent_name: Some("cron".into()),
+                    copy_of: Some(CopyOf::Sample),
+                    ..PersistedCopy::default()
+                }],
+                ..PersistedCopies::default()
+            }),
+            ..SignalNotes::default()
+        };
+        let record = killed_by(
+            Some(SignalSender {
+                pid: 1050,
+                uid: 0,
+                comm: ".e".into(),
+            }),
+            fatal_signal::SI_USER,
+        );
+        let text = recorded(&tree, &notes, &tree[0], &record, 0).unwrap();
+        assert_eq!(
+            text,
+            "sent by pid 1050 \".e\" (uid 0, a process outside the recorded tree that runs a copy of the sample (started by pid 1049 \"cron\"): the sample's persisted copy; SI_USER)"
+        );
+        // Another outside sender is still only "outside".
+        notes.persisted.as_mut().unwrap().copies[0].pid = 7;
+        let text = recorded(&tree, &notes, &tree[0], &record, 0).unwrap();
+        assert!(
+            text.contains("(uid 0, a process outside the recorded tree; SI_USER)"),
+            "{text}"
         );
     }
 

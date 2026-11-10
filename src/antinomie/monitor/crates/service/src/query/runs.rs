@@ -91,6 +91,7 @@ impl QueryService {
                 .recording_error
                 .as_deref()
                 .map(|text| self.scrub.text(text)),
+            held: antinomie_triage::run_state::held(run),
         }
     }
 

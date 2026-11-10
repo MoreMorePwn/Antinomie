@@ -12,6 +12,7 @@ mod guest_resource_control;
 mod launch_failure;
 pub use launch_failure::split_run_record;
 mod manual_core;
+mod persisted_watch;
 mod process_core;
 mod recorder_health;
 mod reduced;
@@ -497,6 +498,10 @@ struct Session {
     boot_id: String,
     /// Set once the guest was seen to have finished booting (or has no boot to wait for).
     boot_settled: bool,
+    /// A network wait of this boot ran out: the guest never showed the
+    /// address the gateway gives (a static address, no DHCP client), so
+    /// later launches do not wait again.
+    network_unseen: bool,
     /// When this session began (the VM started or was restored).
     started: Instant,
     /// Telemetry of root tasks whose launch the host has not been told about yet.
