@@ -299,8 +299,12 @@ fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?;
             link::call(&mut client, "sample.list", value)?
         }
-        None => service_library::list(open_existing(context.data_dir())?.as_ref(), &params)
-            .map_err(link::api)?,
+        None => {
+            let existing = open_existing(context.data_dir())?;
+            let scanned = service_library::scan_if(&existing, &context.options);
+            service_library::list_with_runs(existing.as_ref(), &params, &scanned)
+                .map_err(link::api)?
+        }
     };
     let page: Vec<Value> = reply["samples"].as_array().cloned().unwrap_or_default();
     let next = reply["next_cursor"].as_str().map(str::to_owned);
@@ -345,8 +349,12 @@ fn show(arguments: &Show, context: &Context) -> Result<Reply, CliError> {
                 .map_err(|error| CliError::internal(error.to_string()))?;
             link::call(&mut client, "sample.get", value)?
         }
-        None => service_library::get(open_existing(context.data_dir())?.as_ref(), &params)
-            .map_err(link::api)?,
+        None => {
+            let existing = open_existing(context.data_dir())?;
+            let scanned = service_library::scan_if(&existing, &context.options);
+            service_library::get_with_runs(existing.as_ref(), &params, &scanned)
+                .map_err(link::api)?
+        }
     };
     let human = block(&[
         ("sha256", text_of(&value["sha256"])),

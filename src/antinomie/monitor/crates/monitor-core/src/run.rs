@@ -520,6 +520,7 @@ impl ProgramRun {
             "{} records saved, {} async observations lost, {} dropped by the recorder; recording SHA-256 {}",
             self.capture.packets, lost, health.storage_dropped_packets, trace
         ));
+        log.index_run(&self.summary);
     }
     #[cfg(test)]
     pub fn finalize(&mut self, available: u64, state: &str, health: &Health) -> Result<(), String> {
@@ -1265,6 +1266,45 @@ mod tests {
         assert!(end.detail.contains(&expected), "{}", end.detail);
         assert!(end.detail.contains("records saved"));
         assert!(library.custody_check(&sha).unwrap().ok());
+        drop(run);
+        crate::storage::settle_json_under(&directory);
+        std::fs::remove_dir_all(directory).unwrap();
+        let _ = std::fs::remove_dir_all(data);
+    }
+    #[test]
+    fn a_finalized_run_is_indexed_for_its_sample_and_its_preloaded_library_without_the_window() {
+        let _disk = storage::slow_disk::SlowDisk::install();
+        let (mut run, directory) = open_run("ant-run-indexed");
+        let data = std::env::temp_dir().join(format!("ant-run-idx-{}", storage::unique_id()));
+        std::fs::create_dir_all(&data).unwrap();
+        let mut library = crate::samples::Library::open(&data).unwrap();
+        let mut add = |bytes: &[u8]| {
+            library
+                .add_bytes(bytes, crate::samples::NewSample::default())
+                .unwrap()
+                .sha256
+        };
+        let sha = add(b"echo\n");
+        let lib_sha = add(b"library\n");
+        let sample = crate::samples::SampleRef {
+            sha256: sha.clone(),
+            name: "echo".into(),
+        };
+        run.summary.request.sample = Some(sample.clone());
+        run.summary.request.preloaded = vec![crate::samples::PreloadRef {
+            sha256: lib_sha.clone(),
+            name: "libx.so".into(),
+            via: "LD_PRELOAD".into(),
+            ..Default::default()
+        }];
+        run.custody = Some(crate::samples::RunLog::new(&data, &sample, "r1", "vm"));
+        run.finalize(65536, "clean", &Health::default()).unwrap();
+        crate::samples::settle_custody();
+        for hash in [&sha, &lib_sha] {
+            let runs = library.runs_of(hash).unwrap();
+            assert_eq!(runs.len(), 1, "{hash}");
+            assert_eq!(runs[0].run_id, run.summary.id);
+        }
         drop(run);
         crate::storage::settle_json_under(&directory);
         std::fs::remove_dir_all(directory).unwrap();

@@ -15,7 +15,7 @@
 //! for the guest to drop telemetry. [`settle_custody`] waits for what is
 //! queued.
 use super::{
-    Library, Push, SampleRef,
+    Library, Push, SampleRef, SeenRun,
     actor::{self, ANALYST},
     chain::ChainedEvents,
     custody::{ActionKind, CustodyEvent, CustodySink},
@@ -50,6 +50,12 @@ enum Job {
         push: Push,
         by: String,
     },
+    /// A run ended: its entries in the seen-run index (ANT-T0441).
+    Index {
+        data_dir: PathBuf,
+        runs: Vec<SeenRun>,
+        by: String,
+    },
     /// Answered once everything queued before it is written.
     Settle(mpsc::SyncSender<()>),
 }
@@ -79,6 +85,11 @@ fn queue() -> Option<&'static mpsc::SyncSender<Job>> {
                                 push,
                                 by,
                             } => write_push(&data_dir, &sha256, push, &by),
+                            Job::Index { data_dir, runs, by } => {
+                                let _ = Library::open(&data_dir)
+                                    .and_then(|library| library.with_actor(&by))
+                                    .and_then(|mut library| library.index_runs(&runs));
+                            }
                             Job::Settle(done) => {
                                 let _ = done.send(());
                             }
@@ -137,6 +148,7 @@ pub struct RunLog {
     /// Who the program's own entries name ([`actor::current`] when the run
     /// started).
     app: String,
+    data_dir: PathBuf,
     database: PathBuf,
     sha256: String,
     run: String,
@@ -156,6 +168,7 @@ impl RunLog {
     pub fn with_actor(data_dir: &Path, sample: &SampleRef, run: &str, vm: &str, app: &str) -> Self {
         Self {
             app: app.to_owned(),
+            data_dir: data_dir.to_path_buf(),
             database: samples_dir(data_dir).join(DATABASE),
             sha256: sample.sha256.to_ascii_lowercase(),
             run: run.into(),
@@ -226,6 +239,29 @@ impl RunLog {
                 detail: detail.into(),
             },
         );
+    }
+
+    /// The run is over: put it into the seen-run index for every library
+    /// sample it is linked to (the sample and the libraries it loaded), so the
+    /// command line and the sidebar list it without the window (ANT-T0441).
+    /// Written in order with the entries, and dropped when it cannot be.
+    pub fn index_run(&self, run: &crate::RunSummary) {
+        let runs = super::seen_runs_of(run, &self.vm);
+        if runs.is_empty() {
+            return;
+        }
+        let by = self.app.clone();
+        let Some(queue) = queue() else {
+            let _ = Library::open(&self.data_dir)
+                .and_then(|library| library.with_actor(&by))
+                .and_then(|mut library| library.index_runs(&runs));
+            return;
+        };
+        let _ = queue.try_send(Job::Index {
+            data_dir: self.data_dir.clone(),
+            runs,
+            by,
+        });
     }
 
     /// The run's recording is final: `detail` says how much and what hash.

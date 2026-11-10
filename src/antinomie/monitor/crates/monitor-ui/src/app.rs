@@ -47,6 +47,7 @@ mod settings_window;
 mod shortcut_list;
 mod shortcut_settings;
 mod sidebar;
+mod sidebar_last_run;
 mod sidebar_rail;
 mod start_error;
 mod stealth;
@@ -560,6 +561,8 @@ pub struct MonitorApp {
     run_labels: run_labels::RunLabels,
     /// Settings > Network routes.
     routes: route_settings::RouteSettings,
+    /// The sidebar's last run of VMs the window has not opened.
+    sidebar_scan: sidebar_last_run::Scan,
     run_tree: Option<(String, crate::archive::ProcessTreeResult)>,
     run_tree_pending: Option<String>,
     archive_total: Option<u64>,

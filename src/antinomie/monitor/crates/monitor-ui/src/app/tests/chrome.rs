@@ -297,6 +297,34 @@ fn a_vm_with_only_command_line_runs_names_the_newest_in_the_sidebar() {
 }
 
 #[test]
+fn an_unselected_vm_with_only_command_line_runs_names_its_newest_run() {
+    let root = super::samples_list::temp("sidebar-cli-runs");
+    let mut app = app();
+    observer_fixture(&mut app);
+    let vm_id = app.snapshot.vms[0].id.clone();
+    assert_eq!(vm_id, "vm");
+    // Saved on disk by another process; this window never opened the VM.
+    super::samples_detail::save_run(&root, &"ab".repeat(32), "x", "old", 1_000_000, false);
+    super::samples_detail::save_run(&root, &"ab".repeat(32), "x", "cli", 5_000_000, false);
+    app.options.data_dir = root.clone();
+    app.selected = None;
+    app.snapshot.runs.clear();
+    app.settings.last_runs.clear();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        app.scan_last_runs();
+        if app.settings.last_runs.contains_key(&vm_id) || std::time::Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let last = app.settings.last_runs.get(&vm_id).expect("a latest run");
+    assert_eq!(last.run_id, "cli");
+    assert_eq!(last.started, 5_000);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn sidebar_shows_each_vm_state_resources_and_latest_run() {
     let ctx = egui::Context::default();
     theme::install(&ctx);

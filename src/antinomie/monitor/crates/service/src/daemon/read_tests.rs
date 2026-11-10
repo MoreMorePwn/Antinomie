@@ -395,6 +395,47 @@ fn the_library_is_listed_paged_filtered_and_shown_over_the_socket() {
 }
 
 #[test]
+fn run_counts_cover_runs_no_window_indexed_and_a_read_writes_nothing() {
+    let svc = svc("library-runs", |_| {});
+    let data = fixtures(&svc);
+    let (script, binary) = library_with_samples(&svc);
+    let run = add_run(&data, "boot-1", "run-1", 1_700_000_000_000, "Finalized");
+    // A command-line run: the sample it executed and a library it preloaded.
+    let mut record: Value =
+        serde_json::from_slice(&std::fs::read(run.dir.join("run.json")).unwrap()).unwrap();
+    record["request"]["sample"] = json!({"sha256": script, "name": "one.sh"});
+    record["request"]["preloaded"] = json!([{
+        "sha256": binary, "name": "two.bin", "path": "/tmp/two.bin",
+        "via": "LD_PRELOAD", "note": ""
+    }]);
+    std::fs::write(
+        run.dir.join("run.json"),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+
+    let listed = call(&svc, "sample.list", json!({})).unwrap();
+    for sample in listed["samples"].as_array().unwrap() {
+        assert_eq!(sample["run_count"], 1, "{sample}");
+    }
+    let shown = call(&svc, "sample.get", json!({"sha256": binary, "runs": true})).unwrap();
+    assert_eq!(shown["run_count"], 1);
+    assert_eq!(shown["runs"][0]["run_id"], "run-1");
+    assert_eq!(shown["runs"][0]["exit"], "Exit 0");
+    // The reads wrote nothing into the seen-run index.
+    let library = Library::open(&svc.dir.join("data")).unwrap();
+    assert!(library.runs_of(&script).unwrap().is_empty());
+    // The write path indexes the same runs, and the count does not double.
+    let mut library = library;
+    let options = svc.service.options.clone();
+    assert_eq!(library.index_all_runs(&options).unwrap(), 2);
+    let listed = call(&svc, "sample.list", json!({})).unwrap();
+    for sample in listed["samples"].as_array().unwrap() {
+        assert_eq!(sample["run_count"], 1, "{sample}");
+    }
+}
+
+#[test]
 fn tags_are_set_by_a_manager_and_named_in_the_custody_log() {
     let svc = svc("tags", |_| {});
     let (script, _) = library_with_samples(&svc);

@@ -35,11 +35,15 @@ impl Service {
         match op {
             Op::SampleList => {
                 let request: SampleListParams = params(value)?;
-                library::list(library::open_existing(&self.data_dir)?.as_ref(), &request)
+                let existing = library::open_existing(&self.data_dir)?;
+                let scanned = library::scan_if(&existing, &self.options);
+                library::list_with_runs(existing.as_ref(), &request, &scanned)
             }
             Op::SampleGet => {
                 let request: SampleGetParams = params(value)?;
-                library::get(library::open_existing(&self.data_dir)?.as_ref(), &request)
+                let existing = library::open_existing(&self.data_dir)?;
+                let scanned = library::scan_if(&existing, &self.options);
+                library::get_with_runs(existing.as_ref(), &request, &scanned)
             }
             Op::SampleAdd => self.sample_add(value, ctx),
             Op::SampleDownload => {

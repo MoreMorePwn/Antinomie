@@ -41,6 +41,7 @@ pub mod preload;
 pub mod promote;
 mod rollup;
 mod runlog;
+mod scan;
 mod similar;
 mod summary;
 
@@ -92,6 +93,10 @@ pub use rollup::{
     tactic_of,
 };
 pub use runlog::{RunLog, file_sha256, record_push_later, settle_custody};
+pub use scan::{
+    exit_label as run_exit_label, merged_runs, newest_run_per_vm, root_exit_words, scan_runs,
+    seen_runs_of,
+};
 pub use similar::{Shared, Similar};
 pub use summary::{StringRow, defang, longest_strings, regex_matches};
 

@@ -48,11 +48,7 @@ type Verified = Result<(Vec<(String, Verification)>, LibraryCheck), String>;
 
 /// How a run's root ended, as the run list says it.
 fn exit_label(run: &RunSummary) -> String {
-    if run.state.is_live() {
-        "Running".into()
-    } else {
-        history::root_exit(run)
-    }
+    antinomie_monitor_core::samples::run_exit_label(run)
 }
 
 /// Read the library, first noting every run of a library sample in the
@@ -66,17 +62,9 @@ fn load(options: BackendOptions, vms: Vec<(String, String)>) -> Loaded {
         };
         for run in runs {
             // The sample the run executed and the libraries it loaded.
-            for sha256 in run.request.linked_hashes() {
-                seen.push(SeenRun {
-                    sha256: sha256.to_owned(),
-                    vm_id: run.vm_id.clone(),
-                    vm_name: vm_name.clone(),
-                    run_id: run.id.clone(),
-                    started_ms: run.started_ms,
-                    exit: exit_label(&run),
-                    directory: run.directory.display().to_string(),
-                });
-            }
+            seen.extend(antinomie_monitor_core::samples::seen_runs_of(
+                &run, &vm_name,
+            ));
         }
     }
     library.index_runs(&seen)?;

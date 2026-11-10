@@ -20,8 +20,8 @@ use crate::{
     server::b64,
 };
 use antinomie_monitor_core::samples::{
-    ChainCheck, CustodyEvent, DATABASE, Library, SampleRecord, Tag, TagKind, arch_label,
-    samples_dir,
+    ChainCheck, CustodyEvent, DATABASE, Library, SampleRecord, SeenRun, Tag, TagKind, arch_label,
+    merged_runs, samples_dir,
 };
 use serde_json::{Value, json};
 use std::{
@@ -70,6 +70,20 @@ pub fn open_existing(data_dir: &Path) -> Result<Option<Library>, ApiError> {
         return Ok(None);
     }
     Library::open(data_dir).map(Some).map_err(library_error)
+}
+
+/// The runs of library samples in the recordings of every VM, for
+/// [`list_with_runs`] and [`get_with_runs`]; empty (and nothing read) when
+/// there is no library. Writes nothing.
+pub fn scan_if(
+    library: &Option<Library>,
+    options: &antinomie_monitor_core::BackendOptions,
+) -> Vec<SeenRun> {
+    if library.is_some() {
+        antinomie_monitor_core::samples::scan_runs(options)
+    } else {
+        Vec::new()
+    }
 }
 
 /// `KIND=VALUE` as a tag; a bare value is a custom tag.
@@ -181,6 +195,16 @@ fn parse_cursor(cursor: Option<&str>) -> Result<usize, ApiError> {
 
 /// `sample.list`: `{samples, next_cursor}`, newest first.
 pub fn list(library: Option<&Library>, params: &SampleListParams) -> Result<Value, ApiError> {
+    list_with_runs(library, params, &[])
+}
+
+/// [`list`] counting the runs `scanned` found in the recordings of all VMs as
+/// well as those the seen-run index holds (ANT-T0441).
+pub fn list_with_runs(
+    library: Option<&Library>,
+    params: &SampleListParams,
+    scanned: &[SeenRun],
+) -> Result<Value, ApiError> {
     let limit = params.limit.unwrap_or(DEFAULT_LIST);
     if limit == 0 || limit > MAX_LIST {
         return Err(ApiError::invalid_argument(
@@ -198,7 +222,7 @@ pub fn list(library: Option<&Library>, params: &SampleListParams) -> Result<Valu
         return Ok(json!({"samples": [], "next_cursor": Value::Null}));
     };
     let tags = library.all_tags().map_err(library_error)?;
-    let runs = library.run_stats().map_err(library_error)?;
+    let runs = library.run_counts_with(scanned).map_err(library_error)?;
     let checks = if params.custody == Some(true) {
         Some(library.custody_check_all().map_err(library_error)?)
     } else {
@@ -218,7 +242,7 @@ pub fn list(library: Option<&Library>, params: &SampleListParams) -> Result<Valu
                 .get(&record.sha256)
                 .is_none_or(|check| check.ok())
         });
-        let count = runs.get(&record.sha256).map_or(0, |stats| stats.count);
+        let count = runs.get(&record.sha256).copied().unwrap_or(0);
         let value = sample_value(&record, own, count, custody_ok);
         if params.q.as_deref().is_none_or(|q| matches_query(&value, q)) {
             matching.push(value);
@@ -233,6 +257,16 @@ pub fn list(library: Option<&Library>, params: &SampleListParams) -> Result<Valu
 /// `sample.get`: the `Sample` object plus the hashes, the description and,
 /// on request, the origins, the custody events and the runs.
 pub fn get(library: Option<&Library>, params: &SampleGetParams) -> Result<Value, ApiError> {
+    get_with_runs(library, params, &[])
+}
+
+/// [`get`] with the runs `scanned` found in the recordings of all VMs added to
+/// those the seen-run index holds (ANT-T0441).
+pub fn get_with_runs(
+    library: Option<&Library>,
+    params: &SampleGetParams,
+    scanned: &[SeenRun],
+) -> Result<Value, ApiError> {
     let sha256 = params.sha256.as_str();
     let library = library.ok_or_else(|| missing(sha256))?;
     let record = library
@@ -240,7 +274,11 @@ pub fn get(library: Option<&Library>, params: &SampleGetParams) -> Result<Value,
         .map_err(library_error)?
         .ok_or_else(|| missing(sha256))?;
     let tags = library.tags(sha256).map_err(library_error)?;
-    let runs = library.runs_of(sha256).map_err(library_error)?;
+    let runs = merged_runs(
+        library.runs_of(sha256).map_err(library_error)?,
+        scanned,
+        sha256,
+    );
     let check = library.custody_check(sha256).map_err(library_error)?;
     let mut value = sample_value(&record, &tags, runs.len(), Some(check.ok()));
     value["sha1"] = record.sha1.clone().into();
