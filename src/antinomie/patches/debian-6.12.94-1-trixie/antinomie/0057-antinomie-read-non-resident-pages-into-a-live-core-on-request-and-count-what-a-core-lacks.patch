@@ -34,7 +34,7 @@ Last-Update: 2026-11-10
 
 ---
 diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
-index cb8d0ac6e..e777e1bf4 100644
+index cb8d0ac6e..809c5eb92 100644
 --- a/kernel/antinomie/control_wire.h
 +++ b/kernel/antinomie/control_wire.h
 @@ -43,7 +43,9 @@
@@ -73,6 +73,42 @@ index cb8d0ac6e..e777e1bf4 100644
  /* EXIT_HOLD (revision 22, with EXEC_EXIT_HOLD): header flags=0, u64 cookie
   * at 8, u32 action at 16, u32 hold_ms at 20 (ARM only, 0: EXIT_HOLD_MS; else
   * 0); empty reply.
+@@ -582,8 +602,8 @@
+  * session whose leader no longer exists (the session id is a PID no process
+  * has). None of them adds request or reply bytes.
+  * TRACER_CAPS: header only (8 bytes). Reply 32 bytes: u32 abi=1 at 0, u32
+- * exec_flags at 4 (the optional EXEC flags this guest accepts: HASH_ROOT,
+- * HASH_WRITES, SHELL_JOB), u32 hash file limit at 8 (ANTC_HASH_FILE_MAX), u32 hash queue
++ * exec_flags at 4 (the optional EXEC flags this guest accepts: HASH_ROOT 8,
++ * HASH_WRITES 16, SHELL_JOB 32, SPECIMEN_DIGEST 64, EXIT_HOLD 128), u32 hash file limit at 8 (ANTC_HASH_FILE_MAX), u32 hash queue
+  * jobs at 12 (ANTC_HASH_QUEUE), u64 hash queued byte limit at 16
+  * (ANTC_HASH_PENDING_MAX), zero at 24.
+  * Arm failure has id/size=0 and negative errno; execution still succeeds.
+@@ -754,6 +774,15 @@
+  * STOPPED|TAILS_POSSIBLE does not promise delivery/drain or complete capture.
+  * ANTT minor 2 / 144-byte header adds capture_cookie at offset 136, preserving
+  * launched root cookie at 128. Capture attribution is frozen on admission.
++ * Other ANTT fields the guest writes but the host does not read: header u32 at
++ * 84 is a constant 1 (reserved; no meaning was ever assigned); EVENT_BEGIN body
++ * u16 at 50 is result_kind, 1 in Exit events (a result follows) and 0 otherwise;
++ * EVENT_BEGIN body u32 at 112 is the argument validity bitmap (bits 0-5 argument
++ * n valid, bits 6 and 9 always set, bits 7, 8 and 10 set when an entry time is
++ * known: entry_ns, ip, sp).
++ * ANTT record type 2 ("recorder health", a 96-byte packet with all call fields
++ * zero) is reserved: no guest produces it. The host parser still accepts and
++ * ignores it so that a guest that does send it keeps working.
+  * RESOURCES: header only (8 bytes). Non-blocking: returns the latest completed
+  * sample and, if it is older than 500 ms and no refresh runs, queues one on a
+  * dedicated worker (at most one in flight). Reply (96 bytes): u64 sequence at 0
+@@ -791,7 +820,7 @@
+  * DETACHING until the session is gone (-ESRCH). A group that cannot be stopped
+  * stays attached with last_error set.
+  * STATUS: u64 session_id at 8 (16 bytes). Reply 96 bytes: u64 session_id at 0,
+- * u64 generation at 8, u32 state at 16, u32 flags at 20, u32 live threads at 24,
++ * u64 generation at 8, u32 state at 16, u32 reserved at 20 (always 0; the host rejects a nonzero value), u32 live threads at 24,
+  * u32 stopped threads at 28, u32 event kind at 32, u32 event tid at 36, u64
+  * event pc at 40, u64 event address at 48, u32 wait status (EXITED) at 56,
+  * s32 last_error at 60, u32 event sequence at 64, u32 breakpoints at 68, u32
 diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
 index 409048273..d4be27c7a 100644
 --- a/kernel/antinomie/manual_core.c
