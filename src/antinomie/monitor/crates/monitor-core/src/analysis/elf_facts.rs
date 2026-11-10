@@ -445,12 +445,7 @@ impl HostHead {
         let machine = u32::from(elf.machine);
         let bits = if elf.is_64 { 64 } else { 32 };
         if let Some(guest) = guest {
-            let runs = machine == guest.machine
-                || (guest.machine == crate::api::GuestArch::ELF_AARCH64
-                    && machine == crate::api::GuestArch::ELF_ARM)
-                || (guest.machine == crate::api::GuestArch::ELF_X86_64
-                    && machine == crate::api::GuestArch::ELF_386);
-            if !runs {
+            if !machine_runs(machine, guest) {
                 notes.wrong_arch = Some(format!(
                     "It is a {bits}-bit {} program, but this VM is {}: wrong architecture for this VM.",
                     machine_name(machine),
@@ -467,6 +462,106 @@ impl HostHead {
             }
         }
         notes
+    }
+}
+
+/// Whether a guest of this architecture runs programs of ELF `machine`: the
+/// same machine, i386 on x86-64, 32-bit ARM on an AArch64 kernel.
+fn machine_runs(machine: u32, guest: crate::api::GuestArch) -> bool {
+    machine == guest.machine
+        || (guest.machine == crate::api::GuestArch::ELF_AARCH64
+            && machine == crate::api::GuestArch::ELF_ARM)
+        || (guest.machine == crate::api::GuestArch::ELF_X86_64
+            && machine == crate::api::GuestArch::ELF_386)
+}
+
+/// What the host reads of a sample's ELF headers to say whether any installed
+/// base can run it (the Samples page; the same facts as `HostHead`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SampleElf {
+    /// ELF `e_machine`.
+    pub machine: u32,
+    /// 32 or 64.
+    pub bits: u8,
+    /// 32-bit ARM with EABI version 0 (OABI), which no arm64 kernel runs.
+    pub old_abi: bool,
+    /// The program interpreter (PT_INTERP), when it has one.
+    pub interpreter: Option<String>,
+}
+
+impl SampleElf {
+    /// The headers of the sample's front bytes; `None` for a file that is not an ELF.
+    pub fn of_head(bytes: &[u8]) -> Option<Self> {
+        let head = HostHead::of_bytes(bytes);
+        let elf = head.elf()?;
+        let machine = u32::from(elf.machine);
+        Some(Self {
+            machine,
+            bits: if elf.is_64 { 64 } else { 32 },
+            old_abi: machine == crate::api::GuestArch::ELF_ARM && elf.flags >> 24 == 0,
+            interpreter: match elf.linking(&head.bytes) {
+                Linking::Interpreter(path) => Some(path),
+                _ => None,
+            },
+        })
+    }
+
+    /// Whether a base of this architecture can run the program at all.
+    pub fn runs_on(&self, guest: crate::api::GuestArch) -> bool {
+        machine_runs(self.machine, guest)
+            && !(self.old_abi && guest.machine == crate::api::GuestArch::ELF_AARCH64)
+    }
+
+    /// What to tell about the sample and the installed bases' architectures:
+    /// that no installed base can run it, or that a 32-bit ARM program needs
+    /// the armhf loader of an arm64 base. `armhf_loader` is whether that
+    /// loader is known to be present (`None`: not known). `None` when there
+    /// is nothing to say, also with no base installed at all.
+    pub fn base_note(
+        &self,
+        bases: &[crate::api::GuestArch],
+        armhf_loader: Option<bool>,
+    ) -> Option<String> {
+        if bases.is_empty() {
+            return None;
+        }
+        let runnable: Vec<_> = bases.iter().filter(|guest| self.runs_on(**guest)).collect();
+        if runnable.is_empty() {
+            let mut names: Vec<String> = bases.iter().map(|g| machine_name(g.machine)).collect();
+            names.sort();
+            names.dedup();
+            let why = if self.old_abi {
+                " It is old-ABI ARM (EABI0/OABI), which an arm64 kernel cannot run."
+            } else {
+                ""
+            };
+            return Some(format!(
+                "No installed base can run this {}-bit {} program: the installed bases are {}.{why}",
+                self.bits,
+                machine_name(self.machine),
+                names.join(", ")
+            ));
+        }
+        let arm32 = self.machine == crate::api::GuestArch::ELF_ARM;
+        let needs_loader = self
+            .interpreter
+            .as_deref()
+            .is_some_and(|path| path.contains("ld-linux-armhf"));
+        let only_arm64 = runnable
+            .iter()
+            .all(|g| g.machine == crate::api::GuestArch::ELF_AARCH64);
+        if arm32 && needs_loader && only_arm64 {
+            return match armhf_loader {
+                Some(true) => None,
+                Some(false) => Some(
+                    "This 32-bit ARM program needs /lib/ld-linux-armhf.so.3, which the arm64 base does not have: it will not start there.".into(),
+                ),
+                None => Some(
+                    "This 32-bit ARM program needs /lib/ld-linux-armhf.so.3 on an arm64 base; a Debian arm64 base built before 0.9.0's recipe lacks it, and the program then does not start.".into(),
+                ),
+            };
+        }
+        None
     }
 }
 
@@ -741,5 +836,59 @@ mod tests {
         // A plain executable (ET_EXEC) is never one.
         let exec = elf64(0x400, 0x400, 0x100, false);
         assert!(!parse(&exec).unwrap().is_shared_library(&exec));
+    }
+
+    #[test]
+    fn the_installed_bases_decide_whether_a_sample_can_run_anywhere() {
+        use crate::api::GuestArch;
+        // A 64-bit RISC-V program: no installed x86-64 or arm64 base runs it.
+        let mut riscv = elf64(0x400, 0x400, 0x100, false);
+        riscv[0x12..0x14].copy_from_slice(&243u16.to_le_bytes());
+        let facts = SampleElf::of_head(&riscv).unwrap();
+        let note = facts
+            .base_note(&[GuestArch::X86_64, GuestArch::AARCH64], None)
+            .unwrap();
+        assert!(
+            note.starts_with("No installed base can run this 64-bit RISC-V program"),
+            "{note}"
+        );
+        assert!(
+            note.contains("x86-64") && note.contains("AArch64"),
+            "{note}"
+        );
+        // With no base installed there is nothing to compare with.
+        assert_eq!(facts.base_note(&[], None), None);
+        // x86-64 runs on an x86-64 base.
+        let mut x86 = elf64(0x400, 0x400, 0x100, true);
+        x86[0x12..0x14].copy_from_slice(&62u16.to_le_bytes());
+        let native = SampleElf::of_head(&x86).unwrap();
+        assert_eq!(native.base_note(&[GuestArch::X86_64], None), None);
+        // Old-ABI ARM: the arm64 base cannot run it, and the note says why.
+        let mut arm = elf64(0x400, 0x400, 0x100, false);
+        arm[0x12..0x14].copy_from_slice(&40u16.to_le_bytes());
+        let oabi = SampleElf::of_head(&arm).unwrap();
+        assert!(oabi.old_abi && !oabi.runs_on(GuestArch::AARCH64));
+        let note = oabi.base_note(&[GuestArch::AARCH64], None).unwrap();
+        assert!(note.contains("old-ABI ARM"), "{note}");
+        // EABI5 ARM with the armhf interpreter needs the loader on an arm64 base.
+        let hf = SampleElf {
+            old_abi: false,
+            interpreter: Some("/lib/ld-linux-armhf.so.3".into()),
+            bits: 32,
+            machine: 40,
+        };
+        assert!(hf.runs_on(GuestArch::AARCH64));
+        assert!(
+            hf.base_note(&[GuestArch::AARCH64], None)
+                .unwrap()
+                .contains("ld-linux-armhf.so.3")
+        );
+        assert!(hf.base_note(&[GuestArch::AARCH64], Some(false)).is_some());
+        assert_eq!(hf.base_note(&[GuestArch::AARCH64], Some(true)), None);
+        // An x86-64 base cannot run it, so the arm64 base is the only one.
+        assert!(
+            hf.base_note(&[GuestArch::AARCH64, GuestArch::X86_64], None)
+                .is_some()
+        );
     }
 }

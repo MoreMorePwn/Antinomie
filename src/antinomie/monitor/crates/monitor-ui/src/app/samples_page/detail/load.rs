@@ -111,7 +111,13 @@ pub(in crate::app::samples_page) fn load(
     let outputs = output_files::read(&entries, &kept);
     let (known, links) = lineage_links(&library, &record.sha256, &entries)?;
     let archive = library.archive_path(&record.sha256)?;
+    // The ELF headers, for the note when no installed base can run it.
+    let elf = (record.removed_ms.is_none() && record.file_type.eq_ignore_ascii_case("elf"))
+        .then(|| antinomie_monitor_core::samples::open_sample(&archive, &record.sha256).ok())
+        .flatten()
+        .and_then(|bytes| antinomie_monitor_core::analysis::SampleElf::of_head(&bytes));
     Ok(Data {
+        elf,
         tags: library.tags(&record.sha256)?,
         origins: library.origins(&record.sha256)?,
         aliases: library.aliases(&record.sha256)?,

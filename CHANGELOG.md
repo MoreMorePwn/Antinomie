@@ -273,6 +273,20 @@ x86 programs by their own table.
   shows the run's signal, and the crash note names a truncated ELF when the static
   analysis found one.
 
+- **A refused launch always keeps its "Failed to start" record (ANT-T0445).** A
+  launch the guest refused with nothing captured (network capture off, no analysis)
+  deleted its run directory, so `run exec` and Auto jobs had no run id. The record
+  (`run.json` with the reason, the host's explanation of the ELF headers and the
+  static analysis when there is one, no empty capture files) is now always kept, its
+  id is returned as `failure.run_id` and `run.id`, Run History lists it, and
+  retention and delete treat it like any other run. The Samples page notes when no
+  installed base can run a sample (ELF machine, class and EABI against the installed
+  bases' architectures) and when a 32-bit ARM program needs the armhf loader of an
+  arm64 base. The Debian arm64 base recipe (`scripts/build-debian-image.py`) now also
+  installs the armhf C library and program loader (`libc6:armhf`, giving
+  `/lib/ld-linux-armhf.so.3`) so 32-bit ARM programs start; it takes effect when the
+  bases are rebuilt.
+
 - **Headless runs can take a dump on suspicious activity (ANT-T0439).** The
   live Triage judge was registered only by the window, so `run exec` and Auto
   jobs could not use the dump trigger. The run lane of the service now registers

@@ -100,6 +100,8 @@ pub(super) struct SentSample {
 /// Everything the window shows, read once and read again on a change.
 pub(super) struct Data {
     pub(super) record: SampleRecord,
+    /// Its ELF headers, when it is an ELF the host could read.
+    pub(super) elf: Option<antinomie_monitor_core::analysis::SampleElf>,
     pub(super) tags: Vec<Tag>,
     pub(super) origins: Vec<Origin>,
     pub(super) aliases: Vec<Alias>,
@@ -654,6 +656,18 @@ impl MonitorApp {
         }
         if guest.is_some() && data.record.removed_ms.is_none() {
             show_refusal(ui, why.as_deref());
+        }
+        // No installed base runs it, whichever VM is selected.
+        if let Some(note) = data.elf.as_ref().and_then(|elf| {
+            let bases: Vec<_> = self
+                .snapshot
+                .bases
+                .iter()
+                .map(antinomie_monitor_core::BaseSummary::arch)
+                .collect();
+            elf.base_note(&bases, None)
+        }) {
+            ui.colored_label(theme::warn(), note);
         }
         if !data.archived {
             ui.colored_label(

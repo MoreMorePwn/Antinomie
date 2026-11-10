@@ -73,6 +73,13 @@ ROOT_MODULE_GROUPS = (
 )
 # Debian's name of each guest architecture (dpkg --print-architecture).
 DEB_ARCHES = {"x86_64": "amd64", "arm64": "arm64"}
+# Foreign (multiarch) architectures a base's dpkg and apt know, with the packages
+# that install their program loader. A 32-bit ARM program (armhf) is common in
+# real samples; an AArch64 kernel runs it (the guest's CONFIG_COMPAT) once
+# /lib/ld-linux-armhf.so.3 exists. Only libc6 is added: the loader and the C
+# library, not a 32-bit userland (T0445).
+FOREIGN_ARCHES = {"x86_64": (), "arm64": ("armhf",)}
+FOREIGN_LIBC = {"armhf": "libc6:armhf"}
 
 
 def root_module_groups(arch="x86_64"):
@@ -449,6 +456,11 @@ def options(values):
     return result
 
 
+def foreign_packages(arch="x86_64"):
+    """The foreign architectures' loader packages of a base (FOREIGN_ARCHES)."""
+    return tuple(FOREIGN_LIBC[foreign] for foreign in FOREIGN_ARCHES[arch])
+
+
 def console_packages(arch="x86_64"):
     """CONSOLE_PACKAGES with the architecture's boot loader."""
     if arch == "x86_64":
@@ -461,8 +473,9 @@ def requested_packages(desktop, arch="x86_64"):
     """The packages the installation asks for by name (the manifest's list):
     for the console base its set with the BIOS boot loader."""
     if desktop == CONSOLE:
-        return tuple(package for package, _ in console_packages(arch))
-    return packages(desktop)
+        return (tuple(package for package, _ in console_packages(arch))
+                + foreign_packages(arch))
+    return packages(desktop, arch)
 
 
 def packages(desktop, arch="x86_64"):
@@ -470,10 +483,11 @@ def packages(desktop, arch="x86_64"):
     console base's own set (its boot loader comes last, BOOT_LOADERS)."""
     if desktop == CONSOLE:
         loaders = {name for steps in boot_loaders(arch).values() for step in steps for name in step}
-        return tuple(package for package, _ in console_packages(arch) if package not in loaders)
+        return (tuple(package for package, _ in console_packages(arch)
+                      if package not in loaders) + foreign_packages(arch))
     task = DESKTOPS[desktop][0]
     extra = ("lightdm-gtk-greeter",) if desktop == "xfce" else ()
-    return PACKAGES + (task,) + extra
+    return PACKAGES + (task,) + extra + foreign_packages(arch)
 
 
 def kernel_append(desktop, release=None, root_uuid=None):
@@ -1215,7 +1229,10 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_d
                # distribution's on a non-Debian host).
                "--keyring=" + str(archive_keyring()),
                "--variant=" + ("standard" if values["standard"] else "important"),
-               "--architectures=" + DEB_ARCHES[arch], "--format=tar",
+               # The first architecture is native; the others are dpkg
+               # foreign architectures (libc6:armhf is in --include).
+               "--architectures=" + ",".join((DEB_ARCHES[arch],) + FOREIGN_ARCHES[arch]),
+               "--format=tar",
                "--include=" + ",".join(packages(values["desktop"], arch)),
                '--aptopt=APT::Install-Recommends "true"',
                "--aptopt=APT::Get::AllowUnauthenticated \"false\"",

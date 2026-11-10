@@ -1040,7 +1040,11 @@ class DebianImageTests(unittest.TestCase):
             command = image.mmdebstrap_command(values, Path("/w/r.tar"), Path("/w/c.sh"),
                                                Path("/w/p"), kernel_debs=[Path("/k/a.deb")],
                                                arch="arm64")
-        self.assertIn("--architectures=arm64", command)
+        # armhf is a foreign architecture with its C library and program loader,
+        # so a 32-bit ARM program finds /lib/ld-linux-armhf.so.3 (T0445).
+        self.assertIn("--architectures=arm64,armhf", command)
+        self.assertIn("libc6:armhf", next(arg for arg in command if arg.startswith("--include=")))
+        self.assertIn("libc6:armhf", image.requested_packages(image.CONSOLE, "arm64"))
         self.assertIn("dpkg --verify linux-image-6.12.94+deb13-arm64 linux-image-arm64",
                       " ".join(command))
         include = next(arg for arg in command if arg.startswith("--include="))
@@ -1089,6 +1093,15 @@ class DebianImageTests(unittest.TestCase):
         arm = os.uname_result(("Linux", "h", "6", "#1", "aarch64"))
         with patch.object(image.os, "uname", return_value=arm):
             image.foreign_bootstrap("arm64")
+
+    def test_the_x86_64_bases_stay_single_architecture(self):
+        values = image.options({"desktop": image.CONSOLE})
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(values, Path("/w/r.tar"), Path("/w/c.sh"),
+                                               Path("/w/p"), kernel_debs=[Path("/k/a.deb")])
+        self.assertIn("--architectures=amd64", command)
+        self.assertEqual(image.foreign_packages("x86_64"), ())
+        self.assertFalse([name for name in image.packages("xfce") if ":" in name])
 
     def test_an_arm64_image_gives_its_release_and_banner(self):
         banner = image.debian_banner("arm64")
