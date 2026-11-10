@@ -43,6 +43,26 @@ pub struct DaemonArgs {
 
 /// `service.toml` from `--config` or the data folder; a missing default file
 /// is the defaults, a file with errors stops the start (exit 4).
+/// The daemon's socket, the one rule for the daemon and its clients:
+/// `--socket`, else `[daemon] socket` of `service.toml`, else
+/// `<data>/run/antinomie.sock`.
+pub fn socket_path(
+    flag: Option<&std::path::Path>,
+    config: &ServiceConfig,
+    data_dir: &std::path::Path,
+) -> PathBuf {
+    flag.map(PathBuf::from)
+        .unwrap_or_else(|| config.socket_path(data_dir))
+}
+
+/// The socket a client looks for. It reads `<data>/service.toml` like the
+/// daemon does; a file that is missing or has errors is no reason to fail a
+/// client, which then uses the default path.
+pub fn client_socket(flag: Option<&std::path::Path>, data_dir: &std::path::Path) -> PathBuf {
+    let config = load_config(None, data_dir).unwrap_or_default();
+    socket_path(flag, &config, data_dir)
+}
+
 pub fn load_config(
     path: Option<&PathBuf>,
     data_dir: &std::path::Path,
@@ -89,11 +109,7 @@ pub fn run(arguments: &DaemonArgs, context: &Context) -> Result<Reply, CliError>
         .create(&data_dir)
         .map_err(|e| CliError::io(&data_dir, &e))?;
     let config = load_config(arguments.config.as_ref(), &data_dir)?;
-    let socket = context
-        .global
-        .socket
-        .clone()
-        .unwrap_or_else(|| config.socket_path(&data_dir));
+    let socket = socket_path(context.global.socket.as_deref(), &config, &data_dir);
     if socket.as_os_str().len() > SOCKET_PATH_MAX {
         return Err(CliError::invalid(format!(
             "the socket path is {} bytes; a Unix socket path holds at most {SOCKET_PATH_MAX} (set [daemon] socket or --socket)",

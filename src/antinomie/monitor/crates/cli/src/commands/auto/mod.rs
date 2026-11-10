@@ -7,7 +7,7 @@
 use crate::{context::Context, error::CliError, output::Reply};
 use clap::Subcommand;
 
-mod daemon;
+pub mod daemon;
 mod housekeeping;
 mod init;
 mod jobs;

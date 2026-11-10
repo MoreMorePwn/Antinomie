@@ -6,7 +6,7 @@ use crate::{context::Context, error::CliError, output::Reply};
 use clap::Subcommand;
 
 mod analyze;
-mod auto;
+pub(crate) mod auto;
 mod base;
 mod capabilities;
 mod config;

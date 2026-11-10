@@ -34,7 +34,7 @@ pub struct LaneArgs {
     /// The lane [default: lane-1].
     #[arg(long)]
     pub lane: Option<String>,
-    /// Confirm (needed by reset).
+    /// Confirm (`reset` needs it; `unquarantine` accepts it and does not).
     #[arg(long)]
     pub yes: bool,
 }
