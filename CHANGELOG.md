@@ -15,6 +15,20 @@ x86 programs by their own table.
 
 ### Host
 
+- **`service.toml` `[query]`, `[privacy]` and `[log]` now do what they say, and the keys that cannot are refused (ANT-T0456).**
+  - `[query]` `light_concurrency`, `heavy_concurrency`, `light_timeout_s` and `heavy_timeout_s` set the
+    daemon's read pools and deadlines (they showed the defaults whatever the file said), and
+    `capabilities.queries.limits` reports them.
+  - `[privacy] address_lookup` (default `off`) now decides what a Triage scan of the daemon looks up:
+    `off` makes no lookup, not even TShark's local GeoIP fields; `tshark` uses them. Before, the daemon
+    always used them.
+  - `[log] level`, `format` and `file` apply to the daemon's log (a file rotates at 10 MiB, 5 kept, mode
+    0600). `-q`, `-v` and `--log-format` win over the file; `--log-format` no longer has a default of its
+    own, so an `auto daemon` without it takes the file's. The audit lines of sensitive reads are written at
+    every level.
+  - `[[notify.webhooks]]` and a `[query] scan_cache_mib` other than 1024 are not built: `config validate`
+    reports "not supported in 0.9.0" and the daemon will not start with them.
+
 - **Headless runs can read non-resident pages, and their launch has the library's host copy (ANT-T0449).**
   - `run exec --core-nonresident` and the Auto policy key `evidence.core_nonresident`
     (default off, checked by `config validate`) make the cores the dump trigger takes

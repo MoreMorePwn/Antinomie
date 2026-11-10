@@ -11,7 +11,9 @@ use crate::{
     context::Context,
     error::{CliError, ErrorCode},
     exit::Exit,
+    logging::Logger,
     output::Reply,
+    service_log::ServiceLog,
     signals,
 };
 use antinomie_monitor_core::{
@@ -109,14 +111,23 @@ pub fn run(arguments: &DaemonArgs, context: &Context) -> Result<Reply, CliError>
     let backend = Backend::new(options.clone())
         .map_err(|message| CliError::from_engine_start(&data_dir, &message))?;
     signals::install_daemon();
-    let logger = context.logger;
+    // Flags win over `service.toml [log]`: -q, -v and --log-format set the
+    // level and format; the file's apply otherwise. The file's destination
+    // (`[log] file`, else stderr) has no flag.
+    let logger = Logger::for_daemon(&context.global, &config.log);
+    let service_log = Arc::new(
+        ServiceLog::open(logger, config.log.file.as_deref()).map_err(|error| {
+            CliError::invalid(format!("[log] file cannot be opened: {error}"))
+                .with_field("log.file")
+        })?,
+    );
     let setup = Setup {
         options,
         socket: Some(socket.clone()),
         owner: Owner::Daemon,
         host_grace: Duration::from_secs(u64::from(config.daemon.shutdown_host_grace_s)),
         limits: Limits::default(),
-        log: Arc::new(move |line: &str| logger.info(line)),
+        log: Arc::new(move |line: &str| service_log.log(line)),
         config,
     };
     let mut daemon = Daemon::start(setup, backend)

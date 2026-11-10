@@ -74,15 +74,10 @@ pub struct Global {
     /// Raise the log level on stderr (-v debug, -vv trace).
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
-    /// Log line format on stderr.
-    #[arg(
-        long,
-        global = true,
-        value_enum,
-        default_value = "text",
-        value_name = "FORMAT"
-    )]
-    pub log_format: LogFormat,
+    /// Log line format on stderr [default: `[log] format` of service.toml for
+    /// `auto daemon`, else text]. The flag wins over the file.
+    #[arg(long, global = true, value_enum, value_name = "FORMAT")]
+    pub log_format: Option<LogFormat>,
     /// Overall limit for the command.
     #[arg(long, global = true, value_name = "SECONDS")]
     pub timeout: Option<u64>,
@@ -223,7 +218,7 @@ mod tests {
         assert_eq!(g.format, Some(Format::Ndjson));
         assert_eq!(g.color, ColorWhen::Never);
         assert!(g.quiet && g.tcg && g.no_headless);
-        assert_eq!(g.log_format, LogFormat::Json);
+        assert_eq!(g.log_format, Some(LogFormat::Json));
         assert_eq!(g.timeout, Some(30));
     }
 

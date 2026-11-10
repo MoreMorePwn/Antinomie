@@ -150,6 +150,10 @@ struct Running {
 
 impl Running {
     fn start(fixture: &Fixture) -> Self {
+        Self::start_with(fixture, ServiceConfig::default())
+    }
+
+    fn start_with(fixture: &Fixture, config: ServiceConfig) -> Self {
         let data = fixture.root.join("data");
         let mut engine = FakeEngine::new(Arc::new(ManualClock::new(1_800_000_000_000)));
         engine.start_with(|snapshot| {
@@ -181,7 +185,7 @@ impl Running {
         };
         let setup = Setup {
             options,
-            config: ServiceConfig::default(),
+            config,
             socket: Some(data.join("run").join("antinomie.sock")),
             owner: antinomie_service::api::status::Owner::Daemon,
             host_grace: Duration::from_secs(5),
@@ -680,4 +684,24 @@ fn run_export_with_sensitive_writes_the_recorded_packet_frames_the_same_both_way
             .keys()
             .all(|k| !k.starts_with("network-packets-") && !k.starts_with("captured"))
     );
+}
+
+#[test]
+fn service_toml_query_and_privacy_reach_the_running_daemon() {
+    use antinomie_monitor_core::settings::AddressLookup;
+    use std::time::Duration;
+    let fixture = Fixture::new("conf");
+    let (config, problems) = antinomie_service::config::validate::parse_service(
+        "service.toml",
+        "[query]\nlight_concurrency = 3\nheavy_concurrency = 1\nlight_timeout_s = 7\nheavy_timeout_s = 9\n[privacy]\naddress_lookup = \"off\"\n",
+    );
+    assert!(problems.is_empty(), "{problems:?}");
+    let mut daemon = Running::start_with(&fixture, config.unwrap());
+    let settings = daemon.service.query.settings();
+    assert_eq!(settings.limits.light_concurrency, 3);
+    assert_eq!(settings.limits.heavy_concurrency, 1);
+    assert_eq!(settings.light_timeout, Duration::from_secs(7));
+    assert_eq!(settings.heavy_timeout, Duration::from_secs(9));
+    assert_eq!(settings.address_lookup, AddressLookup::Off);
+    daemon.stop();
 }

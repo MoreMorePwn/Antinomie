@@ -97,7 +97,12 @@ impl QueryService {
         {
             return Some(found);
         }
-        let saved = antinomie_triage::SavedRun::open(opened.run.clone(), &self.options).ok()?;
+        let saved = antinomie_triage::SavedRun::open_with(
+            opened.run.clone(),
+            &self.options,
+            self.settings.address_lookup,
+        )
+        .ok()?;
         let cancel = Arc::new(AtomicBool::new(false));
         // Read from the recording itself: a Triage scan would write its
         // journals into the run's folder, which a read never does.

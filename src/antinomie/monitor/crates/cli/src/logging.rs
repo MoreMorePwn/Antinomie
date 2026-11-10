@@ -55,8 +55,34 @@ impl Logger {
         };
         Self {
             level,
-            format: global.log_format,
+            format: global.log_format.unwrap_or(LogFormat::Text),
         }
+    }
+
+    /// The logger of `auto daemon`: `-q`, `-v` and `--log-format` win over
+    /// `service.toml [log]`; without them the file's level and format apply.
+    pub fn for_daemon(global: &Global, file: &antinomie_service::config::service::Log) -> Self {
+        use antinomie_service::config::service::{LogFormat as FileFormat, LogLevel};
+        let level = if global.quiet {
+            Level::Error
+        } else {
+            match global.verbose {
+                0 => match file.level {
+                    LogLevel::Error => Level::Error,
+                    LogLevel::Warn => Level::Warn,
+                    LogLevel::Info => Level::Info,
+                    LogLevel::Debug => Level::Debug,
+                    LogLevel::Trace => Level::Trace,
+                },
+                1 => Level::Debug,
+                _ => Level::Trace,
+            }
+        };
+        let format = global.log_format.unwrap_or(match file.format {
+            FileFormat::Text => LogFormat::Text,
+            FileFormat::Json => LogFormat::Json,
+        });
+        Self { level, format }
     }
 
     pub fn enabled(&self, level: Level) -> bool {
@@ -128,6 +154,34 @@ mod tests {
 
     fn logger(level: Level, format: LogFormat) -> Logger {
         Logger { level, format }
+    }
+
+    #[test]
+    fn the_daemon_takes_level_and_format_from_the_file_and_the_flags_win() {
+        use antinomie_service::config::service::{Log, LogFormat as FileFormat, LogLevel};
+        use clap::Parser;
+        let global = |args: &[&str]| {
+            let mut all = vec!["antinomie-cli"];
+            all.extend_from_slice(args);
+            all.extend_from_slice(&["doctor"]);
+            crate::args::Cli::parse_from(all).global
+        };
+        let file = Log {
+            level: LogLevel::Warn,
+            format: FileFormat::Json,
+            file: None,
+        };
+        let from_file = Logger::for_daemon(&global(&[]), &file);
+        assert_eq!(
+            (from_file.level, from_file.format),
+            (Level::Warn, LogFormat::Json)
+        );
+        let flags = Logger::for_daemon(&global(&["-v", "--log-format", "text"]), &file);
+        assert_eq!((flags.level, flags.format), (Level::Debug, LogFormat::Text));
+        let quiet = Logger::for_daemon(&global(&["-q"]), &file);
+        assert_eq!(quiet.level, Level::Error);
+        // Other commands: the flag, else text.
+        assert_eq!(Logger::from_global(&global(&[])).format, LogFormat::Text);
     }
 
     #[test]

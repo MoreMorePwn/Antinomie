@@ -380,10 +380,35 @@ fn service_toml_checks_lanes_safety_and_watch_folders() {
         messages.iter().any(|m| m.contains("absolute path")),
         "{messages:?}"
     );
-    // Webhooks must be https or loopback.
-    let hook = "[[notify.webhooks]]\nurl = \"http://example.org/x\"\nsecret_file = \"/s\"\n";
+}
+
+#[test]
+fn webhooks_are_refused_as_not_part_of_0_9_0() {
+    let hook = "[[notify.webhooks]]\nurl = \"https://example.org/x\"\nsecret_file = \"/s\"\n";
     let (_, found) = parse_service("service.toml", hook);
-    assert!(found.iter().any(|p| p.message.contains("HTTPS only")));
+    assert!(
+        found
+            .iter()
+            .any(|p| p.severity == Severity::Error && p.message.contains("not supported in 0.9.0")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_changed_scan_cache_is_refused_and_the_other_query_keys_are_accepted() {
+    let (_, found) = parse_service("service.toml", "[query]\nscan_cache_mib = 512\n");
+    assert!(
+        found
+            .iter()
+            .any(|p| p.severity == Severity::Error && p.message.contains("not supported in 0.9.0")),
+        "{found:?}"
+    );
+    let (config, found) = parse_service(
+        "service.toml",
+        "[query]\nscan_cache_mib = 1024\nlight_concurrency = 4\nheavy_timeout_s = 30\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+    assert_eq!(config.unwrap().query.light_concurrency, 4);
 }
 
 #[test]

@@ -317,6 +317,9 @@ impl<E: Engine + Send + 'static> Daemon<E> {
     /// Start everything (see the module text). The engine must own the data
     /// directory already.
     pub fn start(setup: Setup, engine: E) -> Result<Self, String> {
+        if !setup.config.notify.webhooks.is_empty() {
+            return Err(crate::config::validate::WEBHOOKS_UNSUPPORTED.into());
+        }
         let log = Arc::clone(&setup.log);
         let data_dir = setup.options.data_dir.clone();
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
@@ -382,12 +385,15 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         )?;
         let staging = Arc::new(staging);
         let intake = Arc::new(Intake::new(&data_dir, Arc::clone(&staging), lane_ram));
-        let query = QueryService::new(setup.options.clone())
-            .with_layers(Arc::new(ViewLayers(Arc::clone(&view))))
-            .with_jobs(Arc::new(crate::store::job_index::StoreJobIndex::new(
-                Arc::clone(&store),
-            )))
-            .with_audit(Arc::clone(&log));
+        let query = QueryService::with_settings(
+            setup.options.clone(),
+            crate::query::limits::QuerySettings::from_config(&setup.config),
+        )
+        .with_layers(Arc::new(ViewLayers(Arc::clone(&view))))
+        .with_jobs(Arc::new(crate::store::job_index::StoreJobIndex::new(
+            Arc::clone(&store),
+        )))
+        .with_audit(Arc::clone(&log));
         if setup.config.queue.paused_on_start {
             store
                 .set_pause(Some(crate::api::status::PauseReason::Operator))
@@ -667,7 +673,12 @@ fn lane_main<E: Engine>(
         },
         &service.store,
     );
-    let triage = RealTriage::new(service.options.clone());
+    let address_lookup = service
+        .config
+        .read()
+        .map(|config| config.privacy.address_lookup.triage_mode())
+        .unwrap_or_default();
+    let triage = RealTriage::new(service.options.clone()).with_address_lookup(address_lookup);
     let tags = LibraryTags {
         data_dir: service.data_dir.clone(),
     };

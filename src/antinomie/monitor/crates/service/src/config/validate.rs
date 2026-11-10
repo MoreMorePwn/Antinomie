@@ -171,6 +171,13 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
             "reserved: live routes are not in v1 (decided D6)",
         );
     }
+    if config.query.scan_cache_mib != crate::query::catalogue::QueryLimits::default().scan_cache_mib
+    {
+        sink.error(
+            "query.scan_cache_mib",
+            "not supported in 0.9.0: the daemon keeps 2 scans in memory; remove the key",
+        );
+    }
     for (name, value) in [
         ("query.light_concurrency", config.query.light_concurrency),
         ("query.heavy_concurrency", config.query.heavy_concurrency),
@@ -222,18 +229,14 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     {
         sink.error("notify.on_finish", "the command must be an absolute path");
     }
-    for (index, hook) in config.notify.webhooks.iter().enumerate() {
-        let local = ["http://127.0.0.1", "http://localhost", "http://[::1]"]
-            .iter()
-            .any(|prefix| hook.url.starts_with(prefix));
-        if !hook.url.starts_with("https://") && !local {
-            sink.error(
-                &format!("notify.webhooks.{index}.url"),
-                "HTTPS only, unless the host is loopback",
-            );
-        }
+    if !config.notify.webhooks.is_empty() {
+        sink.error("notify.webhooks", WEBHOOKS_UNSUPPORTED);
     }
 }
+
+/// Why `[[notify.webhooks]]` is refused.
+pub const WEBHOOKS_UNSUPPORTED: &str =
+    "not supported in 0.9.0: webhooks are not delivered; use notify.on_finish or poll the job API";
 
 /// The name a policy file stands for: `[a-z0-9._-]`, 1 to 64 bytes, not
 /// starting with a dot.
