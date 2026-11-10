@@ -1370,6 +1370,13 @@
             "null"
           ],
           "description": "The engine's own error text, truncated to 2 KiB, host paths removed for\nremote callers."
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The run record a failed launch left (Run History lists it as \"Failed to\nstart\"); `None` when the failure is not a launch, or when the launch\nkept no record (nothing was captured)."
         }
       },
       "required": [
