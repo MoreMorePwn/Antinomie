@@ -220,6 +220,9 @@ pub struct EvidencePolicy {
     pub dump_trigger: TriggerSetting,
     /// What the trigger takes: `core`, `memory` or `both`.
     pub dump_trigger_kind: TriggerKind,
+    /// The cores the dump trigger takes also read the pages that are not in
+    /// memory ("Read non-resident pages", guest revision 22). Default off.
+    pub core_nonresident: bool,
 }
 
 impl Default for EvidencePolicy {
@@ -230,6 +233,7 @@ impl Default for EvidencePolicy {
             core_max_mib: 64,
             dump_trigger: TriggerSetting::Off,
             dump_trigger_kind: TriggerKind::Core,
+            core_nonresident: false,
         }
     }
 }

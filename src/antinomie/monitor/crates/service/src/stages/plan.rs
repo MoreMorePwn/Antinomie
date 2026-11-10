@@ -35,6 +35,9 @@ pub const CORE_REVISION: u32 = 15;
 /// (`worker_launch.rs`, the dump trigger's core).
 pub const TRIGGER_CORE_REVISION: u32 = 16;
 
+/// Guest revision that reads non-resident pages into a core on request.
+pub const NONRESIDENT_REVISION: u32 = 22;
+
 /// The job's settings after the spec's overrides met the policy.
 #[derive(Clone, Debug)]
 pub struct Effective {
@@ -107,7 +110,7 @@ pub fn effective(job: &Job, policy: &Policy) -> Effective {
         core_max_size: (core || trigger_core).then(|| core_max_mib.saturating_mul(1 << 20)),
         core_timeout_ms: (core || trigger_core).then_some(core_timeout_ms),
         dump_trigger: trigger,
-        core_nonresident: false,
+        core_nonresident: policy.evidence.core_nonresident && trigger_core,
         debug_on_start: false,
         route: Some(core_kind(o.route.unwrap_or(policy.network.route))),
         host_copy: None,

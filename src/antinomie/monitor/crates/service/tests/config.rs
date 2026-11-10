@@ -656,3 +656,31 @@ fn a_dump_kind_without_a_trigger_is_only_a_warning() {
             .any(|w| w.contains("dump_trigger_kind") && w.contains("no effect"))
     );
 }
+
+#[test]
+fn core_nonresident_needs_a_core_trigger_and_is_a_warning_otherwise() {
+    let on = with(
+        DEFAULT_POLICY,
+        "core_nonresident  = false",
+        "core_nonresident  = true",
+    );
+    assert_eq!(problems(&on, &NoVms), Vec::<String>::new());
+    assert!(
+        warnings(&on)
+            .iter()
+            .any(|w| w.contains("core_nonresident") && w.contains("no effect"))
+    );
+    let armed = with(
+        &on,
+        "dump_trigger      = \"off\"",
+        "dump_trigger      = \"high\"",
+    );
+    assert_eq!(problems(&armed, &NoVms), Vec::<String>::new());
+    assert!(
+        !warnings(&armed)
+            .iter()
+            .any(|w| w.contains("core_nonresident"))
+    );
+    let policy: antinomie_service::config::Policy = toml::from_str(&armed).unwrap();
+    assert!(policy.evidence.core_nonresident);
+}

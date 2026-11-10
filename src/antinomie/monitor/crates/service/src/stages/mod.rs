@@ -185,6 +185,8 @@ pub struct LaneEnv<'a> {
     pub triage: &'a dyn host::HostTriage,
     /// The library tags the service writes itself.
     pub tags: &'a dyn host::SampleTags,
+    /// The data directory: the library the launch stages a host copy from.
+    pub data_dir: &'a std::path::Path,
 }
 
 pub struct LaneStages<'a, E: Engine> {

@@ -30,6 +30,8 @@ pub mod custody;
 pub mod daemon;
 /// The seam to the engine, and the fake behind it (design 7.1).
 pub mod engine;
+/// The library's copy of a sample as a run's host copy (ANT-T0449).
+pub mod host_copy;
 /// Staging, uploads and the common intake checks (card P3-2b).
 pub mod intake;
 /// Lanes: the state file, the checks and recovery (card P3-4a).

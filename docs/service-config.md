@@ -35,7 +35,7 @@ runs while a window or the daemon owns the data directory.
 - Ceilings: `sample.max_sample_mib` 1 to 256, `run.max_run_s` at most 1800,
   `run.timeout_s` between 5 seconds and `max_run_s`, `evidence.core_max_mib` at
   most 1024 (and at least 1 with a core `evidence.dump_trigger`; a
-  `dump_trigger_kind` with the trigger off is a warning), `analysis.static_time_limit_min` 0 to 480, `limits.priority_max`
+  `dump_trigger_kind` or `core_nonresident` with the trigger off is a warning), `analysis.static_time_limit_min` 0 to 480, `limits.priority_max`
   0 to 9.
 - Routes: in version 1 a job may use only `drop` and `inet_sim`. A policy that
   lists `internet`, `tor`, `vpn` or `socks5` fails, as does a default

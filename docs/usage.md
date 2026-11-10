@@ -1685,7 +1685,9 @@ and the family Triage named.
 The command line and Auto mode have the same trigger: `run exec --dump-trigger
 TIER [--dump-kind core|memory|both]`, and the policy keys `evidence.dump_trigger`
 and `evidence.dump_trigger_kind` (see [auto-mode.md](auto-mode.md)). Both are off
-by default; the result reports what fired or that it was armed and nothing matched.
+by default. `--core-nonresident` (policy key `evidence.core_nonresident`) makes the
+trigger's cores read the pages that are not in memory too, as **Read non-resident
+pages** does (a revision-22 base; it needs a core or both trigger); the result reports what fired or that it was armed and nothing matched.
 
 In **Run program > Dumps**, a core that cannot be taken because the process
 is gone is not an attempt: it is kept in the run's trigger log as a miss, noted
@@ -2000,7 +2002,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   ...` (or after `--`), `--env K=V`, `--as user|root|UID:GID` (`user` is UID 1000),
   `--route drop|internet|inet_sim|tor|vpn|socks5` (a routed VM only), `--timeout-run
   SECONDS` (default 300: the run is then told to stop), `--net-capture`, `--memory-dump`,
-  `--core-dump`, `--dump-trigger low|medium|high` (take a dump when the live Triage rules match at that tier or above, as the window's **Dump when suspicious activity is seen**; default off) with `--dump-kind core|memory|both` (default `core`; a core needs a revision-16 base), `--static CHECKS` (the guest-side analysis too), `--load-into PROGRAM` (the sample is a shared library: it is uploaded, then the guest program PROGRAM, an absolute path, runs with `LD_PRELOAD` set to it, and the run is linked to the library sample) and `--wait` (always on in
+  `--core-dump`, `--dump-trigger low|medium|high` (take a dump when the live Triage rules match at that tier or above, as the window's **Dump when suspicious activity is seen**; default off) with `--dump-kind core|memory|both` (default `core`; a core needs a revision-16 base), `--core-nonresident` (the trigger's cores also read pages that are not in memory, as **Read non-resident pages**; needs a core trigger and a revision-22 base), `--static CHECKS` (the guest-side analysis too), `--load-into PROGRAM` (the sample is a shared library: it is uploaded, then the guest program PROGRAM, an absolute path, runs with `LD_PRELOAD` set to it, and the run is linked to the library sample) and `--wait` (always on in
   direct mode). The program runs in the app terminal as `/tmp/<sha8>-<name>`; the end of
   its output is in the result. The wait covers the evidence the way the window's runs do
   (network capture, memory dump and core finished, up to 300 s), then stops the VM and
@@ -2011,7 +2013,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   gives the run (state, exit status, why it ended: `exited` or `run_limit`; for a launch the
   guest refused, `failure.run_id` and `run.id` name the "Failed to start" record, when the
   launch kept one, and `failure.detail` the explanation), the evidence
-  states and paths, the time per stage and the output. With `--dump-trigger` it also has a
+  states and paths, the time per stage and the output. The launch carries the library's copy of the sample as its host copy (read only; a private file removed when the run ends), so a program the guest refuses still gets static analysis. With `--dump-trigger` it also has a
   `triggers` object: what was armed (`tier`, `memory`, `core`), `fired`, each match (`rule`,
   `tier`, `pid`, `syscall`, and the `core` and `memory` dump with `state`, `size` and `path`),
   the counts of matches missed, skipped over the budget or lost, and `notes` (the run is

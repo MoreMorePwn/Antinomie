@@ -44,7 +44,13 @@ impl<E: Engine> LaneStages<'_, E> {
         request
             .validate()
             .map_err(|message| fail("the launch request is refused", Some(&message)))?;
-        let run = self.waiter.launch_request(request.clone())?;
+        // The library's copy vouches for the host copy and gives a refused
+        // launch its static analysis (T0344); it is gone when the launch ends.
+        let staged = crate::host_copy::StagedCopy::stage(self.env.data_dir, sample.sha256.as_str());
+        request.host_copy = staged.as_ref().map(|copy| copy.path().to_owned());
+        let launched = self.waiter.launch_request(request.clone());
+        drop(staged);
+        let run = launched?;
         if phase(&run) == Phase::LaunchFailed {
             return Err(StageStop::Failed(
                 Failure::new(

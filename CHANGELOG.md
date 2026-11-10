@@ -15,6 +15,20 @@ x86 programs by their own table.
 
 ### Host
 
+- **Headless runs can read non-resident pages, and their launch has the library's host copy (ANT-T0449).**
+  - `run exec --core-nonresident` and the Auto policy key `evidence.core_nonresident`
+    (default off, checked by `config validate`) make the cores the dump trigger takes
+    read the pages that are not in memory too, as the window's **Read non-resident
+    pages** does. They need a core trigger (`--dump-trigger` with core or both; an
+    exit core always reads resident pages): the command refuses the flag without one
+    and the policy check warns. On a base below revision 22 the engine reads resident
+    pages only and a job says so in a warning.
+  - `run exec` and the Auto lane now give the launch the library's copy of the sample as
+    the host copy, so the guest's specimen digest vouches for it at once (T0344) and a
+    refused launch still gets static analysis. The library file is only read: the plain
+    copy lives in a private file under `host-copy/` of the data directory, removed when
+    the launch (Auto) or the run (`run exec`) ends.
+
 - **Argument positions come from the call's own ABI table (ANT-T0440).** Triage rules, the
   process record, the Sigma and auditd address fields, the trace's field roles and the
   capture's exec path looked up argument positions in the x86-64 table for every
