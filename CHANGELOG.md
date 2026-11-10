@@ -15,6 +15,11 @@ x86 programs by their own table.
 
 ### Host
 
+- **Network attribution polish on ARM and InetSim, and an InetSim IRC greeting (ANT-T0435).**
+  - Background DNS is classed as **Base image background: DNS** when every name the capture's lookups asked for is one the base image asks for itself (NTP pools, package archives, the guest's host name), and a BusyBox `udhcpc` talking DHCP to a local router is **DHCP** background even on a run saved before the profile's network gateway was recorded (with a recorded gateway only that address counts, as before). The Summary's Indicators set the resolver endpoint apart the same way.
+  - With InetSim every name resolves to one fake address, so the address no longer says which process made a lookup: a name the base image asks for takes no process, and any other name takes the processes that reached the address around the time it was looked up.
+  - Candidate lists name a process once, not once per thread; a UDP endpoint counts datagrams sent and does not count `connect()` calls (an endpoint with only connects says "no datagrams sent"); a write to a socket is no longer listed as a change to "fd N" in Files.
+  - The built-in InetSim answers IRC on ports 6665 to 6669 and 7000 with a minimal greeting (a NOTICE, then the welcome after NICK and USER, PONG, JOIN), so IRC bots speak and their commands are captured. It talks to nobody and relays nothing.
 - **Headless runs can read non-resident pages, and their launch has the library's host copy (ANT-T0449).**
   - `run exec --core-nonresident` and the Auto policy key `evidence.core_nonresident`
     (default off, checked by `config validate`) make the cores the dump trigger takes

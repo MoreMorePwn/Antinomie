@@ -265,6 +265,9 @@ pub struct Seen {
     pub process: Option<Process>,
     /// Something to say about this sighting, such as why a file has no hash.
     pub note: Option<String>,
+    /// A call that moves no data, such as a datagram socket's `connect`: it
+    /// names the peer but is not counted as a datagram.
+    pub silent: bool,
 }
 
 /// How a name was seen.
@@ -296,6 +299,10 @@ struct Tally {
     last_us: Option<u64>,
     first_label: Option<String>,
     processes: BTreeSet<Process>,
+    /// When each process made its calls (first, last), host microseconds.
+    spans: BTreeMap<Process, (u64, u64)>,
+    /// Sightings that moved no data (see [`Seen::silent`]).
+    silent: u64,
     notes: BTreeSet<String>,
 }
 
@@ -314,8 +321,20 @@ impl Tally {
         if self.first_label.is_none() {
             self.first_label = seen.evidence.as_ref().map(|e| e.label.clone());
         }
+        if seen.silent {
+            self.silent += 1;
+        }
         if let Some(process) = &seen.process {
             self.processes.insert(process.clone());
+            if let Some(time) = seen.time_us {
+                self.spans
+                    .entry(process.clone())
+                    .and_modify(|(first, last)| {
+                        *first = (*first).min(time);
+                        *last = (*last).max(time);
+                    })
+                    .or_insert((time, time));
+            }
         }
         if let Some(note) = &seen.note
             && self.notes.len() < 4
@@ -574,11 +593,22 @@ impl Collector {
         // Which processes connected to each endpoint and to each address.
         let mut by_endpoint: BTreeMap<String, BTreeSet<Process>> = BTreeMap::new();
         let mut by_address: BTreeMap<IpAddr, BTreeSet<Process>> = BTreeMap::new();
+        // When each process reached each address, for the addresses several
+        // names share.
+        let mut spans_at: BTreeMap<IpAddr, Vec<(Process, u64, u64)>> = BTreeMap::new();
         for ((ty, key), entry) in &self.entries {
             if *ty != Type::Endpoint {
                 continue;
             }
             if let Some(tally) = entry.tallies.get(&Source::Syscall) {
+                for ip in &entry.addresses {
+                    spans_at.entry(*ip).or_default().extend(
+                        tally
+                            .spans
+                            .iter()
+                            .map(|(process, (first, last))| (process.clone(), *first, *last)),
+                    );
+                }
                 by_endpoint
                     .entry(key.clone())
                     .or_default()
@@ -600,8 +630,14 @@ impl Collector {
                 }
             }
         }
+        let asked: BTreeSet<String> = self
+            .entries
+            .iter()
+            .filter(|((ty, _), entry)| *ty == Type::Domain && entry.via.contains(&Via::Dns))
+            .map(|((_, key), _)| key.clone())
+            .collect();
         let mut out = Vec::new();
-        for ((ty, _), mut entry) in self.entries {
+        for ((ty, key), mut entry) in self.entries {
             let mut indicator = entry.indicator.take().expect("entry holds its indicator");
             let processes: BTreeSet<Process> = match ty {
                 Type::Endpoint => entry
@@ -614,19 +650,19 @@ impl Collector {
                     .as_ref()
                     .and_then(|endpoint| by_endpoint.get(endpoint).cloned())
                     .unwrap_or_default(),
-                Type::Domain => entry
-                    .addresses
-                    .iter()
-                    .filter_map(|ip| by_address.get(ip))
-                    .flatten()
-                    .cloned()
-                    .collect(),
+                Type::Domain => domain_processes(&key, &entry, &names_at, &by_address, &spans_at),
                 Type::File => entry
                     .tallies
                     .values()
                     .flat_map(|tally| tally.processes.iter().cloned())
                     .collect(),
             };
+            // Threads of one process are one candidate.
+            let mut seen_pids = BTreeSet::new();
+            let processes: BTreeSet<Process> = processes
+                .into_iter()
+                .filter(|process| seen_pids.insert((process.pid, process.name.clone())))
+                .collect();
             match processes.len() {
                 0 => {}
                 1 => indicator.process = processes.into_iter().next(),
@@ -639,7 +675,7 @@ impl Collector {
             set_lookups(&mut indicator, &entry);
             out.push(indicator);
         }
-        join_endpoints_to_names(&mut out, &names_at);
+        join_endpoints_to_names(&mut out, &names_at, &asked);
         out.sort_by(|a, b| {
             (a.ty, a.first_us.is_none(), a.first_us, &a.key).cmp(&(
                 b.ty,
@@ -650,6 +686,55 @@ impl Collector {
         });
         out
     }
+}
+
+/// How far the host's estimate of a guest time may be off, microseconds.
+const TIME_SLACK_US: u64 = 15_000_000;
+
+/// The processes that made a domain. A name leads to the processes that
+/// reached its addresses, unless the address is shared by several names (an
+/// InetSim route answers every name with one fake address): then the address
+/// says nothing, a name the base image asks for itself has no process, and any
+/// other name takes the processes that reached the address while it was looked
+/// up.
+fn domain_processes(
+    name: &str,
+    entry: &Entry,
+    names_at: &BTreeMap<IpAddr, BTreeSet<String>>,
+    by_address: &BTreeMap<IpAddr, BTreeSet<Process>>,
+    spans_at: &BTreeMap<IpAddr, Vec<(Process, u64, u64)>>,
+) -> BTreeSet<Process> {
+    let looked_up = entry
+        .tallies
+        .values()
+        .filter_map(|t| t.first_us.zip(t.last_us))
+        .fold(None, |held: Option<(u64, u64)>, (first, last)| {
+            Some(held.map_or((first, last), |(a, b)| (a.min(first), b.max(last))))
+        });
+    let mut out = BTreeSet::new();
+    for ip in &entry.addresses {
+        let shared = names_at
+            .get(ip)
+            .is_some_and(|names| names.iter().any(|other| other != name));
+        if !shared {
+            out.extend(by_address.get(ip).into_iter().flatten().cloned());
+        } else if !super::baseline::dns_noise(name)
+            && let Some((first, last)) = looked_up
+        {
+            out.extend(
+                spans_at
+                    .get(ip)
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, from, to)| {
+                        *from <= last.saturating_add(TIME_SLACK_US)
+                            && to.saturating_add(TIME_SLACK_US) >= first
+                    })
+                    .map(|(process, _, _)| process.clone()),
+            );
+        }
+    }
+    out
 }
 
 /// The address of an endpoint indicator (`1.2.3.4:53`, `[::1]:53`).
@@ -665,13 +750,29 @@ fn endpoint_ip(value: &str) -> Option<IpAddr> {
 /// What the run's DNS answers say about its endpoints: an endpoint that only
 /// the base image's lookups led to (apt's mirror) is the base image's too, and
 /// a stand-in address of the gateway's DNS shows the name it stands for.
-fn join_endpoints_to_names(out: &mut [Indicator], names_at: &BTreeMap<IpAddr, BTreeSet<String>>) {
+fn join_endpoints_to_names(
+    out: &mut [Indicator],
+    names_at: &BTreeMap<IpAddr, BTreeSet<String>>,
+    asked: &BTreeSet<String>,
+) {
     let background: BTreeSet<String> = out
         .iter()
         .filter(|i| i.ty == Type::Domain && i.noise.is_some())
         .map(|i| i.value.clone())
         .collect();
+    // The resolver's own port: when every name the run's DNS asked for is the
+    // base image's, a lookup endpoint nobody called is the base image's too.
+    let base_lookups_only = !asked.is_empty() && asked.iter().all(|name| background.contains(name));
     for indicator in out.iter_mut().filter(|i| i.ty == Type::Endpoint) {
+        if base_lookups_only
+            && indicator.noise.is_none()
+            && indicator.process.is_none()
+            && indicator.candidates.is_empty()
+            && indicator.value.ends_with(":53")
+            && indicator.sub.starts_with("udp")
+        {
+            indicator.noise = Some("DNS lookups of names the base image asks for itself".into());
+        }
         let Some(ip) = endpoint_ip(&indicator.value) else {
             continue;
         };
@@ -717,8 +818,15 @@ fn describe(indicator: &mut Indicator, entry: &Entry) {
                 proto.to_owned()
             };
             indicator.count = match (syscall, pcap) {
+                (Some(t), _) if proto == "udp" && t.count == t.silent => {
+                    "no datagrams sent".to_owned()
+                }
                 (Some(t), _) => plural(
-                    t.count,
+                    if proto == "udp" {
+                        t.count - t.silent
+                    } else {
+                        t.count
+                    },
                     if proto == "udp" {
                         "datagram"
                     } else {
@@ -961,6 +1069,7 @@ mod tests {
                 },
             }),
             note: None,
+            silent: false,
         }
     }
 
@@ -1268,5 +1377,125 @@ mod tests {
         }
         assert_eq!(c.omitted, 5);
         assert_eq!(c.finish().len(), TYPE_LIMIT);
+    }
+    /// A domain looked up on an InetSim-like route: every name got one address.
+    fn fake_address_run() -> Vec<Indicator> {
+        let fake = ip("198.51.100.1");
+        let mut c = Collector::default();
+        let sample = proc(676, "6e506f96");
+        c.endpoint(
+            fake,
+            6667,
+            "tcp",
+            Source::Syscall,
+            call(&sample, true, 100_000_000),
+        );
+        for (name, time) in [
+            ("0.debian.pool.ntp.org", 10_000_000),
+            ("c2.evil.example", 99_000_000),
+            ("other.evil.example", 400_000_000),
+        ] {
+            c.domain(name, Via::Dns, &[fake], Source::Pcap, packet(1, time));
+        }
+        c.finish()
+    }
+
+    #[test]
+    fn a_shared_fake_address_does_not_pin_a_base_lookup_on_the_sample() {
+        let all = fake_address_run();
+        // The base image's NTP name has no process and is background.
+        let ntp = find(&all, Type::Domain, "0.debian.pool.ntp.org");
+        assert!(ntp.process.is_none() && ntp.candidates.is_empty());
+        assert!(ntp.noise.is_some());
+        // The sample's own name, looked up just before it connected, is its.
+        let own = find(&all, Type::Domain, "c2.evil.example");
+        assert_eq!(own.process.as_ref().map(|p| p.pid), Some(676));
+        // A name looked up minutes from any connect is nobody's.
+        let far = find(&all, Type::Domain, "other.evil.example");
+        assert!(far.process.is_none() && far.candidates.is_empty());
+    }
+
+    #[test]
+    fn candidates_list_one_process_once_whatever_its_threads() {
+        let mut c = Collector::default();
+        for tid_cookie in 0..4u64 {
+            let thread = Process {
+                pid: 669,
+                cookie: 6690 + tid_cookie,
+                name: "bot".into(),
+            };
+            c.endpoint(
+                ip("203.0.113.8"),
+                80,
+                "tcp",
+                Source::Syscall,
+                call(&thread, true, tid_cookie),
+            );
+        }
+        let other = proc(700, "helper");
+        c.endpoint(
+            ip("203.0.113.8"),
+            80,
+            "tcp",
+            Source::Syscall,
+            call(&other, true, 9),
+        );
+        let all = c.finish();
+        let shared = find(&all, Type::Endpoint, "203.0.113.8:80");
+        assert_eq!(shared.candidates.len(), 2, "{:?}", shared.candidates);
+    }
+
+    #[test]
+    fn udp_connects_are_not_datagrams() {
+        let mut c = Collector::default();
+        let p = proc(5, "bot");
+        let mut connect = call(&p, true, 1);
+        connect.silent = true;
+        for _ in 0..19 {
+            c.endpoint(ip("8.8.8.8"), 53, "udp", Source::Syscall, connect.clone());
+        }
+        for _ in 0..3 {
+            c.endpoint(ip("1.1.1.1"), 53, "udp", Source::Syscall, connect.clone());
+        }
+        c.endpoint(ip("1.1.1.1"), 53, "udp", Source::Syscall, call(&p, true, 2));
+        c.endpoint(ip("1.1.1.1"), 53, "udp", Source::Syscall, call(&p, true, 3));
+        let all = c.finish();
+        assert_eq!(
+            find(&all, Type::Endpoint, "8.8.8.8:53").count,
+            "no datagrams sent"
+        );
+        assert_eq!(
+            find(&all, Type::Endpoint, "1.1.1.1:53").count,
+            "2 datagrams"
+        );
+    }
+
+    #[test]
+    fn a_resolver_endpoint_is_background_only_when_every_name_asked_is_the_base_images() {
+        let build = |extra: Option<&str>| {
+            let mut c = Collector::default();
+            c.endpoint(ip("10.0.2.3"), 53, "udp", Source::Pcap, packet(1, 1));
+            for name in ["0.debian.pool.ntp.org", "debian"] {
+                c.domain(name, Via::Dns, &[], Source::Pcap, packet(2, 2));
+            }
+            if let Some(name) = extra {
+                c.domain(name, Via::Dns, &[], Source::Pcap, packet(3, 3));
+            }
+            c.finish()
+        };
+        assert!(
+            find(&build(None), Type::Endpoint, "10.0.2.3:53")
+                .noise
+                .is_some()
+        );
+        assert!(
+            find(
+                &build(Some("c2.evil.example")),
+                Type::Endpoint,
+                "10.0.2.3:53"
+            )
+            .noise
+            .is_none()
+        );
     }
 }

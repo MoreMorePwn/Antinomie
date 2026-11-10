@@ -542,6 +542,7 @@ impl Inventory {
         let mut attribution = self.attribution.as_deref().cloned().unwrap_or_default();
         for (name, host) in &self.hosts {
             if host.sources.contains("DNS lookup") {
+                attribution.learn_lookup(name);
                 for address in &host.addresses {
                     if let Ok(ip) = address.parse::<IpAddr>() {
                         attribution.learn_name(ip, name);

@@ -258,6 +258,15 @@ impl FileIndex {
             name,
             "write" | "pwrite64" | "writev" | "pwritev" | "pwritev2"
         );
+        // A write to a socket moves data to a peer: the network tables hold
+        // it, and it is no change to a file (ANT-T0435, N6).
+        if writing
+            && fd.is_some_and(|fd| {
+                crate::sigma_events::socket_at(files, call.task_cookie, event.tid, fd).is_some()
+            })
+        {
+            return None;
+        }
         let failed = file_category::outcome(call).failed();
         let created = hits.iter().any(|hit| hit.category == Category::Created);
         let changed = change_operation(call, event) || created;
