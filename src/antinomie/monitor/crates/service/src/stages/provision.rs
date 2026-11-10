@@ -17,7 +17,7 @@
 //! three in a row.
 use super::{
     LaneStages, Prepared, Provisioned, STOP_WAIT, StageStop,
-    plan::{CORE_REVISION, TRIGGER_CORE_REVISION},
+    plan::{CORE_REVISION, NONRESIDENT_REVISION, TRIGGER_CORE_REVISION},
 };
 use crate::{
     api::{
@@ -192,6 +192,20 @@ impl<E: Engine> LaneStages<'_, E> {
                     revision.map_or("none".to_owned(), |r| r.to_string())
                 )),
             ));
+        }
+        if prepared.effective.request.core_nonresident
+            && revision.is_none_or(|revision| revision < NONRESIDENT_REVISION)
+        {
+            // The engine falls back to resident pages, as the app's box does;
+            // the job says so.
+            self.warn(
+                job,
+                "core_nonresident_unsupported",
+                &format!(
+                    "the guest (revision {}) cannot read non-resident pages ({NONRESIDENT_REVISION} needed); cores hold resident pages only",
+                    revision.map_or("none".to_owned(), |r| r.to_string())
+                ),
+            );
         }
         let now = self.waiter.now_ms();
         self.update_lane(|file| file.note_start_success(now))?;

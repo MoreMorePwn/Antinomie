@@ -682,6 +682,7 @@ fn lane_main<E: Engine>(
             host: &host,
             triage: &triage,
             tags: &tags,
+            data_dir: &service.data_dir,
         },
         lane: lane.clone(),
         governor: Some(governor),

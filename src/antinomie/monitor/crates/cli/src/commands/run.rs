@@ -115,6 +115,14 @@ pub struct Exec {
     /// and the memory cap of the UI's defaults.
     #[arg(long = "dump-kind", value_name = "KIND", requires = "dump_trigger")]
     pub dump_kind: Option<String>,
+    /// Make the cores --dump-trigger takes read the pages that are not in
+    /// memory too (swapped out, or file pages the kernel dropped): slower,
+    /// bounded by the core budget and deadline. Needs --dump-trigger with
+    /// core or both, and a base of guest contract revision 22 (an older one
+    /// reads resident pages only and the run says so). An exit core
+    /// (--core-dump) always reads resident pages.
+    #[arg(long = "core-nonresident", requires = "dump_trigger")]
+    pub core_nonresident: bool,
     /// Run the guest-side static analysis too, with these checks (comma
     /// separated; see `analyze --help`).
     #[arg(long = "static", value_delimiter = ',', value_name = "CHECKS")]
@@ -209,6 +217,12 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
         }
     };
     let dump_trigger = trigger_for(arguments)?;
+    if arguments.core_nonresident && !dump_trigger.as_ref().is_some_and(|plan| plan.core) {
+        return Err(CliError::invalid(
+            "--core-nonresident applies to the cores of --dump-trigger; use --dump-trigger with --dump-kind core or both (an exit core reads resident pages only)",
+        )
+        .with_field("core-nonresident"));
+    }
     let mut args = arguments.args.clone();
     args.extend(arguments.trailing.iter().cloned());
     let request = ExecRequest {
@@ -232,6 +246,7 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
             .as_ref()
             .is_some_and(|plan| plan.core)
             .then_some(antinomie_service::stages::plan::CORE_TIMEOUT_MS),
+        core_nonresident: arguments.core_nonresident,
         dump_trigger,
         ..ExecRequest::default()
     };
@@ -343,6 +358,15 @@ fn exec_on(
     record: &SampleRecord,
 ) -> Result<Reply, CliError> {
     let vm_id = pick_vm(engine.snapshot(), arguments.vm.as_deref())?;
+    // The library's copy vouches for the host copy and gives a refused launch
+    // its static analysis (T0344); read-only, removed when the run ends. A
+    // library under test has none.
+    let staged = match &arguments.load_into {
+        None => antinomie_service::host_copy::StagedCopy::stage(context.data_dir(), &record.sha256),
+        Some(_) => None,
+    };
+    let mut request = request;
+    request.host_copy = staged.as_ref().map(|copy| copy.path().to_owned());
     let plan = RunPlan {
         vm_id: vm_id.clone(),
         sample: SampleRef {
@@ -730,6 +754,46 @@ mod tests {
         assert_eq!(result["run"]["state"], "failed_to_start");
         assert_eq!(result["failure"]["run_id"], "abc123");
         assert!(reply.human.unwrap().contains("abc123 failed to start"));
+    }
+
+    #[test]
+    fn non_resident_pages_go_with_a_core_trigger_only() {
+        let exec = parse(&["--dump-trigger", "high", "--core-nonresident"]);
+        assert!(request_for(&exec).unwrap().core_nonresident);
+        let exec = parse(&[
+            "--dump-trigger",
+            "high",
+            "--dump-kind",
+            "both",
+            "--core-nonresident",
+        ]);
+        assert!(request_for(&exec).unwrap().core_nonresident);
+        assert!(
+            !request_for(&parse(&["--dump-trigger", "high"]))
+                .unwrap()
+                .core_nonresident
+        );
+        let memory = parse(&[
+            "--dump-trigger",
+            "high",
+            "--dump-kind",
+            "memory",
+            "--core-nonresident",
+        ]);
+        assert!(request_for(&memory).is_err());
+        // Without a trigger the flag is refused by the parser; an exit core
+        // alone never reads non-resident pages.
+        let sha = "ab".repeat(32);
+        assert!(
+            Wrapper::try_parse_from([
+                "x",
+                "exec",
+                sha.as_str(),
+                "--core-dump",
+                "--core-nonresident"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

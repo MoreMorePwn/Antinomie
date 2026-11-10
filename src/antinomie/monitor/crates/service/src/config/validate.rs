@@ -390,6 +390,12 @@ fn check_policy(policy: &Policy, catalog: &dyn VmCatalog, sink: &mut Sink<'_>) {
             "must be at least 1 with core_dump or a core dump_trigger",
         );
     }
+    if policy.evidence.core_nonresident && !trigger_core {
+        sink.warn(
+            "evidence.core_nonresident",
+            "has no effect without a core dump_trigger (an exit core reads resident pages only)",
+        );
+    }
     if policy.evidence.dump_trigger == TriggerSetting::Off
         && policy.evidence.dump_trigger_kind != TriggerKind::default()
     {

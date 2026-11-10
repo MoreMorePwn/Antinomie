@@ -31,6 +31,7 @@ pub struct RunnerEnv<'a> {
     pub host: &'a dyn HostChecks,
     pub triage: &'a dyn HostTriage,
     pub tags: &'a dyn SampleTags,
+    pub data_dir: &'a std::path::Path,
 }
 
 pub struct StagesRunner<'a, E: Engine> {
@@ -54,6 +55,7 @@ impl<'a, E: Engine> StagesRunner<'a, E> {
                 evidence: &crate::waiter::load_artifacts,
                 triage: self.env.triage,
                 tags: self.env.tags,
+                data_dir: self.env.data_dir,
             },
             lane: self.lane.clone(),
         }

@@ -62,6 +62,7 @@ core_dump    = false
 core_max_mib = 64
 dump_trigger      = "off"   # off, low, medium or high: dump when the live Triage rules match
 dump_trigger_kind = "core"  # core, memory or both
+core_nonresident  = false   # trigger cores also read pages not in memory (guest revision 22)
 
 [analysis]
 static_checks         = "triage"

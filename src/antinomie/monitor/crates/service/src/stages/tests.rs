@@ -145,6 +145,7 @@ impl W {
                 evidence: self.evidence.as_ref(),
                 triage: self.triage.as_ref(),
                 tags: &self.tags,
+                data_dir: std::path::Path::new("/nonexistent-antinomie-data"),
             },
             lane: lane(),
         }
@@ -297,6 +298,22 @@ fn the_policys_dump_trigger_is_in_the_launch_request_with_a_core_budget() {
     let r = plan::effective(&job, &policy).request;
     assert!(r.dump_trigger.is_some_and(|plan| plan.memory && !plan.core));
     assert_eq!((r.core_max_size, r.core_timeout_ms), (None, None));
+}
+
+#[test]
+fn non_resident_pages_are_asked_only_for_the_cores_of_a_trigger() {
+    use crate::config::policy::TriggerSetting;
+    let w = W::new("plan-nonresident");
+    let job = w.fx.running(1);
+    let mut policy = crate::config::Policy::default();
+    policy.evidence.core_nonresident = true;
+    assert!(!plan::effective(&job, &policy).request.core_nonresident);
+    policy.evidence.core_dump = true;
+    assert!(!plan::effective(&job, &policy).request.core_nonresident);
+    policy.evidence.dump_trigger = TriggerSetting::High;
+    assert!(plan::effective(&job, &policy).request.core_nonresident);
+    policy.evidence.core_nonresident = false;
+    assert!(!plan::effective(&job, &policy).request.core_nonresident);
 }
 
 #[test]

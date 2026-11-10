@@ -74,6 +74,15 @@ copy with comments is in `packaging/policies/default.toml.example`.
   when it was armed and nothing matched, and `job.trigger` events report them as
   they are known. A job cannot turn the trigger on or off; only the policy does.
 
+* **Non-resident pages in trigger cores.** `evidence.core_nonresident = true`
+  (default `false`) makes the cores the dump trigger takes also read the pages that
+  are not in memory (swapped out, or file pages the kernel dropped), as the window's
+  **Read non-resident pages**; slower, bounded by the core budget and deadline. It
+  needs a core `dump_trigger` (without one `config validate` warns; an exit core
+  always reads resident pages) and a base of guest contract revision 22 (on an older
+  one the cores hold resident pages only and the job carries the warning
+  `core_nonresident_unsupported`).
+
 * **A job asks within the policy's ceiling.** `--timeout-run`, `--args`,
   `--env`, `--as`, `--route`, `--static`, `--formats` and the other flags of `auto
   submit` can lower or choose among what the policy allows, never exceed it. A
