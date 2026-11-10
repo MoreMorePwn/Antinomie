@@ -185,6 +185,10 @@ impl MonitorApp {
     pub(super) fn sidebar(&mut self, root: &mut egui::Ui) {
         let ctx = &root.ctx().clone();
         self.note_last_runs();
+        self.scan_last_runs();
+        if self.sidebar_scan.is_pending() {
+            ctx.request_repaint_after(Duration::from_millis(300));
+        }
         if self.settings.sidebar_rail {
             self.sidebar_rail(root);
             return;

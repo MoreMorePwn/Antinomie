@@ -2163,7 +2163,9 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   archive; the record and its custody log stay). A sample is the `Sample` object
   of the job API: `sha256`, `size`, `type`, `architecture`, `name`, `tags`,
   `first_seen_ms`, `run_count`, `last_job`, `custody_ok` (null unless
-  `--custody` or `show`). These commands and `custody verify` need no engine
+  `--custody` or `show`). `run_count` and the `--runs` list count every run in the
+  recordings of all VMs that executed the sample or loaded it as a preloaded
+  library, whether or not the window ever opened them. These commands and `custody verify` need no engine
   lock, so they work while the window is open.
 - `custody verify [SHA256] [--export PATH] [--sign minisign|ssh --key KEY]` checks
   the custody chain of one sample, or every chain and the library index when no

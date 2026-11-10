@@ -64,6 +64,14 @@ x86 programs by their own table.
   the result lists `pending: ["analysis"]` (`run.pending` on a job) and a progress line says
   so. Any other evidence still pending at 300 s still fails the recording.
 
+- **Runs of a sample are counted without the window (ANT-T0441).** `antinomie-cli sample
+  show` and `sample list` printed `run_count` 0 for every sample the window had not
+  opened, and the sidebar said "No recent run" for a VM that was not selected and had only
+  command-line runs. The seen-run index is now also filled when a run ends in the engine
+  (for the sample and for the libraries it preloaded), and the command line and the daemon
+  count the runs of all VMs from the recordings on read, writing nothing. The sidebar finds
+  the newest run of every VM with one background read of the recordings.
+
 - **Argument positions come from the call's own ABI table (ANT-T0440).** Triage rules, the
   process record, the Sigma and auditd address fields, the trace's field roles and the
   capture's exec path looked up argument positions in the x86-64 table for every

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The words for a run's state, its root exit and its execution evidence,
 //! as Run History, the Samples page and Trace show them.
-use antinomie_monitor_core::{RunState, RunSummary, WaitStatus};
+use antinomie_monitor_core::{RunState, RunSummary};
 
 pub(super) fn run_status(run: &RunSummary) -> std::borrow::Cow<'static, str> {
     // A run held open for a persisted copy still captures: not "Finished".
@@ -29,27 +29,7 @@ pub(super) fn run_status(run: &RunSummary) -> std::borrow::Cow<'static, str> {
 }
 
 pub(super) fn root_exit(run: &RunSummary) -> String {
-    // A program that never ran has no exit to be unknown.
-    match run.state {
-        RunState::FailedToStart => return "Not started".into(),
-        RunState::LaunchUnconfirmed => return "Not recorded".into(),
-        _ => {}
-    }
-    match run
-        .execution
-        .as_ref()
-        .and_then(|status| status.root_exit.as_ref())
-    {
-        Some(WaitStatus::Exited { code }) => format!("Exit {code}"),
-        Some(WaitStatus::Signaled {
-            signal,
-            core_dumped,
-        }) => format!(
-            "Signal {signal}{}",
-            if *core_dumped { " (core)" } else { "" }
-        ),
-        None => "Unknown".into(),
-    }
+    antinomie_monitor_core::samples::root_exit_words(run)
 }
 
 pub(super) fn execution_detail(run: &RunSummary) -> String {

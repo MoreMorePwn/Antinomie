@@ -124,6 +124,7 @@ impl MonitorApp {
             triage_pcap: Default::default(),
             run_labels: Default::default(),
             routes,
+            sidebar_scan: Default::default(),
             run_tree: None,
             run_tree_pending: None,
             archive_total: None,
