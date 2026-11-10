@@ -28,8 +28,8 @@ pub mod trigger;
 
 pub use run::{
     BOOT_WAIT, EVIDENCE_WAIT, EndReason, Evidence, LAUNCH_WAIT, Phase, RunPlan, RunReport,
-    STOP_RUN_GRACE, Timings, UPLOAD_WAIT, Warning, incomplete_parts, load_artifacts, pending_parts,
-    phase,
+    STOP_RUN_GRACE, Timings, UPLOAD_WAIT, Warning, incomplete_parts, load_artifacts,
+    may_stay_pending, pending_parts, phase,
 };
 pub(crate) use run::{Stop, late_launch_warning, route_of};
 

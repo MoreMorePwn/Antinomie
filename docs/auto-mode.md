@@ -73,6 +73,9 @@ copy with comments is in `packaging/policies/default.toml.example`.
   size of each dump; the path only for a local caller), `run.trigger_notes` says
   when it was armed and nothing matched, and `job.trigger` events report them as
   they are known. A job cannot turn the trigger on or off; only the policy does.
+When the guest-side static analysis is still running after the 300 s evidence wait,
+the recording is saved without it and the job succeeds; `run.pending` lists
+`analysis`.
 
 * **Non-resident pages in trigger cores.** `evidence.core_nonresident = true`
   (default `false`) makes the cores the dump trigger takes also read the pages that

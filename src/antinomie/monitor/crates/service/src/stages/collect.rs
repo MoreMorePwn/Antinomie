@@ -24,7 +24,7 @@ use crate::{
         job::{Job, Outcome, RecordingPhase, Stage},
     },
     engine::Engine,
-    waiter::{EVIDENCE_WAIT, Warning, incomplete_parts, pending_parts, trigger},
+    waiter::{EVIDENCE_WAIT, Warning, incomplete_parts, may_stay_pending, pending_parts, trigger},
     watchdog::{Trigger, Watchdog},
 };
 use antinomie_monitor_core::{RunArtifacts, VmState};
@@ -36,6 +36,8 @@ pub struct CollectEnd {
     /// `succeeded`, or `partial` when evidence is incomplete.
     pub outcome: Outcome,
     pub warnings: Vec<Warning>,
+    /// Evidence saved without: `analysis` still running at the wait's end.
+    pub pending: Vec<String>,
     pub artifacts: Option<RunArtifacts>,
     /// A cancel came in: the recording is kept, the job ends `cancelled`.
     pub cancelled: bool,
@@ -71,6 +73,7 @@ impl<E: Engine> LaneStages<'_, E> {
         let mut dog = Watchdog::new(Stage::Collect, began, Some(EVIDENCE_WAIT), None);
         let mut cancelled = false;
         let mut warnings = Vec::new();
+        let mut left_pending: Vec<String> = Vec::new();
         let mut artifacts = None;
         loop {
             while self.waiter.pump(Duration::ZERO)?.is_some() {
@@ -102,7 +105,9 @@ impl<E: Engine> LaneStages<'_, E> {
                 )
             })?;
             let pending = pending_parts(&run, evidence.as_ref());
-            if pending.is_empty() {
+            let late = self.waiter.now_ms() >= began + EVIDENCE_WAIT.as_millis() as u64;
+            if pending.is_empty() || (late && may_stay_pending(&pending)) {
+                left_pending = pending.iter().map(|part| (*part).to_owned()).collect();
                 warnings = incomplete_parts(&run, evidence.as_ref());
                 artifacts = evidence;
                 break;
@@ -135,6 +140,16 @@ impl<E: Engine> LaneStages<'_, E> {
             self.tick(&mut dog, Duration::from_millis(100))?;
         }
 
+        if !left_pending.is_empty() {
+            self.progress(
+                job,
+                Stage::Collect,
+                &format!(
+                    "saving the recording without: {} (still running after the collect wait)",
+                    left_pending.join(", ")
+                ),
+            );
+        }
         self.progress(
             job,
             Stage::Collect,
@@ -160,6 +175,9 @@ impl<E: Engine> LaneStages<'_, E> {
         self.record_triggers(job, &run_id, artifacts.as_ref());
         self.set_recording_phase(job, RecordingPhase::Complete)
             .map_err(|e| self.store_error(Stage::Collect, e))?;
+        if !left_pending.is_empty() {
+            let _ = self.patch_run(job, |job_run| job_run.pending = left_pending.clone());
+        }
         for warning in &warnings {
             let _ = self
                 .env
@@ -173,6 +191,7 @@ impl<E: Engine> LaneStages<'_, E> {
                 Outcome::Partial
             },
             warnings,
+            pending: left_pending,
             artifacts,
             cancelled,
         })

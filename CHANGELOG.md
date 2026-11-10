@@ -53,6 +53,17 @@ x86 programs by their own table.
   - A BusyBox shell that runs an applet inside itself (`sh -c 'rm -rf …'`) no longer shows "Process renamed
     itself sh to rm". A rename to a name the shell was not asked to run still does.
 
+- **`run export` with many parts no longer fails on a slow read, and `run exec` no longer
+  fails a complete run for a slow static check (ANT-T0434).** Every read of an export has its
+  own deadline; a read that passed it is asked again (twice, with a fresh deadline) before the
+  export stops, and an export that still stops says which part and read ran out
+  (`details.part`, `details.op`, `details.parts_done`; the parts already written stay).
+  When the run, the network capture, the memory dump and the core are all finished and only
+  the guest-side static analysis is still running after the 300 s collect wait, `run exec` and
+  the Auto lane save the recording without it and end `succeeded`, not `recording_failed`:
+  the result lists `pending: ["analysis"]` (`run.pending` on a job) and a progress line says
+  so. Any other evidence still pending at 300 s still fails the recording.
+
 - **Argument positions come from the call's own ABI table (ANT-T0440).** Triage rules, the
   process record, the Sigma and auditd address fields, the trace's field roles and the
   capture's exec path looked up argument positions in the x86-64 table for every

@@ -105,6 +105,15 @@ fn stages(events: &[EventBody]) -> Vec<(Stage, StageStatus)> {
 /// The engine of the happy path: it answers every command, starts a run on
 /// `Execute`, finishes it `after_ms` later, and settles the stop at once.
 fn happy(clock: &Arc<ManualClock>, finish_after_ms: u64) -> Fake {
+    happy_with(clock, finish_after_ms, false)
+}
+
+fn happy_with(clock: &Arc<ManualClock>, finish_after_ms: u64, analysis: bool) -> Fake {
+    let run = move |state: &str, live: u64| {
+        let mut run = run_summary("r1", state, live);
+        run.request.analysis.enabled = analysis;
+        run
+    };
     let mut fake = Fake::new(clock.clone());
     fake.queue
         .push_back(Notification::Snapshot(running_vm(vec![])));
@@ -121,9 +130,7 @@ fn happy(clock: &Arc<ManualClock>, finish_after_ms: u64) -> Fake {
             )])));
         }
         Command::Stop => {
-            queue.push_back(Notification::Snapshot(stopped_vm(vec![run_summary(
-                "r1", "Finished", 0,
-            )])));
+            queue.push_back(Notification::Snapshot(stopped_vm(vec![run("Finished", 0)])));
             queue.push_back(result(id, true, "VM stopped"));
         }
         _ => queue.push_back(result(id, true, "ok")),
@@ -131,7 +138,7 @@ fn happy(clock: &Arc<ManualClock>, finish_after_ms: u64) -> Fake {
     // The run ends on its own `finish_after_ms` after the launch.
     fake.timed.push((
         finish_after_ms + 1_000,
-        Notification::Snapshot(running_vm(vec![run_summary("r1", "Finished", 0)])),
+        Notification::Snapshot(running_vm(vec![run("Finished", 0)])),
     ));
     fake
 }
@@ -798,6 +805,43 @@ fn evidence_still_being_written_is_waited_for_up_to_three_hundred_seconds() {
         clock.now_ms()
     );
     assert!(report.settled);
+}
+
+#[test]
+fn a_slow_static_analysis_is_left_pending_and_the_run_still_succeeds() {
+    let clock = Arc::new(ManualClock::new(0));
+    let (mut waiter, clock) = make(happy_with(&clock, 1_000, true));
+    let (report, events) = exec(&mut waiter, &plan(), |_| Ok(Some(complete())));
+    let report = report.unwrap();
+    assert_eq!(report.outcome, Outcome::Succeeded, "{:?}", report.failure);
+    assert!(report.failure.is_none() && report.warnings.is_empty());
+    assert_eq!(report.pending, ["analysis"]);
+    assert!(report.settled && report.artifacts.is_some());
+    assert!(
+        (300_000..320_000).contains(&clock.now_ms()),
+        "{}",
+        clock.now_ms()
+    );
+    assert!(events.iter().any(|e| matches!(e,
+        EventBody::JobProgress { text, .. } if text.contains("without: analysis"))));
+}
+
+#[test]
+fn a_slow_analysis_beside_other_pending_evidence_still_fails() {
+    let clock = Arc::new(ManualClock::new(0));
+    let (mut waiter, _) = make(happy_with(&clock, 1_000, true));
+    let (report, _) = exec(&mut waiter, &plan(), |_| {
+        Ok(Some(RunArtifacts {
+            memory_state: RunArtifactState::Recording,
+            ..complete()
+        }))
+    });
+    let report = report.unwrap();
+    let detail = report.failure.unwrap().detail.unwrap();
+    assert!(
+        detail.contains("memory") && detail.contains("analysis"),
+        "{detail}"
+    );
 }
 
 #[test]
