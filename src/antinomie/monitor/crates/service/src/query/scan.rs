@@ -68,14 +68,21 @@ pub struct ScanStore {
     max_running: usize,
     /// A scan that runs longer than this is cancelled (`scan_s`).
     deadline: Duration,
+    /// `service.toml [privacy] address_lookup`.
+    address_lookup: antinomie_monitor_core::settings::AddressLookup,
 }
 
 impl ScanStore {
-    pub fn new(max_running: u32, deadline: Duration) -> Self {
+    pub fn new(
+        max_running: u32,
+        deadline: Duration,
+        address_lookup: antinomie_monitor_core::settings::AddressLookup,
+    ) -> Self {
         Self {
             slots: Arc::new(Mutex::new(Vec::new())),
             max_running: max_running.max(1) as usize,
             deadline,
+            address_lookup,
         }
     }
 
@@ -126,12 +133,13 @@ impl ScanStore {
         if running >= self.max_running {
             return Err(ApiError::heavy_read_limit(retry_after_s));
         }
-        let saved = SavedRun::open(run.clone(), options).map_err(|error| {
-            ApiError::new(
-                crate::api::error::ErrorCode::PreconditionFailed,
-                format!("settings.json cannot be read: {error}"),
-            )
-        })?;
+        let saved =
+            SavedRun::open_with(run.clone(), options, self.address_lookup).map_err(|error| {
+                ApiError::new(
+                    crate::api::error::ErrorCode::PreconditionFailed,
+                    format!("settings.json cannot be read: {error}"),
+                )
+            })?;
         let progress = Arc::new(scan_progress::ScanProgress::default());
         slots.push(Slot {
             dir: dir.to_path_buf(),

@@ -30,6 +30,10 @@ pub const FILE: &str = "settings.json";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AddressLookup {
+    /// No lookup at all, not even TShark's local GeoIP fields. Set by a
+    /// daemon's `service.toml [privacy] address_lookup = "off"`; the window's
+    /// settings do not offer it.
+    Off,
     /// Installed TShark GeoIP fields only.
     #[default]
     Tshark,

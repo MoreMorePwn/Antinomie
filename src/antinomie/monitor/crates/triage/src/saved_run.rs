@@ -227,6 +227,18 @@ impl SavedRun {
         Ok(Self::new(run, TriageSettings::headless(options)?))
     }
 
+    /// [`Self::open`] with the address lookup mode a daemon's `[privacy]`
+    /// section allows instead of the headless default.
+    pub fn open_with(
+        run: RunSummary,
+        options: &BackendOptions,
+        address_lookup: AddressLookup,
+    ) -> Result<Self, String> {
+        let mut settings = TriageSettings::headless(options)?;
+        settings.address_lookup = address_lookup;
+        Ok(Self::new(run, settings))
+    }
+
     /// The run's Triage input ([`TriageInput::for_run`]).
     pub fn input(&self) -> TriageInput<'_> {
         TriageInput::for_run(&self.run, self.pcap.as_deref())

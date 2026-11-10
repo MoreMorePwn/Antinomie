@@ -97,6 +97,7 @@ impl QueryService {
             scans: super::scan::ScanStore::new(
                 settings.limits.heavy_concurrency,
                 settings.scan_deadline,
+                settings.address_lookup,
             ),
             options,
             settings,

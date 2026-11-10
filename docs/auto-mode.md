@@ -277,7 +277,10 @@ error keeps the old settings, so run `config validate` first.
 
 **What happened to a job.** `auto events JOB` lists its events; `<data>/service/jobs/<id>/job.log` has its log lines;
 `kill -USR1` on the daemon writes the queue's state to its log. Log lines go to
-standard error (the journal under systemd), as text or with `--log-format json`.
+standard error (the journal under systemd), as text or with `--log-format json`;
+`[log]` in `service.toml` sets the level, the format and an optional rotating file,
+and the flags `-q`, `-v` and `--log-format` win over it
+([the keys](service-config.md#the-daemons-keys)).
 
 ## Run it under systemd
 

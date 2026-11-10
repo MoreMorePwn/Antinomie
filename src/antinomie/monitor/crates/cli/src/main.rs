@@ -16,6 +16,7 @@ mod error;
 mod exit;
 mod logging;
 mod output;
+mod service_log;
 mod signals;
 
 /// The analysis workers re-run the running program with a flag (design 1.3), so

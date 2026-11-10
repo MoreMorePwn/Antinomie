@@ -34,6 +34,21 @@ x86 programs by their own table.
   - With InetSim every name resolves to one fake address, so the address no longer says which process made a lookup: a name the base image asks for takes no process, and any other name takes the processes that reached the address around the time it was looked up.
   - Candidate lists name a process once, not once per thread; a UDP endpoint counts datagrams sent and does not count `connect()` calls (an endpoint with only connects says "no datagrams sent"); a write to a socket is no longer listed as a change to "fd N" in Files.
   - The built-in InetSim answers IRC on ports 6665 to 6669 and 7000 with a minimal greeting (a NOTICE, then the welcome after NICK and USER, PONG, JOIN), so IRC bots speak and their commands are captured. It talks to nobody and relays nothing.
+
+- **`service.toml` `[query]`, `[privacy]` and `[log]` now do what they say, and the keys that cannot are refused (ANT-T0456).**
+  - `[query]` `light_concurrency`, `heavy_concurrency`, `light_timeout_s` and `heavy_timeout_s` set the
+    daemon's read pools and deadlines (they showed the defaults whatever the file said), and
+    `capabilities.queries.limits` reports them.
+  - `[privacy] address_lookup` (default `off`) now decides what a Triage scan of the daemon looks up:
+    `off` makes no lookup, not even TShark's local GeoIP fields; `tshark` uses them. Before, the daemon
+    always used them.
+  - `[log] level`, `format` and `file` apply to the daemon's log (a file rotates at 10 MiB, 5 kept, mode
+    0600). `-q`, `-v` and `--log-format` win over the file; `--log-format` no longer has a default of its
+    own, so an `auto daemon` without it takes the file's. The audit lines of sensitive reads are written at
+    every level.
+  - `[[notify.webhooks]]` and a `[query] scan_cache_mib` other than 1024 are not built: `config validate`
+    reports "not supported in 0.9.0" and the daemon will not start with them.
+
 - **Headless runs can read non-resident pages, and their launch has the library's host copy (ANT-T0449).**
   - `run exec --core-nonresident` and the Auto policy key `evidence.core_nonresident`
     (default off, checked by `config validate`) make the cores the dump trigger takes

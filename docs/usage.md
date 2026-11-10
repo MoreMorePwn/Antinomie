@@ -1950,7 +1950,7 @@ global flags may also follow the command.
 | `--daemon`, `--direct` | `--daemon` requires a running daemon (exit 21 when none answers), `--direct` never uses one. Without either, the `auto` commands and the reads (`run list`, `run show`, `run export`, `triage`, `sample list`, `sample show`, `sample tag`, `custody verify` without `--export`, `vm list`, `base list`) use the daemon when one answers and work in the calling process when none does. The other commands always run in the calling process and take the lock (`--direct` and `--daemon` conflict) |
 | `-o, --format human\|json\|ndjson` | Output format; `human` on a terminal, `json` otherwise |
 | `--color auto\|always\|never` | Colour of human output; `NO_COLOR` is honoured |
-| `-q`, `-v`, `-vv`, `--log-format text\|json` | Log lines on standard error |
+| `-q`, `-v`, `-vv`, `--log-format text\|json` | Log lines on standard error; for `auto daemon` the flags win over `[log]` in `service.toml` |
 | `--timeout SECONDS` | Overall limit of the command |
 
 **Output.** `json` prints exactly one document on standard output:

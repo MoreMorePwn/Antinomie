@@ -230,6 +230,17 @@ pub enum AddressLookup {
     Tshark,
 }
 
+impl AddressLookup {
+    /// The mode the Triage scan runs with.
+    pub fn triage_mode(self) -> antinomie_monitor_core::settings::AddressLookup {
+        use antinomie_monitor_core::settings::AddressLookup as Mode;
+        match self {
+            Self::Off => Mode::Off,
+            Self::Tshark => Mode::Tshark,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Privacy {

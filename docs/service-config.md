@@ -5,8 +5,10 @@
 > **Status in 0.9.0.** The files, their keys and `antinomie-cli config validate`
 > are checked, and `antinomie-cli auto daemon` acts on all of them: the socket, the
 > queue limits, the resource floors, the shutdown keys, the reload on `SIGHUP`, watch
-> folders, retention, result files and the `on_finish` command. Webhooks are parsed
-> and checked but not built. [Auto mode](auto-mode.md) explains them.
+> folders, retention, result files, the `on_finish` command, `[query]`, `[privacy]`
+> and `[log]`. Webhooks are not part of 0.9.0: `[[notify.webhooks]]` and a changed
+> `[query] scan_cache_mib` are refused by `config validate` and stop the daemon's
+> start. [Auto mode](auto-mode.md) explains them.
 
 Headless mode reads two kinds of file from the data directory. A person writes
 them; the program never rewrites them.
@@ -51,7 +53,9 @@ runs while a window or the daemon owns the data directory.
   profile and never applied.
 - `service.toml`: one lane (`daemon.lanes = 1`), no `safety.unsafe_routes_ack`
   (reserved), absolute watch folder paths, watch folders that name a policy that
-  exists, webhooks over HTTPS or on loopback.
+  exists. `[[notify.webhooks]]` is an error ("not supported in 0.9.0"), and so is
+  a `[query] scan_cache_mib` other than 1024: the daemon keeps 2 scans in memory
+  whatever it says.
 
 ## The daemon's keys
 
@@ -68,6 +72,21 @@ runs while a window or the daemon owns the data directory.
 | `[inbox] dir` | `<data>/inbox` | Where uploads are staged (`uploads/`), and where watched files go after intake (`processed/`) or on failure (`rejected/`) |
 | `[inbox] processed_keep_days` | 7 | Retention removes the plain files of `<inbox>/processed/` older than this many days (at least 1) |
 | `[resources] min_free_disk_gib`, `min_free_ram_mib`, `require_kvm` | 20, VM RAM + 2048, true | The floors of the queue: below one, jobs wait `queued` and the queue pauses (`low_disk`, `no_kvm`); checked every 5 s, and the disk every minute of a run. A `run/PAUSE` file pauses the queue within 5 s |
+| `[query] light_concurrency`, `heavy_concurrency` | 16, 2 | Reads of each class in flight at once (the two pools of the query API); one more heavy read fails `quota_exceeded` (`heavy_read_limit`), and `heavy_concurrency` also caps the Triage scans that run at once. They appear in `capabilities.queries.limits` |
+| `[query] light_timeout_s`, `heavy_timeout_s` | 10, 60 | The deadline of a light read and of a heavy read page; a read that passes it fails `unavailable` (`read_timeout`). A request's own `deadline_ms` replaces it |
+| `[query] scan_cache_mib` | 1024 | The only value accepted in 0.9.0. The daemon keeps 2 Triage scans in memory (least recently used out); a size cap is not built, so another value is refused |
+| `[privacy] address_lookup` | `off` | `off`: a Triage scan the daemon runs (a `triage` or report read, a job's host stages) makes no address lookup at all. `tshark`: TShark's installed GeoIP fields fill the country and organization of public addresses. `dig` and `whois` are never used by the daemon |
+| `[log] level` | `info` | `error`, `warn`, `info`, `debug` or `trace`: the lines below it are dropped. The daemon's own lines are written at `info`; `error` and `warn` therefore silence them, and the audit lines of sensitive reads (`sensitive read: caller=...`) are written at every level |
+| `[log] format` | `text` | `text` or `json`, one line each |
+| `[log] file` | standard error | Append to this file (mode 0600, its folder is created) instead of standard error; it rotates at 10 MiB and keeps 5 files (`daemon.log`, `daemon.log.1` to `.4`). A file that cannot be opened stops the start |
+| `[[notify.webhooks]]` | none | Not part of 0.9.0: refused by `config validate` and at the daemon's start. Use `[notify] on_finish`, or poll `job.get` / `auto events` |
+
+**Flags and the file.** A command line flag wins over the file: `-q` (errors
+only), `-v` and `-vv` (debug, trace) replace `[log] level`, and `--log-format`
+replaces `[log] format`; without a flag the file applies, and without a file
+the defaults. `[log] file` has no flag. `--socket` likewise replaces
+`[daemon] socket`. `[query]`, `[privacy]` and `[log]` are read at the start;
+`SIGHUP` does not change them (restart the daemon).
 
 Commands that reach the daemon read `[daemon] socket` from `<data>/service.toml`
 the same way, so a configured socket needs no `--socket` on the client side; `--socket`

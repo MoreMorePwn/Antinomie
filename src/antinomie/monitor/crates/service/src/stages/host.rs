@@ -101,11 +101,24 @@ pub trait HostTriage: Send + Sync {
 /// The Triage crate itself, on the data directory of `options`.
 pub struct RealTriage {
     pub options: BackendOptions,
+    /// `service.toml [privacy] address_lookup`.
+    pub address_lookup: antinomie_monitor_core::settings::AddressLookup,
 }
 
 impl RealTriage {
     pub fn new(options: BackendOptions) -> Self {
-        Self { options }
+        Self {
+            options,
+            address_lookup: antinomie_monitor_core::settings::AddressLookup::Tshark,
+        }
+    }
+
+    pub fn with_address_lookup(
+        mut self,
+        mode: antinomie_monitor_core::settings::AddressLookup,
+    ) -> Self {
+        self.address_lookup = mode;
+        self
     }
 }
 
@@ -129,7 +142,7 @@ impl HostTriage for RealTriage {
                     .into(),
             );
         }
-        SavedRun::open(run, &self.options)
+        SavedRun::open_with(run, &self.options, self.address_lookup)
     }
 
     fn index(&self, saved: &SavedRun, cancel: &Arc<AtomicBool>) -> Result<ArchiveScan, String> {

@@ -388,7 +388,10 @@ pub fn scan_pcap_query_observed(
     }
     use std::io::{BufRead, BufReader};
     let identity = antinomie_monitor_core::packet_filter::CaptureIdentity::read(path)?;
-    let use_geoip = request.address_lookup != AddressLookup::Whois;
+    let use_geoip = !matches!(
+        request.address_lookup,
+        AddressLookup::Whois | AddressLookup::Off
+    );
     let (spool, extent) = match spool_packet_fields(&identity, pcap_open, cancel, use_geoip) {
         Err(error)
             if use_geoip
@@ -587,7 +590,10 @@ pub fn scan_pcap_query_observed(
     if use_geoip && identity.file_size <= geoip_fill::SMALL_CAPTURE {
         geoip_fill::fill(inventory, cancel)?;
     }
-    if request.address_lookup != AddressLookup::Tshark {
+    if !matches!(
+        request.address_lookup,
+        AddressLookup::Whois | AddressLookup::TsharkThenWhois
+    ) {
         network::enrich_public(inventory, cancel, &mut index.network_warning)?;
     }
     let (ips, hosts) = inventory.rows();
