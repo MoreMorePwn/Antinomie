@@ -775,6 +775,9 @@ impl Assembler {
         };
         h.syscall_nr = self.syscall_id(&h);
         if h.record_type == 2 {
+            // Reserved record type "recorder health": no guest produces it
+            // (see docs/implementation/guest-and-kernel.md, Telemetry protocol). Validated by parse_packet and ignored here; kept
+            // so a guest that sends it is not rejected.
             return Ok(None);
         }
         let key = (h.stream_id, h.task_cookie, h.call_id, h.phase, h.event_seq);

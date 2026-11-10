@@ -1,9 +1,9 @@
 {
   "profile_id": 1,
   "control_version": 1,
-  "telemetry_version": { "major": 1, "minor": 1, "header_size": 136 },
+  "telemetry_version": { "major": 1, "minor": 2, "header_size": 144 },
   "telemetry_root_task_cookie": { "offset": 128, "size": 8, "endianness": "little", "scope": "every fragment; inherited launch cookie, independent of recorder scratch and parent liveness" },
-  "transport_version": 7,
+  "transport_version": 9,
   "kernel": {
     "upstream_version": "6.12.94",
     "debian_version": "6.12.94-1",

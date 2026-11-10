@@ -1,4 +1,4 @@
-# Antinomie shared-memory transport API (ABI 7)
+# Antinomie shared-memory transport API (ABI 9 and 10)
 
 V7 transport code lives here. The initial monitor and application commands live
 in `../monitor/`, with integration probes in `tests/monitor/` at the repository
@@ -84,13 +84,13 @@ Payloads are opaque and exact-length, including embedded zeros and empty message
 An undersized destination returns `-ENOBUFS` and the required size without
 consuming the message. Results use a separate queue and echo request IDs.
 
-ABI 7 retains separate 256 KiB request/result byte rings with independent
+ABI 9 (and ABI 10, the same layout with every field little endian) retain separate 256 KiB request/result byte rings with independent
 16,352-byte argument and result payload limits. Before executing a command,
 the guest requires 16 KiB of free result space, not an empty result ring.
 Sixteen maximum-sized results can remain unread; smaller results use less space.
 The control allocation is 1 MiB. Duplicate/older dispatched command IDs return
 `-ESTALE`; cached responses have been removed. New IDs execute even with identical
-arguments. Rebuild guest and host together; older ABIs are rejected.
+arguments. Rebuild guest and host together; the guest announces ABI 9 (x86_64) or 10 (32-bit and arm64 layouts); the host accepts 7 to 10 and rejects other values.
 
 `host_timeout_ms` configures the guest's host-liveness watchdog: zero selects
 250 ms; 1..60000 ms are supported. `ant_set_host_timeout()` changes it at runtime;
