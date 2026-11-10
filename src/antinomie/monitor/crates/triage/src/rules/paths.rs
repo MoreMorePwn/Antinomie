@@ -451,6 +451,7 @@ pub fn other_calls(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
             }
         }
         "mount" => mount(cx, out),
+        "move_mount" => move_mount(cx, out),
         _ => {}
     }
     let _ = st;
@@ -459,12 +460,7 @@ pub fn other_calls(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 pub fn mount(cx: &Ctx, out: &mut Vec<Hit>) {
     let target = cx.text(1).unwrap_or_default();
     let bind = cx.args[3] & 4096 != 0;
-    let hides = bind
-        && (target.starts_with("/proc/")
-            && target[6..]
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit()));
+    let hides = bind && proc_pid(&target).is_some();
     let hidepid = cx
         .bytes(4, "")
         .is_some_and(|data| String::from_utf8_lossy(data).contains("hidepid"));
@@ -472,9 +468,50 @@ pub fn mount(cx: &Ctx, out: &mut Vec<Hit>) {
         out.push(Hit::new(
             "evasion.proc_hide_mount",
             &target,
-            format!("mount hides {target} from the process list"),
+            match proc_pid(&target).filter(|_| hides) {
+                Some(pid) => format!("mount hides {target} (pid {pid}) from the process list"),
+                None => format!("mount hides {target} from the process list"),
+            },
         ));
     }
+}
+
+/// The pid of `/proc/<pid>` (or a path below it).
+fn proc_pid(path: &str) -> Option<u32> {
+    let rest = path.strip_prefix("/proc/")?;
+    let digits = rest.split('/').next()?;
+    digits.parse().ok()
+}
+
+/// `move_mount(from, to, ...)`: the new mount sits over `/proc/<pid>`. The
+/// mount API's other half of the bind mount (`open_tree` with OPEN_TREE_CLONE,
+/// then this) that `mount(MS_BIND)` does in one call.
+pub fn move_mount(cx: &Ctx, out: &mut Vec<Hit>) {
+    if !cx.ok {
+        return;
+    }
+    let to = cx.text(3).unwrap_or_default();
+    let full = if to.starts_with('/') {
+        to
+    } else {
+        match cx.fd_path(cx.args[2]) {
+            Some(dir) => format!("{}/{to}", dir.trim_end_matches('/')),
+            None => to,
+        }
+    };
+    let Some(pid) = proc_pid(&full) else {
+        return;
+    };
+    out.push(
+        Hit::new(
+            "evasion.proc_hide_mount",
+            &full,
+            format!(
+                "move_mount puts a mount over /proc/{pid}, hiding pid {pid} from the process list"
+            ),
+        )
+        .detail(format!("Hidden pid: {pid}")),
+    );
 }
 
 /// `ioctl(FS_IOC_SETFLAGS)`: the flags word is the pointee of the third argument.
