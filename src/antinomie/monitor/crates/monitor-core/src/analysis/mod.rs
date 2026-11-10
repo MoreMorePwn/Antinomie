@@ -18,7 +18,7 @@ mod elf_facts;
 pub(crate) use elf_facts::HostHead;
 #[cfg(test)]
 pub(crate) use elf_facts::fixtures::elf64 as elf64_fixture;
-pub use elf_facts::report_notes;
+pub use elf_facts::{SampleElf, report_notes};
 mod floss;
 mod ghidra_listing;
 mod ident;

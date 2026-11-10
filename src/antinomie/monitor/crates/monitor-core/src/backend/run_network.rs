@@ -23,15 +23,6 @@ impl Session {
             .analysis
             .as_ref()
             .is_some_and(|report| self.analysis.tracks(&report.id));
-        // Nothing ran and nothing was captured: leave no run behind, or Run
-        // History would list a run that never existed.
-        if run.summary.state == RunState::FailedToStart && owner.network.is_none() && !analyzed {
-            run.storage_error(error.clone());
-            if let Err(cleanup) = fs::remove_dir_all(&run.summary.directory) {
-                return format!("{error}; its run directory remains: {cleanup}");
-            }
-            return error;
-        }
         // The program did not run, so nothing will ever acquire its specimen,
         // unless its file is being analysed from the guest's disk.
         if !analyzed {

@@ -371,8 +371,11 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    analysis you selected: the file is read from the guest's disk (on a
    revision-22 base the host copy stands in once its hash matches), and the run
    stays in **Run History** as "Failed to start" with its report, so the analysis
-   can say what the file is. When the file cannot be read either, the run is not
-   kept, as before.
+   can say what the file is. A refused launch always keeps a small "Failed to
+   start" record (the reason, the host's reading of the ELF headers, the static
+   analysis when there is one, no empty capture files), also with network capture
+   off, so `run exec` and Auto name its run id; Run History lists it and retention
+   treats it like any run.
 6. **Attach to process** traces a process that is already running in the guest
    (and its future children); **Capture all** traces all of userspace. Neither
    stops or signals anything. A capture lists the processes it saw as a tree
@@ -1778,6 +1781,12 @@ shown as "MalwareBazaar signature (looked up by hash)". A sample that already ha
 record, or that MalwareBazaar does not list, is left as it is; with the setting off,
 or without a key, nothing is sent.
 
+When no installed base can run a sample (its ELF machine, class and EABI against the
+installed bases' architectures: a RISC-V or old-ABI ARM program, say), its page says so
+under the title, whichever VM is selected. A 32-bit ARM program that needs
+`/lib/ld-linux-armhf.so.3` gets a note too: only a Debian arm64 base built from 0.9.0's
+recipe on carries that loader.
+
 A sample's **Family** field on the Samples page takes its candidates from the newest run
 with detections. A sample with no such run (it never started, as a truncated or armhf
 ELF on an arm64 base does) takes them from the YARA matches of its newest kept static
@@ -2026,8 +2035,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   finished incomplete), or `failed` (exit 10, with `failure.code` such as `no_vm`,
   `upload_failed`, `launch_failed`, `guest_lost`, `recording_failed`, `internal`). It also
   gives the run (state, exit status, why it ended: `exited` or `run_limit`; for a launch the
-  guest refused, `failure.run_id` and `run.id` name the "Failed to start" record, when the
-  launch kept one, and `failure.detail` the explanation), the evidence
+  guest refused, `failure.run_id` and `run.id` name its "Failed to start" record (always kept), and `failure.detail` the explanation), the evidence
   states and paths, the time per stage and the output. The launch carries the library's copy of the sample as its host copy (read only; a private file removed when the run ends), so a program the guest refuses still gets static analysis. With `--dump-trigger` it also has a
   `triggers` object: what was armed (`tier`, `memory`, `core`), `fired`, each match (`rule`,
   `tier`, `pid`, `syscall`, and the `core` and `memory` dump with `state`, `size` and `path`),
