@@ -15,6 +15,21 @@ x86 programs by their own table.
 
 ### Host
 
+- **Family names from the IDS signatures, and the broad Gafgyt rule (ANT-T0432).** The
+  ARM evaluation named the right family first in 2 of 11 runs. An `ET MALWARE <Family>
+  ...` IDS signature (Kaiji fired 6 to 13 times and the family stayed "Unknown") is now a
+  family candidate: from its `malware_family` metadata when it has one (45 points), else
+  from the family word of its message when exactly one is there (35), else from a known
+  family word in its title (30). They rank below every strong YARA match (an Elastic rule
+  scored 70 or more, a `family` meta, Malpedia) and above the weak ones; the candidate's
+  source says which of the three it was. `Linux_Trojan_Gafgyt_28a2fe0c` matches Mirai
+  builds too, so it is on a short known-broad list: it counts as weak evidence for Mirai
+  and Gafgyt together, and a specific Mirai or Gafgyt rule wins over it. A static scan's
+  match, which has no pack, names its family from an Elastic rule's name as well, and a
+  sample that never ran (a truncated Kinsing, an armhf Tsunami with no loader) shows the
+  families its kept static analysis report's rules name, with the source "Static
+  analysis", on its page. x86-64 results with a specific rule are unchanged.
+
 - **Argument positions come from the call's own ABI table (ANT-T0440).** Triage rules, the
   process record, the Sigma and auditd address fields, the trace's field roles and the
   capture's exec path looked up argument positions in the x86-64 table for every

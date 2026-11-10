@@ -21,20 +21,29 @@ fn bazaar_families(data: &Data) -> Vec<(String, &'static str)> {
     )
 }
 
-/// The family candidates the newest run with detections names, with the run's
-/// number and where each was named. The same logic as Triage's, without the
-/// download source's record (that is shown from the record itself).
+/// The family candidates the newest run with detections names, with the
+/// run's name ("Triage, run 3") and where each was named. The same logic as
+/// Triage's, without the download source's record (that is shown from the
+/// record itself). A sample with no run that names one (it never ran, or its
+/// runs had no detections) gets the candidates of its kept static analysis
+/// report's rule matches ("Static analysis").
 pub(super) fn triage_families(
     data: &Data,
-) -> Option<(usize, Vec<crate::triage::family::Candidate>)> {
-    data.runs.iter().find_map(|entry| {
-        let hits = entry.digest.as_ref()?.detections.as_ref()?;
+) -> Option<(String, Vec<crate::triage::family::Candidate>)> {
+    let named = |hits: &[antinomie_monitor_core::run_digest::DetectionHit]| {
         let found = crate::triage::family::family_candidates(
             hits,
             crate::triage::family::Bazaar::default(),
         );
-        (!found.is_empty()).then_some((entry.number, found))
-    })
+        (!found.is_empty()).then_some(found)
+    };
+    data.runs
+        .iter()
+        .find_map(|entry| {
+            let hits = entry.digest.as_ref()?.detections.as_ref()?;
+            named(hits).map(|found| (format!("Triage, run {}", entry.number), found))
+        })
+        .or_else(|| named(&data.static_hits).map(|found| ("Static analysis".to_owned(), found)))
 }
 
 /// The families the Family field names, each with where it said so: the
@@ -64,12 +73,9 @@ fn named_families(data: &Data) -> Vec<(String, String)> {
         );
     }
     add(&data.record.family, "recorded with the sample".to_owned());
-    if let Some((number, found)) = triage_families(data) {
+    if let Some((label, found)) = triage_families(data) {
         for candidate in found.iter().take(3) {
-            add(
-                &candidate.name,
-                format!("Triage, run {number}: {}", candidate.source),
-            );
+            add(&candidate.name, format!("{label}: {}", candidate.source));
         }
     }
     out
@@ -117,9 +123,12 @@ pub(super) fn family(ui: &mut egui::Ui, data: &Data) {
 /// tags.
 pub(super) fn family_source(data: &Data) -> Option<String> {
     let base = download_source(data);
-    let triage = triage_families(data).map(|(number, found)| {
+    let triage = triage_families(data).map(|(label, found)| {
         let first = found.first().map(|c| c.source.as_str()).unwrap_or_default();
-        format!("Triage run {number}: {first}")
+        format!(
+            "{}: {first}",
+            label.replacen("Triage, run", "Triage run", 1)
+        )
     });
     match (base, triage) {
         (Some(base), Some(triage)) => Some(format!("{base} \u{b7} {triage}")),

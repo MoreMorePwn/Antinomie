@@ -47,7 +47,7 @@ pub use listing::{
     LISTING_PAGE_MAX_ROWS, ghidra_row_of, read_ghidra_disassembly_page, read_listing_page,
     read_listing_page_sorted, read_listing_page_with,
 };
-pub use sample::{anonymous_copy, sample_analysis_directory};
+pub use sample::{anonymous_copy, sample_analysis_directory, static_reports_for, static_rule_hits};
 pub use specimen::read_specimen_range;
 /// Keep the retained specimens under `directory` only as encrypted archives.
 pub fn seal_retained_specimens(directory: &std::path::Path) -> Vec<String> {

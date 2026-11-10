@@ -126,6 +126,9 @@ pub(super) struct Data {
     /// Edges between library samples from their origins.
     pub(super) links: Vec<antinomie_monitor_core::samples::Link>,
     pub(super) report: Option<ReportRef>,
+    /// The YARA rules the sample's kept static analysis reports matched,
+    /// newest report first: a sample that never ran still names its family.
+    pub(super) static_hits: Vec<antinomie_monitor_core::run_digest::DetectionHit>,
     /// Where every library sample was sent, for the process tree's tint.
     pub(super) sent: Vec<SentSample>,
     /// SHA-256 of the base-image programs the runs used, for the lineage
