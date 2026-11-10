@@ -138,6 +138,16 @@ x86 programs by their own table.
   ends at 30 minutes at the latest or 180 s after the engine goes quiet. KVM keeps its
   180 s, and a QEMU that exits still fails the start at once.
 
+- **A snapshot restore under TCG is no longer cut at 180 s (ANT-T0446).** The headless
+  lane restores its clean snapshot before every job, and the service waited for that
+  restore with a fixed 180 s, so on a slow emulated boot (an arm64 guest on a busy host)
+  the restore could fail the job even though the engine was still working. The restore
+  is now waited for like a VM Start: under TCG, while the engine reports that it boots
+  or loads the guest, the wait does not run (30 minutes at the latest, 180 s after the
+  engine goes quiet); KVM keeps its 180 s. A Full-snapshot resume now says "Restoring
+  the snapshot…" and publishes its accelerator at once, so the launch that follows is
+  stretched for TCG too.
+
 - **Snapshots restore works every time, and other fixes from the ARM evaluation
   (ANT-T0437).** In the Snapshots window, **Restore disk and boot…** and **Resume
   disk + memory…** did nothing from the second use in a session: the question opened

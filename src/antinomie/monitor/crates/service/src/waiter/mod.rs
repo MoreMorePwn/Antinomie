@@ -329,7 +329,8 @@ impl<E: Engine> Waiter<E> {
         }
     }
 
-    /// `Start` (or any command that boots the VM): `silence` is a silence
+    /// `Start`, or `RestoreVmSnapshot` (which boots the VM inside the command):
+    /// `silence` is a silence
     /// limit, not a total. Under TCG the engine publishes a note while it
     /// waits for the guest to connect (`Snapshot::start_note`, from its own
     /// scaled wait), so while that note stands the engine is working and the

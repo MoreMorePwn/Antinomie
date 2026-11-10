@@ -142,6 +142,18 @@ impl Worker {
                 fallback_warning: process.accel.fallback_warning(&effective.name),
                 guest_wait_factor: process.waits.guest_factor(),
             });
+            // The restored guest resumes inside this command: say so, with the
+            // accelerator and its wait factor, so a front end waiting for the
+            // command treats the silence as work, as it does on a start.
+            self.snapshot.start_note = Some(if process.accel.is_tcg() {
+                format!(
+                    "Restoring the snapshot under TCG: loading the guest's state (host load {}).",
+                    crate::vm::host_load()
+                )
+            } else {
+                "Restoring the snapshot: loading the guest's state.".to_owned()
+            });
+            self.publish();
             process.load_state(
                 prepared
                     .memory_path
@@ -206,6 +218,7 @@ impl Worker {
             )?;
             Ok(Some(session))
         })();
+        self.snapshot.start_note = None;
         match recovery {
             Ok(Some(session)) => {
                 self.snapshot.health = Health::default();

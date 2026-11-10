@@ -229,11 +229,14 @@ impl<E: Engine> LaneStages<'_, E> {
         })
     }
 
-    /// Send the revert command; one immediate retry; then quarantine.
+    /// Send the revert command; one immediate retry; then quarantine. A
+    /// restore boots the VM inside the command, so `BOOT_WAIT` is a silence
+    /// limit as for `Start` (the engine's note of the slow TCG boot restarts
+    /// it; `START_HARD_WAIT` bounds it).
     fn revert_with(&mut self, job: &Job, command: Command) -> Result<(), StageStop> {
         let mut last = String::new();
         for attempt in 1..=2 {
-            match self.waiter.command(command.clone(), Some(BOOT_WAIT)) {
+            match self.waiter.start_command(command.clone(), BOOT_WAIT) {
                 Ok(_) => return Ok(()),
                 Err(WaitError::Failed(message)) => last = message,
                 Err(WaitError::TimedOut { .. }) => {
