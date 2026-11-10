@@ -1600,7 +1600,8 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   every revision-21 base before it looks at the architecture), before QEMU
   runs.
 * **Snapshots on a UEFI VM** (`snapshot-uefi`, full tier, x86-64 and arm64, a
-  Debian base only: SKIP on BusyBox): `snapshot-check BUNDLE WORK_DIR --uefi`
+  Debian base only: SKIP on BusyBox, not applicable, so it does not fail a
+  BusyBox tier, nor does the quick tier's `nic-routed`): `snapshot-check BUNDLE WORK_DIR --uefi`
   creates the VM with the `server` device profile, so its disk is installed for
   UEFI and it boots through OVMF (AAVMF on arm64) with its own variable store
   (`efi-vars*.fd` in the VM folder), with the console on the serial port. It

@@ -877,7 +877,10 @@ x86 programs by their own table.
   are built for arm64) and checks that an old host refuses the base
   (`io-old-arm64-refused`). The x86-64 full tier has `tracer-ia32`: one
   program built as a 32-bit x86 and an x86-64 program, recorded alike (its
-  32-bit build needs `gcc -m32`: gcc-multilib and libc6-dev-i386).
+  32-bit build needs `gcc -m32`: gcc-multilib and libc6-dev-i386). A tier
+  on a BusyBox base (arm64 or x86-64) whose checks all pass now exits 0: the
+  Debian-only checks (`nic-routed`, `snapshot-uefi`) are SKIP, not applicable,
+  instead of failing the tier.
   `snapshot-uefi` (full tier, Debian bases) runs the snapshot check on a VM of
   the server profile, booted through OVMF or AAVMF with its own variable store
   (`snapshot-check --uefi`). `debug-check a32` checks 32-bit ARM programs on an
