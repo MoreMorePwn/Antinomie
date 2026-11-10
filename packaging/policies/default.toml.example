@@ -43,6 +43,7 @@ dump_trigger_kind = "core"  # core, memory or both
 [analysis]
 static_checks         = "triage"
 static_time_limit_min = 2
+required_checks       = []      # static checks whose timeout fails the job; any other only makes it partial
 triage                = true
 detection             = { yara = true, sigma = true, ids = true }
 required_stages       = ["analyse"]

@@ -15,6 +15,14 @@ x86 programs by their own table.
 
 ### Host
 
+- **An optional static check that times out no longer fails an Auto job (ANT-T0452).** With
+  the default `static_checks = "triage"` every job failed `analysis_failed` ("a tool ran
+  out of time") on a loaded host. A check that runs out of time or stops short now ends
+  the job `partial` with a `static_check_incomplete` warning naming the check. The new
+  policy key `analysis.required_checks` (default none) lists checks whose timeout still
+  fails the stage; an analysis the engine cannot run at all still does. The static tools'
+  time limit is stretched with the host load, like the guest waits.
+
 - **Argument positions come from the call's own ABI table (ANT-T0440).** Triage rules, the
   process record, the Sigma and auditd address fields, the trace's field roles and the
   capture's exec path looked up argument positions in the x86-64 table for every

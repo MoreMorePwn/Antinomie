@@ -90,6 +90,12 @@ pub trait HostTriage: Send + Sync {
     fn write(&self, built: Built, cancel: &Arc<AtomicBool>) -> Result<Written, String>;
     /// How many stored indicator datasets are switched on and usable.
     fn ioc_datasets(&self) -> u32;
+    /// How much a busy host stretches the static tools' time (1 when idle):
+    /// the same factor the guest waits use. Fakes keep the default so tests
+    /// do not depend on the load of the machine they run on.
+    fn load_scale(&self) -> f64 {
+        1.0
+    }
 }
 
 /// The Triage crate itself, on the data directory of `options`.
@@ -195,6 +201,10 @@ impl HostTriage for RealTriage {
             .iter()
             .filter(|feed| feed.usable())
             .count() as u32
+    }
+
+    fn load_scale(&self) -> f64 {
+        antinomie_monitor_core::accel::host_load_scale()
     }
 }
 

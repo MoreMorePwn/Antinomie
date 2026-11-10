@@ -42,6 +42,7 @@ runs while a window or the daemon owns the data directory.
   `network.route` outside `allowed_routes`. NAT is never valid for a job.
 - `run.run_in` must be `app_terminal`; `run.run_as = "root"` needs
   `run.allow_root`.
+- `analysis.required_checks` lists static checks (default none) whose timeout fails the `analyse` stage.
 - `analysis.required_stages` must not name a stage the policy skips.
 - The lane VM (`vm.lane_vm`, found in the data directory): its network must match
   `vm.network`; a policy that allows `inet_sim` needs a routed VM; `reset` is
