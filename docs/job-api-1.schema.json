@@ -848,6 +848,13 @@
             "type": "string"
           },
           "description": "What the trigger did when it took nothing, or took less than it was\nasked: \"armed but no rule of that tier matched\", matches that came too\nlate, matches over the budget."
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Evidence still being written when the collect wait ended and the\nrecording was saved without it: `analysis` (the guest-side static\nchecks). The job still succeeds. Empty when everything finished."
         }
       },
       "required": [

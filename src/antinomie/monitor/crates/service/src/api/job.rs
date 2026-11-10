@@ -218,6 +218,11 @@ pub struct JobRun {
     /// late, matches over the budget.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trigger_notes: Vec<String>,
+    /// Evidence still being written when the collect wait ended and the
+    /// recording was saved without it: `analysis` (the guest-side static
+    /// checks). The job still succeeds. Empty when everything finished.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<String>,
 }
 
 /// The recording of the job's run. `run_key` is the address of every

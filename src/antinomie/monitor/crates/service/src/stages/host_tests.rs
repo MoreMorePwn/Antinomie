@@ -257,6 +257,7 @@ pub(super) fn attach(w: &W, job: &Job, dir: &std::path::Path, end: EndReason) {
                     core_dumped: false,
                     triggers: Vec::new(),
                     trigger_notes: Vec::new(),
+                    pending: Vec::new(),
                 }),
                 recording: Some(JobRecording {
                     vm_id: "vm-1".into(),
@@ -282,6 +283,7 @@ pub(super) fn end_ok() -> CollectEnd {
     CollectEnd {
         outcome: Outcome::Succeeded,
         warnings: Vec::new(),
+        pending: Vec::new(),
         artifacts: None,
         cancelled: false,
     }

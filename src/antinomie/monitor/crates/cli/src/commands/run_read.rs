@@ -473,16 +473,15 @@ pub fn export(arguments: &Export, context: &Context) -> Result<Reply, CliError> 
     };
     let params = json!({"run_key": key});
     let mut partial = false;
-    for part in &parts {
-        export_part(
-            part,
-            &client,
-            &params,
-            arguments.sensitive,
-            &mut out,
-            &mut partial,
-        )?;
-    }
+    export_parts(
+        &parts,
+        &client,
+        &params,
+        arguments.sensitive,
+        &mut out,
+        &mut partial,
+        RETRY_PAUSE,
+    )?;
     let value = json!({
         "run_key": key,
         "out": arguments.out,
@@ -502,6 +501,80 @@ pub fn export(arguments: &Export, context: &Context) -> Result<Reply, CliError> 
         }
     );
     Ok(Reply::value(value).with_human(human))
+}
+
+/// Pause before a read that passed its deadline is asked again.
+const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
+/// How many times a read that passed its deadline is asked again. Every
+/// read has its own deadline (the service's, per page), so an export of many
+/// parts never shares one; a slow page that passed it gets a fresh one, and
+/// the Triage index and the caches the first try warmed make it faster.
+const READ_RETRIES: u32 = 2;
+
+fn is_read_timeout(error: &CliError) -> bool {
+    error.code == ErrorCode::Unavailable && error.details["reason"] == json!("read_timeout")
+}
+
+/// Asks again a read that passed its own deadline, and names the read that
+/// ran out when it still does.
+struct Patient<'a> {
+    inner: &'a dyn Reads,
+    pause: std::time::Duration,
+}
+
+impl Reads for Patient<'_> {
+    fn call(&self, op: &str, params: Value) -> Result<Value, CliError> {
+        let mut tries = 0;
+        loop {
+            match self.inner.call(op, params.clone()) {
+                Err(error) if is_read_timeout(&error) => {
+                    if tries >= READ_RETRIES {
+                        let mut details = error.details.clone();
+                        details["op"] = json!(op);
+                        let mut named = CliError::new(
+                            error.code,
+                            format!("the read {op} passed its deadline {} times", tries + 1),
+                        )
+                        .with_details(details);
+                        named.exit = error.exit;
+                        return Err(named);
+                    }
+                    tries += 1;
+                    std::thread::sleep(self.pause);
+                }
+                other => return other,
+            }
+        }
+    }
+}
+
+/// Every part in turn, each read under its own deadline. A part that cannot
+/// be read says which one (`details.part`) in the error.
+fn export_parts(
+    parts: &[&str],
+    client: &dyn Reads,
+    params: &Value,
+    sensitive: bool,
+    out: &mut Out,
+    partial: &mut bool,
+    pause: std::time::Duration,
+) -> Result<(), CliError> {
+    let patient = Patient {
+        inner: client,
+        pause,
+    };
+    for part in parts {
+        export_part(part, &patient, params, sensitive, out, partial).map_err(|mut error| {
+            if is_read_timeout(&error) || error.details.get("op").is_some() {
+                error.message = format!("export part {part}: {}", error.message);
+                error.details["part"] = json!(part);
+                let done: Vec<&str> = parts.iter().take_while(|p| *p != part).copied().collect();
+                error.details["parts_done"] = json!(done);
+            }
+            error
+        })?;
+    }
+    Ok(())
 }
 
 /// The files of one part.
@@ -944,6 +1017,93 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Times out `fail_first` times on `slow_op`, then answers.
+    struct Slow {
+        slow_op: &'static str,
+        fail_first: std::cell::Cell<u32>,
+        asked: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl Reads for Slow {
+        fn call(&self, op: &str, _params: Value) -> Result<Value, CliError> {
+            self.asked.borrow_mut().push(op.to_owned());
+            if op == self.slow_op && self.fail_first.get() > 0 {
+                self.fail_first.set(self.fail_first.get() - 1);
+                return Err(CliError::new(
+                    ErrorCode::Unavailable,
+                    "the read passed its deadline and was cancelled",
+                )
+                .with_details(json!({"reason": "read_timeout"})));
+            }
+            Ok(json!({"items": [{"n": 1}], "next_cursor": null}))
+        }
+    }
+
+    #[test]
+    fn a_slow_read_gets_its_own_fresh_deadline_and_the_export_goes_on() {
+        let dir = scratch("slow-retry");
+        let slow = Slow {
+            slow_op: "recording.trace.page",
+            fail_first: 2.into(),
+            asked: Default::default(),
+        };
+        let mut out = Out {
+            root: dir.clone(),
+            files: Vec::new(),
+        };
+        let mut partial = false;
+        export_parts(
+            &["trace", "processes", "findings", "indicators"],
+            &slow,
+            &json!({"run_key": "k"}),
+            false,
+            &mut out,
+            &mut partial,
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!(out.files.len(), 4);
+        assert_eq!(slow.asked.borrow().len(), 3 + 3);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_read_that_keeps_timing_out_names_the_part_and_the_read() {
+        let dir = scratch("slow-name");
+        let slow = Slow {
+            slow_op: "recording.findings.list",
+            fail_first: 99.into(),
+            asked: Default::default(),
+        };
+        let mut out = Out {
+            root: dir.clone(),
+            files: Vec::new(),
+        };
+        let mut partial = false;
+        let error = export_parts(
+            &["trace", "processes", "findings", "indicators"],
+            &slow,
+            &json!({"run_key": "k"}),
+            false,
+            &mut out,
+            &mut partial,
+            std::time::Duration::ZERO,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert!(
+            error.message.starts_with("export part findings:"),
+            "{}",
+            error.message
+        );
+        assert_eq!(error.details["part"], json!("findings"));
+        assert_eq!(error.details["op"], json!("recording.findings.list"));
+        assert_eq!(error.details["reason"], json!("read_timeout"));
+        assert_eq!(error.details["parts_done"], json!(["trace", "processes"]));
+        assert_eq!(out.files.len(), 2, "the finished parts stay written");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

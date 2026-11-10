@@ -599,6 +599,7 @@ fn reply(
             "collect": timings.collect_ms,
         },
         "recording_settled": report.settled,
+        "pending": report.pending,
         "output": text,
         "output_dropped_bytes": output.dropped,
     });
@@ -654,6 +655,15 @@ fn reply(
     }
     for warning in &report.warnings {
         pairs.push(("warning", format!("{}: {}", warning.code, warning.text)));
+    }
+    if !report.pending.is_empty() {
+        pairs.push((
+            "pending",
+            format!(
+                "{} (still running when the collect wait ended; the recording is saved without it)",
+                report.pending.join(", ")
+            ),
+        ));
     }
     pairs.push((
         "recording",
@@ -717,6 +727,7 @@ mod tests {
             end_reason: None,
             timings: Default::default(),
             settled: true,
+            pending: Vec::new(),
         };
         let output = antinomie_service::waiter::TerminalTail {
             bytes: Vec::new(),

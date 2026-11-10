@@ -562,6 +562,64 @@ fn evidence_that_never_completes_is_recording_failed_at_300_seconds() {
     );
 }
 
+/// A finished run that asked for static analysis, which never reports.
+fn finished_analysis_run(w: &W) -> (Job, Waiter<FakeEngine>, (Prepared, Launched)) {
+    let job = w.fx.running(1);
+    let mut waiter = w.engine(|fake| {
+        restore_ok(fake);
+        upload_ok(fake);
+        fake.on("Execute")
+            .after(SECOND)
+            .then(500 * MS, |s| s.runs.push(live_run()))
+            .then(3 * SECOND, |s| {
+                ended(Some(WaitStatus::Exited { code: 0 }))(s);
+                s.runs[0].request.analysis.enabled = true;
+            })
+            .ok("launched pid 750, terminal session 1");
+        stop_ok(fake);
+        // The engine keeps talking, so only the stage deadline applies.
+        chatter(fake, 30 * SECOND, 700 * SECOND);
+    });
+    let ready = launched(w, &mut waiter, &job);
+    run_stage(w, &mut waiter, &job, &ready).expect("the run");
+    (job, waiter, ready)
+}
+
+#[test]
+fn a_slow_static_analysis_does_not_fail_a_complete_recording() {
+    let w = W::new("collect-analysis-late");
+    let (job, mut waiter, ready) = finished_analysis_run(&w);
+    let began = now(&w);
+    let end = collect_stage(&w, &mut waiter, &job, &ready).unwrap();
+    assert!((300..=310).contains(&seconds(&w, began)));
+    assert_eq!(end.outcome, Outcome::Succeeded, "{:?}", end.warnings);
+    assert!(end.warnings.is_empty());
+    assert_eq!(end.pending, ["analysis"]);
+    let stored = w.job(&job.id);
+    assert_eq!(stored.run.unwrap().pending, ["analysis"]);
+    assert_eq!(stored.recording.unwrap().phase, RecordingPhase::Complete);
+    assert_eq!(waiter.snapshot().state, VmState::Stopped);
+}
+
+#[test]
+fn network_evidence_pending_beside_the_analysis_still_fails_the_wait() {
+    let mut w = W::new("collect-analysis-and-network");
+    w.evidence = Box::new(|_| {
+        Ok(Some(RunArtifacts {
+            network_state: RunArtifactState::InProgress,
+            ..complete()
+        }))
+    });
+    let (job, mut waiter, ready) = finished_analysis_run(&w);
+    let stop = collect_stage(&w, &mut waiter, &job, &ready).unwrap_err();
+    assert_eq!(code(&stop), FailureCode::RecordingFailed);
+    let detail = stop.failure().unwrap().detail.clone().unwrap();
+    assert!(
+        detail.contains("network") && detail.contains("analysis"),
+        "{detail}"
+    );
+}
+
 #[test]
 fn a_quiet_engine_warns_at_120_seconds_and_ends_the_wait_at_240() {
     let mut w = W::new("collect-stall");

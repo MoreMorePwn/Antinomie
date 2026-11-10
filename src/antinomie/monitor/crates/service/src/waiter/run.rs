@@ -111,6 +111,10 @@ pub struct RunReport {
     pub timings: Timings,
     /// The VM was stopped and its recording is final.
     pub settled: bool,
+    /// Evidence still being written when the collect wait ended and the run
+    /// was saved without it: only `analysis` (the guest-side static checks
+    /// can outlive the 300 s wait). The outcome is not worsened by it.
+    pub pending: Vec<String>,
 }
 
 /// How a run is classified once it is over (design 5.6, "Engine states").
@@ -182,6 +186,13 @@ pub fn pending_parts(run: &RunSummary, artifacts: Option<&RunArtifacts>) -> Vec<
         parts.push("analysis");
     }
     parts
+}
+
+/// The evidence a recording may be saved without when the collect wait is
+/// over: a slow static analysis. Everything else pending (network, memory,
+/// core, a trigger dump, the artifacts file) still fails the recording.
+pub fn may_stay_pending(pending: &[&str]) -> bool {
+    pending == ["analysis"]
 }
 
 /// The pieces of evidence that finished incomplete: `partial`, not `failed`
@@ -327,6 +338,7 @@ impl<E: Engine> Waiter<E> {
             end_reason: None,
             timings: Timings::default(),
             settled: false,
+            pending: Vec::new(),
         };
         let outcome = self.exec_stages(plan, evidence, sink, &mut report);
         match outcome {
@@ -871,7 +883,9 @@ impl<E: Engine> Waiter<E> {
                 )
             })?;
             let pending = pending_parts(&run, artifacts.as_ref());
-            if pending.is_empty() {
+            let late = self.now_ms() >= deadline;
+            if pending.is_empty() || (late && may_stay_pending(&pending)) {
+                report.pending = pending.iter().map(|part| (*part).to_owned()).collect();
                 report
                     .warnings
                     .extend(incomplete_parts(&run, artifacts.as_ref()));
@@ -894,7 +908,7 @@ impl<E: Engine> Waiter<E> {
                 report.artifacts = artifacts;
                 break;
             }
-            if self.now_ms() >= deadline {
+            if late {
                 return Err(fail(
                     FailureCode::RecordingFailed,
                     Stage::Collect,
@@ -903,6 +917,16 @@ impl<E: Engine> Waiter<E> {
                 ));
             }
             self.pump(Duration::from_millis(100))?;
+        }
+        if !report.pending.is_empty() {
+            sink(EventBody::JobProgress {
+                stage: Stage::Collect,
+                text: format!(
+                    "saving the recording without: {} (still running after the collect wait)",
+                    report.pending.join(", ")
+                ),
+                fraction: None,
+            });
         }
         sink(EventBody::JobProgress {
             stage: Stage::Collect,

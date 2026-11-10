@@ -2004,7 +2004,11 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   direct mode). The program runs in the app terminal as `/tmp/<sha8>-<name>`; the end of
   its output is in the result. The wait covers the evidence the way the window's runs do
   (network capture, memory dump and core finished, up to 300 s), then stops the VM and
-  waits until the recording is final: the stop is saved and the disk layer is gone.
+  waits until the recording is final: the stop is saved and the disk layer is gone. A
+  `--static` analysis that is still running when the 300 s end does not fail the run: the
+  recording is saved without it, the outcome stays `succeeded` and the result lists
+  `pending: ["analysis"]` (an Auto job has `run.pending`); any other evidence still
+  pending at 300 s is `recording_failed`.
   The result says `outcome`: `succeeded` (exit 0), `partial` (exit 11: a piece of evidence
   finished incomplete), or `failed` (exit 10, with `failure.code` such as `no_vm`,
   `upload_failed`, `launch_failed`, `guest_lost`, `recording_failed`, `internal`). It also
@@ -2110,7 +2114,11 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   **With a daemon** (`auto daemon`) at the socket these commands, `triage`, `sample
   list|show|tag`, `custody verify` (without `--export`), `vm list` and `base list`
   ask the daemon and print the same objects; `--direct` keeps them in the command and
-  `--daemon` insists on the daemon. `run export` still writes only under `--out`: the
+  `--daemon` insists on the daemon. Every read of `run export` has its own deadline (10 s
+  light, 60 s heavy, per page), never one for the whole export; a read that passes it is
+  asked again twice before the export stops, with exit 21 and `details.part`, `details.op`
+  and `details.parts_done` naming where, and the files already written stay in `--out`.
+  `run export` still writes only under `--out`: the
   command asks the daemon for the rows and the bytes and writes the files itself, so no
   path is sent to the daemon. `triage --parts` builds its report parts in the command
   from the recording folder (no lock is needed). `vm list` and `base list` from the
