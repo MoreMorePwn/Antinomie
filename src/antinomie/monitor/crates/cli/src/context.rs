@@ -44,12 +44,11 @@ impl Context {
         self.global.timeout.map(std::time::Duration::from_secs)
     }
 
-    /// The daemon socket: `--socket` or `<data>/run/antinomie.sock`.
+    /// The daemon socket, resolved as the daemon does: `--socket`, else
+    /// `[daemon] socket` of `<data>/service.toml`, else
+    /// `<data>/run/antinomie.sock`.
     pub fn socket(&self) -> PathBuf {
-        self.global
-            .socket
-            .clone()
-            .unwrap_or_else(|| self.data_dir().join("run").join("antinomie.sock"))
+        crate::commands::auto::daemon::client_socket(self.global.socket.as_deref(), self.data_dir())
     }
 }
 
@@ -203,5 +202,39 @@ mod tests {
         );
         assert_eq!(context.socket(), std::path::Path::new("/s"));
         assert_eq!(context.format, Format::Json);
+    }
+
+    #[test]
+    fn the_socket_follows_the_flag_then_service_toml_then_the_default() {
+        let dir = std::env::temp_dir().join(format!("ant-cli-socket-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let data = dir.to_str().unwrap();
+        let default = dir.join("run").join("antinomie.sock");
+        let socket = |extra: &[&str]| {
+            let mut args = vec!["--data-dir", data];
+            args.extend_from_slice(extra);
+            Context::new(global(&args), false, None).socket()
+        };
+        // No service.toml: the default.
+        assert_eq!(socket(&[]), default);
+        // A file without the key: the default.
+        std::fs::write(dir.join("service.toml"), "[queue]\nmax_queued = 5\n").unwrap();
+        assert_eq!(socket(&[]), default);
+        // The configured socket, as the daemon uses it.
+        std::fs::write(
+            dir.join("service.toml"),
+            "[daemon]\nsocket = \"/run/ant/custom.sock\"\n",
+        )
+        .unwrap();
+        assert_eq!(socket(&[]), std::path::Path::new("/run/ant/custom.sock"));
+        // The flag wins over the file.
+        assert_eq!(
+            socket(&["--socket", "/flag.sock"]),
+            std::path::Path::new("/flag.sock")
+        );
+        // A broken file does not fail a client: the default.
+        std::fs::write(dir.join("service.toml"), "[daemon\nsocket =").unwrap();
+        assert_eq!(socket(&[]), default);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -15,6 +15,20 @@ x86 programs by their own table.
 
 ### Host
 
+- **Commands find a daemon at the configured socket, and the CLI documents match the code (ANT-T0451).**
+  - A command that reaches the daemon now resolves the socket as the daemon does:
+    `--socket`, else `[daemon] socket` of `<data>/service.toml`, else
+    `<data>/run/antinomie.sock`. Before, only the daemon read the key, so a configured
+    socket needed `--socket` on every client command. A missing or faulty `service.toml`
+    gives the default path.
+  - `docs/usage.md` no longer says watch folders, `auto gc`, result files and the
+    `--daemon` mode are not shipped, names `start.network_wait_secs` among the start waits
+    and says `auto submit --route` takes only `drop` and `inet_sim` by design.
+    `docs/service-config.md` lists `[daemon] host_workers`, `[privacy]`, `[query]` and
+    `[log]` (checked, not yet applied) and says plainly that `[[notify.webhooks]]` sends
+    nothing in 0.9.0. `docs/job-api-1.md` states the default page sizes and the CLI name
+    `run_limit`. The `--yes` help of `auto lane` says `unquarantine` accepts it and does not need it.
+
 - **Headless runs can read non-resident pages, and their launch has the library's host copy (ANT-T0449).**
   - `run exec --core-nonresident` and the Auto policy key `evidence.core_nonresident`
     (default off, checked by `config validate`) make the cores the dump trigger takes

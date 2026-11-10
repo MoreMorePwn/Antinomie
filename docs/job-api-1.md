@@ -28,7 +28,7 @@ in a request fails with `invalid_argument` naming the field.
 | Version | `api_version: 1` in every response object and in `capabilities`. |
 | Enumerated values | Lower snake case. Routes: `drop`, `internet`, `inet_sim`, `tor`, `vpn`, `socks5`. Sample types as the library detects them (`elf`, `sh`, `py`, ...) with the architecture as a separate string (`x86_64`, `AArch64`, ...). |
 | Identifiers | Opaque strings that are safe as a path component: job `j_<26 chars>`, artifact `a_<26>`, upload `u_<26>`, recording artifact `ra_<26>`, lane `lane-<n>`. The 26 characters are Crockford base32 in the shape of a ULID, so ids sort by creation time. A sample is its lowercase SHA-256. A recorded run is addressed by an opaque `run_key`; clients never build or parse it. |
-| Pagination | `limit` (1 to 200, default 50 for job and sample lists) and an opaque `cursor`; a reply carries `next_cursor` or null. Newest first. |
+| Pagination | `limit` (1 to 200, default 50 for job lists; sample lists have their own limits, see `sample.list`) and an opaque `cursor`; a reply carries `next_cursor` or null. Newest first. |
 | Idempotency | `job.submit` takes `idempotency_key` (1 to 128 printable ASCII), scoped to `client_id`. The same key with an equal spec within 24 hours returns the original job with `replayed: true`; with a different spec it fails `conflict`. |
 | Client identity | `client_id` is `local:<uid>` on the socket and the CLI, `web:<user_id>` from the web binding. The service never trusts a client-supplied value. |
 | Secrets | Objects never contain secrets (API keys, the SOCKS5 password, the guest password). |
@@ -76,7 +76,7 @@ then the system default.
 | `priority` | 0 to 9, default 5; higher starts first; the policy sets a ceiling |
 | `labels` | At most 16 pairs; key 1 to 32 bytes of `[a-z0-9._-]`, value up to 128 bytes |
 | `idempotency_key` | See conventions |
-| `overrides.timeout_s` | Wall-clock limit of the run, 5 to the policy's `max_run_s`. Reaching it ends the run normally (`end_reason: time_limit`) |
+| `overrides.timeout_s` | Wall-clock limit of the run, 5 to the policy's `max_run_s`. Reaching it ends the run normally (`end_reason: time_limit`; `run exec` in the CLI names the same end `run_limit` in `run.end_reason`) |
 | `overrides.args`, `overrides.env` | At most 64 each; arguments up to 4096 bytes; `K=V` entries |
 | `overrides.run_as` | `user` (default), `root` (needs policy permission) or `{uid, gid}` |
 | `overrides.run_in` | `app_terminal` only in version 1; `guest_desktop` and `guest_desktop_terminal` fail `unsupported` |

@@ -1932,7 +1932,7 @@ global flags may also follow the command.
 | `--data-dir PATH` | Data directory (default `$HOME/antinomie`; `~` is expanded). Use a directory of its own for automation, never the one the window uses |
 | `--bundle PATH`, `--qemu PATH`, `--qemu-img PATH`, `--tcg`, `--no-headless` | Engine options, as in the window. The CLI is headless unless `--no-headless` is given |
 | `--boot-wait SECONDS`, `--tcg-multiplier N` | The waits of a VM start and a launch for this command, over `settings.json`'s `start` section (the window's **Tools > Settings > Advanced**, VM start and guest connection timeouts; `config set start.boot_wait_secs 120`). `--boot-wait` (5 to 600, default 60) is how long a launch waits at KVM speed for a Debian guest to finish booting before it starts the program anyway; `--tcg-multiplier` (1 to 100, default 10) is how many times longer every start wait, that boot wait and each guest command may take under TCG. They matter to the commands that start an engine with a VM: `vm start`, `run exec --start`, `snapshot restore`, `auto daemon` |
-| `--socket PATH` | The daemon's socket (default `<data>/run/antinomie.sock`) |
+| `--socket PATH` | The daemon's socket. Without it a command uses `[daemon] socket` of `<data>/service.toml`, else `<data>/run/antinomie.sock` (the same rule the daemon follows) |
 | `--daemon`, `--direct` | `--daemon` requires a running daemon (exit 21 when none answers), `--direct` never uses one. Without either, the `auto` commands and the reads (`run list`, `run show`, `run export`, `triage`, `sample list`, `sample show`, `sample tag`, `custody verify` without `--export`, `vm list`, `base list`) use the daemon when one answers and work in the calling process when none does. The other commands always run in the calling process and take the lock (`--direct` and `--daemon` conflict) |
 | `-o, --format human\|json\|ndjson` | Output format; `human` on a terminal, `json` otherwise |
 | `--color auto\|always\|never` | Colour of human output; `NO_COLOR` is honoured |
@@ -2151,7 +2151,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   stop` stops a VM this process started, and says so when there is none. `snapshot
   create --mode full` boots the VM first, and `snapshot restore` shows the restored
   guest answering and stops it. Keeping a VM up between commands is what the daemon
-  (`--daemon`, not built yet) is for. Progress lines go to standard error, Ctrl-C
+  (the daemon, `auto daemon`; see [Auto mode](#auto-mode-090)) is for. Progress lines go to standard error, Ctrl-C
   stops the VM cleanly, and `--timeout SECONDS` limits the waits (exit 14).
 - `sample add FILE... [--name N] [--tag K=V] [--delete-original]` hashes and archives
   files in the library (never runs them) and prints the SHA-256 of each; a tag is
@@ -2192,14 +2192,15 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   takes the engine lock, so it refuses while the window owns the data directory.
   `settings.json` is the file the window itself now uses for its engine settings,
   including the VM start waits (`start.boot_wait_secs`, `start.tcg_multiplier`,
-  `start.guest_connect_secs`, `start.kvm_fallback`), which the CLI and the daemon start
+  `start.network_wait_secs`, `start.guest_connect_secs`, `start.kvm_fallback`), which the CLI and the daemon start
   their engine with.
   `config validate [--policy NAME]` checks `service.toml` and `policies/*.toml`
   without starting anything (see [service configuration](service-config.md)); it
   prints each problem as `file:line:column` and exits 4 when there is an error.
-- Not shipped yet: watch folders, retention (`auto gc`), result files and
-  notifications. The job contract is written down in [Job API,
-  version 1](job-api-1.md).
+- Watch folders (`auto watch`), retention (`auto gc`), result files (`[results]`) and
+  the finish hook (`[notify] on_finish`) ship in 0.9.0 and are described under
+  [Auto mode](#auto-mode-090). Webhooks are not part of 0.9.0. The job contract is
+  written down in [Job API, version 1](job-api-1.md).
 
 ### Auto mode (0.9.0)
 
@@ -2256,7 +2257,7 @@ stopped, nothing is still being saved).
 
 | Command | What it does |
 |---|---|
-| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a job; prints the job. `--policy`, `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V`, `--as user\|root\|UID:GID`, `--route drop\|inet_sim`, `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--idempotency-key K`, `--name`. The policy decides what a job may change. `--wait` waits for the end and exits with the job's code; `--follow` also prints the job's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded job labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected job exits 13 |
+| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a job; prints the job. `--policy`, `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V`, `--as user\|root\|UID:GID`, `--route drop\|inet_sim` (only these two, by design: a job never uses another route, whereas `run exec --route` takes all six), `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--idempotency-key K`, `--name`. The policy decides what a job may change. `--wait` waits for the end and exits with the job's code; `--follow` also prints the job's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded job labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected job exits 13 |
 | `auto status [JOB]` | One job, or the queue and the lane |
 | `auto list` | Jobs, newest first: `--state`, `--outcome`, `--sha256`, `--label K[=V]`, `--since 24h`, `--limit`, `--cursor` |
 | `auto wait JOB...` | Waits until the jobs have ended (`--timeout` bounds it, exit 14) and exits with the worst code; `--verdict-exit` as above |

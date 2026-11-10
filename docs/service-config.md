@@ -58,6 +58,7 @@ runs while a window or the daemon owns the data directory.
 | Key | Default | What the daemon does with it |
 |---|---|---|
 | `[daemon] socket` | `<data>/run/antinomie.sock` | The local socket (at most 107 bytes). Its folder must be the daemon user's own with mode 0700; the socket is 0600. Not changed by a reload |
+| `[daemon] host_workers` | `min(4, cpus/4)`, at least 1 | How many jobs the host stages (`analyse`, `report`, `cleanup`) work on at once; 0 is an error |
 | `[daemon] lanes` | 1 | Only 1 is valid in 0.9.0 |
 | `[daemon] shutdown` | `cancel` | On the first `SIGTERM`/`SIGINT`: `cancel` sends a job in its lane stages back to the queue (attempt not counted); `drain` lets it run on for up to `drain_timeout_s` first |
 | `[daemon] drain_timeout_s` | 600 | See `shutdown = drain` |
@@ -67,6 +68,10 @@ runs while a window or the daemon owns the data directory.
 | `[inbox] dir` | `<data>/inbox` | Where uploads are staged (`uploads/`), and where watched files go after intake (`processed/`) or on failure (`rejected/`) |
 | `[inbox] processed_keep_days` | 7 | Retention removes the plain files of `<inbox>/processed/` older than this many days (at least 1) |
 | `[resources] min_free_disk_gib`, `min_free_ram_mib`, `require_kvm` | 20, VM RAM + 2048, true | The floors of the queue: below one, jobs wait `queued` and the queue pauses (`low_disk`, `no_kvm`); checked every 5 s, and the disk every minute of a run. A `run/PAUSE` file pauses the queue within 5 s |
+
+Commands that reach the daemon read `[daemon] socket` from `<data>/service.toml`
+the same way, so a configured socket needs no `--socket` on the client side; `--socket`
+wins over the file, and a missing or faulty file means the default path.
 
 A second `SIGTERM`/`SIGINT` within 5 s interrupts every wait at once, stops the
 VM and exits 130; recovery at the next start finishes the rest. `SIGHUP` reads
@@ -241,3 +246,43 @@ Every custody entry names who caused it: `app` and `analyst` in the window,
 `auto:policy-<name>`, `web:<user>` or `local:<uid>` in headless mode. Entries of
 kind `automation` record the job, policy digest, route and submitter. The
 bundled `verify-custody.py` accepts them.
+
+## Privacy, query and log
+
+```toml
+[privacy]
+address_lookup = "off"          # off (default) or tshark
+
+[query]
+light_concurrency = 16
+heavy_concurrency = 2
+light_timeout_s = 10
+heavy_timeout_s = 60
+scan_cache_mib = 1024
+
+[log]
+level = "info"                  # error, warn, info (default), debug, trace
+format = "text"                 # text (default) or json
+file = "/var/log/antinomie.log" # optional; default standard error
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `[privacy] address_lookup` | `off` | How network views resolve addresses: `off` or `tshark` |
+| `[query] light_concurrency`, `heavy_concurrency` | 16, 2 | Light and heavy reads of the query API that run at once |
+| `[query] light_timeout_s`, `heavy_timeout_s` | 10, 60 | The deadline of one light or heavy read |
+| `[query] scan_cache_mib` | 1024 | Memory of the cache that heavy scans share |
+| `[log] level`, `format`, `file` | `info`, `text`, standard error | Daemon log level, line format (`text` or `json`) and file |
+
+In 0.9.0 these three tables are read and checked by `config validate` (a zero
+query concurrency, timeout or cache size is an error, and so is a value outside
+the lists above), but the daemon does not apply them yet: it runs on the defaults
+shown, and its log goes to standard error, set by the command line (`--log-format`,
+`--quiet`, `-v`), not by `[log]`.
+
+## Webhooks
+
+`[[notify.webhooks]]` is read and checked by `config validate` (HTTPS or loopback
+URL, `secret_file`, `events`, `timeout_s`, `retries`, `allowed_hosts`), but the
+daemon does not deliver webhooks in 0.9.0: no request is ever sent. Use
+`[notify] on_finish` (above) to react to a finished job.
