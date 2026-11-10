@@ -171,6 +171,7 @@ impl SampleInfo {
             reporter: text(record.get("reporter")).unwrap_or_default(),
             file_arch: text(record.get("file_arch")),
             intel: (!intel.is_empty()).then_some(intel),
+            looked_up: false,
         }
     }
 }

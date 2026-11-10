@@ -260,8 +260,10 @@ pub fn merge_detections(digests: &[(usize, &RunDigest)]) -> Vec<RuleHit> {
                 .or_insert_with(|| RuleHit {
                     engine: hit.engine.clone(),
                     rule_id: hit.rule_id.clone(),
+                    layer: true,
                     ..RuleHit::default()
                 });
+            entry.layer &= hit.layer;
             if !entry.runs.contains(number) {
                 entry.runs.push(*number);
             }

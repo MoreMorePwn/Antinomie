@@ -731,6 +731,7 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
                 .map(|info| super::super::family::Bazaar {
                     signature: info.signature.as_deref(),
                     tags: &info.tags,
+                    looked_up: info.looked_up,
                 })
                 .unwrap_or_default(),
         );

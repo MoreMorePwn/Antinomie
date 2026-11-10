@@ -244,8 +244,18 @@ impl Contact {
     }
 }
 
+/// Failed connects to one public address and port, over the whole run.
+#[derive(Default)]
+pub struct DeadServer {
+    pub failed: u32,
+    /// A connect to it succeeded once: the server is not dead.
+    pub reached: bool,
+}
+
 #[derive(Default)]
 pub struct State {
+    /// Failed connects per public address and port (`network.dead_c2`).
+    pub dead_servers: BTreeMap<(std::net::IpAddr, u16), DeadServer>,
     /// Connections and executed programs for the IOC window.
     pub ioc: super::ioc::Log,
     /// Addresses the run's calls connected or sent to, with the first task to do so.

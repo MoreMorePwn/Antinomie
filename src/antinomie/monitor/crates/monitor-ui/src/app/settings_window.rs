@@ -628,6 +628,17 @@ impl MonitorApp {
                 }
             });
             ui.end_row();
+            ui.label("Imported files");
+            ui.vertical(|ui| {
+                ui.checkbox(
+                    &mut self.settings.sample_hash_lookup,
+                    "Look imported files up at MalwareBazaar",
+                )
+                .on_hover_text(
+                    "After Add file, sends the file's SHA-256 (nothing else) to MalwareBazaar with your abuse.ch key (Tools > API keys) and keeps its signature as a family candidate, shown as looked up by hash. Off by default; without a key nothing is sent.",
+                );
+            });
+            ui.end_row();
         });
         ui.add_space(10.0);
         ui.separator();

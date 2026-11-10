@@ -34,6 +34,7 @@ mod ioc_union;
 mod kept;
 mod library;
 mod lineage;
+mod lookup;
 mod migrate;
 mod notes;
 pub mod preload;
@@ -81,6 +82,7 @@ pub use lineage::{
     NodeKind, Options as LineageOptions, RunLineage, build as build_lineage, runs_label,
     system_path,
 };
+pub use lookup::{Lookup, lookup_imported};
 pub use notes::{
     MAX_NOTE, MAX_REFS, Note, NoteRef, RefKind, artifact_target, core_target, imported_core_target,
     packet_target, static_row_target, text_hash as note_text_hash, trace_target, vm_item_target,
@@ -241,6 +243,10 @@ pub struct SampleInfo {
     /// What MalwareBazaar's partners say (hash lookups only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intel: Option<Intel>,
+    /// The record was fetched by the sample's hash after it was imported from
+    /// a file (Settings > Privacy), not recorded with a download.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub looked_up: bool,
 }
 
 fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {

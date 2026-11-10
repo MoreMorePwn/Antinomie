@@ -52,8 +52,16 @@ fn named_families(data: &Data) -> Vec<(String, String)> {
             out.push((name.to_owned(), source));
         }
     };
+    let looked_up = data.record.info.looked_up;
     for (name, source) in bazaar_families(data) {
-        add(&name, source.to_owned());
+        add(
+            &name,
+            if looked_up {
+                format!("{source} (looked up by hash)")
+            } else {
+                source.to_owned()
+            },
+        );
     }
     add(&data.record.family, "recorded with the sample".to_owned());
     if let Some((number, found)) = triage_families(data) {
@@ -121,6 +129,9 @@ pub(super) fn family_source(data: &Data) -> Option<String> {
 
 fn download_source(data: &Data) -> Option<String> {
     use antinomie_monitor_core::samples::OriginKind;
+    if data.record.info.looked_up && !bazaar_families(data).is_empty() {
+        return Some("MalwareBazaar signature, looked up by hash".into());
+    }
     if bazaar_families(data).len() > 1 {
         return Some("MalwareBazaar signature and tags".into());
     }

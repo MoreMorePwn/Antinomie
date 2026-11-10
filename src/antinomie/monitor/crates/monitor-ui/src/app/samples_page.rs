@@ -20,6 +20,7 @@ mod delete_run;
 pub(crate) mod detail;
 mod export;
 mod list;
+mod lookup;
 mod note_picker;
 pub(super) mod notes;
 mod picker;
@@ -166,6 +167,8 @@ pub(super) struct SamplesPage {
     note_editor: Option<notes::Editor>,
     /// The Delete run… dialog.
     delete_run: Option<delete_run::DeleteRun>,
+    /// The MalwareBazaar lookup of a file just added (Settings > Lookup).
+    looking: Option<lookup::Pending>,
 }
 
 /// A run to open in a panel of the VM it belongs to: the VM is selected and
@@ -524,6 +527,7 @@ impl MonitorApp {
         let ctx = ui.ctx().clone();
         self.poll_analyze();
         self.samples_page.poll();
+        self.samples_page.poll_lookup();
         self.samples_page.follow_runs(&self.snapshot);
         if !self.samples_page.loaded && self.samples_page.loading.is_none()
             || self.samples_page.stale
@@ -608,6 +612,7 @@ impl MonitorApp {
                         .add
                         .take()
                         .is_some_and(|dialog| dialog.delete_original());
+                    let sha256 = added.sha256.clone();
                     self.samples_page.selected = Some(added.sha256);
                     self.samples_page.notice = Some((
                         match (added.new, removed) {
@@ -620,6 +625,15 @@ impl MonitorApp {
                         },
                         false,
                     ));
+                    if added.new {
+                        self.samples_page.start_lookup(
+                            ctx,
+                            &self.options.data_dir,
+                            &self.options.curl,
+                            self.settings.sample_hash_lookup,
+                            &sha256,
+                        );
+                    }
                     self.samples_page.refresh();
                 }
             }

@@ -27,7 +27,8 @@ pub fn failing_is_the_signal_for_scans_and_the_kernel_exploit_and_rwx_attempts()
                 "discovery.network_scan",
                 "lateral.bruteforce",
                 "lateral.service_exploit",
-                "impact.fork_bomb"
+                "impact.fork_bomb",
+                "network.dead_c2"
             ]
             .contains(&rule),
             "{rule}"
