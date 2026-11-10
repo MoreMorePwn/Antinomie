@@ -53,6 +53,7 @@ impl Library {
     /// the signature only when it is empty; the custody log says where the
     /// record came from.
     pub fn record_lookup(&mut self, sha256: &str, mut info: SampleInfo) -> Result<(), String> {
+        let _write = self.write_lock();
         let sha256 = sha256.to_ascii_lowercase();
         info.looked_up = true;
         let json = serde_json::to_string(&info).map_err(|e| e.to_string())?;

@@ -66,7 +66,7 @@ fn route_name(route: Route) -> String {
 pub fn record_automation(data_dir: &Path, job: &Job) -> Result<(), String> {
     let sample = job.sample.as_ref().ok_or("the job has no sample yet")?;
     let by = actor_of(job);
-    let library = Library::open(data_dir)?.with_actor(&by)?;
+    let library = Library::open_patient(data_dir)?.with_actor(&by)?;
     let route = job
         .spec
         .overrides

@@ -127,7 +127,7 @@ fn add_and_analyze(
     selection: AnalysisSelection,
     deadline: Instant,
 ) -> Result<(AnalysisReport, Vec<AnalysisReport>), CliError> {
-    let mut library = Library::open(engine.data_dir())
+    let mut library = Library::open_patient(engine.data_dir())
         .map_err(|message| CliError::new(ErrorCode::Internal, message))?;
     let added = library
         .add_file(

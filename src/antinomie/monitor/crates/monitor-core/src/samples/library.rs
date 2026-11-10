@@ -407,11 +407,27 @@ pub struct EventRow {
 }
 
 /// Open the database, creating and checking its layout.
+/// Open the database as a window does (the tests read it through this).
+#[cfg(test)]
 pub(super) fn connect(path: &Path) -> Result<Connection, String> {
+    connect_waiting(path, BUSY_INTERACTIVE)
+}
+
+/// How long a reader or editor in a window waits for another process that
+/// holds the database before it reports "database is locked".
+pub const BUSY_INTERACTIVE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long a custody entry or a service write waits for another process.
+/// Custody entries are never dropped for a busy disk, so they wait longer.
+pub const BUSY_WRITER: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Open the database with the busy timeout of the caller.
+pub(super) fn connect_waiting(
+    path: &Path,
+    busy: std::time::Duration,
+) -> Result<Connection, String> {
     let connection = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    connection
-        .busy_timeout(std::time::Duration::from_secs(5))
-        .map_err(|e| e.to_string())?;
+    connection.busy_timeout(busy).map_err(|e| e.to_string())?;
     connection
         .execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;")
         .map_err(|e| e.to_string())?;
@@ -426,6 +442,8 @@ pub(super) fn now_ms() -> u64 {
 pub struct Library {
     pub(super) root: PathBuf,
     pub(super) connection: Connection,
+    /// The database file, the key of this library's writer lock.
+    database: PathBuf,
     custody: Arc<dyn CustodySink>,
     /// The actor of the custody entries this value writes; `None` takes the
     /// process's current actor ([`super::actor::current`]).
@@ -444,16 +462,41 @@ impl Library {
     pub fn open(data_dir: &Path) -> Result<Self, String> {
         let root = super::samples_dir(data_dir);
         let database = root.join(DATABASE);
-        Self::open_with(data_dir, Arc::new(ChainedEvents::new(&database)))
+        Self::open_waiting(
+            data_dir,
+            Arc::new(ChainedEvents::new(&database)),
+            BUSY_INTERACTIVE,
+        )
+    }
+
+    /// [`Library::open`] for a service or a command that writes: it waits up
+    /// to [`BUSY_WRITER`] for another process that holds the database, so a
+    /// busy disk does not fail an intake or a custody entry.
+    pub fn open_patient(data_dir: &Path) -> Result<Self, String> {
+        let root = super::samples_dir(data_dir);
+        let database = root.join(DATABASE);
+        Self::open_waiting(
+            data_dir,
+            Arc::new(ChainedEvents::new(&database)),
+            BUSY_WRITER,
+        )
     }
 
     /// [`Library::open`] with another custody sink.
     pub fn open_with(data_dir: &Path, custody: Arc<dyn CustodySink>) -> Result<Self, String> {
+        Self::open_waiting(data_dir, custody, BUSY_INTERACTIVE)
+    }
+
+    fn open_waiting(
+        data_dir: &Path,
+        custody: Arc<dyn CustodySink>,
+        busy: std::time::Duration,
+    ) -> Result<Self, String> {
         let root = super::samples_dir(data_dir);
         crate::storage::private_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
         let database = root.join(DATABASE);
         let fresh = !database.exists();
-        let connection = connect(&database)?;
+        let connection = connect_waiting(&database, busy)?;
         if fresh {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&database, fs::Permissions::from_mode(0o600))
@@ -491,11 +534,27 @@ impl Library {
         let mut library = Self {
             root,
             connection,
+            database,
             custody,
             actor: None,
         };
         library.migrate_legacy()?;
         Ok(library)
+    }
+
+    /// Take the writer lock of this library's database: one writer at a time
+    /// in this process. Reentrant on a thread.
+    pub(super) fn write_lock(&self) -> super::write_lock::WriteGuard {
+        super::write_lock::lock(&self.database)
+    }
+
+    /// Wait up to `busy` for another process that holds the database before a
+    /// write fails with "database is locked" (the default is
+    /// [`BUSY_INTERACTIVE`]; a service uses [`BUSY_WRITER`]).
+    pub fn set_busy_timeout(&self, busy: std::time::Duration) -> Result<(), String> {
+        self.connection
+            .busy_timeout(busy)
+            .map_err(|e| e.to_string())
     }
 
     /// Write this library's custody entries under `actor` instead of the
@@ -707,6 +766,7 @@ impl Library {
     /// [`Self::set_tags`] with the custody entry written under `by` (a
     /// service names the caller instead of the analyst).
     pub fn set_tags_as(&mut self, sha256: &str, tags: &[Tag], by: &str) -> Result<(), String> {
+        let _write = self.write_lock();
         let sha256 = sha256.to_ascii_lowercase();
         for tag in tags {
             tag.validate()?;
@@ -750,6 +810,7 @@ impl Library {
     /// library's actor ([`Self::with_actor`]), so a service that tags a
     /// sample on its own is not recorded as the analyst.
     pub fn add_tag(&mut self, sha256: &str, tag: Tag) -> Result<bool, String> {
+        let _write = self.write_lock();
         tag.validate()?;
         let sha256 = sha256.to_ascii_lowercase();
         if !self.contains(&sha256)? {
@@ -786,6 +847,7 @@ impl Library {
 
     /// Name and description, as the analyst edits them.
     pub fn set_text(&mut self, sha256: &str, name: &str, description: &str) -> Result<(), String> {
+        let _write = self.write_lock();
         if name.len() > 256
             || description.len() > 4096
             || name.chars().any(char::is_control)
@@ -911,6 +973,7 @@ impl Library {
     /// start and exit. Runs of samples not in the library are skipped.
     /// Returns how many were new.
     pub fn index_runs(&mut self, runs: &[SeenRun]) -> Result<usize, String> {
+        let _write = self.write_lock();
         let mut added = Vec::new();
         let transaction = self
             .connection
@@ -1068,6 +1131,7 @@ impl Library {
 
     /// Note that a sample was sent into a VM, at `push.at_ms` (now when 0).
     pub fn record_push(&mut self, sha256: &str, push: super::Push) -> Result<(), String> {
+        let _write = self.write_lock();
         let sha256 = sha256.to_ascii_lowercase();
         if self.get(&sha256)?.is_none() {
             return Err("no such sample".into());

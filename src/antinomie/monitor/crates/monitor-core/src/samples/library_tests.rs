@@ -930,3 +930,140 @@ fn a_request_links_to_the_sample_it_ran_and_to_the_libraries_it_loaded() {
         serde_json::from_str(&saved.replace(r#""preloaded""#, r#""ignored""#)).unwrap();
     assert!(old.preloaded.is_empty());
 }
+
+#[test]
+fn many_threads_write_one_library_at_once_and_no_custody_entry_is_lost() {
+    const THREADS: usize = 8;
+    const ROUNDS: usize = 6;
+    let root = temp("contention");
+    Library::open(&root).unwrap();
+    let mut workers = Vec::new();
+    for thread in 0..THREADS {
+        let root = root.clone();
+        workers.push(std::thread::spawn(move || -> Result<String, String> {
+            // Each thread has its own connection, as the window, the daemon
+            // and its watch folder each do.
+            let mut library = Library::open_patient(&root)?;
+            let bytes = format!("#!/bin/sh\necho thread {thread}\n").into_bytes();
+            let mut sha = String::new();
+            for round in 0..ROUNDS {
+                sha = library
+                    .add_bytes(&bytes, added_from(&format!("/in/{thread}/{round}")))?
+                    .sha256;
+                library.add_tag(
+                    &sha,
+                    Tag::new(TagKind::Custom, format!("t{thread}r{round}")),
+                )?;
+                library.set_text(&sha, "name", &format!("round {round}"))?;
+                library.record_event(
+                    &sha,
+                    "analyst",
+                    CustodyEvent::Activity {
+                        run: "r".into(),
+                        detail: format!("{round}"),
+                    },
+                )?;
+            }
+            Ok(sha)
+        }));
+    }
+    let hashes: Vec<String> = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap().unwrap())
+        .collect();
+    let library = Library::open(&root).unwrap();
+    for sha in &hashes {
+        let events = library.events(sha).unwrap();
+        // Per round: an origin (the first add is `added`), a tag edit, a text
+        // edit and the activity entry. Every one is in the chain.
+        let activity = events
+            .iter()
+            .filter(|row| matches!(row.event, CustodyEvent::Activity { .. }))
+            .count();
+        let edited = events
+            .iter()
+            .filter(|row| matches!(row.event, CustodyEvent::Edited { .. }))
+            .count();
+        assert_eq!(activity, ROUNDS, "{sha}");
+        assert_eq!(edited, ROUNDS * 2, "{sha}");
+    }
+    assert!(library.custody_check_all().unwrap().broken().is_empty());
+}
+
+#[test]
+fn a_write_waits_for_another_process_holding_the_database_past_five_seconds() {
+    let root = temp("other-process");
+    let mut library = Library::open_patient(&root).unwrap();
+    let added = library
+        .add_bytes(SCRIPT, added_from("/in/a"))
+        .unwrap()
+        .sha256;
+    // A second connection with no lock of ours, as another process has one,
+    // holds the write lock longer than the old 5 s busy timeout.
+    let database = samples_dir(&root).join(DATABASE);
+    let (locked, ready) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        locked.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(6500));
+        connection.execute_batch("COMMIT").unwrap();
+    });
+    ready.recv().unwrap();
+    library
+        .add_tag(&added, Tag::new(TagKind::Custom, "waited"))
+        .unwrap();
+    holder.join().unwrap();
+    assert!(
+        library
+            .tags(&added)
+            .unwrap()
+            .iter()
+            .any(|tag| tag.value == "waited")
+    );
+    assert!(
+        library
+            .events(&added)
+            .unwrap()
+            .iter()
+            .any(|row| matches!(row.event, CustodyEvent::Edited { .. }))
+    );
+}
+
+#[test]
+fn the_custody_writer_retries_a_busy_database_and_drops_nothing() {
+    let root = temp("retry");
+    let mut library = Library::open_patient(&root).unwrap();
+    let sha = library
+        .add_bytes(SCRIPT, added_from("/in/a"))
+        .unwrap()
+        .sha256;
+    let database = samples_dir(&root).join(DATABASE);
+    let holder_db = database.clone();
+    let (locked, ready) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let connection = rusqlite::Connection::open(&holder_db).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        locked.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        connection.execute_batch("COMMIT").unwrap();
+    });
+    ready.recv().unwrap();
+    // Shorter than the hold: the first attempt of the sink would fail if it
+    // waited only a moment; the writer's wait covers it either way.
+    let sample = SampleRef {
+        sha256: sha.clone(),
+        ..SampleRef::default()
+    };
+    let log = RunLog::new(&root, &sample, "run-1", "vm-1");
+    log.started("detail".into());
+    settle_custody();
+    holder.join().unwrap();
+    let events = library.events(&sha).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|row| matches!(row.event, CustodyEvent::RunStarted { .. })),
+        "{events:?}"
+    );
+}

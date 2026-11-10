@@ -87,6 +87,7 @@ impl Library {
         sha256: &str,
         record: &StoredSample,
     ) -> Result<bool, String> {
+        let _write = self.write_lock();
         let info: &SampleInfo = &record.info;
         let at = if record.downloaded_ms == 0 {
             now_ms()

@@ -110,7 +110,7 @@ impl Intake {
     }
 
     fn library(&self) -> Result<Library, IntakeError> {
-        Library::open(&self.data_dir).map_err(|e| {
+        Library::open_patient(&self.data_dir).map_err(|e| {
             deny(
                 FailureCode::SampleMissing,
                 format!("the library cannot be opened: {e}"),
@@ -297,7 +297,8 @@ impl Intake {
             },
             ..Default::default()
         };
-        let mut library = Library::open(&self.data_dir).map_err(crate::library::library_error)?;
+        let mut library =
+            Library::open_patient(&self.data_dir).map_err(crate::library::library_error)?;
         let added = library
             .add_bytes_as(&bytes, new, actor)
             .map_err(crate::library::library_error)?;
