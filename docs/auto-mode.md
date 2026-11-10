@@ -62,6 +62,18 @@ checks and detection engines, the report formats, how failures are retried and
 who may submit. `auto init` writes `default.toml` when the folder has none; a
 copy with comments is in `packaging/policies/default.toml.example`.
 
+* **Static checks and required checks.** `analysis.static_checks` (`"triage"`
+  by default, `"none"` or a list) runs the library copy's tools before the
+  Triage scan. A check that runs out of its time (`analysis.static_time_limit_min`,
+  stretched on a busy host like the guest waits, up to four times) or stops short
+  does not fail the job: the job ends `partial` with a `static_check_incomplete`
+  warning that names the check. List checks in `analysis.required_checks`
+  (default none) to make their timeout, or their being unavailable, a failure of
+  the `analyse` stage; with `analysis.required_stages` naming `analyse` that
+  ends the job `failed` with `analysis_failed`. A static analysis the engine
+  refuses or cannot run at all is a failure of the stage whichever checks are
+  required.
+
 * **Dump on suspicious activity.** `evidence.dump_trigger = "off"` (default),
   `"low"`, `"medium"` or `"high"` makes every job under the policy take a dump
   while the program runs, when the live Triage rules match at that tier or above;
@@ -222,7 +234,7 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `launch_failed` | launch | depends | The program did not start (not executable for the guest, no terminal) |
 | `guest_lost` | run, collect | once | The guest or QEMU died. A sample that does that twice ends `failed` |
 | `recording_failed` | collect | once | The recording could not be completed |
-| `analysis_failed` | analyse, report | yes | Only when the policy marks the stage required (`analysis.required_stages`); otherwise the job is `partial` with a warning |
+| `analysis_failed` | analyse, report | yes | Only when the policy marks the stage required (`analysis.required_stages`); otherwise the job is `partial` with a warning. A static check that only timed out or stopped short is not this failure unless it is in `analysis.required_checks` (it is a `static_check_incomplete` warning and the job is `partial`) |
 | `cancelled` | any | no | Cancelled by request; what was recorded is kept |
 | `internal` | any | maybe | A bug, or the watchdog: the whole job ran past `run` plus 30 minutes. `details.log` names the job log |
 

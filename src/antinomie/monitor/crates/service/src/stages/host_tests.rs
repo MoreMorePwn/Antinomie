@@ -1016,6 +1016,125 @@ fn a_required_stage_fails_on_a_static_analysis_problem() {
     assert_eq!(done.failure.unwrap().code, FailureCode::AnalysisFailed);
 }
 
+fn report_with_sections(
+    id: &str,
+    state: &str,
+    sections: &[(&str, &str)],
+) -> antinomie_monitor_core::analysis::AnalysisReport {
+    let sections: Vec<_> = sections
+        .iter()
+        .map(|(kind, state)| {
+            serde_json::json!({
+                "kind": kind, "state": state, "summary": "", "entries": [],
+            })
+        })
+        .collect();
+    serde_json::from_value(serde_json::json!({
+        "id": id, "state": state, "source_path": "sample:x", "sections": sections,
+    }))
+    .unwrap()
+}
+
+fn analyse_with(
+    name: &str,
+    required_stage: bool,
+    required_checks: Vec<crate::api::spec::StaticCheck>,
+    report: antinomie_monitor_core::analysis::AnalysisReport,
+) -> (W, Job, Hosted) {
+    let w = world_with(name, |p| {
+        static_policy(p);
+        if required_stage {
+            p.analysis.required_stages = vec![Stage::Analyse];
+        }
+        p.analysis.required_checks = required_checks;
+    });
+    let job = collected(&w, 1);
+    let mut waiter = w.engine(move |fake| {
+        fake.on("AnalyzeSample")
+            .then(SECOND, move |s| s.analysis_reports.push(report.clone()))
+            .ok("rep-1");
+    });
+    let hosted = host(&w, &mut waiter, &job);
+    (w, job, hosted)
+}
+
+#[test]
+fn a_timed_out_optional_check_makes_the_job_partial_even_when_analyse_is_required() {
+    let report = report_with_sections(
+        "rep-1",
+        "partial",
+        &[("metadata", "complete"), ("strings", "timeout")],
+    );
+    let (w, job, hosted) = analyse_with("host-static-timeout", true, Vec::new(), report);
+    let done = finished(hosted);
+    assert_eq!(done.state, JobState::Partial);
+    assert!(done.failure.is_none());
+    let warnings = w.job(&job.id).warnings;
+    assert!(
+        warnings.iter().any(|x| x.code == "static_check_incomplete"
+            && x.text.contains("strings check ran out of time")),
+        "{warnings:?}"
+    );
+    assert!(!warnings.iter().any(|x| x.code == "analysis_failed"));
+    assert!(
+        !done.artifacts.is_empty(),
+        "triage and the report still ran"
+    );
+}
+
+#[test]
+fn a_required_check_that_times_out_fails_the_analyse_stage() {
+    let report = report_with_sections(
+        "rep-1",
+        "partial",
+        &[("metadata", "complete"), ("strings", "timeout")],
+    );
+    let (_, _, hosted) = analyse_with(
+        "host-static-required",
+        true,
+        vec![crate::api::spec::StaticCheck::Strings],
+        report,
+    );
+    let Hosted::Failed(done) = hosted else {
+        panic!("failed");
+    };
+    let failure = done.failure.unwrap();
+    assert_eq!(failure.code, FailureCode::AnalysisFailed);
+    assert!(failure.detail.unwrap().contains("strings check"));
+
+    // A required check that is not the one that timed out changes nothing.
+    let report = report_with_sections(
+        "rep-1",
+        "partial",
+        &[("metadata", "complete"), ("strings", "timeout")],
+    );
+    let (_, _, hosted) = analyse_with(
+        "host-static-required-other",
+        true,
+        vec![crate::api::spec::StaticCheck::Metadata],
+        report,
+    );
+    assert_eq!(finished(hosted).state, JobState::Partial);
+}
+
+#[test]
+fn static_checks_that_all_finish_leave_the_job_succeeded() {
+    let report = report_with_sections(
+        "rep-1",
+        "complete",
+        &[("metadata", "complete"), ("strings", "complete")],
+    );
+    let (w, job, hosted) = analyse_with(
+        "host-static-clean",
+        true,
+        vec![crate::api::spec::StaticCheck::Strings],
+        report,
+    );
+    let done = finished(hosted);
+    assert_eq!(done.state, JobState::Succeeded);
+    assert!(w.job(&job.id).warnings.is_empty());
+}
+
 // ---- a crash, and the resume at analyse --------------------------------
 
 #[test]

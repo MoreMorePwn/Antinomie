@@ -15,6 +15,11 @@
 //!    a job that asks for no report still has its label (departure from 4.1,
 //!    which has `report` build it).
 //!
+//! A static check that ran out of time or stopped short is not a problem of
+//! the stage: it is a job warning (`static_check_incomplete`) and the job ends
+//! `partial`, unless the policy lists the check in `analysis.required_checks`
+//! (default none), when it is a problem like any other.
+//!
 //! A step that fails is a *problem*. If the policy requires the `analyse`
 //! stage (`analysis.required_stages`) the stage fails `analysis_failed`;
 //! otherwise each problem is a job warning, the job ends `partial`, and a job
@@ -36,7 +41,8 @@ use crate::{
 use antinomie_monitor_core::{
     Command,
     analysis::{
-        AnalysisLimits, AnalysisSelection, AnalysisState, detection::Engine as DetectionEngine,
+        AnalysisKind, AnalysisLimits, AnalysisReport, AnalysisSectionState, AnalysisSelection,
+        AnalysisState, detection::Engine as DetectionEngine,
     },
     report::{Choices, Part},
 };
@@ -55,6 +61,69 @@ pub struct Analysed {
     pub scan: Option<(SavedRun, ArchiveScan)>,
     /// Steps that failed, in words (the job has them as warnings).
     pub problems: Vec<String>,
+    /// Static checks that ran out of time or stopped short, in words. They
+    /// are warnings and make the job `partial`, but never fail the stage.
+    pub incomplete: Vec<String>,
+}
+
+/// What the static analysis left: `hard` is a failure of the analysis
+/// itself (or of a required check), `soft` a check that stopped short.
+#[derive(Default)]
+struct StaticOutcome {
+    hard: Vec<String>,
+    soft: Vec<String>,
+}
+
+impl StaticOutcome {
+    fn hard(text: impl Into<String>) -> Self {
+        Self {
+            hard: vec![text.into()],
+            soft: Vec::new(),
+        }
+    }
+
+    /// A timeout of the whole analysis: which check it cut is not known, so
+    /// it fails the stage only when the policy requires some check.
+    fn unfinished(plan: &HostPlan, text: String) -> Self {
+        if plan.required_checks.is_empty() {
+            Self {
+                hard: Vec::new(),
+                soft: vec![text],
+            }
+        } else {
+            Self::hard(text)
+        }
+    }
+}
+
+fn check_name(kind: AnalysisKind) -> String {
+    format!("{kind:?}").to_lowercase()
+}
+
+/// Read the sections of a finished report: a check that ran out of time or
+/// stopped short is `soft`, and `hard` when the policy requires it.
+fn judge_report(plan: &HostPlan, report: &AnalysisReport) -> StaticOutcome {
+    let mut out = StaticOutcome::default();
+    for section in &report.sections {
+        let required = plan.required_checks.contains(&section.kind);
+        let words = match section.state {
+            AnalysisSectionState::Timeout => "ran out of time and was stopped",
+            AnalysisSectionState::Partial => "finished partly",
+            AnalysisSectionState::Unavailable if required => "was not available",
+            _ => continue,
+        };
+        let text = format!("the {} check {words}", check_name(section.kind));
+        if required {
+            out.hard.push(format!("{text} (a required check)"));
+        } else {
+            out.soft.push(text);
+        }
+    }
+    if report.state == AnalysisState::Partial && out.hard.is_empty() && out.soft.is_empty() {
+        out.soft
+            .push("static analysis finished partly (a tool stopped short)".into());
+    }
+    out
 }
 
 /// Why a bounded worker did not hand back its result.
@@ -133,10 +202,16 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 
     /// The library copy through `AnalyzeSample`.
-    fn static_analysis(&mut self, job: &Job, plan: &HostPlan) -> Result<Option<String>, StageStop> {
+    fn static_analysis(&mut self, job: &Job, plan: &HostPlan) -> Result<StaticOutcome, StageStop> {
         let Some(sample) = job.sample.as_ref() else {
-            return Ok(Some("the job has no sample to analyse".into()));
+            return Ok(StaticOutcome::hard("the job has no sample to analyse"));
         };
+        // A loaded host stretches the tools' time like it stretches the
+        // guest waits; a limit of 0 is the engine's own and stays.
+        let scale = self.env.triage.load_scale().max(1.0);
+        let mut plan = plan.clone();
+        plan.static_limit_min = (f64::from(plan.static_limit_min) * scale).ceil() as u32;
+        let plan = &plan;
         let selection = AnalysisSelection {
             enabled: true,
             checks: plan.static_checks.clone(),
@@ -155,10 +230,15 @@ impl<E: Engine> LaneStages<'_, E> {
         ) {
             Ok(id) => id,
             Err(WaitError::Failed(message)) => {
-                return Ok(Some(format!("static analysis was refused: {message}")));
+                return Ok(StaticOutcome::hard(format!(
+                    "static analysis was refused: {message}"
+                )));
             }
             Err(WaitError::TimedOut { .. }) => {
-                return Ok(Some("static analysis did not start in time".into()));
+                return Ok(StaticOutcome::unfinished(
+                    plan,
+                    "static analysis did not start in time".into(),
+                ));
             }
             Err(other) => return Err(StageStop::Abort(other)),
         };
@@ -179,10 +259,13 @@ impl<E: Engine> LaneStages<'_, E> {
             }) {
             Ok(()) => {}
             Err(WaitError::TimedOut { .. }) => {
-                return Ok(Some(format!(
-                    "static analysis did not finish within {} seconds",
-                    limit.as_secs()
-                )));
+                return Ok(StaticOutcome::unfinished(
+                    plan,
+                    format!(
+                        "static analysis did not finish within {} seconds",
+                        limit.as_secs()
+                    ),
+                ));
             }
             Err(other) => return Err(StageStop::Abort(other)),
         }
@@ -193,16 +276,16 @@ impl<E: Engine> LaneStages<'_, E> {
             .iter()
             .find(|r| r.id == id)
             .cloned();
-        Ok(match report.map(|r| (r.state, r.reason)) {
-            Some((AnalysisState::Complete, _)) => None,
-            Some((AnalysisState::Partial, _)) => {
-                Some("static analysis finished partly (a tool ran out of time)".into())
+        Ok(match report {
+            Some(r) if matches!(r.state, AnalysisState::Complete | AnalysisState::Partial) => {
+                judge_report(plan, &r)
             }
-            Some((state, reason)) => Some(format!(
-                "static analysis ended {state:?}{}",
-                reason.map(|r| format!(": {r}")).unwrap_or_default()
+            Some(r) => StaticOutcome::hard(format!(
+                "static analysis ended {:?}{}",
+                r.state,
+                r.reason.map(|r| format!(": {r}")).unwrap_or_default()
             )),
-            None => Some("static analysis left no report".into()),
+            None => StaticOutcome::hard("static analysis left no report"),
         })
     }
 
@@ -358,10 +441,11 @@ impl<E: Engine> LaneStages<'_, E> {
     /// The `analyse` stage. `Ok` carries the problems that did not fail it.
     pub fn analyse(&mut self, job: &Job, plan: &HostPlan) -> Result<Analysed, StageStop> {
         let mut problems = Vec::new();
+        let mut incomplete = Vec::new();
         if !plan.static_checks.is_empty() {
-            if let Some(problem) = self.static_analysis(job, plan)? {
-                problems.push(problem);
-            }
+            let outcome = self.static_analysis(job, plan)?;
+            problems.extend(outcome.hard);
+            incomplete.extend(outcome.soft);
             self.cancel_point(job)?;
         }
         let scanned = if plan.triage || !plan.engines.is_empty() {
@@ -391,6 +475,7 @@ impl<E: Engine> LaneStages<'_, E> {
         Ok(Analysed {
             scan: scanned,
             problems,
+            incomplete,
         })
     }
 }

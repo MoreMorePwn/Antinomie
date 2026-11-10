@@ -143,7 +143,8 @@ pub fn load_scale(load1: f64, cpus: usize) -> f64 {
     (load1 / cpus as f64).clamp(1.0, LOAD_SCALE_CAP)
 }
 
-fn host_load_scale() -> f64 {
+/// The load factor of this host now (reads `/proc/loadavg`; 1 when idle).
+pub fn host_load_scale() -> f64 {
     let load = std::fs::read_to_string("/proc/loadavg")
         .ok()
         .and_then(|text| text.split_whitespace().next()?.parse().ok())

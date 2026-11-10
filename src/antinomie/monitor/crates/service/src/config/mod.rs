@@ -67,6 +67,7 @@ core_nonresident  = false   # trigger cores also read pages not in memory (guest
 [analysis]
 static_checks         = "triage"
 static_time_limit_min = 2
+required_checks       = []      # checks whose timeout fails the job; others only make it partial
 triage                = true
 detection             = { yara = true, sigma = true, ids = true }
 required_stages       = ["analyse"]

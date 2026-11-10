@@ -158,6 +158,8 @@ pub struct HostPlan {
     /// The static checks of the host-side analysis; empty: none.
     pub static_checks: Vec<AnalysisKind>,
     pub static_limit_min: u32,
+    /// Checks whose timeout fails the stage (`analysis.required_checks`).
+    pub required_checks: Vec<AnalysisKind>,
     pub triage: bool,
     pub engines: Vec<DetectionEngine>,
     pub formats: Vec<ReportFormat>,
@@ -255,6 +257,12 @@ pub fn hosted(job: &Job, policy: &Policy) -> HostPlan {
         static_limit_min: o
             .static_time_limit_min
             .unwrap_or(policy.analysis.static_time_limit_min),
+        required_checks: policy
+            .analysis
+            .required_checks
+            .iter()
+            .map(|c| kind_of(*c))
+            .collect(),
         triage: policy.analysis.triage,
         engines,
         formats: o

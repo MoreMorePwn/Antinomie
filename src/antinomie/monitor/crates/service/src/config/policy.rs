@@ -8,7 +8,7 @@ use crate::api::{
     failure::FailureCode,
     job::Stage,
     ops::Scope,
-    spec::{ReportFormat, Route, RunAsName, RunIn, StaticChecks, StaticPreset},
+    spec::{ReportFormat, Route, RunAsName, RunIn, StaticCheck, StaticChecks, StaticPreset},
 };
 use antinomie_monitor_core::dump_trigger::{DumpTrigger, TriggerTier};
 use serde::{Deserialize, Serialize};
@@ -268,6 +268,10 @@ impl Default for Detection {
 pub struct AnalysisPolicy {
     pub static_checks: StaticChecks,
     pub static_time_limit_min: u32,
+    /// Static checks whose timing out or stopping short fails the `analyse`
+    /// stage when it is required; any other check that does so only makes
+    /// the job `partial` with a warning. Default: none.
+    pub required_checks: Vec<StaticCheck>,
     pub triage: bool,
     pub detection: Detection,
     pub required_stages: Vec<Stage>,
@@ -279,6 +283,7 @@ impl Default for AnalysisPolicy {
         Self {
             static_checks: StaticChecks::Preset(StaticPreset::Triage),
             static_time_limit_min: 2,
+            required_checks: Vec::new(),
             triage: true,
             detection: Detection::default(),
             required_stages: vec![Stage::Analyse],

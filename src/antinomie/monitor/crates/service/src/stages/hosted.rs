@@ -185,6 +185,7 @@ impl<E: Engine> LaneStages<'_, E> {
         let mut analysed = Analysed {
             scan: None,
             problems: Vec::new(),
+            incomplete: Vec::new(),
         };
         if plan.analyse_skipped() {
             self.skip_stage(job, Stage::Analyse)?;
@@ -199,7 +200,10 @@ impl<E: Engine> LaneStages<'_, E> {
             for problem in &analysed.problems {
                 self.warn(job, "analysis_failed", problem);
             }
-            if !analysed.problems.is_empty() {
+            for note in &analysed.incomplete {
+                self.warn(job, "static_check_incomplete", note);
+            }
+            if !analysed.problems.is_empty() || !analysed.incomplete.is_empty() {
                 *outcome = Outcome::Partial;
             }
         }
