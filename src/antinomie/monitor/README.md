@@ -434,8 +434,10 @@ frequency ranking. Snapshots, restore and transport reconnection are described
 in the [user guide](../../../docs/usage.md) and the
 [implementation record](../../../docs/implementation.md).
 
-ANTT 1.1 extends the application header to 136 bytes with an inherited launch
-root task cookie at offset 128. V7 is unchanged. Legacy 1.0 packets remain
+ANTT 1.1 extended the application header to 136 bytes with an inherited launch
+root task cookie at offset 128; the current ANTT 1.2 (guest revision 22) makes
+it 144 bytes by adding the capture cookie at offset 136. The transport version
+is unchanged by either (the guest announces ABI 9 or 10; the host accepts 7 to 10). Legacy 1.0 packets remain
 readable but cannot be reliably assigned to program runs after lifecycle loss;
 old VM-wide recordings are explicitly labelled legacy recordings.
 

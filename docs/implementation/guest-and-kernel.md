@@ -2455,13 +2455,23 @@ archives and per-VM disks are compatibility inputs, not disposable fixtures.
 
 ## Telemetry protocol
 
-Use telemetry application protocol 1 (ANTT, 128-byte little-endian
-envelope), carried as opaque V7 messages.
+Use telemetry application protocol 1 (ANTT, little-endian envelope: 144-byte
+header in minor 2, 128 bytes in minor 0), carried as opaque V7 messages.
 Implement EVENT_BEGIN (120), FIELD_BEGIN (40 + key/layout), FIELD_DATA,
 FIELD_END (32), EVENT_END (32); emit lifecycle/health where implemented. Parse
 explicit offsets, never native Rust struct casts. Missing begin/end/chunks,
 copy faults, decoder gaps, parser limits and persistence failures are explicit.
 CPU is metadata. Stream ID + task cookie + call ID identify invocations.
+
+Fields the guest writes that the host does not read: the header u32 at 84 is
+a constant 1 (reserved; no meaning was ever assigned); the EVENT_BEGIN body
+u16 at 50 is `result_kind` (1 in Exit events, where a result follows, 0
+otherwise); the EVENT_BEGIN body u32 at 112 is the argument validity bitmap
+(bits 0-5: argument n valid; bits 6 and 9 always set; bits 7, 8 and 10 set when
+an entry time is known: entry_ns, ip, sp). Record type 2 ("recorder health",
+a 96-byte packet with every call field zero) is reserved: no guest produces
+it; the host parser still accepts and ignores it so a guest that sends it is
+not rejected.
 
 Initial 30 syscall numbers/names for behavioral malware analysis (selected
 coverage, not a measured popularity ranking):
@@ -2477,11 +2487,11 @@ Lifecycle hooks must follow descendants regardless of selected syscall number.
 
 ## Host/control contract
 
-The guest control contract is `protocol/control.h`. Opcodes: 0x1001 upload
-begin, 0x1002 upload chunk, 0x1003 commit,
-0x1004 abort, 0x1010 exec, 0x1011 terminal input, 0x1012 terminal read,
-0x1013 terminal resize, 0x1014 signal, 0x1020 recorder stats,
-0x1030 shutdown. Explicit little-endian fields, versioned, checked lengths;
+The guest control contract is `protocol/control.h`. The opcodes
+(52 registered in the current guest, 0x1001 upload begin onward: upload,
+exec, terminal, recorder stats, shutdown, capture, specimen, core, debugger,
+resources and so on) are the `ANTC_*` definitions in that header; the list
+there is authoritative and is not repeated here. Explicit little-endian fields, versioned, checked lengths;
 results travel in the existing reply queue. Each reply matches request ID.
 Persistent health/loss counters queryable even after telemetry loss.
 
