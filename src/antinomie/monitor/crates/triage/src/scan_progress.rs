@@ -111,6 +111,61 @@ impl ScanProgress {
     }
 }
 
+/// A size and time budget for one scan: the passes over the calls stop at
+/// the first page past `max_calls` calls, or once `limit` has passed since the
+/// stop was made, and the index says it is partial. Both passes stop at the same
+/// call count, so what they read is one prefix of the run. The background
+/// digest build uses it so a recording of millions of calls costs a bounded
+/// amount of time and memory.
+#[derive(Debug)]
+pub struct ScanStop {
+    max_calls: u64,
+    deadline: std::time::Instant,
+    calls_hit: std::sync::atomic::AtomicBool,
+    time_hit: std::sync::atomic::AtomicBool,
+}
+
+impl ScanStop {
+    pub fn new(max_calls: u64, limit: std::time::Duration) -> Self {
+        Self {
+            max_calls,
+            deadline: std::time::Instant::now() + limit,
+            calls_hit: Default::default(),
+            time_hit: Default::default(),
+        }
+    }
+
+    /// Whether a pass that has read `calls` calls is to stop; remembers why.
+    pub fn reached(&self, calls: u64) -> bool {
+        if calls >= self.max_calls {
+            self.calls_hit.store(true, Ordering::Relaxed);
+            return true;
+        }
+        if std::time::Instant::now() >= self.deadline {
+            self.time_hit.store(true, Ordering::Relaxed);
+            return true;
+        }
+        false
+    }
+
+    /// Why a pass stopped, in plain words; `None` when no pass did.
+    pub fn reason(&self) -> Option<String> {
+        if self.time_hit.load(Ordering::Relaxed) {
+            Some(
+                "the time budget for building the digest ran out before the end of the recording"
+                    .into(),
+            )
+        } else if self.calls_hit.load(Ordering::Relaxed) {
+            Some(format!(
+                "the digest was built from the first {} calls of the recording (the size budget)",
+                count(self.max_calls)
+            ))
+        } else {
+            None
+        }
+    }
+}
+
 /// `1,234,567`.
 fn count(value: u64) -> String {
     let digits = value.to_string();

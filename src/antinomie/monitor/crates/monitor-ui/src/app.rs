@@ -13,6 +13,7 @@ mod clipboard;
 mod construct;
 mod debugger;
 mod dialogs;
+mod digests;
 mod disks;
 mod dump_pause;
 mod evidence_delete;

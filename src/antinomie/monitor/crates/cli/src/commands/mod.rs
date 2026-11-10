@@ -12,6 +12,7 @@ mod capabilities;
 mod config;
 mod custody;
 mod detect;
+mod digest;
 mod doctor;
 mod library;
 mod machine;
@@ -69,6 +70,10 @@ pub enum Command {
     /// Run YARA, Sigma and IDS over a saved run's evidence; no engine lock
     /// needed unless --save keeps the results in the recording.
     Detect(detect::Detect),
+    /// Build the Triage digest of a finished run (or of every run that has
+    /// none, with --pending): a budgeted read, marked partial when the budget
+    /// ended it or telemetry was lost. Takes the engine lock.
+    Digest(digest::Digest),
     /// Write a saved run's report (HTML, PDF, JSON, MISP, STIX, Markdown), the
     /// same files the window's Export report writes. No engine lock needed.
     Report(report::Report),
@@ -104,6 +109,7 @@ pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
         Command::Custody(custody) => custody::run(custody, context),
         Command::Triage(arguments) => triage::run(arguments, context),
         Command::Detect(arguments) => detect::run(arguments, context),
+        Command::Digest(arguments) => digest::run(arguments, context),
         Command::Report(arguments) => report::run(arguments, context),
         Command::Auto(auto) => auto::run(auto, context),
     }

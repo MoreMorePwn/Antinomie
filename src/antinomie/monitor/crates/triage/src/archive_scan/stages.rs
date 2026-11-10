@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The phases of one archive scan, each a step over the state the one before left.
 use super::segments::{
-    guest_names, name_launched, run_segments, segment_facts, segments_stamp, walk_segments,
+    guest_names, name_launched, run_segments, segment_facts, segments_stamp, walk_segments_within,
 };
 use super::*;
 use antinomie_monitor_core::recording::{Recording, RunFilterFacts, RunSegment};
@@ -137,46 +137,51 @@ pub fn open_scan(
     let mut scoped_count = 0;
     // Calls whose saved async observations the pages only preview, and how many.
     let (mut async_partial, mut async_omitted) = (0u64, 0u64);
-    let (seen, complete, issues) = walk_segments(&recordings, cancel, |segment, page| {
-        request.advance(page.len());
-        let page: Vec<_> = page.iter().filter(&scoped).cloned().collect();
-        for call in page
-            .iter()
-            .filter(|call| request.root_cookie != 0 && call.task_cookie == request.root_cookie)
-        {
-            root_stream.get_or_insert((segment, call.stream_id));
-            root_call.get_or_insert(trace::key(call));
-            if root_creds.is_none() {
-                root_creds = call
-                    .kernel_notes
-                    .iter()
-                    .find_map(antinomie_monitor_core::kernel_notes::credentials);
+    let (seen, complete, issues) = walk_segments_within(
+        &recordings,
+        cancel,
+        request.stop.as_deref(),
+        |segment, page| {
+            request.advance(page.len());
+            let page: Vec<_> = page.iter().filter(&scoped).cloned().collect();
+            for call in page
+                .iter()
+                .filter(|call| request.root_cookie != 0 && call.task_cookie == request.root_cookie)
+            {
+                root_stream.get_or_insert((segment, call.stream_id));
+                root_call.get_or_insert(trace::key(call));
+                if root_creds.is_none() {
+                    root_creds = call
+                        .kernel_notes
+                        .iter()
+                        .find_map(antinomie_monitor_core::kernel_notes::credentials);
+                }
             }
-        }
-        scoped_count += page.len() as u64;
-        for call in page.iter().filter(|call| call.async_omitted() > 0) {
-            async_partial += 1;
-            async_omitted = async_omitted.saturating_add(call.async_omitted());
-        }
-        if clock_anchor.is_none() {
-            clock_anchor = started_ms
-                .zip(
-                    page.iter()
-                        .filter_map(trace::representative)
-                        .map(|event| event.timestamp_ns)
-                        .min(),
-                )
-                .and_then(|(host_ms, guest_ns)| {
-                    Some(antinomie_monitor_core::HostClockAnchor {
-                        guest_ns,
-                        host_us: host_ms.checked_mul(1000)?,
-                    })
-                });
-        }
-        note_cookie_sets(&mut cookie_sets, &page);
-        observe_processes(&mut nodes, &page);
-        Ok(())
-    })?;
+            scoped_count += page.len() as u64;
+            for call in page.iter().filter(|call| call.async_omitted() > 0) {
+                async_partial += 1;
+                async_omitted = async_omitted.saturating_add(call.async_omitted());
+            }
+            if clock_anchor.is_none() {
+                clock_anchor = started_ms
+                    .zip(
+                        page.iter()
+                            .filter_map(trace::representative)
+                            .map(|event| event.timestamp_ns)
+                            .min(),
+                    )
+                    .and_then(|(host_ms, guest_ns)| {
+                        Some(antinomie_monitor_core::HostClockAnchor {
+                            guest_ns,
+                            host_us: host_ms.checked_mul(1000)?,
+                        })
+                    });
+            }
+            note_cookie_sets(&mut cookie_sets, &page);
+            observe_processes(&mut nodes, &page);
+            Ok(())
+        },
+    )?;
     // The launch, read from the segment that holds the root's first call.
     let launch = root_stream.and_then(|(segment, stream)| {
         recordings[segment]
@@ -438,26 +443,31 @@ impl Scan {
         if let Some(progress) = &request.progress {
             progress.next(scan_progress::Phase::Files);
         }
-        let (_, files_complete, _) = walk_segments(recordings, cancel, |segment, page| {
-            request.advance(page.len());
-            let recording = &recordings[segment];
-            for submitted in page.iter().filter(&scoped) {
-                // Requests a ring's own thread submitted, once the calls reach
-                // their time.
-                for call in attributed.due(segment, submitted) {
-                    observe(segment, &call, false)?;
+        let (_, files_complete, _) = walk_segments_within(
+            recordings,
+            cancel,
+            request.stop.as_deref(),
+            |segment, page| {
+                request.advance(page.len());
+                let recording = &recordings[segment];
+                for submitted in page.iter().filter(&scoped) {
+                    // Requests a ring's own thread submitted, once the calls reach
+                    // their time.
+                    for call in attributed.due(segment, submitted) {
+                        observe(segment, &call, false)?;
+                    }
+                    attributed.read(recording, segment, submitted, &mut reach, cancel);
+                    // The file requests an io_uring ring or AIO context carried,
+                    // after the call that submitted them, as the calls they stand for.
+                    let requests = async_files::expand(recording, submitted, &mut reach, cancel);
+                    observe(segment, submitted, true)?;
+                    for request in &requests {
+                        observe(segment, request, false)?;
+                    }
                 }
-                attributed.read(recording, segment, submitted, &mut reach, cancel);
-                // The file requests an io_uring ring or AIO context carried,
-                // after the call that submitted them, as the calls they stand for.
-                let requests = async_files::expand(recording, submitted, &mut reach, cancel);
-                observe(segment, submitted, true)?;
-                for request in &requests {
-                    observe(segment, request, false)?;
-                }
-            }
-            Ok(())
-        })?;
+                Ok(())
+            },
+        )?;
         for (segment, call) in attributed.rest() {
             observe(segment, &call, false)?;
         }
@@ -943,6 +953,10 @@ impl Scan {
             capture_open: pcap_open,
             network_warning: network.network_warning.as_deref(),
         });
+        let budget_reached = request.stop.as_ref().and_then(|stop| stop.reason());
+        if let Some(why) = &budget_reached {
+            reasons.insert(0, why.clone());
+        }
         let event_journal = event_journal
             .and_then(
                 |journal| match journal.finish_because(reasons.is_empty(), &reasons) {
@@ -980,6 +994,7 @@ impl Scan {
                 .collect(),
             read,
             read_omitted,
+            budget_reached: budget_reached.is_some(),
             partial_reasons: {
                 if omitted_files > 0 {
                     reasons.push(format!(

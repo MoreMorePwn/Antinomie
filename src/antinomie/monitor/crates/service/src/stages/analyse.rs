@@ -22,7 +22,7 @@
 use super::{
     LaneStages, StageStop,
     host::{Built, HostTriage},
-    plan::{ANALYSE_WAIT, HostPlan},
+    plan::{ANALYSE_WAIT, DIGEST_WAIT, HostPlan},
 };
 use crate::{
     api::{
@@ -332,6 +332,29 @@ impl<E: Engine> LaneStages<'_, E> {
         Ok(())
     }
 
+    /// Every finished run gets its digest, whatever the policy asked of
+    /// Triage: when the scan left none (not planned, failed, out of time), a
+    /// budgeted read makes it, partial when the budget ended it. Never fails
+    /// the stage; what is missing is a warning of the job, which the caller
+    /// adds once the stage is not failing (a retry makes the digest again).
+    fn digest(&mut self, job: &Job) -> Result<Option<String>, StageStop> {
+        if job.recording.is_none() {
+            return Ok(None);
+        }
+        let triage: &dyn HostTriage = self.env.triage;
+        let note = match self.bounded(DIGEST_WAIT, |cancel| triage.ensure_digest(job, cancel)) {
+            Ok(Ok(note)) => note,
+            Ok(Err(error)) => Some(format!("the run's digest was not made: {error}")),
+            Err(why) => {
+                if let Some(stop) = why.stop() {
+                    return Err(stop);
+                }
+                Some(why.words("the run's digest"))
+            }
+        };
+        Ok(note)
+    }
+
     /// The `analyse` stage. `Ok` carries the problems that did not fail it.
     pub fn analyse(&mut self, job: &Job, plan: &HostPlan) -> Result<Analysed, StageStop> {
         let mut problems = Vec::new();
@@ -347,6 +370,8 @@ impl<E: Engine> LaneStages<'_, E> {
             None
         };
         self.cancel_point(job)?;
+        let digest_note = self.digest(job)?;
+        self.cancel_point(job)?;
         let triage_ran = plan.triage && scanned.is_some();
         self.assess(job, scanned.as_ref().filter(|_| triage_ran), &mut problems)?;
         if !problems.is_empty() && plan.requires(Stage::Analyse) {
@@ -356,6 +381,12 @@ impl<E: Engine> LaneStages<'_, E> {
                 "the analysis of the recording failed",
                 Some(&problems.join("; ")),
             )));
+        }
+        if let Some(note) = digest_note {
+            let _ = self
+                .env
+                .store
+                .add_warning(&job.id, "digest_incomplete", &note);
         }
         Ok(Analysed {
             scan: scanned,

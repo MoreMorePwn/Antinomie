@@ -9,6 +9,7 @@ use crate::activity::{report, report_quiet, Level};
 impl MonitorApp {
     pub(super) fn collect_notices(&self, ctx: &egui::Context) {
         self.run_finished_toasts(ctx);
+        self.queue_digests(ctx);
         let snapshot = &self.snapshot;
         // A condition that stands is one toast; it toasts again only after it
         // has gone and come back.

@@ -820,6 +820,7 @@ pub fn session_rows(
 pub fn walk_pages(
     recording: &antinomie_monitor_core::recording::Recording,
     cancel: &AtomicBool,
+    stop: Option<(&crate::scan_progress::ScanStop, u64)>,
     mut each: impl FnMut(&[InvocationSummary]) -> Result<(), String>,
 ) -> Result<(u64, bool, Vec<String>), String> {
     let mut offset = 0u64;
@@ -827,6 +828,10 @@ pub fn walk_pages(
     let mut issues = Vec::new();
     loop {
         if cancel.load(Ordering::Relaxed) {
+            return Ok((seen, false, issues));
+        }
+        // `stop` is the budget and the calls earlier segments read.
+        if stop.is_some_and(|(budget, before)| budget.reached(before + seen)) {
             return Ok((seen, false, issues));
         }
         let page = match recording.invocation_page_cancellable(offset, 256, cancel) {

@@ -42,6 +42,23 @@ x86 programs by their own table.
     counted, and one success clears the address. The row counts the failures from the
     tenth on and shows their pace.
 
+- **Every finished run gets its Triage digest by itself, heavy runs included
+  (ANT-T0400).** The digest (behaviour findings, process lineage, written files and
+  indicators behind the sample window, the rollups and the reports) was written only
+  once someone selected the run and its scan finished, so a run nobody opened had none:
+  the Ladvix run (1.18 million calls dropped, 3.7 GB) and Symbiote 1 (telemetry lost)
+  of the malware evaluation showed no digest until opened by hand. Now the window hands
+  each run that ends to a digest queue that builds one digest at a time, smallest
+  recording first, off the UI thread: the recording is streamed page by page and read to
+  a budget (400,000 calls, 20 minutes), and the digest is marked partial, with the
+  reasons, when the budget ended the read or telemetry was lost. A digest made while
+  the recording was still being written is made again when it changes; an interrupted
+  build leaves nothing half written and is made again. Selecting the run while it builds
+  shows its progress instead of starting a second read (**Read it here now** takes over).
+  Auto mode builds the digest of any job's run the scan left none for and warns when it
+  is partial, and the new `antinomie-cli digest RUN` / `digest --pending` run the same
+  build. The digest records how much of the run it was built from (`coverage`).
+
 - **A slow TCG boot no longer fails the VM Start at 180 s (ANT-T0442).** The service's
   180 s limit on the VM `Start` command was fixed, so on a busy host the engine's own
   TCG wait for the guest to connect could outlast it and the job failed with "the VM did

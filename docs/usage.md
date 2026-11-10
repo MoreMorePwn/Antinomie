@@ -935,6 +935,27 @@ The network capture is the guest's own view on every route.
   verdict and no score. Family
   candidates and tags show only what a detection or rule named, so a run nothing
   matched has none.
+- **Run digests are built on their own.** When a run ends, the window builds its Triage
+  digest (the behaviour findings, process lineage, written files and indicators the
+  sample window, the rollups and the report read) in the background, without waiting for
+  anyone to select the run. This holds for a heavy run too, such as a write flood of a
+  million calls: the build streams the recording page by page, reads at most 400,000
+  calls and spends at most 20 minutes, one build at a time, smallest recording first,
+  and never blocks the window. A digest that was cut short, or built from a run that
+  lost telemetry (dropped or unsaved packets), is marked partial with its reasons
+  ("the digest was built from the first 400,000 calls of the recording (the size
+  budget)", "telemetry was lost before it reached the host (N dropped)"). Selecting the
+  run while its digest builds shows a progress line in Triage and waits instead of
+  reading the run a second time; **Read it here now** stops the background build and
+  reads the run in the window, which then writes the digest from the whole run. Opening
+  the run in Triage always reads all of it, so the digest of a budget-limited run is
+  replaced by a whole one. A digest made while the run's recording was still being
+  written is made again when the recording changes. Only runs started in the last seven
+  days are taken at start; `antinomie-cli digest --pending` does the rest. If the app
+  quits during a build, nothing is half written and the run is built again the next time.
+  Auto mode does the same for every job's run when Triage did not leave a digest (not in
+  the policy, failed or out of time), and records a `digest_incomplete` warning when the
+  digest is partial.
 - **Triage › Summary** has a card for each detection engine (YARA, IDS, Sigma). Its
   status reads **Queued** while the scan waits for its turn and **Scanning** while it
   is checked, **Not scanned** only when neither is the case. It also shows the same curve, phases and heat strip for the whole
@@ -1381,8 +1402,9 @@ line is cut, the whole of it is on hover) and **Tree status**, **Root exit** and
   written shows one row per file the runs wrote, rewrote, deleted or renamed, with
   run, state, size and SHA-256, filterable and paged for ransomware-sized lists,
   with **Open in Per-file history**, **Export bytes** and **Copy SHA-256**. The list
-  comes from each run's Triage digest, so a run Triage has not read yet is listed
-  as such with a link to open it. The ATT&CK section has **Show all N**: the same
+  comes from each run's Triage digest. Every finished run gets its digest on its own
+  (see **Run digests** below), so a run is listed as not read yet only in the moments
+  before its digest is built, or when its recording cannot be read. The ATT&CK section has **Show all N**: the same
   list as in Triage, each technique with what cited it and its runs as links into
   Triage.
 - **Runs**: the sample's runs in start order, with the run-state colours above.
@@ -1921,6 +1943,17 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   If the engine still answers a launch after the job gave up
   on it, the VM is stopped (which ends the program), the result names that run and a
   `late_launch` warning says what happened.
+- **Run digests.** `digest RUN` builds the Triage digest of one finished run, and
+  `digest --pending` builds it for every finished run that has none (or whose digest
+  was made while its recording was still being written and has changed since), one at
+  a time. It is the same build the window and Auto mode run on their own; use it for
+  runs older than a week, which the window leaves alone, or after an interruption
+  (nothing is written until the digest is whole, so running it again is safe). `--max-calls`
+  (default 400000) and `--max-seconds` (default 1200) are the budget of one build. It
+  writes the digest into the run's folder, so it takes the engine lock (exit 21 while a
+  window or daemon owns the data directory); the result lists each run as `built`,
+  `built_partial` (with the reasons), `current` (nothing to do), `busy` (another build
+  of the run holds it) or `unreadable`.
 - **Triage, detection and reports of a saved run.** `triage RUN [--parts LIST]`,
   `detect RUN [--engine yara,sigma,ids] [--out DIR] [--save]` and `report RUN
   [--formats html,pdf,json,misp,stix,md] [--parts LIST] [--evidence-bundle] [--defang |

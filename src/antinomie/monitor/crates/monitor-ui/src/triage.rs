@@ -197,6 +197,9 @@ pub(crate) struct TriageView {
     /// Archive directory and owned pcap, so a different capture starts a new index.
     scan_key: Option<String>,
     scan_cancel: Option<Arc<AtomicBool>>,
+    /// The run's digest is being built in the background, and how far it has
+    /// got: the window waits for it instead of reading the run a second time.
+    digest_wait: Option<String>,
     scan_rx: Option<Receiver<(u64, Result<ArchiveScan, String>)>>,
     /// Result generation. A late index from a previous capture is discarded.
     scan_generation: u64,
@@ -312,6 +315,7 @@ impl Default for TriageView {
             selected_call_id: None,
             scan_key: None,
             scan_cancel: None,
+            digest_wait: None,
             scan_rx: None,
             scan_generation: 0,
             pending_generation: None,
@@ -561,6 +565,7 @@ impl TriageView {
         self.mark_shown(ui.ctx());
         presentation::navigation(self, ui, &input);
         self.tick(ui.ctx(), input);
+        self.digest_banner(ui);
         if self.section == Section::Summary {
             summary::show(self, ui, &input);
             return self.take_navigation(ui.ctx());

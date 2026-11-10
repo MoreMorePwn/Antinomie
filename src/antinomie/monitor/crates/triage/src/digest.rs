@@ -224,6 +224,25 @@ pub fn detections(
     any.then_some(out)
 }
 
+/// How much of the run `scan` read and why not all of it. The partial state is
+/// worth reading again later when it is only that the recording was still
+/// being written; the telemetry that was lost, or a budget, will not change.
+pub fn coverage_of(scan: &ArchiveScan) -> run_digest::Coverage {
+    let changing = |reason: &String| {
+        reason == crate::archive_scan::STILL_SAVING
+            || reason.contains("still recording")
+            || reason.contains("still open")
+    };
+    run_digest::Coverage {
+        partial: scan.partial,
+        reasons: scan.partial_reasons.clone(),
+        calls_read: scan.counts.calls,
+        budget_reached: scan.budget_reached,
+        revisit: scan.partial && scan.partial_reasons.iter().any(changing),
+        source: String::new(),
+    }
+}
+
 /// What the scan of a finished run adds to its digest: the behaviour
 /// findings, the process lineage, the files it wrote and, when the scan read
 /// the capture, the indicators. `detections` is the engines' matches, when one
@@ -240,6 +259,7 @@ pub struct Update {
     /// The scan read the whole finished run.
     finished: bool,
     partial: bool,
+    coverage: run_digest::Coverage,
 }
 
 impl Update {
@@ -254,6 +274,7 @@ impl Update {
             activity: scan.file_activity.clone(),
             finished: scan.whole_run,
             partial: scan.partial,
+            coverage: coverage_of(scan),
         }
     }
 
@@ -264,7 +285,10 @@ impl Update {
         if self.finished {
             let _ = crate::written_export::export(directory, &self.activity, self.partial);
         }
+        let mut coverage = self.coverage;
+        coverage.source = run_digest::source_stamp(directory);
         RunDigest::update(directory, |digest| {
+            digest.coverage = Some(coverage);
             digest.behaviour = Some(self.behaviour);
             digest.lineage = Some(self.lineage);
             digest.files = Some(self.files);

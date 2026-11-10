@@ -91,11 +91,25 @@ pub fn segment_facts(
 pub fn walk_segments(
     recordings: &[Recording],
     cancel: &AtomicBool,
+    each: impl FnMut(usize, &[InvocationSummary]) -> Result<(), String>,
+) -> Result<(u64, bool, Vec<String>), String> {
+    walk_segments_within(recordings, cancel, None, each)
+}
+
+/// [`walk_segments`] that also stops, not complete, when `stop` says the
+/// budget is spent.
+pub fn walk_segments_within(
+    recordings: &[Recording],
+    cancel: &AtomicBool,
+    stop: Option<&crate::scan_progress::ScanStop>,
     mut each: impl FnMut(usize, &[InvocationSummary]) -> Result<(), String>,
 ) -> Result<(u64, bool, Vec<String>), String> {
     let (mut seen, mut issues) = (0u64, Vec::new());
     for (index, recording) in recordings.iter().enumerate() {
-        let (count, complete, found) = walk_pages(recording, cancel, |page| each(index, page))?;
+        let (count, complete, found) =
+            walk_pages(recording, cancel, stop.map(|stop| (stop, seen)), |page| {
+                each(index, page)
+            })?;
         seen += count;
         for issue in found {
             if issues.len() < 32 && !issues.contains(&issue) {

@@ -342,11 +342,13 @@ impl TriageView {
         run_id: Option<&str>,
     ) {
         let Some(path) = archive else {
+            digest_job::queue().window_reads(None);
             if self.scan_key.is_some() || self.scan_rx.is_some() {
                 self.stop_scan();
             }
             return;
         };
+        digest_job::queue().window_reads(Some(path));
         let key = format!(
             "{}\n{}\n{}\n{}\n{}",
             path.display(),
@@ -371,6 +373,19 @@ impl TriageView {
         if !self.refresh_requested {
             return;
         }
+        // The run's digest is being built in the background: that build reads
+        // the run, and a second read beside it would double the memory a large
+        // recording takes. Show how far it has got; the request stays.
+        match digest_job::queue().status(path) {
+            digest_job::Status::Building(line) => {
+                self.digest_wait = Some(line);
+                return;
+            }
+            // Not started: this window reads the run itself, and writes its digest.
+            digest_job::Status::Queued => digest_job::queue().release(path),
+            digest_job::Status::Idle => {}
+        }
+        self.digest_wait = None;
         self.refresh_requested = false;
         self.refresh_queued = false;
         let cancel = Arc::new(AtomicBool::new(false));
