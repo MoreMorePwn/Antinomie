@@ -427,8 +427,9 @@ pub fn reset_lane<E: Engine>(
         ResetRefused::State(e) => ApiError::new(ErrorCode::Internal, e.to_string()),
     })?;
     progress("restoring the clean snapshot");
+    // The restore boots the VM inside the command: a silence limit, like Start.
     waiter
-        .command(
+        .start_command(
             Command::RestoreVmSnapshot {
                 vm_id: file.vm_id.clone(),
                 snapshot_id: file.clean_snapshot_id.clone(),
@@ -437,7 +438,7 @@ pub fn reset_lane<E: Engine>(
                 confirmed: true,
                 switch_profile: false,
             },
-            Some(BOOT_WAIT),
+            BOOT_WAIT,
         )
         .map_err(|e| engine_error(e, "the revert failed; the lane stays as it was"))?;
     let id = file.vm_id.clone();

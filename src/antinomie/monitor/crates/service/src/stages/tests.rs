@@ -691,6 +691,94 @@ fn a_restore_that_never_finishes_counts_as_failed() {
     );
 }
 
+/// A Disk restore on a slow emulated host: the engine starts the VM inside
+/// the command, publishes the accelerator and its note, and answers after
+/// `answer_s` seconds (the guest is up when it does).
+fn slow_restore(fake: &mut FakeEngine, factor: f64, answer_s: u64, note: bool) {
+    let mut step = fake.on("RestoreVmSnapshot").after(SECOND * answer_s as u32);
+    step = step.then(100 * MS, move |s| {
+        s.state = VmState::Starting;
+        s.active_vm = Some(VM.into());
+        s.accelerator = Some(antinomie_monitor_core::AcceleratorUsed {
+            record: "tcg".into(),
+            fallback_warning: None,
+            guest_wait_factor: factor,
+        });
+    });
+    if note {
+        step = step.then(3 * SECOND, |s| {
+            s.start_note = Some("Waiting for a slow TCG boot".into());
+        });
+    }
+    step.then(SECOND * answer_s as u32 - 10 * MS, |s| {
+        s.start_note = None;
+        s.state = VmState::Running;
+        s.boot_id = Some("b2".into());
+    })
+    .then(SECOND * answer_s as u32 - 5 * MS, |s| {
+        s.guest_kernel = Some(kernel(21))
+    })
+    .ok("Snapshot disk restored; guest booted in a new timeline");
+}
+
+#[test]
+fn a_tcg_restore_that_boots_past_boot_s_is_waited_for_like_a_start() {
+    let w = W::new("prov-tcg-restore");
+    let job = w.fx.running(1);
+    let mut waiter = w.engine(|fake| slow_restore(fake, 12.5, 400, true));
+    let provisioned = provision(&w, &mut waiter, &job).unwrap();
+    assert_eq!(provisioned.guest_revision, Some(21));
+    assert_eq!(waiter.engine_mut().sent_names(), ["RestoreVmSnapshot"]);
+    assert!(w.fx.clock.now_ms() >= 400_000);
+}
+
+#[test]
+fn a_restore_under_kvm_or_without_progress_keeps_boot_s() {
+    let w = W::new("prov-tcg-restore-limits");
+    let job = w.fx.running(1);
+    // KVM (factor 1): the note does not stretch the limit.
+    let mut kvm = w.engine(|fake| {
+        slow_restore(fake, 1.0, 400, true);
+        slow_restore(fake, 1.0, 400, true);
+    });
+    assert_eq!(
+        code(&provision(&w, &mut kvm, &job).unwrap_err()),
+        FailureCode::RevertFailed
+    );
+    // TCG, but no note: a silent restore fails at 180 s, twice.
+    let mut silent = w.engine(|fake| {
+        slow_restore(fake, 12.5, 400, false);
+        slow_restore(fake, 12.5, 400, false);
+    });
+    let begin = w.fx.clock.now_ms();
+    assert_eq!(
+        code(&provision(&w, &mut silent, &job).unwrap_err()),
+        FailureCode::RevertFailed
+    );
+    assert!(w.fx.clock.now_ms() - begin >= 360_000);
+}
+
+#[test]
+fn a_launch_after_a_tcg_restore_gets_the_stretched_silence() {
+    let w = W::new("launch-after-tcg-restore");
+    let job = w.fx.running(1);
+    let mut waiter = w.engine(|fake| {
+        slow_restore(fake, 12.5, 200, true);
+        // The engine holds Execute for 200 s (a slow boot): 60 s unstretched
+        // would give it up as silent.
+        fake.on("Execute")
+            .after(200 * SECOND)
+            .then(200 * SECOND + 500 * MS, |s| {
+                s.runs.push(run_summary("Running"))
+            })
+            .ok("launched pid 750, terminal session 1");
+    });
+    let provisioned = provision(&w, &mut waiter, &job).unwrap();
+    let prepared = w.prepared(&job);
+    let launched = w.stages(&mut waiter).launch(&job, &prepared, &provisioned);
+    assert!(launched.is_ok(), "{launched:?}");
+}
+
 #[test]
 fn the_previous_disk_layer_is_waited_for_before_the_revert() {
     let w = W::new("prov-layer");
