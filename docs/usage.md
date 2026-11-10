@@ -911,7 +911,12 @@ The network capture is the guest's own view on every route.
   Suspicious activity on that tier; **Family candidates** from the detections and the
   sample's MalwareBazaar record, strongest first, each with its source (an Elastic
   `Linux_Trojan_<Family>` rule, a `family` or Malpedia metadata, MalwareBazaar's
-  signature and its tags, which may name two families; name fragments such as
+  signature and its tags, which may name two families; an IDS signature `ET MALWARE
+  <Family> ...`, named from its `malware_family` metadata, else from the one family
+  word of its message, else from a known family word in its title, which ranks below
+  every strong YARA match and above the weak ones; a rule known to match more than its
+  name says, such as `Linux_Trojan_Gafgyt_28a2fe0c` (it hits Mirai builds), counts as
+  weak evidence for both families and yields to a specific rule; name fragments such as
   MassHunt, IoT or Unique, and a rule pack's vendor or author in a rule name such as
   `SEKOIA_` or `ESET_`, are never a family; a family is the one family word of the
   rule, so `SEKOIA_Backdoor_Lin_Bpfdoor` and `MIRAI_OHSHIT_payload` name BPFDoor and
@@ -1772,6 +1777,12 @@ the custody log notes where it came from, and the signature is a family candidat
 shown as "MalwareBazaar signature (looked up by hash)". A sample that already has a
 record, or that MalwareBazaar does not list, is left as it is; with the setting off,
 or without a key, nothing is sent.
+
+A sample's **Family** field on the Samples page takes its candidates from the newest run
+with detections. A sample with no such run (it never started, as a truncated or armhf
+ELF on an arm64 base does) takes them from the YARA matches of its newest kept static
+analysis report, shown as "Static analysis: ...", so an Elastic `Linux_Trojan_Kinsing_...`
+or `Linux_Trojan_Tsunami_...` match names the family without a run.
 
 **Database status.** While it looks, the page says "Looking for databases…". Then
 **Country / city** and **Organization (AS)** each show **Database found** or **No

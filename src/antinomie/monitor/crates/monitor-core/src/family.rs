@@ -39,7 +39,7 @@ pub fn primary_families(candidates: &[Candidate]) -> (Vec<&Candidate>, Vec<&Cand
 /// The family one YARA or IDS match names, when it names one on purpose or
 /// in its name: what [`family_candidates`] counts for this match.
 pub fn rule_family(hit: &DetectionHit) -> Option<String> {
-    mention(hit).map(|m| m.name)
+    hit_mentions(hit).into_iter().next().map(|m| m.name)
 }
 
 /// What MalwareBazaar says of the run's sample: its `signature` and `tags`.
@@ -389,6 +389,15 @@ fn elastic_family(rule: &str) -> Option<String> {
     Some(pretty(&name))
 }
 
+/// Whether a rule name has Elastic's shape: three or more words and an
+/// eight-digit hexadecimal id at the end.
+fn elastic_named(rule: &str) -> bool {
+    rule.rsplit('_')
+        .next()
+        .is_some_and(|hash| hash.len() == 8 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+        && elastic_family(rule).is_some()
+}
+
 /// A fragment of a curated pack's rule name that may name a family:
 /// `MAL_ELF_Mirai_Jan2020`, `elf_mirai` and `SEKOIA_Backdoor_Lin_Bpfdoor`
 /// each carry one, `Suspicious_Strings` carries none. A name like
@@ -658,11 +667,11 @@ pub fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candi
     let mut mentions: Vec<Mention> = Vec::new();
     let yara = |hit: &&DetectionHit| hit.engine.eq_ignore_ascii_case("yara");
     // YARA first, then IDS: on a tie the earlier mention leads.
-    mentions.extend(hits.iter().filter(yara).filter_map(mention));
+    mentions.extend(hits.iter().filter(yara).flat_map(hit_mentions));
     mentions.extend(
         hits.iter()
             .filter(|hit| hit.engine.eq_ignore_ascii_case("ids"))
-            .filter_map(mention),
+            .flat_map(hit_mentions),
     );
     for (name, source) in bazaar_families(bazaar.signature, bazaar.tags) {
         mentions.push(Mention {
@@ -683,32 +692,206 @@ pub fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candi
     merge(mentions)
 }
 
-/// What one YARA or IDS match says of the family.
-fn mention(hit: &DetectionHit) -> Option<Mention> {
-    let mut found = mention_of(hit)?;
+/// Points an IDS signature's `malware_family` metadata adds. Next to the
+/// YARA mentions: below any strong one (an Elastic rule counts its score, 70
+/// or more when it is strong; a `family` meta 90), above every weak one (a
+/// curated pack's rule name 20, a word in a signature title 30).
+const IDS_META_POINTS: u32 = 45;
+/// Points the family in an `ET MALWARE <Family> ...` message adds.
+const IDS_MESSAGE_POINTS: u32 = 35;
+/// Points a known family word anywhere in an IDS title adds.
+const IDS_WORD_POINTS: u32 = 30;
+/// Points each family of a known-broad Elastic rule adds (see `BROAD_RULES`).
+const BROAD_POINTS: u32 = 25;
+
+/// Elastic rules known to match more than the family their name says: each
+/// is listed with the families it is evidence for, the first one the sample
+/// is more likely to be. The 2026-11-09 ARM evaluation: a Mirai build
+/// matched `Linux_Trojan_Gafgyt_28a2fe0c` and no Mirai rule, because Mirai
+/// and Gafgyt builds share code. Such a rule counts as weak evidence for
+/// every family listed, so a more specific rule of either family outranks it
+/// and, alone, it names the families together. Keep this list short and
+/// give a reason for each entry.
+const BROAD_RULES: &[(&str, &[&str])] = &[("Linux_Trojan_Gafgyt_28a2fe0c", &["Mirai", "Gafgyt"])];
+
+/// What one YARA or IDS match says of the family: usually one mention, two
+/// for a known-broad rule.
+fn hit_mentions(hit: &DetectionHit) -> Vec<Mention> {
+    let mut found = mentions_of(hit);
     if hit.layer {
-        found.source.push_str(" (in the unpacked payload)");
+        for mention in &mut found {
+            mention.source.push_str(" (in the unpacked payload)");
+        }
     }
-    Some(found)
+    found
 }
 
-fn mention_of(hit: &DetectionHit) -> Option<Mention> {
-    if hit.engine.eq_ignore_ascii_case("ids") {
-        let title = hit.title.to_ascii_lowercase();
-        let word = IDS_FAMILIES
+/// The IDS message `ET MALWARE <Family> ...` (`ET MALWARE Golang/Linux Kaiji
+/// Variant Activity`) names a family when exactly one word before the
+/// description is neither a platform, a language nor a category, or when
+/// one of them is a known family. Anything unsure gives none.
+fn ids_message_family(title: &str) -> Option<String> {
+    const ACTIVITY: &[&str] = &[
+        "activity",
+        "variant",
+        "cnc",
+        "c2",
+        "checkin",
+        "check-in",
+        "beacon",
+        "beaconing",
+        "botnet",
+        "backdoor",
+        "trojan",
+        "download",
+        "downloader",
+        "inbound",
+        "outbound",
+        "dns",
+        "http",
+        "https",
+        "tcp",
+        "udp",
+        "tls",
+        "ssl",
+        "domain",
+        "query",
+        "request",
+        "response",
+        "traffic",
+        "connection",
+        "attempt",
+        "scan",
+        "scanner",
+        "exploit",
+        "command",
+        "payload",
+        "malicious",
+        "known",
+        "observed",
+        "possible",
+        "suspected",
+        "likely",
+        "user-agent",
+        "ua",
+        "ip",
+        "tor",
+        "irc",
+        "ssh",
+        "telnet",
+        "login",
+        "target",
+        "related",
+        "reported",
+        "agent",
+        "stage",
+        "generic",
+        "and",
+        "to",
+        "from",
+        "with",
+        "in",
+    ];
+    let rest = title.trim().strip_prefix("ET MALWARE ")?;
+    let mut tokens: Vec<&str> = Vec::new();
+    for token in rest.split(|c: char| c.is_whitespace() || c == '/' || c == '(' || c == ')') {
+        let token = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        if token.is_empty() {
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        // The description starts at the first activity word: the family is
+        // named before it, or not at all.
+        if ACTIVITY.contains(&lower.as_str()) {
+            break;
+        }
+        if wrong_platform(&lower) {
+            // Another platform's malware is no family for a Linux sample.
+            return None;
+        }
+        if not_family(&lower) {
+            continue;
+        }
+        tokens.push(token);
+    }
+    let known = tokens.iter().find(|token| {
+        SPELLINGS
             .iter()
-            .find(|family| title.contains(**family))?;
-        return Some(Mention {
-            name: pretty(word),
-            points: 30,
-            strong: false,
-            source: format!("IDS \u{b7} {}", hit.title),
-        });
+            .chain(IDS_FAMILIES.iter())
+            .any(|known| known.eq_ignore_ascii_case(token))
+    });
+    if let Some(token) = known {
+        return Some(pretty(token));
+    }
+    match tokens.as_slice() {
+        [only] if only.len() >= 3 && !only.chars().any(|c| c.is_ascii_digit()) => {
+            Some(pretty(only))
+        }
+        _ => None,
+    }
+}
+
+fn mentions_of(hit: &DetectionHit) -> Vec<Mention> {
+    if hit.engine.eq_ignore_ascii_case("ids") {
+        // The signature's own `malware_family` metadata first, then the
+        // family its message names, then a known family word in the title.
+        let family = hit.family.trim();
+        if !family.is_empty() {
+            let name = meta_family(family);
+            if !not_family(&name.to_ascii_lowercase()) {
+                return vec![Mention {
+                    name,
+                    points: IDS_META_POINTS,
+                    strong: false,
+                    source: format!("IDS metadata malware_family {family} \u{b7} {}", hit.title),
+                }];
+            }
+        }
+        if let Some(name) = ids_message_family(&hit.title) {
+            return vec![Mention {
+                name,
+                points: IDS_MESSAGE_POINTS,
+                strong: false,
+                source: format!("IDS message \u{b7} {}", hit.title),
+            }];
+        }
+        let title = hit.title.to_ascii_lowercase();
+        return IDS_FAMILIES
+            .iter()
+            .find(|family| title.contains(**family))
+            .map(|word| Mention {
+                name: pretty(word),
+                points: IDS_WORD_POINTS,
+                strong: false,
+                source: format!("IDS \u{b7} {}", hit.title),
+            })
+            .into_iter()
+            .collect();
     }
     if !hit.engine.eq_ignore_ascii_case("yara") {
-        return None;
+        return Vec::new();
     }
     let name = plain_name(&hit.rule_id);
+    if let Some((_, families)) = BROAD_RULES.iter().find(|(rule, _)| *rule == name) {
+        return families
+            .iter()
+            .enumerate()
+            .map(|(at, family)| Mention {
+                name: (*family).to_owned(),
+                // The first family leads by one point.
+                points: BROAD_POINTS + u32::from(at == 0),
+                strong: false,
+                source: format!(
+                    "YARA \u{b7} Elastic rule {name} (known broad: it matches {})",
+                    families.join(" and ")
+                ),
+            })
+            .collect();
+    }
+    mention_of_yara(hit, name).into_iter().collect()
+}
+
+fn mention_of_yara(hit: &DetectionHit, name: &str) -> Option<Mention> {
     let name = if name.is_empty() {
         plain_name(&hit.title)
     } else {
@@ -725,7 +908,9 @@ fn mention_of(hit: &DetectionHit) -> Option<Mention> {
             });
         }
     }
-    if is_elastic(&hit.source) {
+    // A static scan's match carries no pack: Elastic's `<Os>_<Category>_<Family>_<8 hex>`
+    // names are told by the name alone.
+    if is_elastic(&hit.source) || (hit.source.is_empty() && elastic_named(name)) {
         let family = elastic_family(name)?;
         return Some(Mention {
             name: family,
@@ -1060,7 +1245,7 @@ mod tests {
 
     #[test]
     fn a_family_named_only_in_the_unpacked_payload_says_so() {
-        let mut in_layer = hit("YARA", "Linux_Trojan_Gafgyt_28a2fe0c", "80", "", "Elastic");
+        let mut in_layer = hit("YARA", "Linux_Trojan_Gafgyt_6a510422", "80", "", "Elastic");
         in_layer.layer = true;
         let found = family_candidates(&[in_layer], Bazaar::default());
         assert_eq!(names(&found), ["Gafgyt"]);
@@ -1068,7 +1253,7 @@ mod tests {
             found[0].source.ends_with("(in the unpacked payload)"),
             "{found:?}"
         );
-        let on_file = hit("YARA", "Linux_Trojan_Gafgyt_28a2fe0c", "80", "", "Elastic");
+        let on_file = hit("YARA", "Linux_Trojan_Gafgyt_6a510422", "80", "", "Elastic");
         let found = family_candidates(&[on_file], Bazaar::default());
         assert!(!found[0].source.contains("unpacked"));
     }
@@ -1089,6 +1274,192 @@ mod tests {
         assert_eq!(names(&found), ["Gafgyt"]);
         assert!(found[0].source.starts_with("IDS"));
         assert!(family_candidates(&[], Bazaar::default()).is_empty());
+    }
+
+    fn ids(title: &str, family: &str) -> DetectionHit {
+        let mut found = hit("IDS", "1:2044667:1", "1", family, "Suricata");
+        found.title = title.into();
+        found
+    }
+
+    #[test]
+    fn kaiji_is_named_by_the_ids_message_or_metadata() {
+        // T0432: the ARM Kaiji runs had only this signature and a generic
+        // Elastic rule; the family stayed unnamed.
+        let generic = hit(
+            "YARA",
+            "s86::Linux_Generic_Threat_a40aaa96",
+            "50",
+            "",
+            "elastic",
+        );
+        let title = "ET MALWARE Golang/Linux Kaiji Variant Activity";
+        let found = family_candidates(&[generic.clone(), ids(title, "")], Bazaar::default());
+        assert_eq!(names(&found), ["Kaiji"]);
+        assert!(found[0].source.starts_with("IDS message"), "{found:?}");
+        assert!(!found[0].strong);
+        // The signature's own metadata is stronger than its message.
+        let found = family_candidates(&[ids(title, "Kaiji")], Bazaar::default());
+        assert_eq!(names(&found), ["Kaiji"]);
+        assert!(
+            found[0]
+                .source
+                .starts_with("IDS metadata malware_family Kaiji")
+        );
+        assert_eq!(found[0].points, IDS_META_POINTS);
+    }
+
+    #[test]
+    fn ids_messages_name_a_family_only_when_sure() {
+        for (title, want) in [
+            ("ET MALWARE Gafgyt Botnet CnC Checkin", Some("Gafgyt")),
+            ("ET MALWARE Linux/Mirai Variant CnC Activity", Some("Mirai")),
+            (
+                "ET MALWARE Linux/Tsunami Backdoor Activity",
+                Some("Tsunami"),
+            ),
+            ("ET MALWARE Sliver Implant Checkin", Some("Sliver")),
+            ("ET MALWARE Observed DNS Query to Known CnC Domain", None),
+            ("ET MALWARE Suspicious User-Agent", None),
+            ("ET MALWARE Win32/Agent.ABC Checkin", None),
+            ("ET MALWARE Windows Evil Thing Activity", None),
+            ("ET MALWARE Two Unknown Words Activity", None),
+            (
+                "ET DROP Spamhaus DROP Listed Traffic Inbound group 31",
+                None,
+            ),
+            ("ET MALWARE", None),
+        ] {
+            assert_eq!(ids_message_family(title).as_deref(), want, "{title}");
+        }
+    }
+
+    #[test]
+    fn ids_weights_sit_between_strong_and_weak_yara() {
+        let elastic = {
+            let mut rule = hit(
+                "YARA",
+                "s1::Linux_Trojan_Mirai_b9a9d04b",
+                "100",
+                "",
+                "elastic",
+            );
+            rule.title = rule.rule_id.clone();
+            rule
+        };
+        let pack = hit("YARA", "MAL_ELF_Kaiten_Jan2020", "", "", "forge");
+        let found = family_candidates(
+            &[
+                pack,
+                ids("ET MALWARE Golang/Linux Kaiji Variant Activity", ""),
+                ids("ET MALWARE Gafgyt Botnet CnC Checkin", "Gafgyt"),
+                elastic,
+            ],
+            Bazaar::default(),
+        );
+        // Strong Elastic first, IDS metadata, IDS message, then the weak pack.
+        assert_eq!(names(&found), ["Mirai", "Gafgyt", "Kaiji", "Kaiten"]);
+    }
+
+    #[test]
+    fn a_known_broad_gafgyt_rule_names_mirai_and_a_specific_rule_wins() {
+        // T0432: the ARM Mirai build matched only Linux_Trojan_Gafgyt_28a2fe0c.
+        let broad = hit(
+            "YARA",
+            "s171::Linux_Trojan_Gafgyt_28a2fe0c",
+            "100",
+            "",
+            "elastic",
+        );
+        let found = family_candidates(std::slice::from_ref(&broad), Bazaar::default());
+        assert_eq!(names(&found), ["Mirai", "Gafgyt"]);
+        assert!(found.iter().all(|c| !c.strong && c.points <= 26));
+        assert!(found[0].source.contains("known broad"), "{found:?}");
+        let (primary, _) = primary_families(&found);
+        assert_eq!(primary.len(), 2);
+        // A specific Mirai rule outranks it ...
+        let mirai = hit(
+            "YARA",
+            "s197::Linux_Trojan_Mirai_b9a9d04b",
+            "100",
+            "",
+            "elastic",
+        );
+        let found = family_candidates(&[broad.clone(), mirai], Bazaar::default());
+        assert_eq!(found[0].name, "Mirai");
+        assert!(found[0].strong);
+        // ... and so does a specific Gafgyt one.
+        let gafgyt = hit(
+            "YARA",
+            "s171::Linux_Trojan_Gafgyt_6a510422",
+            "100",
+            "",
+            "elastic",
+        );
+        let found = family_candidates(&[broad, gafgyt], Bazaar::default());
+        assert_eq!(found[0].name, "Gafgyt");
+        assert!(found[0].strong);
+        // The rule's own family column still says what its name says.
+        let one = hit("YARA", "Linux_Trojan_Gafgyt_28a2fe0c", "100", "", "elastic");
+        assert_eq!(rule_family(&one).as_deref(), Some("Mirai"));
+    }
+
+    #[test]
+    fn the_gafgyt_sample_with_mirai_and_gafgyt_rules_keeps_both() {
+        // T0432 / report 6389: two Gafgyt rules and a Mirai one.
+        let hits = [
+            hit(
+                "YARA",
+                "s171::Linux_Trojan_Gafgyt_6a510422",
+                "100",
+                "",
+                "elastic",
+            ),
+            hit(
+                "YARA",
+                "s171::Linux_Trojan_Gafgyt_d2953f92",
+                "100",
+                "",
+                "elastic",
+            ),
+            hit(
+                "YARA",
+                "s197::Linux_Trojan_Mirai_b9a9d04b",
+                "100",
+                "",
+                "elastic",
+            ),
+            hit(
+                "YARA",
+                "s86::Linux_Generic_Threat_d2dca9e7",
+                "50",
+                "",
+                "elastic",
+            ),
+        ];
+        let found = family_candidates(&hits, Bazaar::default());
+        assert_eq!(names(&found), ["Gafgyt", "Mirai"]);
+    }
+
+    #[test]
+    fn a_static_scan_match_with_no_pack_names_an_elastic_family() {
+        // Tsunami ARM32 and Kinsing never ran: the sample page has only the
+        // static scan's matches, which carry the rule name and no pack.
+        let hits = [
+            hit("YARA", "Linux_Trojan_Tsunami_30c039e2", "", "", ""),
+            hit("YARA", "Linux_Trojan_Tsunami_a2a2d9f3", "", "", ""),
+            hit("YARA", "Linux_Trojan_Kinsing_3d4c1e0f", "", "", ""),
+            hit("YARA", "ELF_IoT_Persistence_Hunt", "", "", ""),
+            hit("YARA", "Some_Unknown_Rule_12345678", "", "", ""),
+        ];
+        let found = family_candidates(&hits, Bazaar::default());
+        assert_eq!(names(&found), ["Tsunami", "Kinsing"]);
+        assert!(found.iter().all(|c| c.strong));
+        assert!(
+            found[0]
+                .source
+                .contains("Elastic rule Linux_Trojan_Tsunami")
+        );
     }
 
     #[test]

@@ -128,6 +128,13 @@ pub(in crate::app::samples_page) fn load(
         known,
         links,
         report,
+        static_hits: antinomie_monitor_core::analysis::static_reports_for(
+            &options.data_dir,
+            &record.sha256,
+        )
+        .first()
+        .map(antinomie_monitor_core::analysis::static_rule_hits)
+        .unwrap_or_default(),
         sent,
         system,
         record,

@@ -176,6 +176,45 @@ pub fn yara_family(
         .unwrap_or_default()
 }
 
+/// The family an IDS signature names in its `metadata` (`malware_family
+/// Kaiji`, ET Open's key), empty when the rule line names none or one that is
+/// no name (`Unknown`, `None`).
+pub fn ids_family(rule: &str) -> String {
+    let Some((_, metadata)) = rule.split_once("metadata:") else {
+        return String::new();
+    };
+    let metadata = metadata.split(';').next().unwrap_or_default();
+    metadata
+        .split(',')
+        .filter_map(|pair| {
+            let pair = pair.trim();
+            let (key, value) = pair.split_once(char::is_whitespace)?;
+            (key == "malware_family").then(|| value.trim().replace('_', " "))
+        })
+        .find(|family| {
+            !family.is_empty()
+                && !matches!(
+                    family.to_ascii_lowercase().as_str(),
+                    "unknown" | "none" | "generic" | "multiple"
+                )
+        })
+        .unwrap_or_default()
+}
+
+/// The family a rule names in its metadata: [`yara_family`] for a YARA rule,
+/// [`ids_family`] for an IDS signature, nothing for Sigma.
+pub fn rule_family(
+    engine: antinomie_monitor_core::analysis::detection::Engine,
+    rule: &str,
+) -> String {
+    use antinomie_monitor_core::analysis::detection::Engine;
+    match engine {
+        Engine::Yara => yara_family(engine, rule),
+        Engine::Ids => ids_family(rule),
+        _ => String::new(),
+    }
+}
+
 /// Whether a match was found only in layers static analysis unpacked from the
 /// sample: its evidence is bytes of an unpacked layer and nothing else.
 fn only_in_layers(evidence: &[antinomie_monitor_core::analysis::detection::Evidence]) -> bool {
@@ -212,7 +251,7 @@ pub fn detections(
                 severity: finding.severity.clone(),
                 mitre: finding.mitre.clone(),
                 count: finding.count,
-                family: yara_family(report.engine, &finding.rule_text),
+                family: rule_family(report.engine, &finding.rule_text),
                 author: finding.author.clone(),
                 license: finding.license.clone(),
                 source: detection::pack_name(report, finding),
@@ -373,6 +412,22 @@ mod tests {
         assert_eq!(yara_family(Engine::Yara, rule), "XMRig");
         assert_eq!(yara_family(Engine::Ids, rule), "");
         assert_eq!(yara_family(Engine::Yara, "rule a { condition: true }"), "");
+        let ids = r#"alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"ET MALWARE Golang/Linux Kaiji Variant Activity"; flow:established; metadata:attack_target Client_Endpoint, created_at 2023_01_02, malware_family Kaiji, performance_impact Low; sid:2044667; rev:1;)"#;
+        assert_eq!(ids_family(ids), "Kaiji");
+        assert_eq!(rule_family(Engine::Ids, ids), "Kaiji");
+        assert_eq!(rule_family(Engine::Yara, ids), "");
+        let two = "alert tcp any any -> any any (msg:\"x\"; metadata:malware_family Unknown, malware_family Some_Bot; sid:1;)";
+        assert_eq!(ids_family(two), "Some Bot");
+        assert_eq!(
+            ids_family("alert tcp any any -> any any (msg:\"x\"; sid:1;)"),
+            ""
+        );
+        assert_eq!(
+            ids_family(
+                "alert tcp any any -> any any (msg:\"x\"; metadata:malware_family None; sid:1;)"
+            ),
+            ""
+        );
     }
 
     #[test]
