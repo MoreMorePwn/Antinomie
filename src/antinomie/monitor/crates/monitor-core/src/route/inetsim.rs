@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Antinomie's own fake services for the InetSim route: HTTP, SMTP and a
+//! Antinomie's own fake services for the InetSim route: HTTP, SMTP, a minimal
+//! IRC greeting (so IRC bots speak and their commands are captured) and a
 //! catch-all that reads and discards. Each guest connection to a port is
 //! served on a thread of its own over an in-process socket pair, so nothing
 //! listens on the host and nothing can be reached from outside. There is no
@@ -16,6 +17,8 @@ const IDLE: Duration = Duration::from_secs(20);
 const MAX_LINE: usize = 16 * 1024;
 const MAX_BODY: u64 = 1 << 20;
 const MAX_REQUESTS: usize = 64;
+/// Lines an IRC connection may send before the fake server hangs up.
+const MAX_IRC_LINES: usize = 256;
 
 const PAGE: &str = "<html>\n  <head>\n    <title>Antinomie InetSim default page</title>\n  </head>\n  <body>\n    <p>This is the default page of the built-in fake web server.</p>\n  </body>\n</html>\n";
 
@@ -31,6 +34,7 @@ pub(crate) fn spawn(port: u16, stream: UnixStream) -> Result<(), String> {
             let _ = match port {
                 80 | 8080 => http(stream),
                 25 | 587 => smtp(stream),
+                6665..=6669 | 7000 => irc(stream),
                 _ => sink(stream),
             };
         })
@@ -186,6 +190,84 @@ fn smtp(stream: UnixStream) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A nickname the fake server may echo: letters, digits and IRC's specials.
+fn irc_nick(text: &str) -> String {
+    let nick: String = text
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || "[]\\`_^{|}-".contains(*c))
+        .take(30)
+        .collect();
+    if nick.is_empty() {
+        "guest".into()
+    } else {
+        nick
+    }
+}
+
+/// A minimal IRC server: it greets the connection, welcomes it once NICK and
+/// USER arrived, answers PING and JOIN and nothing else. It talks to nobody:
+/// the connection is an in-process socket pair, and a channel has no other
+/// member, so a bot's commands are captured and relayed nowhere.
+fn irc(stream: UnixStream) -> std::io::Result<()> {
+    let mut writer = stream.try_clone()?;
+    let mut reader = BufReader::new(stream);
+    writer.write_all(b":irc.local NOTICE * :*** Looking up your hostname...\r\n")?;
+    let (mut nick, mut user, mut welcomed) = (None::<String>, false, false);
+    for _ in 0..MAX_IRC_LINES {
+        let Some(text) = line(&mut reader)? else {
+            return Ok(());
+        };
+        let mut parts = text.splitn(2, ' ');
+        let verb = parts.next().unwrap_or("").to_ascii_uppercase();
+        let rest = parts.next().unwrap_or("").trim();
+        match verb.as_str() {
+            "NICK" => nick = Some(irc_nick(rest.trim_start_matches(':'))),
+            "USER" => user = true,
+            "PING" => {
+                let token = rest.trim_start_matches(':');
+                let token: String = token.chars().filter(|c| !c.is_control()).take(64).collect();
+                writer.write_all(format!(":irc.local PONG irc.local :{token}\r\n").as_bytes())?;
+            }
+            "JOIN" => {
+                let me = nick.as_deref().unwrap_or("guest");
+                for channel in rest.split(',').take(4) {
+                    let channel: String = channel
+                        .chars()
+                        .filter(|c| c.is_ascii_graphic())
+                        .take(50)
+                        .collect();
+                    if channel.starts_with(['#', '&']) {
+                        writer.write_all(
+                            format!(
+                                ":{me}!{me}@irc.local JOIN :{channel}\r\n:irc.local 366 {me} {channel} :End of /NAMES list.\r\n"
+                            )
+                            .as_bytes(),
+                        )?;
+                    }
+                }
+            }
+            "QUIT" => {
+                writer.write_all(b"ERROR :Closing Link: irc.local (Client Quit)\r\n")?;
+                return Ok(());
+            }
+            _ => {}
+        }
+        if !welcomed && user && nick.is_some() {
+            welcomed = true;
+            let me = nick.as_deref().unwrap_or("guest");
+            writer.write_all(
+                format!(
+                    ":irc.local 001 {me} :Welcome to the Internet Relay Network {me}\r\n\
+                     :irc.local 002 {me} :Your host is irc.local, running version antinomie-irc\r\n\
+                     :irc.local 376 {me} :End of /MOTD command.\r\n"
+                )
+                .as_bytes(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +312,39 @@ mod tests {
         assert!(reply.starts_with("220 "));
         assert!(reply.contains("354 ") && reply.contains("250 OK message queued"));
         assert!(reply.ends_with("221 bye\r\n"));
+    }
+
+    #[test]
+    fn irc_greets_welcomes_after_nick_and_user_and_answers_ping_and_join() {
+        for port in [6665, 6667, 6669, 7000] {
+            let reply = talk(
+                port,
+                b"NICK bot1\r\nUSER bot 0 * :bot\r\nPING :abc\r\nJOIN #chan\r\nPRIVMSG #chan :!scan 1.2.3.4\r\nQUIT\r\n",
+            );
+            assert!(
+                reply.starts_with(":irc.local NOTICE * :*** Looking up your hostname"),
+                "{reply}"
+            );
+            assert!(reply.contains(":irc.local 001 bot1 :Welcome"), "{reply}");
+            assert!(reply.contains("PONG irc.local :abc"), "{reply}");
+            assert!(
+                reply.contains(":bot1!bot1@irc.local JOIN :#chan"),
+                "{reply}"
+            );
+            // A channel message is read and relayed nowhere.
+            assert!(!reply.contains("!scan"), "{reply}");
+        }
+    }
+
+    #[test]
+    fn irc_welcomes_only_when_both_nick_and_user_came_and_never_echoes_control_bytes() {
+        let nick_only = talk(6667, b"NICK bot2\r\n");
+        assert!(!nick_only.contains(" 001 "));
+        let user_first = talk(6667, b"USER u 0 * :u\r\nNICK bad\x01nick\x07\r\n");
+        assert!(user_first.contains(" 001 badnick :"), "{user_first}");
+        assert!(!user_first.contains('\u{1}'));
+        // Other ports near IRC's are the silent catch-all.
+        assert_eq!(talk(6670, b"NICK x\r\nUSER x 0 * :x\r\n"), "");
     }
 
     #[test]

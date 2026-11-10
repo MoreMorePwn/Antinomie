@@ -522,7 +522,7 @@ user: no root, no firewall rules, no VPN client on the computer.
 |---|---|
 | **None (drop)** | Nothing leaves. Connections and DNS go unanswered; the attempts are still captured. |
 | **Internet** | Connect to public addresses through this computer's connection. It cannot reach this computer or your local network unless you allow private addresses. |
-| **InetSim (fake services)** | Every name resolves to a fake address and every connection reaches a fake service (HTTP, SMTP; other ports accept and discard). Nothing leaves. |
+| **InetSim (fake services)** | Every name resolves to a fake address and every connection reaches a fake service (HTTP, SMTP, a minimal IRC greeting on ports 6665 to 6669 and 7000; other ports accept and discard). Nothing leaves. |
 | **Tor** | Connect through Tor, which Antinomie starts for the run (or through a SOCKS address of your own Tor); Tor resolves the names. |
 | **VPN (WireGuard)** | Connect through a WireGuard tunnel run by wireproxy (userspace, no root). |
 | **SOCKS5 proxy** | Connect through a SOCKS5 proxy you give (optional user name and password). |
@@ -567,7 +567,10 @@ Pick the route in the Run form (**Network > Route**); the default comes from
   `https_bind_port 10443`, `smtp_bind_port 10025`, `ftp_bind_port 10021` and a
   `start_service` line for each. Antinomie answers DNS itself (every name resolves
   to the fake address), so INetSim's DNS service is not used. The built-in
-  services have no TLS: HTTPS needs INetSim.
+  services have no TLS: HTTPS needs INetSim. The IRC greeting (a NOTICE, the
+  welcome after NICK and USER, PONG, JOIN) lets IRC bots speak so their commands
+  are captured; it talks to nobody. Since every name has the one fake address,
+  Triage tells the processes' lookups apart by time, not by address.
 * A **Test** button for each route brings it up the way a run would and says
   whether it answers.
 
@@ -1177,7 +1180,9 @@ The network capture is the guest's own view on every route.
   first and `+N`), **Base image background: NTP** (or DHCP, apt: the traffic the
   Summary's Indicators set apart, and a base program's own flows; DHCP to the
   gateway of a profile's own guest network counts too, read from the run's
-  record), or
+  record; on a run without that record any local DHCP server counts; a flow
+  to the resolver is background DNS when every name looked up is one the base
+  image asks for itself), or
   **Unattributed** when no recorded call matches, as for a raw socket. Filter it
   with `network.source`, `network.source_kind` (`process`, `background`,
   `unattributed`), `network.source_process` and `network.source_pid`. A run

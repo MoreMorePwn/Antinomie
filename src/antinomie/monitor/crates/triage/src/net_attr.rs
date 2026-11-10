@@ -182,6 +182,8 @@ pub struct NetAttribution {
     window: Option<(u64, u64)>,
     /// Addresses the run's own DNS answers gave to a name, by address.
     names_at: BTreeMap<IpAddr, Vec<String>>,
+    /// Every name the capture's DNS lookups asked for (a bounded sample).
+    lookups: Vec<String>,
     /// The router of the guest's own NAT network, whose DHCP is background.
     gateway: Option<IpAddr>,
 }
@@ -202,6 +204,7 @@ impl NetAttribution {
             by_port,
             window: None,
             names_at: BTreeMap::new(),
+            lookups: Vec::new(),
             gateway: None,
         }
     }
@@ -272,6 +275,13 @@ impl NetAttribution {
         let names = self.names_at.entry(ip).or_default();
         if names.len() < 16 && !names.iter().any(|known| known == name) {
             names.push(name.to_owned());
+        }
+    }
+
+    /// Learn that the capture's DNS asked for `name`.
+    pub fn learn_lookup(&mut self, name: &str) {
+        if self.lookups.len() < 256 && !self.lookups.iter().any(|known| known == name) {
+            self.lookups.push(name.to_owned());
         }
     }
 
@@ -354,10 +364,11 @@ impl NetAttribution {
 
     /// The distinct callers of `calls`, the earliest first.
     fn callers(calls: &[&FlowCall]) -> Vec<Caller> {
+        // Threads of one process are one caller.
         let mut seen = std::collections::BTreeSet::new();
         calls
             .iter()
-            .filter(|call| seen.insert(call.caller.cookie))
+            .filter(|call| seen.insert((call.caller.pid, call.caller.name.clone())))
             .map(|call| call.caller.clone())
             .collect()
     }
@@ -404,6 +415,23 @@ impl NetAttribution {
             return Some((
                 crate::summary::indicators::background_kind(&value, why),
                 why.to_owned(),
+            ));
+        }
+        if endpoint.1 == 53
+            && !self.lookups.is_empty()
+            && self.lookups.iter().all(|name| baseline::dns_noise(name))
+        {
+            return Some((
+                "DNS",
+                format!(
+                    "the capture's only lookups ({}) are names the base image asks for itself",
+                    self.lookups
+                        .iter()
+                        .take(2)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             ));
         }
         let names = self.names_at.get(&endpoint.0).filter(|n| !n.is_empty())?;
@@ -731,9 +759,18 @@ mod tests {
         ] {
             assert_eq!(own.source_of(&other), Source::Unattributed);
         }
-        // With no gateway recorded, QEMU's default 10.0.2.2 is all it knows.
+        // With no gateway recorded (an older run) any local DHCP server is
+        // the base image's: BusyBox's udhcpc at 192.168.1.1 (ANT-T0435, N3).
         let none = NetAttribution::default();
-        assert_eq!(none.source_of(&dhcp), Source::Unattributed);
+        assert_eq!(none.source_of(&dhcp).label(), "Base image background: DHCP");
+        assert_eq!(
+            none.source_of(&key(false, ("192.168.1.1", 67), (5 * SEC, 5 * SEC))),
+            Source::Unattributed
+        );
+        assert_eq!(
+            none.source_of(&key(true, ("203.0.113.9", 67), (5 * SEC, 5 * SEC))),
+            Source::Unattributed
+        );
         let default = key(true, ("10.0.2.2", 67), (5 * SEC, 5 * SEC));
         assert_eq!(
             none.source_of(&default).label(),
@@ -803,5 +840,54 @@ mod tests {
         // A flow spanning both lists both.
         let both = attribution.source_of(&key(false, ("192.0.2.9", 443), (100 * SEC, 210 * SEC)));
         assert_eq!(both.label(), "first (10 \u{b7} 11), second (20 \u{b7} 21)");
+    }
+    #[test]
+    fn resolver_flows_of_base_lookups_are_background_dns_and_a_sample_name_is_not() {
+        let flow = key(true, ("10.0.2.3", 53), (5 * SEC, 6 * SEC));
+        let mut base = NetAttribution::default();
+        base.learn_lookup("0.debian.pool.ntp.org");
+        base.learn_lookup("debian");
+        assert_eq!(base.source_of(&flow).label(), "Base image background: DNS");
+        base.learn_lookup("c2.evil.example");
+        assert_eq!(base.source_of(&flow), Source::Unattributed);
+        // No lookups known: nothing is claimed.
+        assert_eq!(
+            NetAttribution::default().source_of(&flow),
+            Source::Unattributed
+        );
+        // A process that called the resolver keeps the flow.
+        let mut called = NetAttribution::new(vec![call(
+            caller(52, "nslookup"),
+            "sendto",
+            Role::Remote,
+            ("10.0.2.3", 53),
+            true,
+            5 * SEC,
+        )]);
+        called.learn_lookup("debian");
+        assert_eq!(called.source_of(&flow).kind(), "process");
+    }
+
+    #[test]
+    fn threads_of_one_process_are_one_caller() {
+        let thread = |tid: u32, cookie: u64| {
+            let mut c = caller(669, "bot");
+            c.tid = tid;
+            c.cookie = cookie;
+            call(
+                c,
+                "connect",
+                Role::Remote,
+                ("192.0.2.9", 80),
+                false,
+                100 * SEC,
+            )
+        };
+        let attribution = NetAttribution::new(vec![thread(1, 1), thread(2, 2), thread(3, 3)]);
+        let source = attribution.source_of(&key(false, ("192.0.2.9", 80), (100 * SEC, 101 * SEC)));
+        match source {
+            Source::Process(callers) => assert_eq!(callers.len(), 1),
+            other => panic!("{other:?}"),
+        }
     }
 }

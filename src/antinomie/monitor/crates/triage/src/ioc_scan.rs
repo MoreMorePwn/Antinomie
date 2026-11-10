@@ -184,6 +184,8 @@ pub fn feed(gathered: &mut Gathered<'_>) {
             ok: Some(call.ok),
             process: Some(process(&call.who)),
             note: None,
+            // A datagram socket's connect() sends nothing.
+            silent: call.udp && call.name == "connect",
         };
         gathered.collector.endpoint(
             call.ip,
@@ -239,6 +241,7 @@ pub fn feed(gathered: &mut Gathered<'_>) {
             ok: Some(true),
             process: Some(process(&run.who)),
             note,
+            silent: false,
         };
         let from_disk = hash.clone().filter(|_| run.sha256.is_none());
         gathered
@@ -314,6 +317,7 @@ pub fn feed(gathered: &mut Gathered<'_>) {
                     .as_deref()
                     .filter(|_| hash.is_none())
                     .map(antinomie_monitor_core::ioc::no_hash_text),
+                silent: false,
             };
             gathered
                 .collector

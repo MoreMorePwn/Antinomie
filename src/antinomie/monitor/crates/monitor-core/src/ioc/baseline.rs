@@ -115,10 +115,39 @@ pub fn endpoint_noise_at(value: &str, udp: bool, gateway: Option<&str>) -> Optio
     if udp && matches!(port, 67 | 68) && gateway.is_some_and(|gateway| gateway == address) {
         return Some("DHCP, the base image's address request");
     }
+    // No gateway recorded (a run saved before the profile's network was
+    // kept): the DHCP client of any image (BusyBox's udhcpc broadcasts through
+    // a packet socket, no call names it) talks to the router of the guest's
+    // own network, a private or link-local address on the DHCP ports. With a
+    // recorded gateway only that address counts.
+    if udp && matches!(port, 67 | 68) && gateway.is_none() && local_address(address) {
+        return Some("DHCP, the base image's address request");
+    }
     ENDPOINTS
         .iter()
         .any(|(ip, known)| *ip == address && *known == port)
         .then_some("DHCP, the base image's address request")
+}
+
+/// Whether `address` is a private, link-local or broadcast IPv4 address (the
+/// guest's own network, where a DHCP server lives).
+fn local_address(address: &str) -> bool {
+    address
+        .parse::<std::net::Ipv4Addr>()
+        .is_ok_and(|ip| ip.is_private() || ip.is_link_local() || ip.is_broadcast())
+}
+
+/// Whether a looked-up name is one the base image asks for itself: the NTP
+/// pools and package archives, the guest's own host name (a single label) or
+/// a local name.
+pub fn dns_noise(name: &str) -> bool {
+    let trimmed = name.trim_end_matches('.').to_ascii_lowercase();
+    !trimmed.is_empty()
+        && (domain_noise(&trimmed)
+            || !trimmed.contains('.')
+            || trimmed.ends_with(".local")
+            || trimmed.ends_with(".localdomain")
+            || trimmed.ends_with(".in-addr.arpa"))
 }
 
 /// Why the indicator is the base image's, or `None` when it is the run's.
@@ -152,7 +181,13 @@ pub fn noise_at(indicator: &Indicator, gateway: Option<&str>) -> Option<String> 
                 .map(str::to_owned)
         }
         _ => host(indicator)
-            .filter(|host| domain_noise(host))
+            .filter(|host| {
+                if indicator.ty == Type::Domain {
+                    dns_noise(host)
+                } else {
+                    domain_noise(host)
+                }
+            })
             .map(|host| format!("{host} is looked up by the base image (clock sync, apt)")),
     }
 }
@@ -206,11 +241,17 @@ mod tests {
         // Only the gateway, only DHCP.
         assert_eq!(noise_of(&own, Type::Endpoint, "192.168.1.1:53"), None);
         assert_eq!(noise_of(&own, Type::Endpoint, "192.168.1.9:67"), None);
-        // With no gateway recorded the list knows QEMU's default only.
-        assert_eq!(
-            noise_of(&list(None), Type::Endpoint, "192.168.1.1:67"),
-            None
+        // With no gateway recorded any local DHCP server is the base image's
+        // (a run saved before the network was kept), but still only DHCP.
+        let none = list(None);
+        assert!(
+            noise_of(&none, Type::Endpoint, "192.168.1.1:67")
+                .unwrap()
+                .contains("DHCP")
         );
+        assert_eq!(noise_of(&none, Type::Endpoint, "192.168.1.1:53"), None);
+        assert!(!endpoint_noise_at("203.0.113.9:67", true, None).is_some());
+        assert!(endpoint_noise_at("192.168.1.1:67", false, None).is_none());
     }
 
     #[test]
