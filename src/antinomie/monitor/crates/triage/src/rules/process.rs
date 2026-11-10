@@ -13,6 +13,10 @@ pub const CLONE_NEWUSER: u64 = 0x1000_0000;
 pub const NS: u64 = 1_000_000_000;
 pub const KILL_TARGETS: usize = 5;
 pub const KILL_SPAN: u64 = 30 * NS;
+/// Different processes SIGKILLed after their `/proc` files were read.
+pub const KILLER_VICTIMS: usize = 3;
+/// Programs that reap and stop their own services: not a killer.
+const INIT_SYSTEMS: &[&str] = &["init", "systemd", "tini", "dumb-init", "runit", "s6-svscan"];
 pub const FORKS_PER_SECOND: usize = 200;
 pub const FORK_FAILURES: u32 = 20;
 pub const EAGAIN: i64 = -11;
@@ -278,6 +282,48 @@ pub fn prctl(cx: &Ctx, out: &mut Vec<Hit>) {
     }
 }
 
+/// BusyBox's shell runs NOFORK and NOEXEC applets inside itself and sets `comm`
+/// to the applet's name. That is the new name being an applet that the process,
+/// a BusyBox binary or a shell, was asked to run in its own command line. A
+/// rename to another name, or in a process that never asked for the applet,
+/// is still a rename.
+fn busybox_applet(cx: &Ctx, name: &str) -> bool {
+    if !crate::process_cells::is_applet(name) {
+        return false;
+    }
+    let image = crate::process_cells::family(cx.image_name());
+    let busybox = image == "busybox"
+        || cx
+            .files
+            .process_images
+            .get(&TaskKey {
+                pid: cx.event.pid,
+                cookie: cx.call.task_cookie,
+            })
+            .is_some_and(|node| {
+                node.exec_history
+                    .iter()
+                    .any(|path| crate::process_cells::file_name(path) == "busybox")
+            });
+    if busybox {
+        return true;
+    }
+    image == "sh"
+        && cx
+            .files
+            .process_images
+            .get(&TaskKey {
+                pid: cx.event.pid,
+                cookie: cx.call.task_cookie,
+            })
+            .is_some_and(|node| {
+                node.argv.iter().skip(1).any(|word| {
+                    word.split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+                        .any(|part| part == name)
+                })
+            })
+}
+
 /// The process gave itself a new name: `prctl(PR_SET_NAME)` or a write to its
 /// `comm` file. LOW; MEDIUM when the name imitates a kernel thread or a daemon.
 /// An empty `name` is a name the recording did not capture.
@@ -287,6 +333,9 @@ pub fn renamed(cx: &Ctx, name: &str, how: &str, imitates: bool, out: &mut Vec<Hi
     } else {
         format!("{name:?}")
     };
+    if !imitates && busybox_applet(cx, name) {
+        return;
+    }
     let mut hit = Hit::new(
         "evasion.process_rename",
         if name.is_empty() {
@@ -503,7 +552,31 @@ pub fn kill(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         return;
     }
     let time = cx.time();
+    let image = cx.image_name();
     let task = st.task(cx);
+    // Mirai-style killer: scan /proc, then SIGKILL what was found.
+    if signal == 9
+        && task.proc_pids.contains(&pid)
+        && !INIT_SYSTEMS.contains(&image)
+        && task.killed_read.insert(pid)
+        && task.killed_read.len() >= KILLER_VICTIMS
+        && !task.killer_done
+    {
+        task.killer_done = true;
+        let victims: Vec<String> = task.killed_read.iter().map(u32::to_string).collect();
+        out.push(
+            Hit::new(
+                "evasion.process_killer",
+                "kill",
+                format!(
+                    "SIGKILL sent to {} processes whose /proc entries it had read (pids {})",
+                    victims.len(),
+                    victims.join(", ")
+                ),
+            )
+            .detail("The task listed processes under /proc and then killed them, the way a bot removes rival malware and security tools."),
+        );
+    }
     task.kills.push(time, KILL_SPAN, pid);
     if task.kills.distinct() >= KILL_TARGETS && !task.kill_done {
         task.kill_done = true;

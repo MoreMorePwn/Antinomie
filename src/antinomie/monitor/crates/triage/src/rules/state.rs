@@ -149,6 +149,9 @@ pub struct Task {
     /// Writable anonymous ranges, to tell a write-then-execute from a plain exec map.
     pub writable: Vec<(u64, u64)>,
     pub kill_done: bool,
+    /// Pids killed with SIGKILL after this task read their `/proc` files.
+    pub killed_read: BTreeSet<u32>,
+    pub killer_done: bool,
     /// Pipe descriptor → the file just spliced into it.
     pub spliced: BTreeMap<u64, String>,
     /// An ELF image came in over a socket.

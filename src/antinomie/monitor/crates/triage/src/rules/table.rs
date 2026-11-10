@@ -648,6 +648,13 @@ pub const SPECS: &[Spec] = &[
         &["T1489", "DET0021", "T1685"],
     ),
     rule(
+        "evasion.process_killer",
+        1,
+        T::Medium,
+        C::Evasion,
+        &["T1489", "DET0021", "T1685"],
+    ),
+    rule(
         "evasion.hidden_artifact",
         1,
         T::Low,

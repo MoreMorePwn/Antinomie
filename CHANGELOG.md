@@ -15,6 +15,15 @@ x86 programs by their own table.
 
 ### Host
 
+- **Rule gaps: PID hiding through the new mount API, a process killer, and a BusyBox false positive (ANT-T0436).**
+  - A mount over `/proc/<pid>` made with `open_tree` and `move_mount` (Kaiji's way of hiding itself) is now
+    "Hiding processes: mount over /proc", as `mount(MS_BIND)` already was; the finding names the hidden pid.
+  - New finding "Process killer" (MEDIUM): a task that read other processes' `/proc` files and then sent
+    SIGKILL to three or more of them that the run did not start. It names the killed pids. Init systems and
+    the run's own children do not fire it.
+  - A BusyBox shell that runs an applet inside itself (`sh -c 'rm -rf …'`) no longer shows "Process renamed
+    itself sh to rm". A rename to a name the shell was not asked to run still does.
+
 - **Argument positions come from the call's own ABI table (ANT-T0440).** Triage rules, the
   process record, the Sigma and auditd address fields, the trace's field roles and the
   capture's exec path looked up argument positions in the x86-64 table for every

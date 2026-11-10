@@ -80,6 +80,7 @@ pub const FILES: &[&str] = &[
     "fanotify_mark",
     "flock",
     "mount",
+    "move_mount",
     "umount2",
     "chroot",
     "ioctl",

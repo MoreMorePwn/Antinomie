@@ -739,3 +739,127 @@ pub fn renaming_and_argv_zero_are_separate_findings_in_one_process() {
     assert_eq!(rows(&out, "evasion.process_rename").len(), 1);
     assert_eq!(rows(&out, "evasion.argv_masquerade").len(), 1);
 }
+
+fn move_mount_to(path: &str, result: i64) -> InvocationSummary {
+    let call = sys(
+        1,
+        429,
+        "move_mount",
+        [3, 0, (-100i64) as u64, 0, 0, 0],
+        result,
+    );
+    with_path(call, "arg3.to_path", path)
+}
+
+#[test]
+pub fn a_mount_over_a_proc_pid_hides_the_pid_by_either_mount_api() {
+    // open_tree(OPEN_TREE_CLONE) then move_mount onto /proc/<pid>: Kaiji.
+    let open_tree = with_path(
+        sys(1, 428, "open_tree", [(-100i64) as u64, 0, 1, 0, 0, 0], 3),
+        "arg1.path",
+        "/tmp/",
+    );
+    let out = run(vec![open_tree, move_mount_to("/proc/4321", 0)]);
+    assert_eq!(
+        tier(&out, "evasion.proc_hide_mount").as_deref(),
+        Some("high")
+    );
+    let row = rows(&out, "evasion.proc_hide_mount")[0];
+    assert!(text(row, "finding.summary").contains("4321"));
+    // The mount(2) form names the pid as well.
+    let bind = with_path(
+        sys(1, 165, "mount", [0, 0, 0, 4096, 0, 0], 0),
+        "arg1.dir_name",
+        "/proc/777",
+    );
+    let out = run(vec![bind]);
+    assert!(text(rows(&out, "evasion.proc_hide_mount")[0], "finding.summary").contains("777"));
+    // Another target, a failed move and a /proc entry that is not a pid.
+    for call in [
+        move_mount_to("/mnt/x", 0),
+        move_mount_to("/proc/4321", -1),
+        move_mount_to("/proc/sys", 0),
+    ] {
+        assert!(!has(&run(vec![call]), "evasion.proc_hide_mount"));
+    }
+}
+
+fn read_proc_then_kill(victims: &[u64], signal: u64, init: &str) -> super::super::engine::Output {
+    let mut calls = vec![exec(1, init, &[init])];
+    for (n, pid) in victims.iter().enumerate() {
+        calls.push(open_read(1, &format!("/proc/{pid}/cmdline"), 10 + n as i64));
+    }
+    for pid in victims {
+        calls.push(sys(1, 62, "kill", [*pid, signal, 0, 0, 0, 0], 0));
+    }
+    run(calls)
+}
+
+#[test]
+pub fn killing_processes_after_reading_their_proc_entries_is_a_killer() {
+    let out = read_proc_then_kill(&[900, 901, 902], 9, "/tmp/x");
+    assert_eq!(
+        tier(&out, "evasion.process_killer").as_deref(),
+        Some("medium")
+    );
+    let summary = text(rows(&out, "evasion.process_killer")[0], "finding.summary");
+    assert!(summary.contains("900") && summary.contains("902"));
+    // Too few victims, SIGTERM, or processes never looked at.
+    assert!(!has(
+        &read_proc_then_kill(&[900, 901], 9, "/tmp/x"),
+        "evasion.process_killer"
+    ));
+    assert!(!has(
+        &read_proc_then_kill(&[900, 901, 902], 15, "/tmp/x"),
+        "evasion.process_killer"
+    ));
+    let blind = run((900..903)
+        .map(|pid| sys(1, 62, "kill", [pid, 9, 0, 0, 0, 0], 0))
+        .collect());
+    assert!(!has(&blind, "evasion.process_killer"));
+    // An init system that stops its services.
+    assert!(!has(
+        &read_proc_then_kill(&[900, 901, 902], 9, "/sbin/init"),
+        "evasion.process_killer"
+    ));
+    // Its own children are not victims.
+    let mut calls = vec![exec(1, "/bin/sh", &["sh"])];
+    for pid in 2..5u32 {
+        calls.push(exec(pid, "/bin/sleep", &["sleep"]));
+        calls.push(open_read(
+            1,
+            &format!("/proc/{pid}/cmdline"),
+            10 + i64::from(pid),
+        ));
+        calls.push(sys(1, 62, "kill", [u64::from(pid), 9, 0, 0, 0, 0], 0));
+    }
+    assert!(!has(&run(calls), "evasion.process_killer"));
+}
+
+#[test]
+pub fn a_busybox_shell_running_an_applet_is_not_a_rename() {
+    let renames = |program: &str, argv: &[&str], name: &str| {
+        run(vec![exec(1, program, argv), prctl_name(Some(name))])
+    };
+    // sh -c 'rm -rf …' on the BusyBox base: the shell runs rm in itself.
+    assert!(!has(
+        &renames("/bin/sh", &["sh", "-c", "rm -rf /tmp/*"], "rm"),
+        "evasion.process_rename"
+    ));
+    assert!(!has(
+        &renames("/bin/busybox", &["busybox", "sh"], "rm"),
+        "evasion.process_rename"
+    ));
+    // Real renames stay: a name the shell was not asked to run, a name that
+    // is not an applet, and a program that is not a shell.
+    for (program, argv, name) in [
+        ("/bin/sh", vec!["sh", "-c", "echo hi"], "rm"),
+        ("/bin/sh", vec!["sh", "-c", "rm -rf /tmp/*"], "worker-1"),
+        ("/tmp/x", vec!["x", "rm"], "rm"),
+    ] {
+        assert!(
+            has(&renames(program, &argv, name), "evasion.process_rename"),
+            "{program} {argv:?} {name}"
+        );
+    }
+}
