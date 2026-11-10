@@ -13,7 +13,7 @@ use super::{
         ChainCheck, Entry, IndexCheck, IndexRecord, ZERO, check_chain, check_index, heads_of,
     },
     custody::{CustodyEvent, CustodySink},
-    library::{EventRow, Library, connect},
+    library::{BUSY_WRITER, EventRow, Library, connect_waiting},
 };
 use rusqlite::{Connection, Transaction, params};
 use std::{
@@ -174,7 +174,8 @@ impl CustodySink for ChainedEvents {
         event: &CustodyEvent,
     ) -> Result<(), String> {
         let detail = event.stored()?;
-        let mut connection = connect(&self.database)?;
+        let _write = super::write_lock::lock(&self.database);
+        let mut connection = connect_waiting(&self.database, BUSY_WRITER)?;
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| format!("custody log: {e}"))?;
@@ -194,7 +195,8 @@ impl CustodySink for ChainedEvents {
     }
 
     fn prepare(&self) -> Result<(), String> {
-        let mut connection = connect(&self.database)?;
+        let _write = super::write_lock::lock(&self.database);
+        let mut connection = connect_waiting(&self.database, BUSY_WRITER)?;
         migrate_plain(&mut connection)
     }
 }
@@ -497,6 +499,7 @@ impl Library {
     /// the missing log is accounted for. [`Library::remove`] is the usual,
     /// lighter action.
     pub fn purge(&mut self, sha256: &str) -> Result<(), String> {
+        let _write = self.write_lock();
         let sha256 = sha256.to_ascii_lowercase();
         let archive = self.archive_path(&sha256)?;
         let transaction = self

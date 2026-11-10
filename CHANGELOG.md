@@ -80,6 +80,19 @@ x86 programs by their own table.
   fails the stage; an analysis the engine cannot run at all still does. The static tools'
   time limit is stretched with the host load, like the guest waits.
 
+- **Sample library writes under contention no longer fail "database is locked" or drop a
+  custody entry (ANT-T0453).** Two writers to one library at once (the window or CLI and the
+  daemon, or the daemon's lane and its watch-folder intake) could fail after the 5 s busy
+  timeout, and the background custody writer dropped an entry it could not write.
+  - Writers in one process now queue on one lock per library instead of competing through
+    SQLite's retry sleeps.
+  - Custody entries and the service's and CLI's writes wait up to 30 s for another process
+    (windows keep 5 s). The custody writer retries a busy database with a back-off, waits
+    for room in its queue instead of dropping an entry, and reports an entry it finally
+    cannot write on stderr ("antinomie: LOST custody entry ...").
+  - The library keeps its rollback journal (no `-wal` files beside `library.sqlite`), so a
+    copied or backed-up database file is always whole.
+
 - **Argument positions come from the call's own ABI table (ANT-T0440).** Triage rules, the
   process record, the Sigma and auditd address fields, the trace's field roles and the
   capture's exec path looked up argument positions in the x86-64 table for every

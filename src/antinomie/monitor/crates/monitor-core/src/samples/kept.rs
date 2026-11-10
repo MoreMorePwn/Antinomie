@@ -348,6 +348,7 @@ impl Library {
         artifact: &NewArtifact,
         at_ms: u64,
     ) -> Result<(), String> {
+        let _write = self.write_lock();
         self.connection
             .execute(
                 "INSERT OR REPLACE INTO artifact(sha256, kind, vm_id, run_id, name, hash, size,

@@ -229,7 +229,7 @@ impl SampleTags for LibraryTags {
     fn add_tag(&self, job: &Job, tag: &str) -> Result<bool, String> {
         let sample = job.sample.as_ref().ok_or("the job has no sample")?;
         let mut library =
-            Library::open(&self.data_dir)?.with_actor(&custody::automation_actor(job))?;
+            Library::open_patient(&self.data_dir)?.with_actor(&custody::automation_actor(job))?;
         library.add_tag(sample.sha256.as_str(), Tag::new(TagKind::Custom, tag))
     }
 }

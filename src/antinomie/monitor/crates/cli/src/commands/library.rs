@@ -18,7 +18,7 @@ pub fn open_existing(data_dir: &Path) -> Result<Option<Library>, CliError> {
 
 /// The library of `data_dir` for a command that writes; created if absent.
 pub fn open_for_write(data_dir: &Path) -> Result<Library, CliError> {
-    Library::open(data_dir).map_err(library_error)
+    Library::open_patient(data_dir).map_err(library_error)
 }
 
 /// A library error text as an error object: the library has no error type, so

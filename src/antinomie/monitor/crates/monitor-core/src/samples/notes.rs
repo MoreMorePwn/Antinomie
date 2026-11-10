@@ -462,6 +462,7 @@ impl Library {
     /// Add a note to a sample; returns its number. The custody log gets an
     /// entry with the text's hash and the references' labels.
     pub fn add_note(&mut self, sha256: &str, text: &str, refs: &[NoteRef]) -> Result<i64, String> {
+        let _write = self.write_lock();
         let sha256 = sha256.to_ascii_lowercase();
         let text = check(text, refs)?;
         let refs = &once(refs)[..];
@@ -495,6 +496,7 @@ impl Library {
 
     /// Replace a note's text and references.
     pub fn edit_note(&mut self, id: i64, text: &str, refs: &[NoteRef]) -> Result<(), String> {
+        let _write = self.write_lock();
         let text = check(text, refs)?;
         let refs = &once(refs)[..];
         let sha256: String = self
@@ -528,6 +530,7 @@ impl Library {
 
     /// Delete a note. The custody log keeps the entries about it.
     pub fn delete_note(&mut self, id: i64) -> Result<(), String> {
+        let _write = self.write_lock();
         let (sha256, text): (String, String) = self
             .connection
             .query_row("SELECT sha256, body FROM note WHERE id=?1", [id], |row| {

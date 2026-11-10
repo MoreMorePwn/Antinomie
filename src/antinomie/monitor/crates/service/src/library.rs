@@ -337,7 +337,7 @@ pub fn set_tags(data_dir: &Path, actor: &str, params: &SampleTagParams) -> Resul
         .iter()
         .map(tag_of_api)
         .collect::<Result<_, _>>()?;
-    let mut library = Library::open(data_dir)
+    let mut library = Library::open_patient(data_dir)
         .and_then(|library| library.with_actor(actor))
         .map_err(library_error)?;
     if !library.contains(sha256).map_err(library_error)? {
@@ -366,7 +366,7 @@ pub fn download(
     params: &SampleDownloadParams,
 ) -> Result<Value, ApiError> {
     let sha256 = params.sha256.as_str();
-    let library = Library::open(data_dir)
+    let library = Library::open_patient(data_dir)
         .and_then(|library| library.with_actor(actor))
         .map_err(library_error)?;
     let record = library

@@ -30,9 +30,14 @@ use std::{
     sync::{OnceLock, mpsc},
 };
 
-/// Entries that may wait for the custody writer; past that, an entry is
-/// dropped like one the database refused.
+/// Entries that may wait for the custody writer; past that, the caller waits
+/// for room (an entry is never dropped for a full queue).
 const QUEUED_ENTRIES: usize = 4096;
+
+/// Times the custody writer tries an entry, each after the database's own
+/// long busy wait ([`super::library::BUSY_WRITER`]), before it reports the
+/// entry as lost.
+const WRITE_ATTEMPTS: u32 = 6;
 
 /// Work for the custody writer thread.
 enum Job {
@@ -102,19 +107,50 @@ fn queue() -> Option<&'static mpsc::SyncSender<Job>> {
         .as_ref()
 }
 
+/// Write one custody entry, trying again while the database is busy. When it
+/// still cannot be written the loss is reported on stderr: an entry is never
+/// skipped silently.
 fn write(database: &Path, sha256: &str, by: &str, at_ms: u64, event: &CustodyEvent) {
-    let _ = ChainedEvents::new(database).record(sha256, by, at_ms, event);
+    let sink = ChainedEvents::new(database);
+    retry("custody entry", || sink.record(sha256, by, at_ms, event));
 }
 
 fn write_push(data_dir: &Path, sha256: &str, push: Push, by: &str) {
-    let _ = Library::open(data_dir)
-        .and_then(|library| library.with_actor(by))
-        .and_then(|mut library| library.record_push(sha256, push));
+    retry("push record", || {
+        Library::open(data_dir)
+            .and_then(|library| library.with_actor(by))
+            .and_then(|library| {
+                library.set_busy_timeout(super::library::BUSY_WRITER)?;
+                Ok(library)
+            })
+            .and_then(|mut library| library.record_push(sha256, push.clone()))
+    });
+}
+
+fn retry(what: &str, mut attempt: impl FnMut() -> Result<(), String>) {
+    let mut last = String::new();
+    for round in 0..WRITE_ATTEMPTS {
+        match attempt() {
+            Ok(()) => return,
+            Err(error) => {
+                // Only a busy database is retried, and never a change that is
+                // already saved (its entry alone failed): that would double it.
+                let busy = (error.contains("locked") || error.contains("busy"))
+                    && !error.starts_with("saved, but");
+                last = error;
+                if !busy || round + 1 == WRITE_ATTEMPTS {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200 << round));
+            }
+        }
+    }
+    eprintln!("antinomie: LOST {what}: {last}");
 }
 
 /// Record that a sample was sent into a VM, now, without waiting for the
 /// database: written in order with the run entries that follow it, and
-/// dropped like them when it cannot be written.
+/// retried like them when the database is busy.
 pub fn record_push_later(data_dir: &Path, sha256: &str, push: Push) {
     let push = Push {
         at_ms: now_ms(),
@@ -125,7 +161,7 @@ pub fn record_push_later(data_dir: &Path, sha256: &str, push: Push) {
         write_push(data_dir, sha256, push, &by);
         return;
     };
-    let _ = queue.try_send(Job::Push {
+    let _ = queue.send(Job::Push {
         data_dir: data_dir.to_path_buf(),
         sha256: sha256.to_ascii_lowercase(),
         push,
@@ -183,7 +219,7 @@ impl RunLog {
             write(&self.database, &self.sha256, by, at_ms, &event);
             return;
         };
-        let _ = queue.try_send(Job::Entry {
+        let _ = queue.send(Job::Entry {
             database: self.database.clone(),
             sha256: self.sha256.clone(),
             by: by.to_owned(),

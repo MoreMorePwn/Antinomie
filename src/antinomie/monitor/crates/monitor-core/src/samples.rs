@@ -44,6 +44,7 @@ mod runlog;
 mod scan;
 mod similar;
 mod summary;
+mod write_lock;
 
 pub use archive::Verification;
 pub use bazaar::{Intel, YaraHit, recorded_info};
@@ -75,8 +76,9 @@ pub use kept::{
     artifact_sha256, record_saved, saved_items, short_hash,
 };
 pub use library::{
-    Alias, CATEGORIES, DATABASE, EventRow, Library, NewOrigin, Origin, OriginKind, RunStats,
-    SampleRecord, SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS, guest_path_of,
+    Alias, BUSY_INTERACTIVE, BUSY_WRITER, CATEGORIES, DATABASE, EventRow, Library, NewOrigin,
+    Origin, OriginKind, RunStats, SampleRecord, SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS,
+    guest_path_of,
 };
 pub use lineage::{
     Edge as LineageEdge, EdgeKind, Graph as LineageGraph, Known, Link, Node as LineageNode,

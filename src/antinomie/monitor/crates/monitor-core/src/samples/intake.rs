@@ -222,6 +222,7 @@ impl Library {
     /// Add held bytes. A sample already here gains the origin; a sample
     /// whose archive was removed gets its archive back.
     pub fn add_bytes(&mut self, bytes: &[u8], new: NewSample) -> Result<Added, String> {
+        let _write = self.write_lock();
         if bytes.len() as u64 > MAX_SAMPLE {
             return Err(format!("a sample may be at most {} MiB", MAX_SAMPLE >> 20));
         }
@@ -431,6 +432,7 @@ impl Library {
 
     /// Delete the archive; the record, origins, tags and events stay.
     pub fn remove(&mut self, sha256: &str) -> Result<(), String> {
+        let _write = self.write_lock();
         let sha256 = sha256.to_ascii_lowercase();
         let archive = self.archive_path(&sha256)?;
         match fs::remove_file(&archive) {
