@@ -317,3 +317,8 @@ pub(crate) fn write_marker(data_dir: &Path, marker: &LaneMarker) -> Result<(), S
     }
     crate::storage::atomic_json(&data_dir.join(MARKER_FILE), marker)
 }
+
+#[cfg(test)]
+mod engine_tests;
+#[cfg(test)]
+mod tests;
