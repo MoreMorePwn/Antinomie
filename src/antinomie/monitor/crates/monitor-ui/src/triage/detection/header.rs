@@ -1154,4 +1154,23 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn the_scan_button_and_note_follow_the_run_and_the_interval() {
+        let mut view = View::default();
+        assert_eq!(view.scan_label(), "Scan");
+        view.live_run = true;
+        assert_eq!(view.scan_label(), "Scan now");
+        view.live_interval = Some(Duration::from_secs(300));
+        assert_eq!(view.live_note(), "Live scan every 5 min.");
+        view.live_interval = None;
+        assert!(view.live_note().contains("off"));
+        let shown = view
+            .status_parts(0, false)
+            .iter()
+            .any(|part| matches!(part, StatusPart::Muted(text) if text.contains("Live scans off")));
+        assert!(shown);
+        view.live_run = false;
+        assert!(view.status_parts(0, false).is_empty());
+    }
 }
