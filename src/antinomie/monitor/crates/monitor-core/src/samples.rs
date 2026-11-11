@@ -435,6 +435,7 @@ pub fn parse_reply(body: &[u8]) -> Result<Vec<SampleInfo>, String> {
 fn post(
     curl: &Path,
     key: &str,
+    endpoint: &str,
     form: &[(&str, String)],
     output: Option<&Path>,
     cancel: &AtomicBool,
@@ -464,7 +465,7 @@ fn post(
         command.arg("-o").arg(path);
     }
     let mut child = command
-        .arg(BAZAAR_API)
+        .arg(endpoint)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -497,7 +498,52 @@ pub fn search(
     limit: u32,
     cancel: &AtomicBool,
 ) -> Result<Vec<SampleInfo>, String> {
-    parse_reply(&post(curl, key, &query.form(limit), None, cancel)?)
+    search_at(BAZAAR_API, curl, key, query, limit, cancel)
+}
+
+/// [`search`] against another endpoint; only tests pass one that is not
+/// MalwareBazaar's (see [`check_key_at`]).
+fn search_at(
+    endpoint: &str,
+    curl: &Path,
+    key: &str,
+    query: &Query,
+    limit: u32,
+    cancel: &AtomicBool,
+) -> Result<Vec<SampleInfo>, String> {
+    parse_reply(&post(
+        curl,
+        key,
+        endpoint,
+        &query.form(limit),
+        None,
+        cancel,
+    )?)
+}
+
+/// The SHA-256 of an empty file: a hash MalwareBazaar answers "not found"
+/// for, so the key check never depends on what the database holds today.
+const PROBE_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+/// Ask MalwareBazaar whether it accepts `key` (Tools > API keys > Test). It
+/// sends the same one-hash `get_info` call the import lookup uses, for a hash
+/// that is not listed: any answer that is not a refusal (`ok`, `hash_not_found`,
+/// `no_results`) means the key works. A busy tag listing (the old probe)
+/// could answer "query execution time exceeded" for a valid key.
+pub fn check_key(curl: &Path, key: &str, cancel: &AtomicBool) -> Result<(), String> {
+    check_key_at(BAZAAR_API, curl, key, cancel)
+}
+
+fn check_key_at(endpoint: &str, curl: &Path, key: &str, cancel: &AtomicBool) -> Result<(), String> {
+    search_at(
+        endpoint,
+        curl,
+        key,
+        &Query::Hash(PROBE_HASH.into()),
+        1,
+        cancel,
+    )
+    .map(|_| ())
 }
 
 /// A SHA-256, SHA-1 or MD5 in hex.
@@ -765,7 +811,7 @@ pub fn download(
         ("sha256_hash", info.sha256_hash.to_ascii_lowercase()),
     ];
     let result = (|| {
-        post(curl, key, &form, Some(&partial), cancel)?;
+        post(curl, key, BAZAAR_API, &form, Some(&partial), cancel)?;
         let body = fs::read(&partial).map_err(|e| e.to_string())?;
         if body.first() == Some(&b'{') {
             // An error answered as JSON instead of the archive.
@@ -970,6 +1016,8 @@ mod actor_tests;
 mod bazaar_tests;
 #[cfg(test)]
 mod chain_tests;
+#[cfg(test)]
+mod check_key_tests;
 #[cfg(test)]
 mod feature_tests;
 #[cfg(test)]

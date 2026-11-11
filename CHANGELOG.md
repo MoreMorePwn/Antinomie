@@ -15,6 +15,7 @@ x86 programs by their own table.
 
 ### Host
 
+- **Tools → API keys → Test no longer fails for a working abuse.ch key (ANT-T0457).** Test asked MalwareBazaar for the busy `Mirai` tag listing, which can answer "query execution time exceeded" even for a valid key. It now sends the same one-hash lookup the import lookup uses, for a hash MalwareBazaar does not list, and counts any non-refusal answer (`ok`, `hash_not_found`, `no_results`) as accepted. A refused key still fails, in words.
 - **Commands find a daemon at the configured socket, and the CLI documents match the code (ANT-T0451).**
   - A command that reaches the daemon now resolves the socket as the daemon does:
     `--socket`, else `[daemon] socket` of `<data>/service.toml`, else
