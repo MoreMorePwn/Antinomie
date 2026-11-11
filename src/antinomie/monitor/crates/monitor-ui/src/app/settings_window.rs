@@ -524,6 +524,34 @@ impl MonitorApp {
         });
     }
 
+    /// The live scan interval: a switch and the minutes between scans.
+    fn live_detection_row(&mut self, ui: &mut egui::Ui) {
+        use antinomie_monitor_core::settings::{
+            LIVE_DETECTION_DEFAULT_MINUTES as DEFAULT, LIVE_DETECTION_MAX_MINUTES as MAX,
+            LIVE_DETECTION_MIN_MINUTES as MIN,
+        };
+        ui.horizontal(|ui| {
+            let mut on = self.settings.live_detection_minutes != 0;
+            if ui.checkbox(&mut on, "Scan every").changed() {
+                self.settings.live_detection_minutes = if on { DEFAULT } else { 0 };
+            }
+            ui.add_enabled_ui(on, |ui| {
+                let mut minutes = self.settings.live_detection_minutes.max(MIN);
+                if ui
+                    .add(egui::DragValue::new(&mut minutes).range(MIN..=MAX).suffix(" min"))
+                    .changed()
+                    && on
+                {
+                    self.settings.live_detection_minutes = minutes.clamp(MIN, MAX);
+                }
+            });
+        })
+        .response
+        .on_hover_text(
+            "How often the detection engines scan a run whose program is still running (at least 2 minutes). Off scans only when the run ends. Scan now on the Detection tab scans at once; the scan at the end of the run always happens.",
+        );
+    }
+
     fn detection_page(&mut self, ui: &mut egui::Ui) {
         form_grid("settings_detection", ui).show(ui, |ui| {
             ui.label("After a run");
@@ -536,6 +564,9 @@ impl MonitorApp {
                     "Scans a run with YARA, IDS and Sigma once its evidence is ready, and again when the installed rule packs change. A run whose VM stopped is scanned with what it recorded, and the result says so. Scan still works when this is off.",
                 );
             });
+            ui.end_row();
+            ui.label("While a program runs");
+            self.live_detection_row(ui);
             ui.end_row();
             ui.label("Downloads");
             ui.vertical(|ui| {

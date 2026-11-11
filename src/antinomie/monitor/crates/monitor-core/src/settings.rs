@@ -21,6 +21,12 @@ use std::path::{Path, PathBuf};
 /// The layout of the file. A version the reader does not know is refused for
 /// writing, so an older program never rewrites a newer file.
 pub const SETTINGS_VERSION: u32 = 1;
+/// The least time between two detection scans of a running program, minutes.
+pub const LIVE_DETECTION_MIN_MINUTES: u32 = 2;
+/// The default time between them.
+pub const LIVE_DETECTION_DEFAULT_MINUTES: u32 = 2;
+/// The most the setting accepts (a day).
+pub const LIVE_DETECTION_MAX_MINUTES: u32 = 1440;
 
 /// The file name inside the data directory.
 pub const FILE: &str = "settings.json";
@@ -107,6 +113,10 @@ pub struct EngineSettings {
     pub file_before_run_mib: u32,
     /// Scan retained evidence when it becomes ready.
     pub automatic_detection: bool,
+    /// Minutes between the detection scans of a run that is still going; 0
+    /// is off (the scan at the run's end stays). At least
+    /// [`LIVE_DETECTION_MIN_MINUTES`].
+    pub live_detection_minutes: u32,
     /// Allow the rule catalog check and rule-pack downloads.
     pub outbound_catalog: bool,
     /// Public destination country and organization lookups.
@@ -151,6 +161,7 @@ impl Default for EngineSettings {
             file_before_file_mib: (file_writes::DEFAULT_PER_FILE >> 20) as u32,
             file_before_run_mib: (file_writes::DEFAULT_PER_RUN >> 20) as u32,
             automatic_detection: true,
+            live_detection_minutes: LIVE_DETECTION_DEFAULT_MINUTES,
             outbound_catalog: false,
             address_lookup: AddressLookup::default(),
             report_export: Default::default(),
@@ -188,6 +199,14 @@ impl EngineSettings {
             0,
             TIME_LIMIT_MAX_MINUTES,
         )?;
+        if self.live_detection_minutes != 0 {
+            within(
+                "live_detection_minutes (0 is off)",
+                self.live_detection_minutes,
+                LIVE_DETECTION_MIN_MINUTES,
+                LIVE_DETECTION_MAX_MINUTES,
+            )?;
+        }
         within("file_write_file_mib", self.file_write_file_mib, 1, 65_536)?;
         within("file_write_run_mib", self.file_write_run_mib, 1, 1_048_576)?;
         within("file_before_file_mib", self.file_before_file_mib, 1, 65_536)?;
@@ -203,6 +222,12 @@ impl EngineSettings {
                 .map_err(|error| format!("start: {error}"))?;
         }
         Ok(())
+    }
+
+    /// The time between detection scans of a running program; `None` is off.
+    pub fn live_detection_interval(&self) -> Option<std::time::Duration> {
+        (self.live_detection_minutes != 0)
+            .then(|| std::time::Duration::from_secs(u64::from(self.live_detection_minutes) * 60))
     }
 
     /// The start settings in force: the file's, else the defaults.
@@ -275,6 +300,12 @@ impl EngineSettings {
     /// settings object, so a value of the wrong type or range is refused and
     /// nothing changes. Only a key the settings already have may be set.
     pub fn set(&mut self, key: &str, text: &str) -> Result<(), String> {
+        // `off` is the word for 0 in the live scan interval.
+        let text = if key == "live_detection_minutes" && text.trim().eq_ignore_ascii_case("off") {
+            "0"
+        } else {
+            text
+        };
         let value =
             serde_json::from_str::<Value>(text).unwrap_or_else(|_| Value::String(text.into()));
         let mut root = self.view();

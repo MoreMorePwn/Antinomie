@@ -687,9 +687,12 @@ impl TriageView {
         &mut self,
         data_dir: &std::path::Path,
         automatic: bool,
+        live_minutes: u32,
         profile: &str,
         generation: u64,
     ) {
+        self.detection.live_interval =
+            (live_minutes != 0).then(|| Duration::from_secs(u64::from(live_minutes) * 60));
         self.detection.settings.rules_root = data_dir.display().to_string();
         self.detection.automatic = automatic;
         if self.detection.registry_for != generation || self.detection.registry.is_none() {

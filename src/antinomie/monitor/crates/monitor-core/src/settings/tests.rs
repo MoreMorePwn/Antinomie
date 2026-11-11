@@ -162,3 +162,32 @@ fn the_start_settings_are_shared_and_default_when_absent() {
     std::fs::write(path(&dir), r#"{"start": {"tcg_multiplier": 500}}"#).unwrap();
     assert!(load(&dir).unwrap_err().contains("TCG multiplier"));
 }
+
+#[test]
+fn the_live_detection_interval_defaults_to_two_minutes_and_can_be_off() {
+    let mut settings = EngineSettings::default();
+    assert_eq!(settings.live_detection_minutes, 2);
+    assert_eq!(
+        settings.live_detection_interval(),
+        Some(std::time::Duration::from_secs(120))
+    );
+    // A file written before the setting existed gets the default.
+    let old: EngineSettings = serde_json::from_str(r#"{"quota_gib": 9}"#).unwrap();
+    assert_eq!(old.live_detection_minutes, 2);
+    settings.set("live_detection_minutes", "10").unwrap();
+    assert_eq!(settings.live_detection_minutes, 10);
+    settings.set("live_detection_minutes", "off").unwrap();
+    assert_eq!(settings.live_detection_minutes, 0);
+    assert_eq!(settings.live_detection_interval(), None);
+    let before = settings.clone();
+    for value in ["1", "1441", "soon", "-3"] {
+        assert!(
+            settings.set("live_detection_minutes", value).is_err(),
+            "{value}"
+        );
+    }
+    assert_eq!(settings, before);
+    let dir = scratch("live");
+    std::fs::write(path(&dir), r#"{"live_detection_minutes": 1}"#).unwrap();
+    assert!(load(&dir).unwrap_err().contains("live_detection_minutes"));
+}
