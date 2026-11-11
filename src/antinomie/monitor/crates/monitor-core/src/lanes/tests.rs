@@ -291,3 +291,49 @@ fn a_folder_with_lanes_is_not_migrated() {
     assert!(error.contains("lanes"), "{error}");
     assert!(!destination.exists());
 }
+
+#[test]
+fn a_lane_reads_lane_0s_engine_and_route_settings_and_never_writes_them() {
+    let tree = Tree::new("settings");
+    let lane = tree.lane(2);
+    assert_eq!(
+        crate::settings::path(&lane),
+        tree.shared.join(crate::settings::FILE)
+    );
+    let mut settings = crate::settings::EngineSettings::default();
+    settings.quota_gib = 7;
+    crate::storage::atomic_json(&tree.shared.join(crate::settings::FILE), &settings).unwrap();
+    assert_eq!(crate::settings::load(&lane).unwrap().unwrap().quota_gib, 7);
+    refused(crate::settings::save(&lane, &settings));
+    let routes = crate::route::RouteConfig {
+        allow_lan: true,
+        ..Default::default()
+    };
+    crate::storage::private_dir(&tree.shared.join("network")).unwrap();
+    crate::storage::atomic_json(&tree.shared.join("network").join("routes.json"), &routes).unwrap();
+    assert_eq!(crate::route::load_config(&lane).unwrap(), routes);
+    refused(crate::route::save_config(&lane, &routes));
+    assert!(!lane.join("settings.json").exists() && !lane.join("network").exists());
+}
+
+#[test]
+fn the_base_lock_is_lane_0s_and_one_holder_at_a_time() {
+    let tree = Tree::new("base-lock");
+    let lane = tree.lane(1);
+    let held = base_lock(&lane, std::time::Duration::ZERO)
+        .unwrap()
+        .expect("free");
+    assert!(tree.shared.join("run").join(BASE_LOCK_FILE).is_file());
+    assert!(
+        base_lock(&tree.shared, std::time::Duration::from_millis(50))
+            .unwrap()
+            .is_none(),
+        "lane 0 waits for the lane's holder"
+    );
+    drop(held);
+    assert!(
+        base_lock(&tree.shared, std::time::Duration::ZERO)
+            .unwrap()
+            .is_some()
+    );
+}

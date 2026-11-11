@@ -563,8 +563,12 @@ impl RouteConfig {
     }
 }
 
+/// `<data>/network/routes.json`; a lane's data folder reads lane 0's (the
+/// lanes of a daemon route alike). Its Tor and helper state stays its own.
 fn config_path(data_dir: &Path) -> PathBuf {
-    data_dir.join(CONFIG_DIR).join(CONFIG_FILE)
+    crate::lanes::shared_root(data_dir)
+        .join(CONFIG_DIR)
+        .join(CONFIG_FILE)
 }
 
 /// The saved settings; the defaults when none were saved. A file that
@@ -580,6 +584,7 @@ pub fn load_config(data_dir: &Path) -> Result<RouteConfig, String> {
 
 /// Saves the settings owner-only after checking them.
 pub fn save_config(data_dir: &Path, config: &RouteConfig) -> Result<(), String> {
+    crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::RouteSettings)?;
     config.validate()?;
     let path = config_path(data_dir);
     let dir = path.parent().ok_or("route settings folder")?;

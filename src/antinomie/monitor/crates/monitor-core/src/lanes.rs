@@ -24,6 +24,15 @@
 //! sample library is the exception: every lane writes it, serialised by its
 //! writer lock (`samples::write_lock`) and SQLite.
 //!
+//! The engine settings (`settings.json`) and the route settings
+//! (`network/routes.json`) are lane 0's too: a lane reads them through the
+//! same resolution, and only lane 0 writes them (ANT-T0455 card C). A lane's
+//! Tor and helper state under `network/` stays its own.
+//!
+//! A base must not go while a lane creates a VM from it: `DeleteBase` and a
+//! lane engine's `Create` take the base lock of the shared root
+//! ([`base_lock`]), across engines and processes.
+//!
 //! A folder without `lane.json` is a plain data folder, as before.
 use crate::api::BackendOptions;
 use serde::{Deserialize, Serialize};
@@ -188,6 +197,8 @@ pub enum SharedWrite {
     FeedUpdate,
     KnownFalsePositives,
     GeoipUpdate,
+    EngineSettings,
+    RouteSettings,
 }
 
 impl SharedWrite {
@@ -203,6 +214,8 @@ impl SharedWrite {
             Self::FeedUpdate => "changing the IOC datasets",
             Self::KnownFalsePositives => "changing the known false positives",
             Self::GeoipUpdate => "updating the GeoIP databases",
+            Self::EngineSettings => "changing the engine settings",
+            Self::RouteSettings => "changing the route settings",
         }
     }
 }
@@ -244,6 +257,39 @@ pub fn refuse_in_lane(data_dir: &Path, action: SharedWrite) -> Result<(), String
     }
     let lane = lane_of(data_dir).ok().flatten().map(|lane| lane.lane);
     Err(LaneRefusal { lane, action }.to_string())
+}
+
+/// The file of the base lock, in lane 0's `run/` folder.
+pub const BASE_LOCK_FILE: &str = "base.lock";
+
+/// The base lock of a shared root, held while it lives: an exclusive `flock`
+/// on `<lane 0>/run/base.lock`. A lock taken through another descriptor, in
+/// this process or another, waits for it.
+#[derive(Debug)]
+pub struct BaseLock {
+    _file: fs::File,
+}
+
+/// Take the base lock of the folder `data_dir` shares, waiting up to `wait`
+/// for another holder. `Ok(None)` when it is still held after `wait`.
+pub fn base_lock(data_dir: &Path, wait: std::time::Duration) -> Result<Option<BaseLock>, String> {
+    let run = shared_root(data_dir).join("run");
+    crate::storage::private_dir(&run).map_err(|e| format!("{}: {e}", run.display()))?;
+    let path = run.join(BASE_LOCK_FILE);
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32)
+        .open(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    match crate::data_owner::flock_within(&file, wait) {
+        Ok(true) => Ok(Some(BaseLock { _file: file })),
+        Ok(false) => Ok(None),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
 }
 
 /// Check what an engine is about to take, before it takes the folder:

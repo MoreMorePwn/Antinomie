@@ -371,6 +371,11 @@ impl Worker {
         {
             return Err("invalid base identity".into());
         }
+        // A lane engine creating a VM holds the base lock until its VM is
+        // saved, so the check below sees that VM (ANT-T0455 card C).
+        let _bases =
+            crate::lanes::base_lock(&self.options.data_dir, crate::data_owner::LOCK_GRACE)?
+                .ok_or("a lane is creating a VM from a base; try the deletion again in a moment")?;
         let mut dependents: Vec<String> = self
             .snapshot
             .vms

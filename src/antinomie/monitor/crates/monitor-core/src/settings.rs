@@ -307,9 +307,10 @@ impl EngineSettings {
     }
 }
 
-/// `<data>/settings.json`.
+/// `<data>/settings.json`; a lane's data folder reads lane 0's
+/// ([`crate::lanes`]: the lanes of a daemon share one set of engine settings).
 pub fn path(data_dir: &Path) -> PathBuf {
-    data_dir.join(FILE)
+    crate::lanes::shared_root(data_dir).join(FILE)
 }
 
 /// The saved settings. `Ok(None)` when no file exists (the first start of a
@@ -349,6 +350,7 @@ pub fn holds_data_lock(data_dir: &Path) -> bool {
 /// Write the settings: atomic, 0600, and only by the process that holds the
 /// data lock. The unknown fields in `settings.extra` are kept.
 pub fn save(data_dir: &Path, settings: &EngineSettings) -> Result<(), String> {
+    crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::EngineSettings)?;
     if !holds_data_lock(data_dir) {
         return Err(
             "settings.json is written only by the process that holds the data folder lock".into(),

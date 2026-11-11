@@ -169,6 +169,15 @@ fn engines(lanes: u32) {
     let error = command(&backends[0], delete()).unwrap_err();
     assert!(error.contains("Lane 1 (lane 1)"), "{error}");
     assert!(bases_dir(&tree.shared).join(&identity).is_dir());
+    // While a lane holds the base lock (as its `Create` does until the VM is
+    // saved), lane 0's deletion refuses instead of racing the new VM.
+    {
+        let _creating = base_lock(&lane_dir(&tree.shared, 1), Duration::ZERO)
+            .unwrap()
+            .unwrap();
+        let error = command(&backends[0], delete()).unwrap_err();
+        assert!(error.contains("a lane is creating a VM"), "{error}");
+    }
     // Every lane writes the shared library at once, through its own folder,
     // as each lane's intake and custody log do.
     let hashes = write_library_from_every_lane(&tree, lanes);
