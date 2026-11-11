@@ -56,6 +56,8 @@ pub struct Service {
     /// One retention pass or `job.delete` at a time.
     pub gc_lock: Mutex<()>,
     pub log: Arc<dyn Fn(&str) + Send + Sync>,
+    /// The host work pool (ANT-T0454); `None` in tests that run no lane.
+    pub pool: Option<Arc<crate::pool::HostPool>>,
 }
 
 /// Parse the parameters of an op; an unknown member is named in `field`.
@@ -231,6 +233,11 @@ impl Service {
                 per_client_queued: config.queue.per_client_queued,
             },
             owner: self.owner,
+            host_pool: self
+                .pool
+                .as_ref()
+                .map(|pool| pool.status())
+                .unwrap_or_default(),
         })
     }
 

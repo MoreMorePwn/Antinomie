@@ -128,6 +128,10 @@ pub struct IndexMigration {
 /// the registry is saved, so a failure leaves the previous index and toggles,
 /// and the next call finishes the staged work instead of starting over.
 pub fn migrate_indexes(data_dir: &Path) -> Result<IndexMigration, String> {
+    if crate::lanes::is_lane_folder(data_dir) {
+        // Lane 0 migrates the shared rules; a lane only reads them.
+        return Ok(IndexMigration::default());
+    }
     let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let mut report = IndexMigration::default();

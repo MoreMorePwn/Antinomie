@@ -99,6 +99,7 @@ pub fn update_latest(
     cancel: &AtomicBool,
     progress: impl FnMut(&str, u64, u64),
 ) -> Result<(), String> {
+    crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::GeoipUpdate)?;
     let progress = std::cell::RefCell::new(progress);
     // The size of the pinned month stands in for the total: close enough for a bar.
     let estimate = crate::analysis_tools::package(super::TOOL_ID).map_or(0, |p| p.size());

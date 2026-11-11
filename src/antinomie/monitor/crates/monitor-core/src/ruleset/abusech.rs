@@ -510,6 +510,7 @@ pub fn check_live(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<(Checked, bool), String> {
+    super::refuse_lane(data_dir)?;
     let url = pack
         .url_for(key)
         .map_err(|error| format!("{}: {error}", pack.name))?;

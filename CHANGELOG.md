@@ -19,6 +19,40 @@ x86 programs by their own table.
   - While a program runs, YARA, IDS and Sigma scanned its evidence each time the recording grew. They now scan at most once per interval: **Settings > Detection > While a program runs > Scan every N min**, default 2, at least 2, or off (`live_detection_minutes` in `settings.json`, 0 is off; `antinomie-cli config set live_detection_minutes off` works).
   - The Scan button reads **Scan now** while the run is live; it scans at once and restarts the interval. The scan when the run ends is not delayed. The daemon has no live scans and is unchanged.
 
+- **Security tests, fuzzing and the process-start gate for Auto mode (ANT-T0387).** New cross-surface tests cover unknown spec members, route and privilege escalation, hostile watch-folder names and links, and log injection. Fuzz targets `job_spec`, `config_toml`, `watch_names` and `label_expr` join `socket_frames`. A watched file name that began with a dot could be stored 101 bytes long; it is now cut to 100. A verdict `when` expression is now limited to 2048 bytes and 32 nested parentheses (a hostile policy overflowed the stack). CI runs `scripts/check-command-new.py`, which fails on a process start that is not on `scripts/command-new-allowlist.txt`.
+
+- **Auto mode pipelines the host work: the VM starts the next job while the last one is analysed (ANT-T0454).**
+  - Once `collect` has finished, the lane releases the VM and claims the next job. The
+    job's host work goes to a host work pool, split into items: each static tool
+    (`static:floss`, `static:decompilation`, ...; Regex with Strings), the Triage scan,
+    detection (YARA, Sigma, IDS), the digest and label (`assess`) and the report, which
+    waits for the others.
+  - At most `[daemon] host_workers` items run at once (now 2 by default, 1 to 8), across
+    every job, strictly first come, first served by job arrival: an older job's items all
+    start before a newer job's, and nothing jumps the head of the queue. An item starts only
+    with 2048 MiB of memory available.
+  - Each item may take `[daemon] host_time_factor` (new, default 2) times its expected
+    time: its recent median on this host, else an estimate from the sample or recording
+    size, else the stage's fixed limit. Time in the queue does not count. A policy's
+    `analysis.static_time_limit_min` still sets a fixed limit when it is given; it is no
+    longer set in the default policy.
+  - `auto status <job>` and the job's `host_work` list every item with its state, expected
+    time and limit; `auto status` and `queue.status` (`host_pool`) show the pool's queue.
+    The lane and the workers share the one engine through a connection that routes each
+    command's result to the thread that sent it.
+  - A stop lets the pool work on for `shutdown_host_grace_s`; what is left resumes in the
+    same order at the next start, keeping static tools that had finished.
+
+- **Lane data folders share lane 0's bases, samples, rules, tools and IOC data (ANT-T0455, part B).**
+  - Groundwork for several lanes in one daemon (`daemon.lanes` stays 1 by default). Lane N
+    keeps its VMs and runs in `<data>/lanes/N/` and uses lane 0's `bases`, `samples`, `ioc`,
+    `rules`, `tools`, `volatility-plugins` and known false positives directly, without
+    symbolic links. A lane does not change them: base import, delete, download and build,
+    tool install and remove, and rule, IOC dataset, known false positive and GeoIP updates
+    are refused there with "only lane 0 changes the folders the lanes share".
+  - Deleting a base is refused while a VM of any lane is built on it. The window refuses to
+    open a lane's folder and names lane 0's instead.
+
 - **Commands find a daemon at the configured socket, and the CLI documents match the code (ANT-T0451).**
   - A command that reaches the daemon now resolves the socket as the daemon does:
     `--socket`, else `[daemon] socket` of `<data>/service.toml`, else
@@ -308,8 +342,8 @@ x86 programs by their own table.
   bases' architectures) and when a 32-bit ARM program needs the armhf loader of an
   arm64 base. The Debian arm64 base recipe (`scripts/build-debian-image.py`) now also
   installs the armhf C library and program loader (`libc6:armhf`, giving
-  `/lib/ld-linux-armhf.so.3`) so 32-bit ARM programs start; it takes effect when the
-  bases are rebuilt.
+  `/lib/ld-linux-armhf.so.3`) so 32-bit ARM programs start; the 0.9.0 Debian arm64
+  base (revision 22) has it.
 
 - **Headless runs can take a dump on suspicious activity (ANT-T0439).** The
   live Triage judge was registered only by the window, so `run exec` and Auto
@@ -881,7 +915,10 @@ x86 programs by their own table.
   are built for arm64) and checks that an old host refuses the base
   (`io-old-arm64-refused`). The x86-64 full tier has `tracer-ia32`: one
   program built as a 32-bit x86 and an x86-64 program, recorded alike (its
-  32-bit build needs `gcc -m32`: gcc-multilib and libc6-dev-i386).
+  32-bit build needs `gcc -m32`: gcc-multilib and libc6-dev-i386). A tier
+  on a BusyBox base (arm64 or x86-64) whose checks all pass now exits 0: the
+  Debian-only checks (`nic-routed`, `snapshot-uefi`) are SKIP, not applicable,
+  instead of failing the tier.
   `snapshot-uefi` (full tier, Debian bases) runs the snapshot check on a VM of
   the server profile, booted through OVMF or AAVMF with its own variable store
   (`snapshot-check --uefi`). `debug-check a32` checks 32-bit ARM programs on an

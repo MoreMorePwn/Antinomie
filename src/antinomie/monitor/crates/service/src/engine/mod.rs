@@ -11,9 +11,13 @@ use antinomie_monitor_core::{Backend, Command, Notification};
 use std::time::Duration;
 
 pub mod fake;
+pub mod mux;
+#[cfg(test)]
+mod mux_tests;
 pub mod trace;
 
 pub use fake::FakeEngine;
+pub use mux::{Handle, Mux};
 
 #[cfg(test)]
 mod tests;

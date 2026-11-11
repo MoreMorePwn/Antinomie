@@ -9,7 +9,9 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// resolved limits are stored with the job"); `canon_json` the canonical spec
 /// as sent, for idempotency (5.2); `wait_s`, `waiting_since_ms`,
 /// `not_before_ms` the queue wait and backoff of 4.7; `forgiven` the attempts
-/// that do not count (4.7.3); `cancel_reason`/`cancel_shutdown` the cancel
+/// that do not count (4.7.3); the `host_work` table the items of the host work
+/// pool (ANT-T0454, one row per job, added without a version change: it is
+/// created when missing); `cancel_reason`/`cancel_shutdown` the cancel
 /// request; the `*_json` columns the parts of the `Job` object (5.4.2) that
 /// have no column in the table of 4.3.
 pub const SCHEMA: &str = "
@@ -105,4 +107,10 @@ CREATE TABLE IF NOT EXISTS events(
     data_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_job ON events(job_id, seq);
+CREATE TABLE IF NOT EXISTS host_work(
+    job_id TEXT PRIMARY KEY,
+    attempt INTEGER NOT NULL,
+    items_json TEXT NOT NULL,
+    updated_ms INTEGER NOT NULL
+);
 ";

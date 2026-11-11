@@ -62,11 +62,12 @@ runs while a window or the daemon owns the data directory.
 | Key | Default | What the daemon does with it |
 |---|---|---|
 | `[daemon] socket` | `<data>/run/antinomie.sock` | The local socket (at most 107 bytes). Its folder must be the daemon user's own with mode 0700; the socket is 0600. Not changed by a reload |
-| `[daemon] host_workers` | `min(4, cpus/4)`, at least 1 | How many jobs the host stages (`analyse`, `report`, `cleanup`) work on at once; 0 is an error |
+| `[daemon] host_workers` | 2 | How many host work items (a static tool, the Triage scan, the detection engines, the assessment, a report) run at once, across every job: the host work pool. 1 to 8 |
+| `[daemon] host_time_factor` | 2 | A host work item may take this many times its expected time (its recent median on this host, else an estimate from the sample or recording size, else the stage's fixed limit); a job's host stages may take this many times the expected work ahead of it plus its own. 1 to 20 |
 | `[daemon] lanes` | 1 | Only 1 is valid in 0.9.0 |
 | `[daemon] shutdown` | `cancel` | On the first `SIGTERM`/`SIGINT`: `cancel` sends a job in its lane stages back to the queue (attempt not counted); `drain` lets it run on for up to `drain_timeout_s` first |
 | `[daemon] drain_timeout_s` | 600 | See `shutdown = drain` |
-| `[daemon] shutdown_host_grace_s` | 120 | A job already in its host stages (`analyse`, `report`, `cleanup`) at shutdown may finish within this many seconds; past it the job is left `running` and resumes at `analyse` on the next start (the VM does not run again) |
+| `[daemon] shutdown_host_grace_s` | 120 | The host work pool goes on with the jobs it holds (their `analyse`, `report`, `cleanup` items) for this many seconds at shutdown; past it those jobs are left `running` and go back to the pool on the next start, in the same order (the VM does not run again) |
 | `[queue] max_queued`, `per_client_queued` | 1000, 100 | `job.submit` fails `quota_exceeded` above them (the smaller of `per_client_queued` and the policy's `max_queued_per_client` applies) |
 | `[queue] paused_on_start` | false | Start with the queue paused (`queue.resume` starts it) |
 | `[inbox] dir` | `<data>/inbox` | Where uploads are staged (`uploads/`), and where watched files go after intake (`processed/`) or on failure (`rejected/`) |

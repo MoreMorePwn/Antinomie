@@ -1,10 +1,52 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Commands that start or end base installs, tool installs and clipboard typing.
 use super::*;
+use crate::lanes::SharedWrite;
 
 impl Worker {
+    /// A lane engine leaves the shared folders to lane 0 ([`crate::lanes`]).
+    fn refuse_on_lane(&self, action: SharedWrite) -> Result<(), String> {
+        match self.options.owner.lane {
+            Some(lane) => Err(crate::lanes::LaneRefusal {
+                lane: Some(lane),
+                action,
+            }
+            .to_string()),
+            None => Ok(()),
+        }
+    }
+
+    /// The VMs of the other lanes of this data folder built on base
+    /// `identity`, named with their lane. A lane whose record or VM list does
+    /// not read refuses the deletion: a base must never go while a VM may
+    /// still need it.
+    fn lane_dependents(&self, identity: &str) -> Result<Vec<String>, String> {
+        let mut found = Vec::new();
+        let lanes = crate::lanes::lanes_checked(&self.options.data_dir)
+            .map_err(|e| format!("base deletion refused: a lane does not read: {e}"))?;
+        for lane in lanes {
+            let options = BackendOptions {
+                data_dir: lane.data_dir.clone(),
+                ..self.options.clone()
+            };
+            let vms = storage::load_vms(&options).map_err(|e| {
+                format!(
+                    "base deletion refused: the VMs of lane {} do not read: {e}",
+                    lane.lane
+                )
+            })?;
+            found.extend(
+                vms.iter()
+                    .filter(|vm| vm.base_identity.as_deref() == Some(identity))
+                    .map(|vm| format!("{} (lane {})", vm.name, lane.lane)),
+            );
+        }
+        Ok(found)
+    }
+
     /// Install a boot bundle from a directory.
     pub(super) fn import_base(&mut self, directory: PathBuf) -> Result<String, String> {
+        self.refuse_on_lane(SharedWrite::ImportBase)?;
         if self.session.is_some() || self.snapshot.active_vm.is_some() {
             return Err("stop VM before importing a base".into());
         }
@@ -47,6 +89,7 @@ impl Worker {
 
     /// Start downloading one base of the catalog.
     pub(super) fn download_base(&mut self, identity: String) -> Result<String, String> {
+        self.refuse_on_lane(SharedWrite::DownloadBase)?;
         if self.download.is_some() {
             return Err("a base download is already in progress".into());
         }
@@ -156,6 +199,7 @@ impl Worker {
 
     /// Start building a base.
     pub(super) fn build_base(&mut self, request: build::BuildRequest) -> Result<String, String> {
+        self.refuse_on_lane(SharedWrite::BuildBase)?;
         if self.build.is_some() {
             return Err("a base build is already in progress".into());
         }
@@ -254,6 +298,7 @@ impl Worker {
 
     /// Start installing an analysis tool.
     pub(super) fn install_tool(&mut self, id: String) -> Result<String, String> {
+        self.refuse_on_lane(SharedWrite::InstallTool)?;
         if self.tool.is_some() {
             return Err("a tool installation is already in progress".into());
         }
@@ -312,6 +357,7 @@ impl Worker {
         identity: String,
         confirmed: bool,
     ) -> Result<String, String> {
+        self.refuse_on_lane(SharedWrite::DeleteBase)?;
         if !confirmed {
             return Err("base deletion requires confirmation".into());
         }
@@ -325,13 +371,14 @@ impl Worker {
         {
             return Err("invalid base identity".into());
         }
-        let dependents: Vec<&str> = self
+        let mut dependents: Vec<String> = self
             .snapshot
             .vms
             .iter()
             .filter(|vm| vm.base_identity.as_deref() == Some(identity.as_str()))
-            .map(|vm| vm.name.as_str())
+            .map(|vm| vm.name.clone())
             .collect();
+        dependents.extend(self.lane_dependents(&identity)?);
         if !dependents.is_empty() {
             return Err(format!(
                 "base is used by {} VM(s): {}",
@@ -339,7 +386,7 @@ impl Worker {
                 dependents.join(", ")
             ));
         }
-        let directory = self.options.data_dir.join("bases").join(&identity);
+        let directory = crate::lanes::bases_dir(&self.options.data_dir).join(&identity);
         if !directory.is_dir() {
             return Err("unknown base".into());
         }
@@ -389,6 +436,7 @@ impl Worker {
 
     /// Remove an installed analysis tool.
     pub(super) fn remove_tool(&mut self, id: String) -> Result<String, String> {
+        self.refuse_on_lane(SharedWrite::RemoveTool)?;
         if self.tool.as_ref().is_some()
             && self
                 .snapshot

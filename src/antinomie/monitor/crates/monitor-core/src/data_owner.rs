@@ -69,6 +69,9 @@ pub struct OwnerClaim {
     pub kind: OwnerKind,
     /// The socket a daemon serves, recorded for clients.
     pub socket: Option<PathBuf>,
+    /// A lane engine of a daemon: its lane (1 and up; see [`crate::lanes`]).
+    /// A lane engine refuses to change the folders the lanes share.
+    pub lane: Option<u32>,
 }
 
 /// The content of `run/owner.json`.
@@ -80,6 +83,9 @@ pub struct OwnerRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socket: Option<String>,
     pub app_version: String,
+    /// The lane of a lane engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<u32>,
 }
 
 /// The current owner of a directory.
@@ -102,8 +108,12 @@ impl DataOwner {
             OwnerKind::Daemon => "the Antinomie daemon",
             OwnerKind::Cli => "an antinomie-cli command",
         };
+        let lane = record
+            .lane
+            .map(|n| format!("lane {n} of "))
+            .unwrap_or_default();
         let mut text = format!(
-            "{what} (pid {}, started {} UTC",
+            "{lane}{what} (pid {}, started {} UTC",
             record.pid,
             crate::date::date_time_text((record.started_ms / 1000) as i64)
         );
@@ -140,6 +150,7 @@ pub fn record_for(claim: &OwnerClaim) -> OwnerRecord {
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned()),
         app_version: crate::api::APP_VERSION.to_owned(),
+        lane: claim.lane,
     }
 }
 
@@ -270,7 +281,11 @@ mod tests {
     }
 
     fn claim(kind: OwnerKind) -> OwnerClaim {
-        OwnerClaim { kind, socket: None }
+        OwnerClaim {
+            kind,
+            socket: None,
+            lane: None,
+        }
     }
 
     #[test]
@@ -470,6 +485,7 @@ mod tests {
             started_ms: 1_793_448_000_000,
             socket: Some("/d/run/antinomie.sock".into()),
             app_version: "0.9.0".into(),
+            lane: None,
         };
         assert_eq!(
             DataOwner {

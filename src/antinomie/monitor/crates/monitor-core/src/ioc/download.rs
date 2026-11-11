@@ -182,6 +182,7 @@ fn update_sized(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<FeedMeta, String> {
+    crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::FeedUpdate)?;
     let result = update_inner(data_dir, feed, key, known, fetcher, cancel, progress)
         .map_err(|error| api_keys::redact(&redact_url(&error), &[key]));
     match &result {
@@ -325,6 +326,17 @@ pub fn update_all(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Vec<Outcome> {
+    if let Err(refused) =
+        crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::FeedUpdate)
+    {
+        let enabled = feeds::status(data_dir).into_iter().filter(|s| s.enabled);
+        return enabled
+            .map(|status| Outcome {
+                feed: status.feed,
+                result: Err(refused.clone()),
+            })
+            .collect();
+    }
     feeds::remove_withdrawn(data_dir);
     let statuses = feeds::status(data_dir);
     let enabled: Vec<&feeds::FeedStatus> =

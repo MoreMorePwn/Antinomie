@@ -14,7 +14,7 @@
 //!
 //! | Signal | What happens |
 //! |---|---|
-//! | first `SIGTERM`/`SIGINT` | No new submissions (`unavailable`, reason `service_stopping`); queued jobs stay queued. A job in its lane stages is cancelled for shutdown and goes back to the queue with the attempt not counted (`shutdown = drain`: after `drain_timeout_s`). A job in its host stages (`analyse`, `report`, `cleanup`) is let finish for up to `shutdown_host_grace_s` (120 s); past that its waits are interrupted and recovery resumes it at `analyse` on the next start. |
+//! | first `SIGTERM`/`SIGINT` | No new submissions (`unavailable`, reason `service_stopping`); queued jobs stay queued. A job in its lane stages is cancelled for shutdown and goes back to the queue with the attempt not counted (`shutdown = drain`: after `drain_timeout_s`). The host work pool goes on with the jobs it holds (their `analyse`, `report`, `cleanup` items) for up to `shutdown_host_grace_s` (120 s); past that its waits are interrupted and recovery hands those jobs back to the pool on the next start, their items queued in the same order. |
 //! | a second one within 5 s | Every wait is interrupted now; the engine stops the VM; exit 130. Recovery finishes the rest. |
 //! | `SIGHUP` | `policies/` and `service.toml` are read again (the socket stays); a failing reload keeps the old set. Running and queued jobs keep the policy they were frozen with. |
 //! | `SIGUSR1` | The queue's state is written to the log. |
@@ -32,6 +32,8 @@ mod read_tests;
 pub mod runner;
 pub mod service;
 #[cfg(test)]
+mod t9_tests;
+#[cfg(test)]
 mod tests;
 mod watch_env;
 
@@ -43,16 +45,20 @@ use crate::{
     },
     clock::{Clock, SystemClock},
     config::{DiskVms, PolicySet, ServiceConfig, SharedPolicies, service::Shutdown},
-    engine::Engine,
+    engine::{Engine, Handle, Mux},
     intake::{Intake, staging::StagingStore},
     lane::{
         LaneDir, ProcFs,
         recover::{RecoverOptions, recover_startup},
     },
+    pool::{HostPool, ITEM_FLOOR_MIB, PoolEnv},
     query::{QueryService, phase::LayerSource},
     resources::{Floors, Governor, ResourceChecks, SystemProbes},
     server::{Handler, Server, StopHandle, limits::Limits},
-    stages::host::{LibraryTags, RealTriage},
+    stages::{
+        host::{LibraryTags, RealTriage},
+        timing::{Medians, Timing},
+    },
     store::Store,
     waiter::Waiter,
 };
@@ -79,7 +85,8 @@ pub enum Phase {
     Idle,
     /// `prechecks` to `collect`: the VM is in use.
     Lane(JobId),
-    /// `analyse` to `cleanup`: host work only.
+    /// `analyse` to `cleanup` on the lane's own thread (the sequential form,
+    /// without a host work pool).
     Host(JobId),
     /// A lane command (`lane.reset`, ...).
     Command(String),
@@ -227,7 +234,9 @@ pub enum Exit {
 /// A running daemon.
 pub struct Daemon<E: Engine + Send + 'static> {
     service: Arc<Service>,
-    lane: Option<JoinHandle<Waiter<E>>>,
+    lane: Option<JoinHandle<Waiter<Handle<E>>>>,
+    /// The host work pool's workers (ANT-T0454).
+    workers: Vec<JoinHandle<()>>,
     server: Option<(StopHandle, JoinHandle<()>)>,
     /// The watcher, retention and delivery threads; they end on the stop flag.
     helpers: Vec<JoinHandle<()>>,
@@ -259,8 +268,24 @@ pub fn shutdown_step(
             Duration::from_secs(u64::from(config.daemon.drain_timeout_s)),
         )
     };
-    let phase = crate::store::lock(&service.phase);
-    match &*phase {
+    let phase = crate::store::lock(&service.phase).clone();
+    let limit = match mode {
+        Shutdown::Drain => host_grace.max(drain),
+        Shutdown::Cancel => host_grace,
+    };
+    let pooled = service.pool.as_ref().is_some_and(|pool| pool.busy());
+    if pooled && !state.interrupted && now.duration_since(since) >= limit {
+        state.interrupted = true;
+        service.controls.interrupt();
+        if let Some(pool) = &service.pool {
+            pool.poke();
+        }
+        return Some(format!(
+            "the host work pool did not finish within {} s; its jobs resume on the next start",
+            limit.as_secs()
+        ));
+    }
+    match &phase {
         Phase::Lane(job) if !state.cancelled.contains(job) => {
             if mode == Shutdown::Drain && now.duration_since(since) < drain {
                 return None;
@@ -274,10 +299,6 @@ pub fn shutdown_step(
             }
         }
         Phase::Host(job) if !state.interrupted => {
-            let limit = match mode {
-                Shutdown::Drain => host_grace.max(drain),
-                Shutdown::Cancel => host_grace,
-            };
             if now.duration_since(since) < limit {
                 return None;
             }
@@ -325,7 +346,11 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let controls = Arc::new(Controls::default());
         let view = Arc::new(Mutex::new(EngineView::default()));
-        let mut waiter = Waiter::new(engine, Arc::clone(&clock));
+        // One engine for the lane and the host workers (addendum card A): the
+        // lane's connection is made first, so terminal output and results of
+        // no known command go to it.
+        let mux = Mux::new(engine);
+        let mut waiter = Waiter::new(mux.handle(), Arc::clone(&clock));
         {
             let view = Arc::clone(&view);
             let clock = Arc::clone(&clock);
@@ -369,6 +394,9 @@ impl<E: Engine + Send + 'static> Daemon<E> {
                 }
             }
         }
+        // They go back to the host work pool in the order they arrived (first
+        // come, first served), whatever lane collected them.
+        resume.sort_by(|a, b| (a.created_ms, &a.id).cmp(&(b.created_ms, &b.id)));
         log(&format!(
             "recovery: {} job(s) back in the queue, {} to resume at analyse",
             recovery.jobs.requeued.len() + recovery.jobs.failed.len(),
@@ -404,6 +432,32 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK,
         )
         .is_ok();
+        let address_lookup = setup.config.privacy.address_lookup.triage_mode();
+        let pool = HostPool::new(PoolEnv {
+            store: Arc::clone(&store),
+            lanes: LaneDir::new(&service_dir),
+            policies: Arc::clone(&policies) as Arc<dyn crate::config::PolicyLookup>,
+            triage: Arc::new(
+                RealTriage::new(setup.options.clone()).with_address_lookup(address_lookup),
+            ),
+            tags: Arc::new(LibraryTags {
+                data_dir: data_dir.clone(),
+            }),
+            evidence: crate::waiter::load_artifacts,
+            data_dir: data_dir.clone(),
+            probes: Arc::new(SystemProbes {
+                pause_file: data_dir.join("run").join("PAUSE"),
+            }),
+            floor_mib: ITEM_FLOOR_MIB,
+            controls: Arc::clone(&controls),
+            clock: Arc::clone(&clock),
+            log: Arc::clone(&log),
+            workers: setup.config.host_workers(),
+            timing: Timing {
+                factor: setup.config.host_time_factor(),
+                medians: Medians::load(&service_dir.join("host-times.json")),
+            },
+        });
         let (wake_tx, wake_rx) = mpsc::channel();
         let (command_tx, command_rx) = mpsc::channel();
         let floors = Floors::of(
@@ -437,6 +491,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             watch: Default::default(),
             gc_lock: Mutex::new(()),
             log: Arc::clone(&log),
+            pool: Some(Arc::clone(&pool)),
         });
 
         // The socket is bound before the lane starts, so a socket that cannot
@@ -471,6 +526,22 @@ impl<E: Engine + Send + 'static> Daemon<E> {
                 })
                 .map_err(|e| format!("no thread for the lane: {e}"))?
         };
+        let mut workers = Vec::new();
+        for index in 0..pool.workers() {
+            let mut waiter = Waiter::new(mux.handle(), Arc::clone(&clock));
+            let controls = Arc::clone(&service.controls);
+            waiter.interrupt_when(move || controls.interrupted());
+            let pool = Arc::clone(&pool);
+            workers.push(
+                std::thread::Builder::new()
+                    .name(format!("antinomie-host-{index}"))
+                    .spawn(move || pool.work(&mut waiter))
+                    .map_err(|e| format!("no thread for a host worker: {e}"))?,
+            );
+        }
+        // The engine comes back through the lane's connection once every
+        // worker's is closed (`finish`).
+        drop(mux);
         let server = server.map(|server| {
             let handle = server.stop_handle();
             let thread = std::thread::spawn(move || server.serve());
@@ -513,6 +584,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         Ok(Self {
             service,
             lane: Some(lane_thread),
+            workers,
             server,
             helpers,
             log,
@@ -567,12 +639,17 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             {
                 (self.log)(&line);
             }
-            if self.lane.as_ref().is_none_or(|t| t.is_finished()) {
+            if self.lane.as_ref().is_none_or(|t| t.is_finished())
+                && self.workers.iter().all(|t| t.is_finished())
+            {
                 break;
             }
             // Wake the lane so an idle one sees the stop at once.
             if service.controls.stopping() {
                 let _ = crate::store::lock(&service.wake).send(());
+                if let Some(pool) = &service.pool {
+                    pool.poke();
+                }
             }
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -631,6 +708,12 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         let _ = crate::store::lock(&self.service.wake).send(());
         let thread = self.lane.take().expect("the lane thread is joined once");
         let waiter = thread.join();
+        if let Some(pool) = &self.service.pool {
+            pool.poke();
+        }
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
         // Nothing more can finish; the helpers end (delivery after it has
         // handled what the lane's last jobs produced).
         self.service.controls.lane_ended();
@@ -644,7 +727,10 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             )
         })?;
         (self.log)("daemon stopped");
-        Ok(waiter.into_engine())
+        waiter
+            .into_engine()
+            .into_engine()
+            .map_err(|error| ApiError::new(crate::api::error::ErrorCode::Internal, error))
     }
 }
 
@@ -698,6 +784,7 @@ fn lane_main<E: Engine>(
         lane: lane.clone(),
         governor: Some(governor),
         log,
+        pool: service.pool.as_deref(),
     };
     let staging = Arc::clone(&service.intake);
     let store = Arc::clone(&service.store);

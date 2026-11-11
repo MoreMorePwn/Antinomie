@@ -294,6 +294,8 @@ pub struct LaneDir {
 }
 
 static TEMP: AtomicU64 = AtomicU64::new(0);
+/// One lane-file change at a time in this process ([`LaneDir::update`]).
+static UPDATE: Mutex<()> = Mutex::new(());
 
 fn io(path: &Path, error: std::io::Error) -> LaneStateError {
     LaneStateError::Io {
@@ -441,12 +443,15 @@ impl LaneDir {
             .map_err(|e| io(&self.dir, e))
     }
 
-    /// Load, change and save a lane's file; the value `change` returns.
+    /// Load, change and save a lane's file; the value `change` returns. The
+    /// lane's thread and the host workers change the same file, so the whole
+    /// read, change and write is one step in the process.
     pub fn update<T>(
         &self,
         lane: &LaneId,
         change: impl FnOnce(&mut LaneFile) -> T,
     ) -> Result<T, LaneStateError> {
+        let _one = UPDATE.lock().unwrap_or_else(|p| p.into_inner());
         let mut file = self
             .load(lane)?
             .ok_or_else(|| LaneStateError::Missing(lane.clone()))?;

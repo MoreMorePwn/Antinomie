@@ -2236,6 +2236,15 @@ it for as long as it runs.
 The pipeline, policies, retention, failure codes and troubleshooting are in
 [Auto mode](auto-mode.md); this section lists the commands.
 
+**Pipelining.** The VM is free as soon as a job's recording is collected: the
+next job starts in the VM while the previous job's host work (each static tool,
+the Triage scan, detection, the label and the report) runs in the host work
+pool, at most `[daemon] host_workers` items at once (2), first come, first
+served by job arrival. Each item may take twice its expected time
+(`[daemon] host_time_factor`); `auto status <job>` lists the items with their
+state, expected time and limit, and `auto status` the pool's queue
+([Auto mode](auto-mode.md#the-host-work-pool)).
+
 **The daemon.** `antinomie-cli --data-dir ~/auto auto daemon` runs in the
 foreground until it is stopped; put it in the background with your service
 manager or `&`. It owns the data folder (`run/owner.json` says "daemon" and names

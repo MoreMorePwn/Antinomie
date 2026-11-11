@@ -772,6 +772,29 @@ never used as seeds: the seeds are fixtures of this repository and generated
 bytes. A finding gets a regression test in the crate's normal tests and a fix
 of the parser, never a limit that hides it.
 
+### Service surface targets and the process-start gate (0.9.0)
+
+Five more targets cover what a client or an administrator hands the Auto mode
+service. The four new ones call `antinomie-service`'s `fuzz_entry.rs`; the fifth
+(`socket_frames`) is `server::frame::fuzz_entry`. Each also runs over hostile and
+generated inputs in the normal test run.
+
+| Target | Surface reached |
+|---|---|
+| `job_spec` | `JobSpec` JSON: parse, shape checks, and a parsed spec must survive a round trip |
+| `config_toml` | policy and `service.toml` parsing with every validation check |
+| `socket_frames` | NDJSON line framing, the strict request parser and the upload Base64 |
+| `watch_names` | file names of watch folders and uploads: `sanitize`, partial-file test, display name, stored-name rules |
+| `label_expr` | the `when` grammar of verdict rules (parse and evaluate). An expression is limited to 2048 bytes and 32 levels of parentheses so a hostile policy cannot overflow the stack |
+
+`scripts/check-command-new.py` is the A21 gate: no code path may start a
+submitted file. It lists every process start (`Command::new`, `exec*`) in the
+non-test Rust code of the workspace and compares it with
+`scripts/command-new-allowlist.txt` (one line per file: path, count, reason). A
+start in an unlisted file, more starts than listed, or a stale entry fails CI;
+add a reviewed line when a new start is intended. `tests/monitor/test-command-new-gate.py`
+checks the gate itself, including that a new unlisted call is caught.
+
 ## Detection scanned inputs (0.6.2)
 
 Every detection report records `inputs` (`analysis/detection/inputs.rs`):

@@ -553,6 +553,12 @@ pub struct BackendOptions {
     /// What this process records about itself in `run/owner.json` when it
     /// takes the data directory (the window by default).
     pub owner: crate::data_owner::OwnerClaim,
+    /// A lane engine (multi-lane, [`crate::lanes`]): lane 0's data folder,
+    /// whose bases, samples, ioc, rules, tools and volatility-plugins this
+    /// engine uses. `data_dir` must then be `<shared_root>/lanes/<N>` and
+    /// `owner.lane` must name lane N. `None` (the default) is a plain data
+    /// folder that owns its shared folders itself.
+    pub shared_root: Option<PathBuf>,
 }
 impl Default for BackendOptions {
     fn default() -> Self {
@@ -577,6 +583,7 @@ impl Default for BackendOptions {
             headless: false,
             serial_console: false,
             owner: Default::default(),
+            shared_root: None,
         }
     }
 }

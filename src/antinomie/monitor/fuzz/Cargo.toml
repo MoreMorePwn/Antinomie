@@ -111,3 +111,31 @@ path = "fuzz_targets/socket_frames.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "job_spec"
+path = "fuzz_targets/job_spec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_toml"
+path = "fuzz_targets/config_toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "watch_names"
+path = "fuzz_targets/watch_names.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "label_expr"
+path = "fuzz_targets/label_expr.rs"
+test = false
+doc = false
+bench = false

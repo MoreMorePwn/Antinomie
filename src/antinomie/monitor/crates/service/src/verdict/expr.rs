@@ -230,10 +230,18 @@ pub struct Expr {
     node: Node,
 }
 
+/// The longest expression and the deepest parenthesis nesting accepted. A
+/// rule is a sentence; without these a hostile policy file (found by the
+/// `label_expr` fuzz target) overflows the stack while parsing, evaluating
+/// or dropping a chain or a nest of tens of thousands of terms.
+pub const MAX_LEN: usize = 2048;
+pub const MAX_DEPTH: usize = 32;
+
 struct Parser {
     tokens: Vec<(usize, Token)>,
     at: usize,
     end: usize,
+    depth: usize,
 }
 
 impl Parser {
@@ -274,8 +282,17 @@ impl Parser {
 
     fn compare(&mut self) -> Result<Node, ExprError> {
         if self.peek() == Some(&Token::Open) {
+            if self.depth >= MAX_DEPTH {
+                return err(
+                    self.here(),
+                    format!("parentheses nest deeper than {MAX_DEPTH} levels"),
+                );
+            }
             self.at += 1;
-            let inner = self.expr()?;
+            self.depth += 1;
+            let inner = self.expr();
+            self.depth -= 1;
+            let inner = inner?;
             if !self.eat(&Token::Close) {
                 return err(self.here(), "a parenthesis is not closed");
             }
@@ -372,6 +389,9 @@ impl Parser {
 impl Expr {
     /// Parse `text`.
     pub fn parse(text: &str) -> Result<Self, ExprError> {
+        if text.len() > MAX_LEN {
+            return err(0, format!("the expression is longer than {MAX_LEN} bytes"));
+        }
         let tokens = tokens(text)?;
         if tokens.is_empty() {
             return err(0, "the expression is empty");
@@ -380,6 +400,7 @@ impl Expr {
             tokens,
             at: 0,
             end: text.len(),
+            depth: 0,
         };
         let node = parser.expr()?;
         if parser.at < parser.tokens.len() {

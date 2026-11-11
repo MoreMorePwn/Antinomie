@@ -89,6 +89,7 @@ fn job(state: JobState) -> Job {
         failure: None,
         repeat_of: None,
         labels: Default::default(),
+        host_work: Vec::new(),
     }
 }
 
