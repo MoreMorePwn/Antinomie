@@ -11,6 +11,7 @@
 //! client can make the daemon open a path of its choosing.
 
 use super::{Controls, EngineView, Phase, artifacts, lane::LaneCommand};
+use crate::api::ids::LaneId;
 use crate::{
     api::{
         error::{ApiError, ErrorCode, ErrorReason},
@@ -35,6 +36,37 @@ use std::{
     time::Duration,
 };
 
+/// One lane the daemon runs: its engine's view, what it is doing, and how
+/// to reach its thread (ANT-T0455 card C: one per lane).
+pub struct LaneSlot {
+    pub lane: LaneId,
+    /// The lane's data folder (lane 1's for `lane-1`, `<data>/lanes/N/` for
+    /// `lane-N`).
+    pub data_dir: PathBuf,
+    pub view: Arc<Mutex<EngineView>>,
+    pub phase: Arc<Mutex<Phase>>,
+    pub wake: Mutex<mpsc::Sender<()>>,
+    pub commands: Mutex<mpsc::Sender<LaneCommand>>,
+}
+
+impl LaneSlot {
+    pub fn new(
+        lane: LaneId,
+        data_dir: PathBuf,
+        wake: mpsc::Sender<()>,
+        commands: mpsc::Sender<LaneCommand>,
+    ) -> Self {
+        Self {
+            lane,
+            data_dir,
+            view: Arc::new(Mutex::new(EngineView::default())),
+            phase: Arc::new(Mutex::new(Phase::Idle)),
+            wake: Mutex::new(wake),
+            commands: Mutex::new(commands),
+        }
+    }
+}
+
 /// The daemon's state, shared by the socket threads and the supervisor.
 pub struct Service {
     pub data_dir: PathBuf,
@@ -46,11 +78,14 @@ pub struct Service {
     pub lanes: LaneDir,
     pub query: QueryService,
     pub owner: Owner,
-    pub view: Arc<Mutex<EngineView>>,
-    pub phase: Arc<Mutex<Phase>>,
+    /// The lanes that run, lane 1 first (one unless `daemon.lanes` asks for
+    /// more).
+    pub slots: Vec<LaneSlot>,
+    /// The lane choice between the lanes.
+    pub board: Arc<super::board::LaneBoard>,
+    /// The lanes `daemon.lanes` asked for that did not start, and why.
+    pub left_out: Vec<super::lanes::LeftOut>,
     pub controls: Arc<Controls>,
-    pub wake: Mutex<mpsc::Sender<()>>,
-    pub commands: Mutex<mpsc::Sender<LaneCommand>>,
     pub accelerator: Accelerator,
     pub watch: crate::watch::WatchHub,
     /// One retention pass or `job.delete` at a time.
@@ -113,8 +148,46 @@ fn starts_work(op: Op) -> bool {
 }
 
 impl Service {
+    /// Wake every lane's loop.
     pub(super) fn wake_lane(&self) {
-        let _ = crate::store::lock(&self.wake).send(());
+        for slot in &self.slots {
+            let _ = crate::store::lock(&slot.wake).send(());
+        }
+    }
+
+    /// The lane that runs as `lane`.
+    pub fn slot(&self, lane: &LaneId) -> Option<&LaneSlot> {
+        self.slots.iter().find(|slot| &slot.lane == lane)
+    }
+
+    /// The first lane's engine view (lane 1's: the shared bases, the
+    /// accelerator).
+    pub fn first_view(&self) -> EngineView {
+        self.slots
+            .first()
+            .map(|slot| crate::store::lock(&slot.view).clone())
+            .unwrap_or_default()
+    }
+
+    /// The VMs of every lane's engine, lane 1's first.
+    pub(super) fn all_vms(&self) -> Vec<antinomie_monitor_core::VmConfig> {
+        let mut vms: Vec<antinomie_monitor_core::VmConfig> = Vec::new();
+        for slot in &self.slots {
+            for vm in &crate::store::lock(&slot.view).lanes.vms {
+                if !vms.iter().any(|known| known.id == vm.id) {
+                    vms.push(vm.clone());
+                }
+            }
+        }
+        vms
+    }
+
+    /// The jobs the lanes are on now (lane or host stages, lane order).
+    pub(super) fn phases(&self) -> Vec<(LaneId, Phase)> {
+        self.slots
+            .iter()
+            .map(|slot| (slot.lane.clone(), crate::store::lock(&slot.phase).clone()))
+            .collect()
     }
 
     pub(super) fn submit_context<'a>(
@@ -184,18 +257,27 @@ impl Service {
     }
 
     pub(super) fn lane_statuses(&self) -> Vec<LaneStatus> {
-        let view = crate::store::lock(&self.view).clone();
-        let phase = crate::store::lock(&self.phase).clone();
+        let first = self.first_view();
         let mut out = Vec::new();
         for lane in self.lanes.lanes().unwrap_or_default() {
             let file = self.lanes.load(&lane).ok().flatten();
+            let slot = self.slot(&lane);
+            let view = slot.map_or_else(
+                || first.clone(),
+                |slot| crate::store::lock(&slot.view).clone(),
+            );
+            // A lane that has a file but does not run in this daemon (beyond
+            // `daemon.lanes`, or left out at start) is stopped.
+            let phase = slot.map(|slot| crate::store::lock(&slot.phase).clone());
             let (state, job_id) = match (&file, &phase) {
                 (Some(file), _) if file.is_quarantined() => (LaneState::Quarantined, None),
-                (None, _) => (LaneState::Stopped, None),
-                (_, Phase::Lane(job) | Phase::Host(job)) => (LaneState::Busy, Some(job.clone())),
-                (_, Phase::Command(_)) => (LaneState::Starting, None),
-                (_, Phase::Idle) if self.controls.stopping() => (LaneState::Stopped, None),
-                (_, Phase::Idle) => (LaneState::Idle, None),
+                (None, _) | (_, None) => (LaneState::Stopped, None),
+                (_, Some(phase)) => match phase {
+                    Phase::Lane(job) | Phase::Host(job) => (LaneState::Busy, Some(job.clone())),
+                    Phase::Command(_) => (LaneState::Starting, None),
+                    Phase::Idle if self.controls.stopping() => (LaneState::Stopped, None),
+                    Phase::Idle => (LaneState::Idle, None),
+                },
             };
             let vm_id = file.as_ref().map(|f| f.vm_id.clone());
             let pending = vm_id
@@ -229,7 +311,7 @@ impl Service {
             lanes: self.lane_statuses(),
             limits: QueueLimits {
                 max_queue: config.queue.max_queued,
-                max_concurrent: 1,
+                max_concurrent: self.slots.len().max(1) as u32,
                 per_client_queued: config.queue.per_client_queued,
             },
             owner: self.owner,
@@ -242,7 +324,17 @@ impl Service {
     }
 
     pub fn health(&self) -> Result<HealthStatus, ApiError> {
-        let view = crate::store::lock(&self.view).clone();
+        // The engines' counters, summed over the lanes.
+        let mut view = EngineView::default();
+        for slot in &self.slots {
+            let lane = crate::store::lock(&slot.view);
+            view.ui_dropped += lane.ui_dropped;
+            view.shedding |= lane.shedding;
+            view.reply_stalls += lane.reply_stalls;
+            view.read_gaps.count += lane.read_gaps.count;
+            view.read_gaps.total_ns += lane.read_gaps.total_ns;
+            view.read_gaps.longest_ns = view.read_gaps.longest_ns.max(lane.read_gaps.longest_ns);
+        }
         let lanes = self.lane_statuses();
         let counts = self.store.counts()?;
         let mut reasons = Vec::new();
@@ -255,8 +347,18 @@ impl Service {
         if lanes.is_empty() {
             reasons.push("no lane is set up; run `antinomie-cli auto init`".to_owned());
         }
-        if lanes.iter().any(|l| l.state == LaneState::Quarantined) {
-            reasons.push("a lane is quarantined".to_owned());
+        // With several lanes a quarantined one keeps the node ready while
+        // another running lane can take jobs; `lane_states` shows it.
+        let running: Vec<&LaneStatus> = lanes
+            .iter()
+            .filter(|l| self.slot(&l.lane).is_some())
+            .collect();
+        if !running.is_empty() && running.iter().all(|l| l.state == LaneState::Quarantined) {
+            reasons.push(if running.len() == 1 {
+                "a lane is quarantined".to_owned()
+            } else {
+                "every lane is quarantined".to_owned()
+            });
         }
         if let Some(reason) = self.store.pause_reason()? {
             reasons.push(format!("the queue is paused ({})", wire(&reason)));
@@ -291,7 +393,7 @@ impl Service {
             api_version: crate::API_VERSION,
             app_version: antinomie_monitor_core::api::APP_VERSION.into(),
             app_revision: antinomie_monitor_core::api::APP_REVISION,
-            lanes: 1,
+            lanes: self.slots.len().max(1) as u32,
             max_sample_bytes: 0,
             accept_types: Vec::new(),
             accept_arch: Vec::new(),
@@ -393,19 +495,40 @@ impl Service {
         to_value(&reply)
     }
 
-    /// A lane op: sent to the lane's thread (it owns the engine) and answered
-    /// when the lane is idle; a lane that stays busy answers `conflict`.
+    /// A lane op: sent to the lane's thread (it owns the lane's engine) and
+    /// answered when the lane is idle; a lane that stays busy answers
+    /// `conflict`. `params.lane` picks the lane (default lane 1).
     pub fn lane_op(&self, op: &str, value: Value, wait: Duration) -> Result<Value, ApiError> {
-        if let Phase::Lane(job) | Phase::Host(job) = &*crate::store::lock(&self.phase) {
+        let request: super::lane_ops::LaneParams = params(value.clone())?;
+        let lane = request.lane.unwrap_or_else(|| LaneId::new(1));
+        let Some(slot) = self.slot(&lane) else {
+            let why = self
+                .left_out
+                .iter()
+                .find(|left| left.lane == lane)
+                .map(|left| format!(": {}", left.reason))
+                .unwrap_or_else(|| {
+                    format!(
+                        " (the daemon runs {} lane(s); daemon.lanes in service.toml)",
+                        self.slots.len()
+                    )
+                });
+            return Err(ApiError::new(
+                ErrorCode::PreconditionFailed,
+                format!("{lane} does not run in this daemon{why}"),
+            )
+            .with_field("lane"));
+        };
+        if let Phase::Lane(job) | Phase::Host(job) = &*crate::store::lock(&slot.phase) {
             return Err(ApiError::new(
                 ErrorCode::Conflict,
                 format!(
-                    "the lane is busy with job {job}; try again when it is idle (or pause the queue first)"
+                    "{lane} is busy with job {job}; try again when it is idle (or pause the queue first)"
                 ),
             ));
         }
         let (reply, answer) = mpsc::channel();
-        crate::store::lock(&self.commands)
+        crate::store::lock(&slot.commands)
             .send(LaneCommand {
                 op: op.to_owned(),
                 params: value,
@@ -413,7 +536,7 @@ impl Service {
                 deadline: std::time::Instant::now() + wait,
             })
             .map_err(|_| ApiError::new(ErrorCode::Unavailable, "the lane has stopped"))?;
-        self.wake_lane();
+        let _ = crate::store::lock(&slot.wake).send(());
         answer.recv_timeout(wait).unwrap_or_else(|_| {
             Err(ApiError::new(
                 ErrorCode::Conflict,

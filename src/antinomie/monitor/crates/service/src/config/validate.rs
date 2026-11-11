@@ -141,10 +141,13 @@ pub fn parse_service(file: &str, text: &str) -> (Option<ServiceConfig>, Vec<Prob
 }
 
 fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
-    if config.daemon.lanes != 1 {
+    if !(1..=super::service::MAX_LANES).contains(&config.daemon.lanes) {
         sink.error(
             "daemon.lanes",
-            "unsupported: one lane per node (decided D4); values above 1 are not available",
+            format!(
+                "must be 1 to {} (each lane runs its own VM; 1 is the default)",
+                super::service::MAX_LANES
+            ),
         );
     }
     if let Some(workers) = config.daemon.host_workers

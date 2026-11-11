@@ -206,7 +206,7 @@ pub(super) fn cancelled(cancel: Option<&std::sync::atomic::AtomicBool>) -> bool 
 /// Remove staging directories left by a crashed or canceled preparation.
 pub fn reap_staging(data_dir: &Path, older_than: std::time::Duration) -> Result<u32, String> {
     if crate::lanes::is_lane_folder(data_dir) {
-        return Ok(0); // lane 0 reaps the shared staging
+        return Ok(0); // lane 1 reaps the shared staging
     }
     let staging = rules_root(data_dir).join("staging");
     if !staging.is_dir() {

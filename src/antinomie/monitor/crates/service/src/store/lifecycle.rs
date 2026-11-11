@@ -26,6 +26,9 @@ pub enum Eligibility {
     Ready,
     /// Not yet: the job stays `queued` and says why.
     Wait(WaitingFor),
+    /// Not for this lane: another lane takes it (several lanes, design
+    /// 4.6.1). The job is left exactly as it is.
+    Skip,
 }
 
 /// How a running job goes back to the queue.
@@ -312,6 +315,7 @@ impl Store {
                     continue;
                 }
                 match eligible(&job) {
+                    Eligibility::Skip => {}
                     Eligibility::Wait(why) => set_waiting(tx, &job.id, &cur, Some(why))?,
                     Eligibility::Ready => {
                         start(tx, &job.id, &cur, lane)?;

@@ -57,7 +57,7 @@ pub(super) fn migrate_data_with_proc(
     if holds_only_window_state(source) {
         return Ok(());
     }
-    // A lane folder, or lane 0 with lanes, is not copied: the lanes run
+    // A lane folder, or lane 1 with lanes, is not copied: the lanes run
     // beside it, and a half-copied lane tree would split the shared folders.
     if crate::lanes::has_lanes(source) {
         return Err("data migration of a folder with lanes is unsupported; source retained".into());

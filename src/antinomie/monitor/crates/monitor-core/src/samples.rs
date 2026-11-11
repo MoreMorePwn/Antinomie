@@ -182,7 +182,7 @@ impl Source {
     }
 }
 
-/// Folder of downloaded sample archives and their records; lane 0's for a
+/// Folder of downloaded sample archives and their records; lane 1's for a
 /// lane data folder ([`crate::lanes`]).
 pub fn samples_dir(data_dir: &Path) -> PathBuf {
     crate::lanes::shared_root(data_dir).join("samples")

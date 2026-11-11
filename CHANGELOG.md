@@ -46,15 +46,35 @@ x86 programs by their own table.
   - A stop lets the pool work on for `shutdown_host_grace_s`; what is left resumes in the
     same order at the next start, keeping static tools that had finished.
 
-- **Lane data folders share lane 0's bases, samples, rules, tools and IOC data (ANT-T0455, part B).**
-  - Groundwork for several lanes in one daemon (`daemon.lanes` stays 1 by default). Lane N
-    keeps its VMs and runs in `<data>/lanes/N/` and uses lane 0's `bases`, `samples`, `ioc`,
+- **Lane data folders share lane 1's bases, samples, rules, tools and IOC data (ANT-T0455, part B).**
+  - Groundwork for several lanes in one daemon (`daemon.lanes` stays 1 by default). Lane 1 is
+    the data folder; lane N (2 and up) keeps its VMs and runs in `<data>/lanes/N/` and uses
+    lane 1's `bases`, `samples`, `ioc`,
     `rules`, `tools`, `volatility-plugins` and known false positives directly, without
     symbolic links. A lane does not change them: base import, delete, download and build,
     tool install and remove, and rule, IOC dataset, known false positive and GeoIP updates
-    are refused there with "only lane 0 changes the folders the lanes share".
+    are refused there with "only lane 1 (the main data folder) changes the folders the lanes share".
   - Deleting a base is refused while a VM of any lane is built on it. The window refuses to
-    open a lane's folder and names lane 0's instead.
+    open a lane's folder and names lane 1's instead.
+
+- **Auto mode runs up to four lanes at once (`[daemon] lanes`, ANT-T0455, part C).** One lane
+  stays the default.
+  - `auto init --lane N` (2 to 4) makes lane N's VM (`auto-N`) in `<data>/lanes/N/` on a base of
+    the data folder; with `[daemon] lanes = N` the daemon runs one engine and one VM per lane.
+    `daemon.lanes` accepts 1 to 4.
+  - A lane starts only when `MemAvailable` covers the RAM of every lane VM before it plus its own
+    floor (VM RAM + 2048 MiB, or `min_free_ram_mib`); the log and `auto lane list` say how many
+    lanes started and why the others did not.
+  - A job goes to a free lane whose base (that of the policy's `vm.lane_vm`) and architecture can
+    run it, the least recently used first, so jobs spread over the lanes. Each lane has its own
+    floors and quarantine: a quarantined lane holds back only what no other lane can run.
+  - All lanes share one host work pool (first come, first served by job arrival,
+    `host_workers` in total), one job store and the data folder's engine and route settings
+    (a lane reads lane 1's `settings.json` and `network/routes.json`). After a crash every
+    lane's jobs are recovered and the collected ones resume in arrival order.
+  - `auto status`, `capabilities` (`lanes`), `auto lane list` and `vm list` show every lane;
+    `auto lane reset/unquarantine --lane lane-N` reaches that lane's engine. Deleting a base waits
+    for a lane that is creating a VM from it (and refuses), so the two cannot cross.
 
 - **binwalk is listed in the requirements (ANT-T0458).** Embedded content has always needed
   binwalk on the host, but **Tools > App dependencies**, its install command and

@@ -35,6 +35,16 @@ impl DirectEngine {
     /// Start the engine as a `cli` owner of the data directory. A directory
     /// another process owns is `unavailable` (exit 21) and names the owner.
     pub fn start(context: &Context) -> Result<Self, CliError> {
+        Self::start_lane(context, None)
+    }
+
+    /// [`start`](Self::start) on lane `lane`'s data folder (`<data>/lanes/N/`,
+    /// ANT-T0455 card C): the lane engine shares the data folder's bases,
+    /// library and settings. `None` and lane 1 are the data folder itself.
+    pub fn start_lane(
+        context: &Context,
+        lane: Option<&antinomie_service::api::ids::LaneId>,
+    ) -> Result<Self, CliError> {
         if context.mode() == crate::args::Mode::Daemon {
             return Err(CliError::new(
                 ErrorCode::Unsupported,
@@ -47,6 +57,12 @@ impl DirectEngine {
             socket: None,
             lane: None,
         };
+        if let Some(lane) = lane.filter(|lane| lane.as_str() != "lane-1") {
+            let root = &options.data_dir;
+            let canonical = std::fs::canonicalize(root).map_err(|e| CliError::io(root, &e))?;
+            options.data_dir = canonical;
+            options = antinomie_service::daemon::lanes::lane_options(&options, lane);
+        }
         let data_dir = options.data_dir.clone();
         let backend = Backend::new(options.clone())
             .map_err(|message| CliError::from_engine_start(&data_dir, &message))?;

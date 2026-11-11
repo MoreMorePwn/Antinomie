@@ -103,6 +103,9 @@ pub struct RealTriage {
     pub options: BackendOptions,
     /// `service.toml [privacy] address_lookup`.
     pub address_lookup: antinomie_monitor_core::settings::AddressLookup,
+    /// The engine options of the other lanes (several lanes, ANT-T0455 card
+    /// C): a job's run is in the data folder of the lane that ran it.
+    pub lanes: Vec<(crate::api::ids::LaneId, BackendOptions)>,
 }
 
 impl RealTriage {
@@ -110,7 +113,22 @@ impl RealTriage {
         Self {
             options,
             address_lookup: antinomie_monitor_core::settings::AddressLookup::Tshark,
+            lanes: Vec::new(),
         }
+    }
+
+    pub fn with_lanes(mut self, lanes: Vec<(crate::api::ids::LaneId, BackendOptions)>) -> Self {
+        self.lanes = lanes;
+        self
+    }
+
+    /// The options of the data folder that holds `job`'s run: its lane's,
+    /// else lane 1's.
+    pub fn options_for(&self, job: &Job) -> &BackendOptions {
+        job.lane
+            .as_ref()
+            .and_then(|lane| self.lanes.iter().find(|(id, _)| id == lane))
+            .map_or(&self.options, |(_, options)| options)
     }
 
     pub fn with_address_lookup(
@@ -128,7 +146,8 @@ impl HostTriage for RealTriage {
             .recording
             .as_ref()
             .ok_or("the job has no recording to read")?;
-        let location = read_only_locations(&self.options)
+        let options = self.options_for(job);
+        let location = read_only_locations(options)
             .map_err(|e| e.to_string())?
             .into_iter()
             .find(|location| location.vm_id == recording.vm_id)
@@ -142,7 +161,7 @@ impl HostTriage for RealTriage {
                     .into(),
             );
         }
-        SavedRun::open_with(run, &self.options, self.address_lookup)
+        SavedRun::open_with(run, options, self.address_lookup)
     }
 
     fn index(&self, saved: &SavedRun, cancel: &Arc<AtomicBool>) -> Result<ArchiveScan, String> {
@@ -176,7 +195,7 @@ impl HostTriage for RealTriage {
         let built = digest_job::queue().build_blocking(
             digest_job::Job {
                 run: saved.run,
-                options: self.options.clone(),
+                options: self.options_for(job).clone(),
                 budget: digest_job::Budget::default(),
             },
             cancel,

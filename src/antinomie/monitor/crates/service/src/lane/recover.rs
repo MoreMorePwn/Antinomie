@@ -129,15 +129,27 @@ impl From<ApiError> for RecoverError {
     }
 }
 
-/// Run the recovery of 4.7.3 and 4.8. Call after the engine started, the
-/// first snapshot arrived, and the data directory is owned.
-pub fn recover_startup<E: Engine>(
-    store: &Store,
-    lanes: &LaneDir,
-    waiter: &mut Waiter<E>,
-    procs: &dyn Processes,
-    options: &RecoverOptions,
-) -> Result<StartupRecovery, RecoverError> {
+/// What the store's part of recovery leaves for one lane: its file as read,
+/// the collected jobs that resume at `analyse` and those that are dropped.
+pub struct PendingLane {
+    pub lane: LaneId,
+    file: Result<Option<LaneFile>, LaneStateError>,
+    resume: Vec<JobId>,
+    dropped: Vec<JobId>,
+}
+
+/// The store's part of recovery, done once for every lane ([`recover_store`]).
+pub struct StoreRecovery {
+    pub jobs: RecoveryReport,
+    /// Every lane that has a file, in lane order.
+    pub pending: Vec<PendingLane>,
+}
+
+/// Steps 1 to 3 of the module text, for every lane at once (the store is one
+/// for all lanes). Each lane's own part follows with its engine
+/// ([`recover_lane_with`]) or, for a lane that does not start, without one
+/// ([`recover_unstarted`]).
+pub fn recover_store(store: &Store, lanes: &LaneDir) -> Result<StoreRecovery, RecoverError> {
     lanes.sweep_temp();
     let mut loaded = Vec::new();
     for lane in lanes.lanes()? {
@@ -147,10 +159,10 @@ pub fn recover_startup<E: Engine>(
 
     // Which collected jobs resume at analyse.
     let mut keep = HashSet::new();
-    let mut resumable: Vec<(Vec<JobId>, Vec<JobId>)> = Vec::new();
-    for (_, file) in &loaded {
+    let mut pending = Vec::new();
+    for (lane, file) in loaded {
         let (mut resume, mut dropped) = (Vec::new(), Vec::new());
-        if let Ok(Some(file)) = file {
+        if let Ok(Some(file)) = &file {
             for entry in &file.collected {
                 if still_needed(store, entry) {
                     keep.insert(entry.job_id.clone());
@@ -160,33 +172,125 @@ pub fn recover_startup<E: Engine>(
                 }
             }
         }
-        resumable.push((resume, dropped));
+        pending.push(PendingLane {
+            lane,
+            file,
+            resume,
+            dropped,
+        });
     }
-
     let jobs = store.recover_keeping(&keep)?;
+    Ok(StoreRecovery { jobs, pending })
+}
+
+fn unreadable(lane: LaneId, error: &LaneStateError) -> LaneRecovery {
+    LaneRecovery {
+        lane,
+        file: FileState::Unreadable(error.to_string()),
+        interrupted: None,
+        qemu: QemuOutcome::NotRecorded,
+        stopped_vm: false,
+        layer_pending: false,
+        problems: Vec::new(),
+        quarantined: None,
+        resume: Vec::new(),
+        dropped: Vec::new(),
+    }
+}
+
+/// Step 4 of the module text for one lane, on that lane's engine. `None`
+/// when the lane's file has gone since [`recover_store`] read it.
+pub fn recover_lane_with<E: Engine>(
+    store: &Store,
+    lanes: &LaneDir,
+    waiter: &mut Waiter<E>,
+    procs: &dyn Processes,
+    options: &RecoverOptions,
+    pending: PendingLane,
+) -> Result<Option<LaneRecovery>, RecoverError> {
+    let PendingLane {
+        lane,
+        file,
+        resume,
+        dropped,
+    } = pending;
+    match file {
+        Err(error) => Ok(Some(unreadable(lane, &error))),
+        Ok(None) => Ok(None),
+        Ok(Some(file)) => {
+            recover_lane(store, lanes, waiter, procs, options, file, resume, dropped).map(Some)
+        }
+    }
+}
+
+/// The part of step 4 that needs no engine, for a lane that has a file but
+/// does not start this time (beyond `daemon.lanes`, or left out for memory):
+/// its recorded QEMU process is ended when it is still that VM's, the dead
+/// process's work and the collected entries no job needs are cleared. The
+/// engine checks wait for the lane's next start. Its collected jobs still
+/// resume at `analyse` (the host work pool needs no lane engine).
+pub fn recover_unstarted(
+    store: &Store,
+    lanes: &LaneDir,
+    procs: &dyn Processes,
+    pending: PendingLane,
+    now_ms: u64,
+) -> Result<Option<LaneRecovery>, RecoverError> {
+    let PendingLane {
+        lane,
+        file,
+        resume,
+        dropped,
+    } = pending;
+    let mut file = match file {
+        Err(error) => return Ok(Some(unreadable(lane, &error))),
+        Ok(None) => return Ok(None),
+        Ok(Some(file)) => file,
+    };
+    let was_quarantined = file.is_quarantined();
+    let interrupted = file.current.take();
+    let qemu = end_recorded_qemu(procs, &mut file, now_ms);
+    file.collected
+        .retain(|entry| !dropped.contains(&entry.job_id));
+    file.updated_ms = now_ms;
+    lanes.save(&file)?;
+    let quarantined = file.quarantine.as_ref().map(|q| q.reason);
+    if let (Some(_), false) = (&file.quarantine, was_quarantined) {
+        announce_quarantine(store, &file, interrupted.as_ref().map(|w| w.job_id.clone()))?;
+    }
+    Ok(Some(LaneRecovery {
+        lane: file.lane,
+        file: FileState::Recovered,
+        interrupted,
+        qemu,
+        stopped_vm: false,
+        layer_pending: false,
+        problems: Vec::new(),
+        quarantined,
+        resume,
+        dropped,
+    }))
+}
+
+/// Run the recovery of 4.7.3 and 4.8 with one engine for every lane (one
+/// lane). Call after the engine started, the first snapshot arrived, and the
+/// data directory is owned.
+pub fn recover_startup<E: Engine>(
+    store: &Store,
+    lanes: &LaneDir,
+    waiter: &mut Waiter<E>,
+    procs: &dyn Processes,
+    options: &RecoverOptions,
+) -> Result<StartupRecovery, RecoverError> {
+    let recovered = recover_store(store, lanes)?;
     let mut report = StartupRecovery {
-        jobs,
+        jobs: recovered.jobs,
         lanes: Vec::new(),
     };
-    for ((lane, file), (resume, dropped)) in loaded.into_iter().zip(resumable) {
-        report.lanes.push(match file {
-            Err(error) => LaneRecovery {
-                lane,
-                file: FileState::Unreadable(error.to_string()),
-                interrupted: None,
-                qemu: QemuOutcome::NotRecorded,
-                stopped_vm: false,
-                layer_pending: false,
-                problems: Vec::new(),
-                quarantined: None,
-                resume: Vec::new(),
-                dropped: Vec::new(),
-            },
-            Ok(None) => continue,
-            Ok(Some(file)) => {
-                recover_lane(store, lanes, waiter, procs, options, file, resume, dropped)?
-            }
-        });
+    for pending in recovered.pending {
+        if let Some(lane) = recover_lane_with(store, lanes, waiter, procs, options, pending)? {
+            report.lanes.push(lane);
+        }
     }
     Ok(report)
 }
@@ -217,28 +321,7 @@ fn recover_lane<E: Engine>(
     let interrupted = file.current.take();
 
     // 1. The QEMU process the dead service started.
-    let qemu = match file.qemu.take() {
-        None => QemuOutcome::NotRecorded,
-        Some(record) => match procs.info(record.pid) {
-            None => QemuOutcome::Gone(record.pid),
-            Some(info) if is_recorded_qemu(&record, &info) => match procs.kill(record.pid) {
-                Ok(()) => QemuOutcome::Killed(record.pid),
-                Err(message) => {
-                    let pid = record.pid;
-                    file.qemu = Some(record);
-                    QemuOutcome::KillFailed(pid, message)
-                }
-            },
-            Some(_) => QemuOutcome::NotOurs(record.pid),
-        },
-    };
-    if let QemuOutcome::KillFailed(pid, message) = &qemu {
-        file.quarantine(
-            FailureCode::LaneChanged,
-            &format!("the QEMU process {pid} of the lane VM would not end: {message}"),
-            now,
-        );
-    }
+    let qemu = end_recorded_qemu(procs, &mut file, now);
 
     // 2. The engine side: stopped, settled.
     waiter.drain().map_err(RecoverError::Engine)?;
@@ -310,6 +393,34 @@ fn recover_lane<E: Engine>(
         resume,
         dropped,
     })
+}
+
+/// End the QEMU process the lane file records, only when it is still that
+/// VM's; a process that would not end quarantines the lane.
+fn end_recorded_qemu(procs: &dyn Processes, file: &mut LaneFile, now: u64) -> QemuOutcome {
+    let qemu = match file.qemu.take() {
+        None => QemuOutcome::NotRecorded,
+        Some(record) => match procs.info(record.pid) {
+            None => QemuOutcome::Gone(record.pid),
+            Some(info) if is_recorded_qemu(&record, &info) => match procs.kill(record.pid) {
+                Ok(()) => QemuOutcome::Killed(record.pid),
+                Err(message) => {
+                    let pid = record.pid;
+                    file.qemu = Some(record);
+                    QemuOutcome::KillFailed(pid, message)
+                }
+            },
+            Some(_) => QemuOutcome::NotOurs(record.pid),
+        },
+    };
+    if let QemuOutcome::KillFailed(pid, message) = &qemu {
+        file.quarantine(
+            FailureCode::LaneChanged,
+            &format!("the QEMU process {pid} of the lane VM would not end: {message}"),
+            now,
+        );
+    }
+    qemu
 }
 
 /// Store `lane.state` (`quarantined`) and `engine.alert` for a lane whose file

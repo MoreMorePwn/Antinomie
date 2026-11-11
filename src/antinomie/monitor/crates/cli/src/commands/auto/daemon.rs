@@ -6,6 +6,12 @@
 //! command owns is refused with exit 21 and the owner named. It then runs
 //! the service until a stop signal and exits 0 (130 after a second signal
 //! within 5 s).
+//!
+//! With `daemon.lanes = N` (ANT-T0455 card C) lane 1's engine starts first
+//! (it owns the folders the lanes share), then one engine per further lane
+//! the plan lets start (`<data>/lanes/N/`, a lane VM made by `auto init
+//! --lane N`, and the RAM floor of every lane met). The log says how many
+//! lanes started and why the others did not.
 use crate::{
     args::Mode,
     context::Context,
@@ -21,9 +27,11 @@ use antinomie_monitor_core::{
     data_owner::{OwnerClaim, OwnerKind},
 };
 use antinomie_service::{
-    api::status::Owner,
+    api::{ids::LaneId, status::Owner},
     config::{ServiceConfig, validate},
-    daemon::{Daemon, Exit as DaemonExit, Setup},
+    daemon::{Daemon, Exit as DaemonExit, LaneEngine, Setup, lanes},
+    lane::LaneDir,
+    resources::{Probes, SystemProbes},
     server::limits::Limits,
 };
 use clap::Args;
@@ -127,6 +135,37 @@ pub fn run(arguments: &DaemonArgs, context: &Context) -> Result<Reply, CliError>
     };
     let backend = Backend::new(options.clone())
         .map_err(|message| CliError::from_engine_start(&data_dir, &message))?;
+    // The other lanes, lane 1's options with each lane's own folder.
+    let mut first = options.clone();
+    first.data_dir = std::fs::canonicalize(&data_dir).map_err(|e| CliError::io(&data_dir, &e))?;
+    let plan = lanes::plan_lanes(
+        &config,
+        &first,
+        &LaneDir::new(&first.data_dir.join("service")),
+        (SystemProbes {
+            pause_file: PathBuf::new(),
+        })
+        .mem_available_mib(),
+    );
+    let mut engines = vec![LaneEngine {
+        lane: LaneId::new(1),
+        options: options.clone(),
+        engine: backend,
+    }];
+    let mut left_out = plan.left.clone();
+    for planned in plan.start.into_iter().skip(1) {
+        match Backend::new(planned.options.clone()) {
+            Ok(engine) => engines.push(LaneEngine {
+                lane: planned.lane,
+                options: planned.options,
+                engine,
+            }),
+            Err(message) => left_out.push(lanes::LeftOut {
+                lane: planned.lane,
+                reason: format!("its engine did not start: {message}"),
+            }),
+        }
+    }
     signals::install_daemon();
     // Flags win over `service.toml [log]`: -q, -v and --log-format set the
     // level and format; the file's apply otherwise. The file's destination
@@ -147,15 +186,21 @@ pub fn run(arguments: &DaemonArgs, context: &Context) -> Result<Reply, CliError>
         log: Arc::new(move |line: &str| service_log.log(line)),
         config,
     };
-    let mut daemon = Daemon::start(setup, backend)
-        .map_err(|message| CliError::new(ErrorCode::Unavailable, message))?;
+    let started = engines.len();
+    let mut daemon = match Daemon::start_lanes(setup, engines, left_out) {
+        Ok(daemon) => daemon,
+        Err(message) => return Err(CliError::new(ErrorCode::Unavailable, message)),
+    };
     let exit = daemon.supervise(&signals::DaemonSignals::new(), &|_| false);
-    let mut backend = daemon
-        .finish()
+    let backends = daemon
+        .finish_lanes()
         .map_err(|error| CliError::internal(error.message))?;
-    // Stops a VM that still runs and releases the data folder.
-    let _ = backend.shutdown();
-    let result = json!({"stopped": true, "data_dir": data_dir, "socket": socket});
+    // Stops a VM that still runs and releases each lane's data folder, the
+    // other lanes before lane 1 (which owns the folders they share).
+    for (_, mut backend) in backends.into_iter().rev() {
+        let _ = backend.shutdown();
+    }
+    let result = json!({"stopped": true, "data_dir": data_dir, "socket": socket, "lanes": started});
     match exit {
         DaemonExit::Clean => Ok(Reply::value(result).with_human("daemon stopped".into())),
         DaemonExit::Hurried => Ok(Reply::value(result)

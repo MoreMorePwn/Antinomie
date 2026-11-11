@@ -57,6 +57,8 @@ pub(super) struct Hooked {
     pub(super) write_error: Option<String>,
     pub(super) datasets: u32,
     pub(super) scans: AtomicU32,
+    /// The jobs whose run was opened, in order, when set.
+    pub(super) opened: Option<Arc<std::sync::Mutex<Vec<crate::api::ids::JobId>>>>,
 }
 
 impl Hooked {
@@ -67,6 +69,9 @@ impl Hooked {
 
 impl HostTriage for Hooked {
     fn open_run(&self, job: &Job) -> Result<SavedRun, String> {
+        if let Some(opened) = &self.opened {
+            opened.lock().unwrap().push(job.id.clone());
+        }
         self.real().open_run(job)
     }
 
@@ -243,6 +248,17 @@ pub(super) fn collected(w: &W, n: u8) -> Job {
 
 /// Point `job` at the recording in `dir` and mark its lane work collected.
 pub(super) fn attach(w: &W, job: &Job, dir: &std::path::Path, end: EndReason) {
+    attach_on(w, job, dir, end, &lane());
+}
+
+/// [`attach`] for a job of `on`: that lane's file has the collected entry.
+pub(super) fn attach_on(
+    w: &W,
+    job: &Job,
+    dir: &std::path::Path,
+    end: EndReason,
+    on: &crate::api::ids::LaneId,
+) {
     w.fx.store
         .patch(
             &job.id,
@@ -272,7 +288,7 @@ pub(super) fn attach(w: &W, job: &Job, dir: &std::path::Path, end: EndReason) {
         )
         .unwrap();
     w.lanes
-        .update(&lane(), |file| {
+        .update(on, |file| {
             file.begin_work(job.id.clone(), job.attempt, 1);
             file.collected(2);
         })

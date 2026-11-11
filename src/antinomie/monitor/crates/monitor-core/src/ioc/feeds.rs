@@ -260,7 +260,7 @@ pub fn feed(id: &str) -> Option<&'static Feed> {
     FEEDS.iter().find(|feed| feed.id == id)
 }
 
-/// `<data dir>/ioc`; lane 0's for a lane data folder ([`crate::lanes`]).
+/// `<data dir>/ioc`; lane 1's for a lane data folder ([`crate::lanes`]).
 pub fn root(data_dir: &Path) -> PathBuf {
     crate::lanes::shared_root(data_dir).join("ioc")
 }

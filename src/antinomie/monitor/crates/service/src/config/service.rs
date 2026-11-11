@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// The most lanes `daemon.lanes` may ask for (ANT-T0455 card C). Each lane
+/// is an engine with its own VM; one is the default.
+pub const MAX_LANES: u32 = 4;
 /// `daemon.host_workers` when it is not set.
 pub const DEFAULT_HOST_WORKERS: u32 = 2;
 /// The most `daemon.host_workers` may be: the engine keeps eight standalone
@@ -30,7 +33,11 @@ pub enum Shutdown {
 pub struct Daemon {
     /// Default `<data>/run/antinomie.sock`.
     pub socket: Option<PathBuf>,
-    /// Values above 1 fail `unsupported` (decided D4).
+    /// The lanes (engines, each with its own lane VM) the daemon runs: 1 (the
+    /// default) to [`MAX_LANES`]. Lane 1 is the data folder itself, lane N
+    /// is `<data>/lanes/N/` (made by `auto init --lane N`). A lane starts only
+    /// when its lane VM exists and the machine has the RAM for it beside the
+    /// lanes before it.
     pub lanes: u32,
     /// Host work items run at once, across every job and lane (the host work
     /// pool, ANT-T0454). Default 2; 1 to [`MAX_HOST_WORKERS`].

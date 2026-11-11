@@ -51,7 +51,7 @@ runs while a window or the daemon owns the data directory.
   refused when the VM has snapshots; `snapshot_disk` and `snapshot_full` need the
   snapshot named by `vm.revert_to`; `vm.stealth` is compared with the VM's
   profile and never applied.
-- `service.toml`: one lane (`daemon.lanes = 1`), no `safety.unsafe_routes_ack`
+- `service.toml`: `daemon.lanes` 1 to 4 (default 1), no `safety.unsafe_routes_ack`
   (reserved), absolute watch folder paths, watch folders that name a policy that
   exists. `[[notify.webhooks]]` is an error ("not supported in 0.9.0"), and so is
   a `[query] scan_cache_mib` other than 1024: the daemon keeps 2 scans in memory
@@ -64,7 +64,7 @@ runs while a window or the daemon owns the data directory.
 | `[daemon] socket` | `<data>/run/antinomie.sock` | The local socket (at most 107 bytes). Its folder must be the daemon user's own with mode 0700; the socket is 0600. Not changed by a reload |
 | `[daemon] host_workers` | 2 | How many host work items (a static tool, the Triage scan, the detection engines, the assessment, a report) run at once, across every job: the host work pool. 1 to 8 |
 | `[daemon] host_time_factor` | 2 | A host work item may take this many times its expected time (its recent median on this host, else an estimate from the sample or recording size, else the stage's fixed limit); a job's host stages may take this many times the expected work ahead of it plus its own. 1 to 20 |
-| `[daemon] lanes` | 1 | Only 1 is valid in 0.9.0 |
+| `[daemon] lanes` | 1 | How many lanes (engines, each with its own lane VM) the daemon runs: 1 to 4. See [Several lanes](#several-lanes). Not changed by a reload |
 | `[daemon] shutdown` | `cancel` | On the first `SIGTERM`/`SIGINT`: `cancel` sends a job in its lane stages back to the queue (attempt not counted); `drain` lets it run on for up to `drain_timeout_s` first |
 | `[daemon] drain_timeout_s` | 600 | See `shutdown = drain` |
 | `[daemon] shutdown_host_grace_s` | 120 | The host work pool goes on with the jobs it holds (their `analyse`, `report`, `cleanup` items) for this many seconds at shutdown; past it those jobs are left `running` and go back to the pool on the next start, in the same order (the VM does not run again) |
@@ -97,6 +97,49 @@ A second `SIGTERM`/`SIGINT` within 5 s interrupts every wait at once, stops the
 VM and exits 130; recovery at the next start finishes the rest. `SIGHUP` reads
 `policies/` and `service.toml` again (a file with an error keeps the old set);
 `SIGUSR1` writes the queue's state to the log.
+
+## Several lanes
+
+One lane is the default and the right choice for most machines. With
+`[daemon] lanes = N` the daemon runs N lanes at once, each an engine of its own
+with its own lane VM, so N jobs run their VMs side by side.
+
+| Lane | Data folder | Made by |
+|---|---|---|
+| `lane-1` | the data folder itself | `antinomie-cli auto init` |
+| `lane-N` (2 to 4) | `<data>/lanes/N/` | `antinomie-cli auto init --lane N` (stop the daemon first) |
+
+- **What the lanes share.** Every lane uses the data folder's bases, sample
+  library, rules, tools, IOC data, Volatility plugins, engine settings
+  (`settings.json`) and route settings (`network/routes.json`); only the data
+  folder (lane 1) changes them. A lane keeps its VMs, runs and Tor state in its
+  own folder. The job store, `service.toml`, the policies and the lane files
+  (`<data>/service/lanes/lane-N.json`) are the data folder's.
+- **Which lanes start.** Lane 1 always does. Lane N starts when it has a lane VM
+  and when `MemAvailable` covers the RAM of the lane VMs that start before it
+  plus its own floor (`[resources] min_free_ram_mib`, default its VM's RAM plus
+  2048 MiB). The lanes start in order: the first one refused for memory stops
+  the count. The log says how many lanes started and why the others did not
+  (`lanes: 2 of 3 started (lane-1, lane-2); lane-3 not started: the RAM floor
+  is not met: ...`); `auto lane list` says it per lane.
+- **Which lane takes a job.** A free lane that can run it: the lane's base must
+  be the base of the policy's `vm.lane_vm` (when that VM is one of the lanes'),
+  and an ELF must be of the lane's architecture (x86-64 also runs i386 programs,
+  arm64 32-bit ARM ones). When several such lanes are free the least recently
+  used takes it, so jobs spread over the lanes. A job no lane can run goes to a
+  free lane as with one lane, and its run says why it failed. The queue order
+  (priority, then age) does not change.
+- **Each lane on its own.** Each lane has its own floors (its VM's RAM and its
+  recording folders), its own quarantine and failure count, and its own revert.
+  A quarantined lane takes no job while the others go on; `health` stays ready
+  while one lane can take jobs.
+- **One host work pool.** The host work of every lane's jobs goes to the one
+  pool: `[daemon] host_workers` items at once in total, first come, first served
+  by job arrival whatever lane ran the job.
+- **Recovery.** After a crash every lane's interrupted job goes back to the
+  queue, and the jobs that had finished `collect` on any lane go back to the
+  host work pool in the order they arrived.
+- **One engine stopping** stops the daemon (the unit file restarts it).
 
 ## Watch folders
 

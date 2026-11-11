@@ -129,7 +129,7 @@ pub struct IndexMigration {
 /// and the next call finishes the staged work instead of starting over.
 pub fn migrate_indexes(data_dir: &Path) -> Result<IndexMigration, String> {
     if crate::lanes::is_lane_folder(data_dir) {
-        // Lane 0 migrates the shared rules; a lane only reads them.
+        // Lane 1 migrates the shared rules; a lane only reads them.
         return Ok(IndexMigration::default());
     }
     let _lock = registry_lock(data_dir);
