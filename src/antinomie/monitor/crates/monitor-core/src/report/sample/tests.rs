@@ -1156,3 +1156,50 @@ fn sample_report_anchors_are_unique_and_every_link_resolves() {
         }
     }
 }
+
+#[test]
+fn a_lane_folder_names_paths_the_way_lane_one_does() {
+    // ANT-T0455 card D: a lane (`<data>/lanes/N/`) names its own files as
+    // `lanes/N/...` and the folders the lanes share as lane 1 does, never as
+    // a bare file name or a full host path.
+    let root = std::fs::canonicalize(temp("lane-paths")).unwrap();
+    let lane = crate::lanes::lane_dir(&root, 2);
+    std::fs::create_dir_all(lane.join("vm-2/runs/r1")).unwrap();
+    std::fs::write(
+        lane.join(crate::lanes::MARKER_FILE),
+        br#"{"schema":1,"lane":2}"#,
+    )
+    .unwrap();
+    let sample = root.join("samples/ab/abcd");
+    let run = lane.join("vm-2/runs/r1");
+    // Lane 1 names both relative to itself, as before.
+    assert_eq!(build::in_data_dir(&root, &sample), "samples/ab/abcd");
+    assert_eq!(build::in_data_dir(&root, &run), "lanes/2/vm-2/runs/r1");
+    // The lane names them the same way.
+    assert_eq!(build::in_data_dir(&lane, &sample), "samples/ab/abcd");
+    assert_eq!(build::in_data_dir(&lane, &run), "lanes/2/vm-2/runs/r1");
+    assert_eq!(
+        build::in_data_dir(&lane, &root.join("lanes/3/vm-3/runs/r2")),
+        "lanes/3/vm-3/runs/r2"
+    );
+    // Outside every data folder: the file name only, lane or not.
+    let elsewhere = std::path::Path::new("/srv/elsewhere/sample.bin");
+    assert_eq!(build::in_data_dir(&lane, elsewhere), "sample.bin");
+    assert_eq!(build::in_data_dir(&root, elsewhere), "sample.bin");
+    // A run report of a lane run, from lane 1's folder and from the lane's.
+    std::fs::create_dir_all(run.join("report")).unwrap();
+    std::fs::write(
+        run.join("report/antinomie-report-x.html"),
+        "<section id=\"a\">",
+    )
+    .unwrap();
+    assert_eq!(
+        build::latest_run_report(&root, &run),
+        "lanes/2/vm-2/runs/r1/report/antinomie-report-x.html"
+    );
+    assert_eq!(
+        build::latest_run_report(&lane, &run),
+        build::latest_run_report(&root, &run)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

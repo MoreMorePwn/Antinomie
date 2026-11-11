@@ -102,8 +102,9 @@ impl Worker {
     /// The background layer finalizer runs on a thread of its own, so the
     /// worker looks for its progress while one is pending or listed.
     fn poll_disk_layers(&mut self) {
+        let vms: Vec<String> = self.snapshot.vms.iter().map(|vm| vm.id.clone()).collect();
         let pending =
-            !self.snapshot.disk_layers.is_empty() || crate::snapshots::run_layer::working();
+            !self.snapshot.disk_layers.is_empty() || crate::snapshots::run_layer::working(&vms);
         if pending && self.layer_scan.elapsed() >= Duration::from_millis(200) {
             self.layer_scan = Instant::now();
             if self.refresh_disk_layers() {
@@ -167,7 +168,8 @@ impl Worker {
         // The automatic disk layer of a boot that just ended is finished too
         // (a limit: what is left goes on at the next start of the app).
         let deadline = Instant::now() + Duration::from_secs(300);
-        while crate::snapshots::run_layer::working() && Instant::now() < deadline {
+        let vms: Vec<String> = self.snapshot.vms.iter().map(|vm| vm.id.clone()).collect();
+        while crate::snapshots::run_layer::working(&vms) && Instant::now() < deadline {
             self.poll_flush();
             thread::sleep(Duration::from_millis(100));
         }

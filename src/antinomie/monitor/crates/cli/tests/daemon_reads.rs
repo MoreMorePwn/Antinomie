@@ -705,3 +705,108 @@ fn service_toml_query_and_privacy_reach_the_running_daemon() {
     assert_eq!(settings.address_lookup, AddressLookup::Off);
     daemon.stop();
 }
+
+/// The fixture's run copied into lane 2's data folder (`<data>/lanes/2/`,
+/// with its lane record) as run `run_id` of VM `vm-2`, as lane-2 records it.
+fn lane_run(fixture: &Fixture, run_id: &str) -> PathBuf {
+    let data = fixture.root.join("data");
+    let lane = data.join("lanes").join("2");
+    let from = data.join("vm-1").join("runs").join(RUN);
+    let dir = lane.join("vm-2").join("runs").join(run_id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(lane.join("lane.json"), br#"{"schema":1,"lane":2}"#).unwrap();
+    for name in ["telemetry.raw", "network.pcap"] {
+        std::fs::copy(from.join(name), dir.join(name)).unwrap();
+    }
+    let mut artifacts: Value =
+        serde_json::from_slice(&std::fs::read(from.join("artifacts.json")).unwrap()).unwrap();
+    artifacts["run_id"] = run_id.into();
+    artifacts["vm_id"] = "vm-2".into();
+    artifacts["network_captures"] = serde_json::json!([dir.join("network.pcap")]);
+    std::fs::write(
+        dir.join("artifacts.json"),
+        serde_json::to_vec(&artifacts).unwrap(),
+    )
+    .unwrap();
+    let mut run: Value =
+        serde_json::from_slice(&std::fs::read(from.join("run.json")).unwrap()).unwrap();
+    run["id"] = run_id.into();
+    run["vm_id"] = "vm-2".into();
+    run["started_ms"] = 1_792_000_100_000u64.into();
+    run["directory"] = dir.display().to_string().into();
+    std::fs::write(dir.join("run.json"), serde_json::to_vec(&run).unwrap()).unwrap();
+    dir
+}
+
+#[test]
+fn a_run_lane_2_recorded_is_read_from_lane_1_through_the_daemon_and_directly() {
+    // ANT-T0455 card D: show, triage, report and the sample's runs find a run
+    // in `<data>/lanes/2/`, the same both ways, and the run stays there.
+    let fixture = Fixture::new("lanes");
+    let data = fixture.data();
+    let lane_run_id = "9d4e1b22-lane-two-run";
+    let dir = lane_run(&fixture, lane_run_id);
+    let _daemon = Running::start(&fixture);
+    let (_, listed) = cli(&args(&data, &["--direct", "run", "list"]));
+    let ids: Vec<String> = items(&listed)
+        .iter()
+        .map(|i| i["run_id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids, [lane_run_id, RUN], "newest first, both lanes");
+    for tail in [
+        vec!["run", "list"],
+        vec!["run", "list", "--vm", "vm-2"],
+        vec!["run", "show", "9d4e1b22"],
+        vec![
+            "run",
+            "show",
+            "vm-2:boot-1:9d4e1b22-lane-two-run",
+            "--summary",
+        ],
+        vec!["triage", "9d4e1b22"],
+        vec!["sample", "show", fixture.sha256.as_str(), "--runs"],
+    ] {
+        let (through, direct) = both(&data, &tail);
+        assert_eq!(through.0, 0, "{tail:?}: {}", through.1);
+        assert_eq!(direct.0, 0, "{tail:?}: {}", direct.1);
+        assert_eq!(through.1["result"], direct.1["result"], "{tail:?}");
+    }
+    let (_, shown) = cli(&args(&data, &["--direct", "run", "show", "9d4e1b22"]));
+    assert_eq!(shown["result"]["vm_id"], "vm-2", "{shown}");
+    let (_, sample) = cli(&args(
+        &data,
+        &[
+            "--direct",
+            "sample",
+            "show",
+            fixture.sha256.as_str(),
+            "--runs",
+        ],
+    ));
+    let runs = sample["result"]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2, "{sample}");
+    // The run's folder given by path is found too.
+    let path = dir.display().to_string();
+    let (code, value) = cli(&args(&data, &["--direct", "run", "show", &path]));
+    assert_eq!(code, 0, "{value}");
+    // The report of the lane's run is written and names its run.
+    let out = fixture.root.join("report-lane");
+    let out_text = out.display().to_string();
+    let (code, value) = cli(&args(
+        &data,
+        &[
+            "report",
+            "9d4e1b22",
+            "--formats",
+            "json",
+            "--out",
+            &out_text,
+        ],
+    ));
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["result"]["run"]["run_id"], lane_run_id, "{value}");
+    assert_eq!(value["result"]["run"]["vm_id"], "vm-2");
+    // Nothing moved: the run is still in lane 2's folder only.
+    assert!(dir.join("run.json").is_file());
+    assert!(!fixture.root.join("data/vm-2").exists());
+}

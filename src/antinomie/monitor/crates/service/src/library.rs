@@ -72,18 +72,21 @@ pub fn open_existing(data_dir: &Path) -> Result<Option<Library>, ApiError> {
     Library::open(data_dir).map(Some).map_err(library_error)
 }
 
-/// The runs of library samples in the recordings of every VM, for
-/// [`list_with_runs`] and [`get_with_runs`]; empty (and nothing read) when
-/// there is no library. Writes nothing.
+/// The runs of library samples in the recordings of every VM of every lane
+/// (`daemon::lanes::read_lanes`), for [`list_with_runs`] and
+/// [`get_with_runs`]; empty (and nothing read) when there is no library.
+/// Writes nothing.
 pub fn scan_if(
     library: &Option<Library>,
     options: &antinomie_monitor_core::BackendOptions,
 ) -> Vec<SeenRun> {
-    if library.is_some() {
-        antinomie_monitor_core::samples::scan_runs(options)
-    } else {
-        Vec::new()
+    if library.is_none() {
+        return Vec::new();
     }
+    crate::daemon::lanes::read_lanes(options)
+        .iter()
+        .flat_map(|(_, lane)| antinomie_monitor_core::samples::scan_runs(lane))
+        .collect()
 }
 
 /// `KIND=VALUE` as a tag; a bare value is a custom tag.

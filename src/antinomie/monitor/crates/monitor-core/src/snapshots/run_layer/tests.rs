@@ -453,3 +453,98 @@ fn the_lock_probe_sees_a_held_finalizer_lock_and_touches_nothing_else() {
     drop(held);
     assert_eq!(lock_free(&fixture.directory), Some(true));
 }
+
+/// A data folder of its own with one VM `vm` and a pending layer of it that
+/// `settle` refuses (its sealed path leaves the VM folder), as a lane's.
+fn lane_folder(tag: &str, vm: &str) -> (BackendOptions, PathBuf) {
+    let root = std::env::temp_dir().join(format!("ant-runlayer-{tag}-{}", unique_id()));
+    let directory = root.join(vm);
+    private_dir(&directory).unwrap();
+    let config = VmConfig {
+        id: vm.into(),
+        name: vm.into(),
+        ..VmConfig::default()
+    };
+    atomic_json(&directory.join("config.json"), &config).unwrap();
+    Record {
+        format: 1,
+        vm_id: vm.into(),
+        boot_id: "b1".into(),
+        boot_dir: root.join("boots/b1"),
+        sealed: "../escape".into(),
+        top: "snapshots/top.qcow2".into(),
+        manifest_absent: true,
+        marker: Marker {
+            phase: Some(LayerPhase::Saving),
+            phase_ms: Some(1),
+            started_ms: Some(1),
+            owner: Owner::current(),
+        },
+    }
+    .store(&directory)
+    .unwrap();
+    let options = BackendOptions {
+        data_dir: root.clone(),
+        ..BackendOptions::default()
+    };
+    (options, root)
+}
+
+fn phase_of(options: &BackendOptions, vm: &str) -> Option<LayerPhase> {
+    pending_record(options, vm).and_then(|record| record.marker.phase)
+}
+
+fn until_idle(vms: &[String]) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while working(vms) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!working(vms), "a finalize did not end");
+}
+
+#[test]
+fn each_engine_of_a_process_finishes_only_its_own_vms_layers() {
+    // ANT-T0455 (found by the 2-lane VM run): two lanes' engines in one
+    // daemon, each over its own data folder. The boot of lane 1's VM ended
+    // and was marked due; lane 2's engine came by first. It must leave lane
+    // 1's layer to lane 1's engine, which finds the VM in its own folder.
+    let _serial = serial();
+    let one_vm = format!("lane1-{}", unique_id());
+    let two_vm = format!("lane2-{}", unique_id());
+    let (one, one_root) = lane_folder("one", &one_vm);
+    let (two, two_root) = lane_folder("two", &two_vm);
+    let (ones, twos) = (vec![one_vm.clone()], vec![two_vm.clone()]);
+    mark_due(&one_vm);
+    mark_due(&two_vm);
+    finalize_due(&two, &twos);
+    until_idle(&twos);
+    assert_eq!(phase_of(&two, &two_vm), Some(LayerPhase::Finalizing));
+    // Lane 1's VM is still due, and its record untouched.
+    assert!(working(&ones));
+    assert_eq!(phase_of(&one, &one_vm), Some(LayerPhase::Saving));
+    finalize_due(&one, &ones);
+    until_idle(&ones);
+    assert_eq!(phase_of(&one, &one_vm), Some(LayerPhase::Finalizing));
+    let _ = fs::remove_dir_all(&one_root);
+    let _ = fs::remove_dir_all(&two_root);
+}
+
+#[test]
+fn every_data_folder_of_a_process_is_scanned_for_a_layer_left_behind() {
+    // A layer an earlier process left in lane 2's folder is found by lane 2's
+    // first pass even though lane 1's engine scanned its own folder first.
+    let _serial = serial();
+    let one_vm = format!("lane1-{}", unique_id());
+    let two_vm = format!("lane2-{}", unique_id());
+    let (one, one_root) = lane_folder("scan-one", &one_vm);
+    let (two, two_root) = lane_folder("scan-two", &two_vm);
+    let (ones, twos) = (vec![one_vm.clone()], vec![two_vm.clone()]);
+    finalize_due(&one, &ones);
+    until_idle(&ones);
+    finalize_due(&two, &twos);
+    until_idle(&twos);
+    assert_eq!(phase_of(&one, &one_vm), Some(LayerPhase::Finalizing));
+    assert_eq!(phase_of(&two, &two_vm), Some(LayerPhase::Finalizing));
+    let _ = fs::remove_dir_all(&one_root);
+    let _ = fs::remove_dir_all(&two_root);
+}

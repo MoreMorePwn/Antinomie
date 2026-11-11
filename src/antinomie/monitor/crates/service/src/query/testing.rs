@@ -39,6 +39,8 @@ pub fn sample_sha() -> String {
 /// A data directory that is removed with the value.
 pub struct Data {
     pub root: PathBuf,
+    /// The id of its one VM ([`VM`] unless made by [`Data::lane`]).
+    pub vm: String,
 }
 
 impl Data {
@@ -51,7 +53,26 @@ impl Data {
                 .map_or(0, |d| d.as_nanos())
         ));
         fs::create_dir_all(root.join(VM).join("runs")).unwrap();
-        Self { root }
+        Self {
+            root,
+            vm: VM.into(),
+        }
+    }
+
+    /// The data folder of lane `n` of this one (`<root>/lanes/n/`, with its
+    /// lane record) with one VM `vm`, as `auto init --lane n` leaves it.
+    pub fn lane(&self, n: u32, vm: &str) -> Self {
+        let root = antinomie_monitor_core::lanes::lane_dir(&self.root, n);
+        fs::create_dir_all(root.join(vm).join("runs")).unwrap();
+        fs::write(
+            root.join(antinomie_monitor_core::lanes::MARKER_FILE),
+            format!("{{\"schema\":1,\"lane\":{n}}}"),
+        )
+        .unwrap();
+        Self {
+            root,
+            vm: vm.into(),
+        }
     }
 
     pub fn options(&self) -> BackendOptions {
@@ -67,7 +88,7 @@ impl Data {
 
     /// The VM folder: the disk folder and the recording folder.
     pub fn vm_dir(&self) -> PathBuf {
-        self.root.join(VM)
+        self.root.join(&self.vm)
     }
 
     /// Every file under the data directory with its size and time: a read
@@ -110,6 +131,7 @@ pub fn plain_ctx() -> ReadContext {
 
 /// One run folder.
 pub struct Run {
+    pub vm: String,
     pub boot: String,
     pub id: String,
     pub dir: PathBuf,
@@ -117,7 +139,7 @@ pub struct Run {
 
 impl Run {
     pub fn key(&self) -> super::key::RunKey {
-        super::key::RunKey::new(VM, &self.boot, &self.id).unwrap()
+        super::key::RunKey::new(&self.vm, &self.boot, &self.id).unwrap()
     }
 }
 
@@ -146,7 +168,7 @@ pub fn add_run(data: &Data, boot: &str, id: &str, started_ms: u64, state: &str) 
     let run = json!({
         "started_ms": started_ms,
         "clock_anchor": {"guest_ns": 1_000_000_000u64, "host_us": started_ms * 1000},
-        "id": id, "vm_id": VM, "boot_id": boot,
+        "id": id, "vm_id": data.vm, "boot_id": boot,
         "session_id": 1, "root_task_cookie": 10, "pid": 100,
         "request": request,
         "directory": "/ignored/by/the/reader",
@@ -159,7 +181,7 @@ pub fn add_run(data: &Data, boot: &str, id: &str, started_ms: u64, state: &str) 
     });
     fs::write(dir.join("run.json"), serde_json::to_vec(&run).unwrap()).unwrap();
     let manifest = json!({
-        "run": {"id": id, "vm_id": VM, "boot_id": boot,
+        "run": {"id": id, "vm_id": data.vm, "boot_id": boot,
                 "request": {"cwd": "/tmp"}, "environment": {}},
         "started_ms": started_ms, "ended_ms": started_ms + 5000, "bytes": 1,
     });
@@ -169,6 +191,7 @@ pub fn add_run(data: &Data, boot: &str, id: &str, started_ms: u64, state: &str) 
     )
     .unwrap();
     Run {
+        vm: data.vm.clone(),
         boot: boot.into(),
         id: id.into(),
         dir,
@@ -452,7 +475,7 @@ pub fn write_artifacts(data: &Data, run: &Run) -> PathBuf {
     fs::write(&core, vec![0u8; 256]).unwrap();
     let artifacts = RunArtifacts {
         run_id: run.id.clone(),
-        vm_id: VM.into(),
+        vm_id: data.vm.clone(),
         boot_id: run.boot.clone(),
         network_captures: vec![capture.clone()],
         network_state: RunArtifactState::Complete,

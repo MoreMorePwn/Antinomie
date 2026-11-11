@@ -353,13 +353,34 @@ pub fn merge_attack(digests: &[(usize, &RunDigest)]) -> Vec<Technique> {
 /// `path` as the report names it: relative to the data directory, so the
 /// user name and the folder layout above it do not reach the report. A path
 /// outside the data directory is reduced to its file name.
+///
+/// A lane's data folder (`<data>/lanes/N/`) names paths the way lane 1 does,
+/// relative to lane 1's folder: its own files as `lanes/N/...`, and the
+/// folders the lanes share (`samples/...`, `bases/...`) as they are, not as
+/// a bare file name.
 pub fn in_data_dir(data_dir: &std::path::Path, path: &std::path::Path) -> String {
-    match path.strip_prefix(data_dir) {
-        Ok(inside) => inside.display().to_string(),
-        Err(_) => path
-            .file_name()
-            .map_or(String::new(), |name| name.to_string_lossy().into_owned()),
+    let file_name = || {
+        path.file_name()
+            .map_or(String::new(), |name| name.to_string_lossy().into_owned())
+    };
+    let Ok(Some(lane)) = crate::lanes::lane_of(data_dir) else {
+        return match path.strip_prefix(data_dir) {
+            Ok(inside) => inside.display().to_string(),
+            Err(_) => file_name(),
+        };
+    };
+    let own = std::path::Path::new(crate::lanes::LANES_DIR).join(lane.lane.to_string());
+    let canonical = std::fs::canonicalize(path).ok();
+    let path_is = [Some(path), canonical.as_deref()];
+    for candidate in path_is.into_iter().flatten() {
+        if let Ok(inside) = candidate.strip_prefix(data_dir) {
+            return own.join(inside).display().to_string();
+        }
+        if let Ok(inside) = candidate.strip_prefix(&lane.shared_root) {
+            return inside.display().to_string();
+        }
     }
+    file_name()
 }
 
 /// The fullest report file a run's Triage export wrote: of

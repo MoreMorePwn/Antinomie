@@ -251,14 +251,23 @@ pub(crate) fn ensure_idle(options: &BackendOptions, vm_id: &str) -> Result<(), S
 }
 
 /// VMs whose automatic layer is to be finished once the recording is saved.
+///
+/// These sets are of the process, and one process may run several engines
+/// (the lanes of a daemon, ANT-T0455), each over its own data folder. So an
+/// engine takes, waits for and scans only its own VMs (`vms`, the VMs of its
+/// snapshot; VM ids are unique across folders): another lane's VM finished
+/// with this engine's folder is not found, and its layer would stay pending.
 static DUE: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 /// VMs with a finalize at work in this process.
 static BUSY: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-static SCANNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The data folders whose leftover layers were looked for in this process.
+static SCANNED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 
-/// Whether a layer is waiting to be finished or being finished right now.
-pub(crate) fn working() -> bool {
-    DUE.lock().is_ok_and(|due| !due.is_empty()) || BUSY.lock().is_ok_and(|busy| !busy.is_empty())
+/// Whether a layer of one of `vms` is waiting to be finished or being
+/// finished right now.
+pub(crate) fn working(vms: &[String]) -> bool {
+    let any = |set: &BTreeSet<String>| vms.iter().any(|vm| set.contains(vm));
+    DUE.lock().is_ok_and(|due| any(&due)) || BUSY.lock().is_ok_and(|busy| any(&busy))
 }
 
 /// The VM's boot ended: its layer is finished at the next [`finalize_due`].
@@ -268,11 +277,16 @@ pub(crate) fn mark_due(vm_id: &str) {
     }
 }
 
-/// Start the finalize of every due VM in a thread of its own (the copy can
-/// take a while). The first call of a process also finds layers an earlier
-/// process left behind (a crash or kill) among `vms`.
+/// Start the finalize of every due VM of `vms` (this engine's) in a thread
+/// of its own (the copy can take a while); the due VMs of another engine in
+/// the process stay for that engine. The first call for a data folder also
+/// finds layers an earlier process left behind (a crash or kill) among `vms`.
 pub(crate) fn finalize_due(options: &BackendOptions, vms: &[String]) {
-    if !vms.is_empty() && !SCANNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+    let first_scan = !vms.is_empty()
+        && SCANNED
+            .lock()
+            .is_ok_and(|mut scanned| scanned.insert(options.data_dir.clone()));
+    if first_scan {
         for vm in vms {
             if pending_record(options, vm).is_some() {
                 mark_due(vm);
@@ -280,7 +294,13 @@ pub(crate) fn finalize_due(options: &BackendOptions, vms: &[String]) {
         }
     }
     let due: Vec<String> = match DUE.lock() {
-        Ok(mut due) => std::mem::take(&mut *due).into_iter().collect(),
+        Ok(mut due) => {
+            let mine: Vec<String> = due.iter().filter(|vm| vms.contains(vm)).cloned().collect();
+            for vm in &mine {
+                due.remove(vm);
+            }
+            mine
+        }
         Err(_) => return,
     };
     for vm in due {

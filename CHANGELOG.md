@@ -75,6 +75,15 @@ x86 programs by their own table.
   - `auto status`, `capabilities` (`lanes`), `auto lane list` and `vm list` show every lane;
     `auto lane reset/unquarantine --lane lane-N` reaches that lane's engine. Deleting a base waits
     for a lane that is creating a VM from it (and refuses), so the two cannot cross.
+- **Reads find the runs of every lane (ANT-T0455, part D).** A run stays in the folder of the lane
+  that recorded it; `run list/show/export`, `triage`, `detect`, `report`, `sample show --runs` and
+  the daemon's `recording.*` reads, given the data folder, find the runs of every lane folder,
+  through the daemon and directly. A run found in two lanes' folders (a copied VM folder) is
+  refused, not guessed. Retention and `auto job delete --with-recording` delete a lane's run in
+  its own folder, and a sample report names a lane's paths the way lane 1 does.
+  - With several lanes, a lane no longer stalls in `collect` after a run: each lane's engine
+    finishes the disk layer of its own VM (one lane's engine could take another lane's VM, not
+    find it in its own folder, and leave that layer "saving" until the daemon restarted).
 
 - **binwalk is listed in the requirements (ANT-T0458).** Embedded content has always needed
   binwalk on the host, but **Tools > App dependencies**, its install command and

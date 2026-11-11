@@ -656,3 +656,77 @@ fn the_real_runs_only_trust_a_plain_run_folder_inside_the_data_folder() {
     assert!(inspect(std::path::Path::new("relative/r1"), "r1").is_err());
     assert_eq!(fs::read(outside.join("r5/precious")).unwrap(), b"x");
 }
+
+#[test]
+fn the_real_runs_delete_a_lane_jobs_recording_in_its_own_lane_folder() {
+    // ANT-T0455 card D: a job that lane-2 ran recorded its run in
+    // `<data>/lanes/2/`; retention and `job.delete --with-recording` delete it
+    // there (with its custody entry), and leave lane 1's run of the same id.
+    use crate::{api::ids::LaneId, query::testing};
+    use antinomie_monitor_core::{
+        BackendOptions,
+        samples::{Library, NewSample},
+    };
+    use std::mem::ManuallyDrop;
+    let rig = Rig::new("lanereal");
+    let first = ManuallyDrop::new(testing::Data {
+        root: rig.fx.dir.join("data"),
+        vm: testing::VM.into(),
+    });
+    fs::create_dir_all(first.vm_dir().join("runs")).unwrap();
+    let lane = ManuallyDrop::new(first.lane(2, "vm-2"));
+    // The lane's VM as `auto init --lane 2` saved it.
+    let vm = antinomie_monitor_core::VmConfig {
+        id: "vm-2".into(),
+        name: "auto-2".into(),
+        ..Default::default()
+    };
+    fs::write(
+        lane.vm_dir().join("config.json"),
+        serde_json::to_vec(&vm).unwrap(),
+    )
+    .unwrap();
+    let mut library = Library::open(&first.root).unwrap();
+    let added = library
+        .add_bytes(
+            testing::SAMPLE_BYTES,
+            NewSample {
+                name: "sample.sh".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    drop(library);
+    let kept = testing::add_run(&first, "boot-1", "run-1", 1_000, "Finalized");
+    let gone = testing::add_run(&lane, "boot-1", "run-1", 2_000, "Finalized");
+    let options = BackendOptions {
+        data_dir: first.root.clone(),
+        ..BackendOptions::default()
+    };
+    let runs = RealRuns {
+        options: &options,
+        query: None,
+    };
+    let mut job = job_with_folder(&rig, &gone.dir, &gone.id);
+    job.lane = Some(LaneId::new(2));
+    job.vm = None;
+    job.recording.as_mut().unwrap().vm_id = gone.vm.clone();
+    job.recording.as_mut().unwrap().boot_id = gone.boot.clone();
+    job.sample.as_mut().unwrap().sha256 = added.sha256.clone().try_into().unwrap();
+    assert!(matches!(runs.inspect(&job), Ok(RunState::Present { .. })));
+    runs.delete(&job, "auto:policy-default").unwrap();
+    assert!(!gone.dir.exists(), "the lane's run is deleted");
+    assert!(kept.dir.join("run.json").is_file(), "lane 1's run stays");
+    assert_eq!(runs.inspect(&job), Ok(RunState::Gone));
+    // The custody entry is in the one library the lanes share.
+    let library = Library::open(&lane.root).unwrap();
+    let events = library.events(&added.sha256).unwrap();
+    assert!(
+        events.iter().any(|e| matches!(
+            &e.event,
+            antinomie_monitor_core::samples::CustodyEvent::RunDeleted { vm, run, .. }
+                if vm == "vm-2" && run == "run-1"
+        ) && e.by == "auto:policy-default"),
+        "{events:?}"
+    );
+}

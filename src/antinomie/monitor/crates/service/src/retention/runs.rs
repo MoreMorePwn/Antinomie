@@ -41,6 +41,16 @@ pub struct RealRuns<'a> {
 }
 
 impl RealRuns<'_> {
+    /// The engine options of the folder that holds `job`'s run: its lane's
+    /// (`<data>/lanes/N/`, `daemon::lanes::lane_options`), else the data
+    /// folder's. A run stays in the folder of the lane that recorded it.
+    fn options_for(&self, job: &Job) -> BackendOptions {
+        match &job.lane {
+            Some(lane) => crate::daemon::lanes::lane_options(self.options, lane),
+            None => self.options.clone(),
+        }
+    }
+
     /// The run's folder as the job names it, only when it is a plain folder
     /// inside the data folder.
     fn run_dir(&self, job: &Job) -> Result<Option<PathBuf>, String> {
@@ -119,8 +129,9 @@ impl Runs for RealRuns<'_> {
     fn delete(&self, job: &Job, actor: &str) -> Result<u64, String> {
         let recording = job.recording.as_ref().ok_or("the job has no recording")?;
         let sample = job.sample.as_ref().ok_or("the job has no sample")?;
+        let options = self.options_for(job);
         let plan = plan_run_deletion(
-            self.options,
+            &options,
             sample.sha256.as_str(),
             &recording.vm_id,
             &recording.run_id,
@@ -129,14 +140,7 @@ impl Runs for RealRuns<'_> {
             .vm
             .as_ref()
             .map_or_else(|| recording.vm_id.clone(), |vm| vm.name.clone());
-        delete_run_as(
-            self.options,
-            &plan,
-            &BTreeSet::new(),
-            &vm_name,
-            false,
-            actor,
-        )
-        .map(|done| done.freed)
+        delete_run_as(&options, &plan, &BTreeSet::new(), &vm_name, false, actor)
+            .map(|done| done.freed)
     }
 }

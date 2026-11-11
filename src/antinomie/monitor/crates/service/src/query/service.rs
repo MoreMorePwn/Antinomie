@@ -26,9 +26,9 @@ use crate::api::{
     job::RecordingPhase,
     ops::Scope,
 };
+use crate::daemon::lanes::read_locations;
 use antinomie_monitor_core::{
-    BackendOptions, RunState, RunSummary, VmLocations,
-    recording::{find_run_read_only, read_only_locations},
+    BackendOptions, RunState, RunSummary, VmLocations, recording::find_run_read_only,
 };
 use std::{
     path::PathBuf,
@@ -165,24 +165,41 @@ impl QueryService {
         self.layers.as_ref().map(|source| source.layers())
     }
 
-    /// Every VM of the data directory.
+    /// Every VM of the data directory and of each of its lanes' folders
+    /// (`daemon::lanes::read_lanes`): a run of `lane-N` is read where that
+    /// lane recorded it, `<data>/lanes/N/`.
     pub(super) fn locations(&self) -> Result<Vec<VmLocations>, ApiError> {
-        read_only_locations(&self.options)
-            .map_err(|e| super::errors::recording_error(&e, &self.scrub))
+        read_locations(&self.options).map_err(|e| super::errors::recording_error(&e, &self.scrub))
     }
 
     /// The run `key` names, its phase and its generation, with a lease held
-    /// for as long as the result lives.
+    /// for as long as the result lives. VM and run ids carry 128 random bits,
+    /// so a key names one run; a key found in two lanes' folders (a VM folder
+    /// copied by hand) is refused, never guessed.
     pub(super) fn open_run(&self, key: &RunKey) -> Result<Opened, ApiError> {
         let (vm_id, boot_id, run_id) = key.parts();
-        let location = self
-            .locations()?
-            .into_iter()
-            .find(|location| location.vm_id == vm_id)
-            .ok_or_else(|| ApiError::not_found("run"))?;
-        let run = find_run_read_only(&location, &boot_id, &run_id)
-            .map_err(|e| super::errors::recording_error(&e, &self.scrub))?
-            .ok_or_else(|| ApiError::not_found("run"))?;
+        let mut found = Vec::new();
+        for location in self.locations()? {
+            if location.vm_id != vm_id {
+                continue;
+            }
+            if let Some(run) = find_run_read_only(&location, &boot_id, &run_id)
+                .map_err(|e| super::errors::recording_error(&e, &self.scrub))?
+            {
+                found.push((location, run));
+            }
+        }
+        if found.len() > 1 {
+            return Err(ApiError::new(
+                ErrorCode::Conflict,
+                format!(
+                    "run {run_id} of VM {vm_id} is in {} data folders (lanes); remove the copy",
+                    found.len()
+                ),
+            )
+            .with_field("run_key"));
+        }
+        let (location, run) = found.pop().ok_or_else(|| ApiError::not_found("run"))?;
         // Open once, canonical: every later file is opened under this path.
         let dir = std::fs::canonicalize(&run.directory).map_err(|_| ApiError::not_found("run"))?;
         let snapshot = self.snapshot();
