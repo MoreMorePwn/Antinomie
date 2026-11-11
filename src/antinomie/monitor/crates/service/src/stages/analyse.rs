@@ -120,8 +120,22 @@ fn judge_report(plan: &HostPlan, report: &AnalysisReport) -> StaticOutcome {
         }
     }
     if report.state == AnalysisState::Partial && out.hard.is_empty() && out.soft.is_empty() {
-        out.soft
-            .push("static analysis finished partly (a tool stopped short)".into());
+        // Name the checks that had nothing to give (one item per tool since
+        // ANT-T0454, so each warning says which).
+        let unavailable: Vec<String> = report
+            .sections
+            .iter()
+            .filter(|s| s.state == AnalysisSectionState::Unavailable)
+            .map(|s| check_name(s.kind))
+            .collect();
+        out.soft.push(if unavailable.is_empty() {
+            "static analysis finished partly (a tool stopped short)".into()
+        } else {
+            format!(
+                "static analysis finished partly: the {} check was not available",
+                unavailable.join(" and ")
+            )
+        });
     }
     out
 }

@@ -1230,3 +1230,22 @@ fn a_stage_that_finished_cannot_be_entered_twice_in_an_attempt() {
 // Keep the helpers the other test files of this module reuse.
 #[allow(dead_code)]
 fn _uses(_: &dyn SampleTags, _: StageStop) {}
+
+#[test]
+fn a_tool_with_nothing_to_give_is_named_in_its_warning() {
+    // A shell script: the engine has no structures to read and calls the
+    // analysis partial; the job is partial and the warning names the check.
+    let report = report_with_sections(
+        "rep-1",
+        "partial",
+        &[("metadata", "complete"), ("structures", "unavailable")],
+    );
+    let (w, job, hosted) = analyse_with("host-static-unavailable", false, Vec::new(), report);
+    assert_eq!(finished(hosted).state, JobState::Partial);
+    let warnings = w.job(&job.id).warnings;
+    assert!(
+        warnings.iter().any(|x| x.code == "static_check_incomplete"
+            && x.text.contains("the structures check was not available")),
+        "{warnings:?}"
+    );
+}
