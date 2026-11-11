@@ -1609,8 +1609,37 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   that VM; the profile phase keeps the firmware (it toggles the hypervisor
   bit), and the variable store must exist after the first boot and after every
   restore.
-* **Final revision-21 arm64 bases** (2026-11-06, series 0001-0053,
-  `bases/0.9.0-r21-20261105/busybox-arm64` and `debian-minimal-arm64`). The
+* **Final revision-22 bases** (2026-11-11, series 0001-0057, 9960064c,
+  `bases/0.9.0-r22-20261111/busybox`, `debian-minimal`, `busybox-arm64` and
+  `debian-minimal-arm64`; they supersede the revision-21 bases below). Patches
+  0001-0053 are byte-identical to revision 21's; 0054-0057 touch only
+  `kernel/antinomie/`. Both Debian stock kernels pass Debian's ABI check
+  (exports, traceable functions and BTF identical to Debian's). The Debian
+  arm64 Minimal base is built in the container builder (`build-base.py
+  --container`) on a host with the qemu-aarch64 binfmt handler, its stock
+  kernel taken from the kernel cache. Against the revision-21 kernels, on all
+  four bases the configuration differs only in `CONFIG_ANTINOMIE_SOURCE_ID`,
+  and every changed or new function is in `kernel/antinomie/`; the stock
+  differences are layout only (moved data addresses, section boundaries and,
+  on arm64, Cortex-A53 erratum-843419 veneers that move with the code). Quick
+  tier: the conformance groups (x86-64: user 2094, root 136, threads 2241
+  cases; arm64: 1911, 129, 2241) and the matrix (375 slots x86-64, 318 arm64)
+  pass on all four; `screen` passes on both x86-64 bases and `nic-routed` on
+  both Debian bases. The Debian arm64 base has the armhf loader
+  (`libc6:armhf`, `/lib/ld-linux-armhf.so.3`): a dynamically linked armhf
+  program runs on it. Revision 22 changes nothing the native conformance suite
+  renders (the exit hold, non-resident core pages and the specimen digest are
+  opt-in; the compat structures are AArch32-only), so the goldens were not
+  re-blessed. One golden value depends on the host that builds the trace
+  fixture, not on the base: `prctl.set_name_long`'s `arg2` is the address of
+  the fixture's name string (`PR_SET_NAME`'s argument is an `unsigned long` in
+  the syscall table, so it keeps its value), and a static arm64 fixture
+  linked against another cross C library places `.rodata` elsewhere
+  (Ubuntu's glibc 2.43 cross libc: 64 KiB higher, 5120160 instead of
+  5054624).
+* **Final revision-21 arm64 bases** (superseded by the revision-22 bases
+  above; 2026-11-06, series 0001-0053, `bases/0.9.0-r21-20261105/busybox-arm64`
+  and `debian-minimal-arm64`). The
   Debian arm64 Minimal base is built in the QEMU builder (this PC has no
   qemu-aarch64 binfmt handler, so no container build), its stock kernel by the
   same script and toolchain in the pinned container builder and taken from
@@ -1624,7 +1653,8 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   `aarch64/debian-minimal` predated (ioctl captures, the fixture's
   `PR_SET_NAME` address); none came from arm64 or Debian behaviour. The
   goldens were re-blessed with the x86-64 ones (below).
-* **Final revision-21 x86-64 bases on the final series** (2026-11-06,
+* **Final revision-21 x86-64 bases on the final series** (superseded by the
+  revision-22 bases above; 2026-11-06,
   `bases/0.9.0-r21-20261105/busybox` and `debian-minimal`, series 9d955a7b).
   Rebuilt after patch 45's arm64 change: the object code is the earlier
   bases' (series 2c43fb98) but for the source ID. BusyBox: every instruction

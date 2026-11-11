@@ -304,8 +304,8 @@ x86 programs by their own table.
   bases' architectures) and when a 32-bit ARM program needs the armhf loader of an
   arm64 base. The Debian arm64 base recipe (`scripts/build-debian-image.py`) now also
   installs the armhf C library and program loader (`libc6:armhf`, giving
-  `/lib/ld-linux-armhf.so.3`) so 32-bit ARM programs start; it takes effect when the
-  bases are rebuilt.
+  `/lib/ld-linux-armhf.so.3`) so 32-bit ARM programs start; the 0.9.0 Debian arm64
+  base (revision 22) has it.
 
 - **Headless runs can take a dump on suspicious activity (ANT-T0439).** The
   live Triage judge was registered only by the window, so `run exec` and Auto
