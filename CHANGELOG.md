@@ -55,6 +55,11 @@ x86 programs by their own table.
   Embedded content signature scan; `binwalk` is also a `doctor --require` name; apt, dnf, pacman
   and zypper package `binwalk`). A test fails when the analysis code names a host program
   that is neither in the list nor a base utility (`file`, `objdump`, `readelf`, `python3`).
+
+- **Fixed: a Volatility plugin run finishes with the Memory tab closed (ANT-T0459).** A plugin or
+  MemNixFS run was collected only while the Memory tab was drawn, so it stayed in the Jobs window
+  as running and its result was not opened until you came back. The app now ends the run and loads
+  its result every frame; the tab only shows the state.
 - **Commands find a daemon at the configured socket, and the CLI documents match the code (ANT-T0451).**
   - A command that reaches the daemon now resolves the socket as the daemon does:
     `--socket`, else `[daemon] socket` of `<data>/service.toml`, else

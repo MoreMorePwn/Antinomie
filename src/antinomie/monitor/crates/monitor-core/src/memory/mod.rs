@@ -917,6 +917,21 @@ pub struct RunHandle {
 }
 
 impl RunHandle {
+    /// A handle whose run has already ended, as `run` records it (for tests
+    /// of what the app does when a run ends).
+    #[doc(hidden)]
+    pub fn ended(run: PluginRun) -> Self {
+        Self {
+            progress: Arc::new(Mutex::new(Progress {
+                finished: Some(run.clone()),
+                ..Progress::default()
+            })),
+            run,
+            process: Arc::new(Mutex::new(None)),
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     pub fn progress(&self) -> Progress {
         self.progress.lock().map(|p| p.clone()).unwrap_or_default()
     }

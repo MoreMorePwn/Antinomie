@@ -440,3 +440,26 @@ fn a_dump_links_to_its_run_by_provenance_then_by_the_runs_own_record() {
     let wide = view.link_of(&dump);
     assert_eq!(view.cell_of(&wide).line().text, "Run: VM-wide");
 }
+
+#[test]
+fn a_plugin_run_ends_without_the_memory_tab_being_drawn() {
+    let run = PluginRun {
+        id: "r1".into(),
+        plugin: "linux.pslist.PsList".into(),
+        dump_id: "d".into(),
+        state: RunState::Finished,
+        rows: 3,
+        ..PluginRun::default()
+    };
+    let mut view = MemoryView::default();
+    view.jobs.push(RunHandle::ended(run));
+    assert_eq!(view.running_jobs().len(), 1);
+    // The app's every-frame hook, with no `show` call at all.
+    view.background(&egui::Context::default());
+    assert!(view.jobs.is_empty(), "the run left the running list");
+    assert!(view.running_jobs().is_empty());
+    assert_eq!(
+        view.status,
+        Some(("PsList finished: 3 rows".to_owned(), false))
+    );
+}
