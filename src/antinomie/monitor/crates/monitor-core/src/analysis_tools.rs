@@ -541,7 +541,7 @@ struct Manifest {
 }
 
 pub fn tools_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("tools")
+    crate::lanes::shared_root(data_dir).join("tools")
 }
 
 fn installed_version(data_dir: &Path, package: &Package) -> Option<String> {
@@ -887,12 +887,10 @@ pub fn install(
     cancel: &AtomicBool,
     progress: impl FnMut(&str, u64, u64),
 ) -> Result<(), String> {
+    crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::InstallTool)?;
     let package = package(id).ok_or("unknown analysis tool")?;
     let result = install_package(curl, data_dir, package, cancel, progress);
-    if result
-        .as_ref()
-        .is_err_and(|e| crate::cancel::is_cancelled(e))
-    {
+    if matches!(&result, Err(e) if crate::cancel::is_cancelled(e)) {
         // The half-unpacked folder goes; the downloads stay in `.downloads`
         // (never where the tool is looked for) so the next install resumes.
         let tools = tools_dir(data_dir);
@@ -1188,6 +1186,7 @@ pub fn managed_sigma_python(data_dir: &Path) -> Option<PathBuf> {
 
 /// Remove an Antinomie-installed tool (system installations are untouched).
 pub fn remove(data_dir: &Path, id: &str) -> Result<(), String> {
+    crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::RemoveTool)?;
     let package = package(id).ok_or("unknown analysis tool")?;
     let directory = tools_dir(data_dir).join(package.id);
     if directory.exists() {

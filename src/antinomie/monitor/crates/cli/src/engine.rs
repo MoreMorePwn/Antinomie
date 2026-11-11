@@ -45,6 +45,7 @@ impl DirectEngine {
         options.owner = OwnerClaim {
             kind: OwnerKind::Cli,
             socket: None,
+            lane: None,
         };
         let data_dir = options.data_dir.clone();
         let backend = Backend::new(options.clone())

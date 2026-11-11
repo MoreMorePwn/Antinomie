@@ -662,8 +662,9 @@ impl Bundle {
     }
     /// Import a content-addressed immutable base outside disposable build trees.
     pub(crate) fn install(self, options: &BackendOptions) -> Result<Self, String> {
+        crate::lanes::refuse_in_lane(&options.data_dir, crate::lanes::SharedWrite::ImportBase)?;
         let identity = self.identity()?;
-        let root = options.data_dir.join("bases");
+        let root = crate::lanes::bases_dir(&options.data_dir);
         private_dir(&root).map_err(|e| e.to_string())?;
         let target = root.join(&identity);
         if !target.exists() {

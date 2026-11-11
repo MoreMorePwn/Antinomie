@@ -77,6 +77,7 @@ pub fn run(arguments: &Detect, context: &Context) -> Result<Reply, CliError> {
         let claim = OwnerClaim {
             kind: OwnerKind::Cli,
             socket: None,
+            lane: None,
         };
         Some(
             data_owner::lock_data_dir(data, &claim)

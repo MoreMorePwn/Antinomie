@@ -58,6 +58,7 @@ pub mod kernel_notes;
 mod kernel_resources;
 mod kit;
 pub mod known_fp;
+pub mod lanes;
 mod launch_notes;
 mod locations;
 pub mod malshare;

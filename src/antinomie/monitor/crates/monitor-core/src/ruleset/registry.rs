@@ -62,6 +62,7 @@ pub fn load_registry(data_dir: &Path) -> Result<Registry, String> {
 }
 
 pub(super) fn save_registry(data_dir: &Path, registry: &Registry) -> Result<(), String> {
+    super::refuse_lane(data_dir)?;
     #[cfg(test)]
     if take_fail("registry-write") {
         return Err("No space left on device".into());
@@ -103,6 +104,7 @@ pub fn profile_label_of(registry: &Registry) -> String {
 }
 
 pub fn set_pack_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), String> {
+    super::refuse_lane(data_dir)?;
     let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let pack = registry
@@ -115,6 +117,7 @@ pub fn set_pack_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), 
 }
 
 pub fn set_group_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), String> {
+    super::refuse_lane(data_dir)?;
     let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let group = registry
@@ -132,6 +135,7 @@ pub fn set_rule_enabled(
     rule_id: &str,
     enabled: bool,
 ) -> Result<(), String> {
+    super::refuse_lane(data_dir)?;
     let _lock = registry_lock(data_dir);
     let mut registry = load_registry(data_dir)?;
     let slot = registry.disabled.entry(key.to_owned()).or_default();

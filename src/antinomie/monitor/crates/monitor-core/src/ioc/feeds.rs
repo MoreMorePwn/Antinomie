@@ -260,9 +260,9 @@ pub fn feed(id: &str) -> Option<&'static Feed> {
     FEEDS.iter().find(|feed| feed.id == id)
 }
 
-/// `<data dir>/ioc`.
+/// `<data dir>/ioc`; lane 0's for a lane data folder ([`crate::lanes`]).
 pub fn root(data_dir: &Path) -> PathBuf {
-    data_dir.join("ioc")
+    crate::lanes::shared_root(data_dir).join("ioc")
 }
 
 pub(super) fn feed_dir(data_dir: &Path, feed: &Feed) -> PathBuf {
@@ -416,6 +416,7 @@ fn read_settings(data_dir: &Path) -> Settings {
 /// Switch a feed on or off. A feed that is off is not downloaded by
 /// "update all" and is not used for matching, but its copy stays.
 pub fn set_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), String> {
+    crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::FeedUpdate)?;
     feed(id).ok_or_else(|| format!("no dataset named {id}"))?;
     let mut settings = read_settings(data_dir);
     if enabled {

@@ -145,6 +145,7 @@ fn set(key: &str, text: &str, context: &Context) -> Result<Reply, CliError> {
     let claim = OwnerClaim {
         kind: OwnerKind::Cli,
         socket: None,
+        lane: None,
     };
     let _lock = data_owner::lock_data_dir(data, &claim)
         .map_err(|message| CliError::from_engine_start(data, &message))?;
