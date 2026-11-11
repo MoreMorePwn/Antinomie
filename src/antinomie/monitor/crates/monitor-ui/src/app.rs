@@ -192,6 +192,8 @@ struct Settings {
     address_lookup: antinomie_monitor_core::settings::AddressLookup,
     /// Scan retained evidence when it becomes ready. Manual Scan still works.
     automatic_detection: bool,
+    /// Minutes between the detection scans of a run that is still going; 0 is off.
+    live_detection_minutes: u32,
     /// Allow the explicit catalog check and rule-pack download buttons.
     outbound_catalog: bool,
     /// The user closed the VM screen tab: a new boot does not open it again.
@@ -341,6 +343,8 @@ impl Default for Settings {
             disks: Default::default(),
             address_lookup: antinomie_monitor_core::settings::AddressLookup::Tshark,
             automatic_detection: true,
+            live_detection_minutes:
+                antinomie_monitor_core::settings::LIVE_DETECTION_DEFAULT_MINUTES,
             outbound_catalog: false,
             vm_screen_closed: false,
             toast_high_findings: false,

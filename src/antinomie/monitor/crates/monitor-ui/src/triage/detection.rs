@@ -113,6 +113,32 @@ fn attribution(author: &str) -> &str {
     }
 }
 
+/// Whether an automatic scan of a run that is still going may start now.
+///
+/// `last` is when the engine's last scan began. With no scan yet and no
+/// result on screen the first one is not held back; otherwise the next waits
+/// for `interval` (`None`: off, never). Returns `Err(wait)` when it must wait,
+/// with the time left (`None` when off).
+fn live_gate(
+    last: Option<Instant>,
+    has_result: bool,
+    interval: Option<Duration>,
+    now: Instant,
+) -> Result<(), Option<Duration>> {
+    let Some(interval) = interval else {
+        return Err(None);
+    };
+    match last {
+        None if !has_result => Ok(()),
+        // A result of an earlier session counts as a scan that just ran.
+        None => Err(Some(interval)),
+        Some(at) => match interval.checked_sub(now.saturating_duration_since(at)) {
+            Some(left) if !left.is_zero() => Err(Some(left)),
+            _ => Ok(()),
+        },
+    }
+}
+
 #[derive(Clone, Default)]
 struct AttemptBudget {
     attempts: u8,
@@ -224,6 +250,12 @@ pub(super) struct View {
     bytes: Option<BytePreview>,
     pending_byte: Option<Evidence>,
     pub automatic: bool,
+    /// Time between the automatic scans of a run that is still going; `None` is off.
+    pub live_interval: Option<Duration>,
+    /// When each engine's scan last began on the run on screen.
+    last_launch: [Option<Instant>; 3],
+    /// The run on screen has not ended: its scans are paced by `live_interval`.
+    live_run: bool,
     /// The engine whose stale result asked for a rescan this frame.
     rescan: Option<usize>,
     pub profile: String,
@@ -365,6 +397,7 @@ impl View {
         self.kept_note = Default::default();
         self.budgets = Default::default();
         self.auto_started = Default::default();
+        self.last_launch = Default::default();
         for phase in &mut self.phase {
             if !phase.is_empty() {
                 *phase = "canceled".into();
@@ -1489,5 +1522,47 @@ mod tests {
         facts.sigma = found;
         view.digest_facts = Some(facts);
         assert!(!view.tool_unanswered(2));
+    }
+
+    #[test]
+    fn a_running_program_is_scanned_once_per_interval_and_never_when_off() {
+        let now = Instant::now();
+        let two = Some(Duration::from_secs(120));
+        // The first scan of a run with nothing on screen is not held back.
+        assert_eq!(live_gate(None, false, two, now), Ok(()));
+        // A saved result counts as a scan that just ran.
+        assert_eq!(live_gate(None, true, two, now), Err(two));
+        // Changed evidence inside the interval waits for the rest of it.
+        let later = now + Duration::from_secs(30);
+        assert_eq!(
+            live_gate(Some(now), true, two, later),
+            Err(Some(Duration::from_secs(90)))
+        );
+        assert_eq!(
+            live_gate(Some(now), true, two, now + Duration::from_secs(120)),
+            Ok(())
+        );
+        // Off: never, not even the first.
+        assert_eq!(live_gate(None, false, None, now), Err(None));
+        assert_eq!(live_gate(Some(now), true, None, later), Err(None));
+    }
+
+    #[test]
+    fn the_scan_button_and_note_follow_the_run_and_the_interval() {
+        let mut view = View::default();
+        assert_eq!(view.scan_label(), "Scan");
+        view.live_run = true;
+        assert_eq!(view.scan_label(), "Scan now");
+        view.live_interval = Some(Duration::from_secs(300));
+        assert_eq!(view.live_note(), "Live scan every 5 min.");
+        view.live_interval = None;
+        assert!(view.live_note().contains("off"));
+        let shown = view
+            .status_parts(0, false)
+            .iter()
+            .any(|part| matches!(part, header::StatusPart::Muted(text) if text.contains("Live scans off")));
+        assert!(shown);
+        view.live_run = false;
+        assert!(view.status_parts(0, false).is_empty());
     }
 }
