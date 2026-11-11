@@ -285,6 +285,15 @@ pub fn list_lanes(
     lanes: &LaneDir,
     snapshot: Option<&antinomie_monitor_core::Snapshot>,
 ) -> Result<Vec<LaneSummary>, ApiError> {
+    list_lanes_with(lanes, &|_| snapshot)
+}
+
+/// [`list_lanes`] with each lane checked against its own engine's snapshot
+/// (several lanes, one engine each); `None` skips a lane's checks.
+pub fn list_lanes_with<'a>(
+    lanes: &LaneDir,
+    snapshot_of: &dyn Fn(&LaneId) -> Option<&'a antinomie_monitor_core::Snapshot>,
+) -> Result<Vec<LaneSummary>, ApiError> {
     let ids = lanes
         .lanes()
         .map_err(|e| ApiError::new(ErrorCode::Internal, e.to_string()))?;
@@ -300,6 +309,7 @@ pub fn list_lanes(
                 ));
             }
         };
+        let snapshot = snapshot_of(&lane);
         let problems = snapshot
             .map(|s| {
                 check_lane(&file, s)

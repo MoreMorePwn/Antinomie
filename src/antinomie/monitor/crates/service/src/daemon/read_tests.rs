@@ -631,14 +631,14 @@ fn vms_and_bases_come_from_the_engines_latest_snapshot() {
     let svc = svc("vmbase", |_| {});
     // The engine has not listed its bases yet.
     {
-        let mut view = svc.service.view.lock().unwrap();
+        let mut view = svc.service.slots[0].view.lock().unwrap();
         view.lanes.bases_checking = true;
     }
     let error = call(&svc, "base.list", json!({})).unwrap_err();
     assert_eq!(error.code, ErrorCode::Unavailable);
     assert!(error.retryable);
     {
-        let mut view = svc.service.view.lock().unwrap();
+        let mut view = svc.service.slots[0].view.lock().unwrap();
         view.lanes.bases_checking = false;
         view.lanes.vms = vec![
             VmConfig {

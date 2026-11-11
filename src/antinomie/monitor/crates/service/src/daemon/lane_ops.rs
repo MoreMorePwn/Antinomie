@@ -62,8 +62,38 @@ fn serve(service: &Service, op: &str, value: Value) -> Result<Value, ApiError> {
     let _: LaneParams = params(value.clone())?;
     match op {
         "lane.list" => {
-            let snapshot = crate::store::lock(&service.view).lanes.clone();
-            to_value(&provision::list_lanes(&service.lanes, Some(&snapshot))?)
+            // Each lane is checked against its own engine's snapshot; a lane
+            // that does not run here says why.
+            let snapshots: Vec<(LaneId, antinomie_monitor_core::Snapshot)> = service
+                .slots
+                .iter()
+                .map(|slot| {
+                    (
+                        slot.lane.clone(),
+                        crate::store::lock(&slot.view).lanes.clone(),
+                    )
+                })
+                .collect();
+            let mut list = provision::list_lanes_with(&service.lanes, &|lane| {
+                snapshots
+                    .iter()
+                    .find(|(id, _)| id == lane)
+                    .map(|(_, snapshot)| snapshot)
+            })?;
+            for summary in &mut list {
+                if service.slot(&summary.lane).is_none() {
+                    let why = service
+                        .left_out
+                        .iter()
+                        .find(|left| left.lane == summary.lane)
+                        .map_or_else(
+                            || "not started: beyond daemon.lanes".to_owned(),
+                            |left| format!("not started: {}", left.reason),
+                        );
+                    summary.problems.push(why);
+                }
+            }
+            to_value(&list)
         }
         "lane.reset" => service.lane_op(op, value, RESET_WAIT),
         _ => service.lane_op(op, value, CHECK_WAIT),

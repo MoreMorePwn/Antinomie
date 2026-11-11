@@ -10,6 +10,17 @@
 //! jobs that resume at `analyse`), the staging store and its `noexec` check,
 //! the lane's thread, and last the socket.
 //!
+//! Several lanes (`daemon.lanes`, ANT-T0455 card C; [`lanes`]): the caller
+//! starts lane 1's engine first (it owns the folders the lanes share), then
+//! one engine per lane the plan lets start ([`lanes::plan_lanes`]), and hands
+//! them all to [`Daemon::start_lanes`]. Each lane has its own thread and
+//! [`LaneLoop`]; the lanes share the job store, the policies, the socket and
+//! one host work pool (first come, first served by job arrival over every
+//! lane; its workers use lane 1's engine). The recovery of the store is done
+//! once, then each lane's own on its engine; the jobs to resume at `analyse`
+//! go back to the pool in arrival order, whatever lane collected them. One
+//! lane whose engine stops stops the daemon (its unit restarts it).
+//!
 //! Signals (2.7), as the supervisor sees them through [`Signals`]:
 //!
 //! | Signal | What happens |
@@ -20,9 +31,13 @@
 //! | `SIGUSR1` | The queue's state is written to the log. |
 
 pub mod artifacts;
+pub mod board;
 mod housekeeping;
 pub mod lane;
 mod lane_ops;
+pub mod lanes;
+#[cfg(test)]
+mod lanes_tests;
 mod library_ops;
 mod notify_thread;
 #[cfg(test)]
@@ -49,7 +64,7 @@ use crate::{
     intake::{Intake, staging::StagingStore},
     lane::{
         LaneDir, ProcFs,
-        recover::{RecoverOptions, recover_startup},
+        recover::{RecoverOptions, recover_lane_with, recover_store, recover_unstarted},
     },
     pool::{HostPool, ITEM_FLOOR_MIB, PoolEnv},
     query::{QueryService, phase::LayerSource},
@@ -175,12 +190,15 @@ fn update_view(view: &Mutex<EngineView>, snapshot: &Snapshot, now_ms: u64) {
     };
 }
 
-/// The engine's disk layers for the recording reads (5.12.2).
-struct ViewLayers(Arc<Mutex<EngineView>>);
+/// The engines' disk layers for the recording reads (5.12.2), every lane's.
+struct ViewLayers(Vec<Arc<Mutex<EngineView>>>);
 
 impl LayerSource for ViewLayers {
     fn layers(&self) -> Vec<DiskLayer> {
-        crate::store::lock(&self.0).disk_layers.clone()
+        self.0
+            .iter()
+            .flat_map(|view| crate::store::lock(view).disk_layers.clone())
+            .collect()
     }
 }
 
@@ -234,7 +252,8 @@ pub enum Exit {
 /// A running daemon.
 pub struct Daemon<E: Engine + Send + 'static> {
     service: Arc<Service>,
-    lane: Option<JoinHandle<Waiter<Handle<E>>>>,
+    /// Each lane's thread, lane 1 first; it hands its engine connection back.
+    lanes: Vec<(LaneId, JoinHandle<Waiter<Handle<E>>>)>,
     /// The host work pool's workers (ANT-T0454).
     workers: Vec<JoinHandle<()>>,
     server: Option<(StopHandle, JoinHandle<()>)>,
@@ -268,7 +287,6 @@ pub fn shutdown_step(
             Duration::from_secs(u64::from(config.daemon.drain_timeout_s)),
         )
     };
-    let phase = crate::store::lock(&service.phase).clone();
     let limit = match mode {
         Shutdown::Drain => host_grace.max(drain),
         Shutdown::Cancel => host_grace,
@@ -285,40 +303,36 @@ pub fn shutdown_step(
             limit.as_secs()
         ));
     }
-    match &phase {
-        Phase::Lane(job) if !state.cancelled.contains(job) => {
-            if mode == Shutdown::Drain && now.duration_since(since) < drain {
-                return None;
+    let mut lines = Vec::new();
+    for (_, phase) in service.phases() {
+        match &phase {
+            Phase::Lane(job) if !state.cancelled.contains(job) => {
+                if mode == Shutdown::Drain && now.duration_since(since) < drain {
+                    continue;
+                }
+                state.cancelled.insert(job.clone());
+                lines.push(match service.store.cancel_for_shutdown(job) {
+                    Ok(_) => format!(
+                        "job={job} is in its lane stages: cancelled for shutdown, it goes back to the queue"
+                    ),
+                    Err(error) => format!("job={job}: cancel for shutdown: {error}"),
+                });
             }
-            state.cancelled.insert(job.clone());
-            match service.store.cancel_for_shutdown(job) {
-                Ok(_) => Some(format!(
-                    "job={job} is in its lane stages: cancelled for shutdown, it goes back to the queue"
-                )),
-                Err(error) => Some(format!("job={job}: cancel for shutdown: {error}")),
+            Phase::Host(job) if !state.interrupted => {
+                if now.duration_since(since) < limit {
+                    continue;
+                }
+                state.interrupted = true;
+                service.controls.interrupt();
+                lines.push(format!(
+                    "job={job} did not finish its host stages within {} s; it resumes at analyse on the next start",
+                    limit.as_secs()
+                ));
             }
+            _ => {}
         }
-        Phase::Host(job) if !state.interrupted => {
-            if now.duration_since(since) < limit {
-                return None;
-            }
-            state.interrupted = true;
-            service.controls.interrupt();
-            Some(format!(
-                "job={job} did not finish its host stages within {} s; it resumes at analyse on the next start",
-                limit.as_secs()
-            ))
-        }
-        _ => None,
     }
-}
-
-fn first_lane(lanes: &LaneDir) -> LaneId {
-    lanes
-        .lanes()
-        .ok()
-        .and_then(|list| list.into_iter().next())
-        .unwrap_or_else(|| LaneId::new(1))
+    (!lines.is_empty()).then(|| lines.join("; "))
 }
 
 /// The lane VM's RAM and recording root, from the engine's VM list.
@@ -334,34 +348,92 @@ fn lane_vm(lanes: &LaneDir, lane: &LaneId, snapshot: &Snapshot) -> (Option<u32>,
     }
 }
 
+/// One lane's engine, as the caller started it.
+pub struct LaneEngine<E> {
+    pub lane: LaneId,
+    /// The options the engine was started with (its data folder among them).
+    pub options: BackendOptions,
+    pub engine: E,
+}
+
+/// A lane being started: its engine connection and what its thread needs.
+struct Starting<E: Engine> {
+    lane: LaneId,
+    options: BackendOptions,
+    mux: Arc<Mux<E>>,
+    waiter: Waiter<Handle<E>>,
+    view: Arc<Mutex<EngineView>>,
+}
+
 impl<E: Engine + Send + 'static> Daemon<E> {
-    /// Start everything (see the module text). The engine must own the data
-    /// directory already.
+    /// Start everything with one lane (see the module text). The engine must
+    /// own the data directory already.
     pub fn start(setup: Setup, engine: E) -> Result<Self, String> {
+        let options = setup.options.clone();
+        Self::start_lanes(
+            setup,
+            vec![LaneEngine {
+                lane: LaneId::new(1),
+                options,
+                engine,
+            }],
+            Vec::new(),
+        )
+    }
+
+    /// Start everything with the lanes the caller started engines for, lane
+    /// 1 first (see the module text). `left_out` are the lanes `daemon.lanes`
+    /// asked for that did not start, with why; they are logged and shown.
+    pub fn start_lanes(
+        setup: Setup,
+        engines: Vec<LaneEngine<E>>,
+        left_out: Vec<lanes::LeftOut>,
+    ) -> Result<Self, String> {
         if !setup.config.notify.webhooks.is_empty() {
             return Err(crate::config::validate::WEBHOOKS_UNSUPPORTED.into());
+        }
+        if engines
+            .first()
+            .is_none_or(|first| first.lane != LaneId::new(1))
+        {
+            return Err("lane-1's engine must come first".into());
         }
         let log = Arc::clone(&setup.log);
         let data_dir = setup.options.data_dir.clone();
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let controls = Arc::new(Controls::default());
-        let view = Arc::new(Mutex::new(EngineView::default()));
-        // One engine for the lane and the host workers (addendum card A): the
-        // lane's connection is made first, so terminal output and results of
-        // no known command go to it.
-        let mux = Mux::new(engine);
-        let mut waiter = Waiter::new(mux.handle(), Arc::clone(&clock));
+        // One engine per lane. Lane 1's is shared by the lane and the host
+        // workers (addendum card A): the lane's connection is made first, so
+        // terminal output and results of no known command go to it.
+        let mut starting = Vec::new();
+        for LaneEngine {
+            lane,
+            options,
+            engine,
+        } in engines
         {
-            let view = Arc::clone(&view);
-            let clock = Arc::clone(&clock);
-            waiter.observe(move |snapshot| update_view(&view, snapshot, clock.now_ms()));
-            let controls = Arc::clone(&controls);
-            waiter.interrupt_when(move || controls.interrupted());
+            let view = Arc::new(Mutex::new(EngineView::default()));
+            let mux = Mux::new(engine);
+            let mut waiter = Waiter::new(mux.handle(), Arc::clone(&clock));
+            {
+                let view = Arc::clone(&view);
+                let clock = Arc::clone(&clock);
+                waiter.observe(move |snapshot| update_view(&view, snapshot, clock.now_ms()));
+                let controls = Arc::clone(&controls);
+                waiter.interrupt_when(move || controls.interrupted());
+            }
+            waiter
+                .first_snapshot(Duration::from_secs(30))
+                .map_err(|e| format!("the engine of {lane} did not start: {e}"))?;
+            update_view(&view, waiter.snapshot(), clock.now_ms());
+            starting.push(Starting {
+                lane,
+                options,
+                mux,
+                waiter,
+                view,
+            });
         }
-        waiter
-            .first_snapshot(Duration::from_secs(30))
-            .map_err(|e| format!("the engine did not start: {e}"))?;
-        update_view(&view, waiter.snapshot(), clock.now_ms());
 
         let service_dir = data_dir.join("service");
         let store = Arc::new(Store::open(&service_dir).map_err(|e| e.message)?);
@@ -377,21 +449,46 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             ));
         }
         let policies = Arc::new(SharedPolicies::new(PolicySet::new(report.policies)));
+        if starting.len() > 1 || !left_out.is_empty() {
+            let started: Vec<&str> = starting.iter().map(|s| s.lane.as_str()).collect();
+            let mut line = format!(
+                "lanes: {} of {} started ({})",
+                starting.len(),
+                setup.config.daemon.lanes,
+                started.join(", ")
+            );
+            for left in &left_out {
+                line.push_str(&format!("; {} not started: {}", left.lane, left.reason));
+            }
+            log(&line);
+        }
 
-        let recovery = recover_startup(
-            &store,
-            &lanes,
-            &mut waiter,
-            &ProcFs,
-            &RecoverOptions::default(),
-        )
-        .map_err(|e| format!("recovery failed: {e}"))?;
+        // Recovery: the store once, then each lane on its own engine; a lane
+        // with a file that does not start gets the part that needs no engine.
+        let recovered =
+            recover_store(&store, &lanes).map_err(|e| format!("recovery failed: {e}"))?;
+        let mut resume_ids = Vec::new();
+        for pending in recovered.pending {
+            let lane = match starting.iter_mut().find(|s| s.lane == pending.lane) {
+                Some(lane) => recover_lane_with(
+                    &store,
+                    &lanes,
+                    &mut lane.waiter,
+                    &ProcFs,
+                    &RecoverOptions::default(),
+                    pending,
+                ),
+                None => recover_unstarted(&store, &lanes, &ProcFs, pending, clock.now_ms()),
+            }
+            .map_err(|e| format!("recovery failed: {e}"))?;
+            if let Some(lane) = lane {
+                resume_ids.extend(lane.resume);
+            }
+        }
         let mut resume = Vec::new();
-        for lane in &recovery.lanes {
-            for id in &lane.resume {
-                if let Ok(job) = store.get(id) {
-                    resume.push(job);
-                }
+        for id in &resume_ids {
+            if let Ok(job) = store.get(id) {
+                resume.push(job);
             }
         }
         // They go back to the host work pool in the order they arrived (first
@@ -399,12 +496,17 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         resume.sort_by(|a, b| (a.created_ms, &a.id).cmp(&(b.created_ms, &b.id)));
         log(&format!(
             "recovery: {} job(s) back in the queue, {} to resume at analyse",
-            recovery.jobs.requeued.len() + recovery.jobs.failed.len(),
+            recovered.jobs.requeued.len() + recovered.jobs.failed.len(),
             resume.len()
         ));
 
-        let lane = first_lane(&lanes);
-        let (lane_ram, recording_roots) = lane_vm(&lanes, &lane, waiter.snapshot());
+        // Each lane's VM: its RAM (the floors, the intake's estimate) and its
+        // recording roots.
+        let mut vms = Vec::new();
+        for lane in &starting {
+            vms.push(lane_vm(&lanes, &lane.lane, lane.waiter.snapshot()));
+        }
+        let lane_ram = vms.iter().filter_map(|(ram, _)| *ram).max();
         let (staging, _) = StagingStore::open(
             &setup.config.inbox_dir(&data_dir),
             &data_dir,
@@ -417,7 +519,9 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             setup.options.clone(),
             crate::query::limits::QuerySettings::from_config(&setup.config),
         )
-        .with_layers(Arc::new(ViewLayers(Arc::clone(&view))))
+        .with_layers(Arc::new(ViewLayers(
+            starting.iter().map(|s| Arc::clone(&s.view)).collect(),
+        )))
         .with_jobs(Arc::new(crate::store::job_index::StoreJobIndex::new(
             Arc::clone(&store),
         )))
@@ -433,12 +537,18 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         )
         .is_ok();
         let address_lookup = setup.config.privacy.address_lookup.triage_mode();
+        let lane_options: Vec<(LaneId, BackendOptions)> = starting
+            .iter()
+            .map(|s| (s.lane.clone(), s.options.clone()))
+            .collect();
         let pool = HostPool::new(PoolEnv {
             store: Arc::clone(&store),
             lanes: LaneDir::new(&service_dir),
             policies: Arc::clone(&policies) as Arc<dyn crate::config::PolicyLookup>,
             triage: Arc::new(
-                RealTriage::new(setup.options.clone()).with_address_lookup(address_lookup),
+                RealTriage::new(setup.options.clone())
+                    .with_address_lookup(address_lookup)
+                    .with_lanes(lane_options.clone()),
             ),
             tags: Arc::new(LibraryTags {
                 data_dir: data_dir.clone(),
@@ -458,16 +568,47 @@ impl<E: Engine + Send + 'static> Daemon<E> {
                 medians: Medians::load(&service_dir.join("host-times.json")),
             },
         });
-        let (wake_tx, wake_rx) = mpsc::channel();
-        let (command_tx, command_rx) = mpsc::channel();
-        let floors = Floors::of(
-            &setup.config.resources,
-            lane_ram.unwrap_or(0),
-            std::iter::once(data_dir.clone())
-                .chain(recording_roots)
-                .collect(),
-            setup.options.capture_quota_size,
-        );
+        // Each lane's own floors (4.6.3): its VM's RAM plus the headroom, the
+        // data folder and its recording roots.
+        let mut receivers = Vec::new();
+        let mut slots = Vec::new();
+        let board = Arc::new(board::LaneBoard::default());
+        for (lane, (ram, roots)) in starting.iter().zip(&vms) {
+            let (wake_tx, wake_rx) = mpsc::channel();
+            let (command_tx, command_rx) = mpsc::channel();
+            board.join(&lane.lane, wake_tx.clone());
+            let floors = Floors::of(
+                &setup.config.resources,
+                ram.unwrap_or(0),
+                std::iter::once(data_dir.clone())
+                    .chain(roots.iter().cloned())
+                    .collect(),
+                setup.options.capture_quota_size,
+            );
+            receivers.push((wake_rx, command_rx, floors));
+            let mut slot = service::LaneSlot::new(
+                lane.lane.clone(),
+                lane.options.data_dir.clone(),
+                wake_tx,
+                command_tx,
+            );
+            slot.view = Arc::clone(&lane.view);
+            slots.push(slot);
+        }
+        // The governor pauses the whole queue (disk, KVM, the PAUSE file):
+        // one, on lane 1's loop, watching every lane's disks.
+        let all_disks: Vec<PathBuf> = {
+            let mut all: Vec<PathBuf> = Vec::new();
+            for (_, _, floors) in &receivers {
+                for path in &floors.disk_paths {
+                    if !all.contains(path) {
+                        all.push(path.clone());
+                    }
+                }
+            }
+            all
+        };
+        let several = slots.len() > 1;
         let service = Arc::new(Service {
             data_dir: data_dir.clone(),
             options: setup.options.clone(),
@@ -478,11 +619,10 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             lanes,
             query,
             owner: setup.owner,
-            view,
-            phase: Arc::new(Mutex::new(Phase::Idle)),
+            slots,
+            board: Arc::clone(&board),
+            left_out,
             controls,
-            wake: Mutex::new(wake_tx),
-            commands: Mutex::new(command_tx),
             accelerator: if kvm && !setup.options.force_tcg {
                 Accelerator::Kvm
             } else {
@@ -494,7 +634,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             pool: Some(Arc::clone(&pool)),
         });
 
-        // The socket is bound before the lane starts, so a socket that cannot
+        // The socket is bound before the lanes start, so a socket that cannot
         // be served stops the start with nothing running.
         let server = match &setup.socket {
             Some(path) => {
@@ -507,28 +647,56 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             None => None,
         };
 
-        let lane_thread = {
+        let mut lane_threads = Vec::new();
+        let mut first_mux = None;
+        let mut resume = Some(resume);
+        for (index, (lane, (wake_rx, command_rx, floors))) in
+            starting.into_iter().zip(receivers).enumerate()
+        {
+            let first = index == 0;
+            let mut governor_floors = None;
+            if first {
+                let mut whole = floors.clone();
+                whole.disk_paths = all_disks.clone();
+                governor_floors = Some(whole);
+                first_mux = Some(Arc::clone(&lane.mux));
+            }
             let service = Arc::clone(&service);
             let log = Arc::clone(&log);
-            std::thread::Builder::new()
-                .name("antinomie-lane".into())
+            let jobs = if first {
+                resume.take().unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let Starting {
+                lane: id,
+                options,
+                waiter,
+                ..
+            } = lane;
+            let name = id.to_string();
+            let lane_id = id.clone();
+            let thread = std::thread::Builder::new()
+                .name(format!("antinomie-{name}"))
                 .spawn(move || {
-                    lane_main(
-                        &service,
-                        waiter,
-                        lane,
+                    let run = LaneRun {
+                        lane: id,
+                        data_dir: options.data_dir.clone(),
+                        options,
                         floors,
-                        &resume,
-                        &wake_rx,
-                        &command_rx,
-                        &*log,
-                    )
+                        governor: governor_floors,
+                        upkeep: first,
+                        several,
+                    };
+                    lane_main(&service, waiter, run, &jobs, &wake_rx, &command_rx, &*log)
                 })
-                .map_err(|e| format!("no thread for the lane: {e}"))?
-        };
+                .map_err(|e| format!("no thread for {name}: {e}"))?;
+            lane_threads.push((lane_id, thread));
+        }
+        let first_mux = first_mux.expect("lane-1 comes first");
         let mut workers = Vec::new();
         for index in 0..pool.workers() {
-            let mut waiter = Waiter::new(mux.handle(), Arc::clone(&clock));
+            let mut waiter = Waiter::new(first_mux.handle(), Arc::clone(&clock));
             let controls = Arc::clone(&service.controls);
             waiter.interrupt_when(move || controls.interrupted());
             let pool = Arc::clone(&pool);
@@ -539,9 +707,9 @@ impl<E: Engine + Send + 'static> Daemon<E> {
                     .map_err(|e| format!("no thread for a host worker: {e}"))?,
             );
         }
-        // The engine comes back through the lane's connection once every
-        // worker's is closed (`finish`).
-        drop(mux);
+        // Each engine comes back through its lane's connection once every
+        // other connection is closed (`finish`).
+        drop(first_mux);
         let server = server.map(|server| {
             let handle = server.stop_handle();
             let thread = std::thread::spawn(move || server.serve());
@@ -583,7 +751,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         ));
         Ok(Self {
             service,
-            lane: Some(lane_thread),
+            lanes: lane_threads,
             workers,
             server,
             helpers,
@@ -639,14 +807,23 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             {
                 (self.log)(&line);
             }
-            if self.lane.as_ref().is_none_or(|t| t.is_finished())
+            // One lane's engine gone stops the daemon: the others finish what
+            // they can, and the unit starts the daemon again (recovery).
+            if self.lanes.len() > 1
+                && service.controls.engine_is_lost()
+                && !service.controls.stopping()
+            {
+                (self.log)("an engine has stopped: stopping the daemon");
+                service.controls.begin_stop();
+            }
+            if self.lanes.iter().all(|(_, t)| t.is_finished())
                 && self.workers.iter().all(|t| t.is_finished())
             {
                 break;
             }
-            // Wake the lane so an idle one sees the stop at once.
+            // Wake the lanes so an idle one sees the stop at once.
             if service.controls.stopping() {
-                let _ = crate::store::lock(&service.wake).send(());
+                service.wake_lane();
                 if let Some(pool) = &service.pool {
                     pool.poke();
                 }
@@ -699,15 +876,29 @@ impl<E: Engine + Send + 'static> Daemon<E> {
 
     /// Stop the socket, join the lane, and hand the engine back for its
     /// shutdown (which stops a running VM and releases the data directory).
-    pub fn finish(mut self) -> Result<E, ApiError> {
+    /// With several lanes the other lanes' engines are dropped; a front end
+    /// that started them uses [`finish_lanes`](Self::finish_lanes).
+    pub fn finish(self) -> Result<E, ApiError> {
+        self.finish_lanes()?
+            .into_iter()
+            .next()
+            .map(|(_, engine)| engine)
+            .ok_or_else(|| ApiError::new(crate::api::error::ErrorCode::Internal, "no lane"))
+    }
+
+    /// Stop the socket, join every lane, and hand every lane's engine back
+    /// for its shutdown, lane 1 first.
+    pub fn finish_lanes(mut self) -> Result<Vec<(LaneId, E)>, ApiError> {
         if let Some((handle, thread)) = self.server.take() {
             handle.stop();
             let _ = thread.join();
         }
         self.service.controls.begin_stop();
-        let _ = crate::store::lock(&self.service.wake).send(());
-        let thread = self.lane.take().expect("the lane thread is joined once");
-        let waiter = thread.join();
+        self.service.wake_lane();
+        let mut waiters = Vec::new();
+        for (lane, thread) in self.lanes.drain(..) {
+            waiters.push((lane, thread.join()));
+        }
         if let Some(pool) = &self.service.pool {
             pool.poke();
         }
@@ -715,56 +906,97 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             let _ = worker.join();
         }
         // Nothing more can finish; the helpers end (delivery after it has
-        // handled what the lane's last jobs produced).
+        // handled what the lanes' last jobs produced).
         self.service.controls.lane_ended();
         for helper in self.helpers.drain(..) {
             let _ = helper.join();
         }
-        let waiter = waiter.map_err(|_| {
-            ApiError::new(
-                crate::api::error::ErrorCode::Internal,
-                "the lane thread panicked",
-            )
-        })?;
+        let mut engines = Vec::new();
+        let mut failed = None;
+        for (lane, waiter) in waiters {
+            match waiter {
+                Ok(waiter) => match waiter.into_engine().into_engine() {
+                    Ok(engine) => engines.push((lane, engine)),
+                    Err(error) => failed = Some(format!("{lane}: {error}")),
+                },
+                Err(_) => failed = Some(format!("the thread of {lane} panicked")),
+            }
+        }
         (self.log)("daemon stopped");
-        waiter
-            .into_engine()
-            .into_engine()
-            .map_err(|error| ApiError::new(crate::api::error::ErrorCode::Internal, error))
+        match failed {
+            Some(error) if engines.is_empty() => {
+                Err(ApiError::new(crate::api::error::ErrorCode::Internal, error))
+            }
+            Some(error) => {
+                (self.log)(&format!("an engine was not handed back: {error}"));
+                Ok(engines)
+            }
+            None => Ok(engines),
+        }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// What one lane's thread runs with.
+struct LaneRun {
+    lane: LaneId,
+    /// The lane's data folder (the library its launch stages a host copy
+    /// from resolves into lane 1's).
+    data_dir: PathBuf,
+    options: BackendOptions,
+    floors: Floors,
+    /// The governor's floors (every lane's disks), on the first lane only.
+    governor: Option<Floors>,
+    /// The wait expiry and the janitor run here (the first lane).
+    upkeep: bool,
+    /// The daemon runs more than one lane: the lanes choose on the board.
+    several: bool,
+}
+
 fn lane_main<E: Engine>(
     service: &Service,
     waiter: Waiter<E>,
-    lane: LaneId,
-    floors: Floors,
+    run: LaneRun,
     resume: &[crate::api::job::Job],
     wake: &mpsc::Receiver<()>,
     commands: &mpsc::Receiver<lane::LaneCommand>,
     log: &(dyn Fn(&str) + Send + Sync),
 ) -> Waiter<E> {
+    let LaneRun {
+        lane,
+        data_dir,
+        options,
+        floors,
+        governor,
+        upkeep,
+        several,
+    } = run;
+    let Some(slot) = service.slot(&lane) else {
+        return waiter;
+    };
     let probes = SystemProbes {
         pause_file: service.data_dir.join("run").join("PAUSE"),
     };
     let host = ResourceChecks {
-        floors: floors.clone(),
+        floors,
         probes: &probes,
     };
-    let governor = Governor::new(
-        ResourceChecks {
-            floors,
-            probes: &probes,
-        },
-        &service.store,
-    );
+    let governor = governor.map(|floors| {
+        Governor::new(
+            ResourceChecks {
+                floors,
+                probes: &probes,
+            },
+            &service.store,
+        )
+    });
     let address_lookup = service
         .config
         .read()
         .map(|config| config.privacy.address_lookup.triage_mode())
         .unwrap_or_default();
-    let triage = RealTriage::new(service.options.clone()).with_address_lookup(address_lookup);
+    let triage = RealTriage::new(service.options.clone())
+        .with_address_lookup(address_lookup)
+        .with_lanes(vec![(lane.clone(), options)]);
     let tags = LibraryTags {
         data_dir: service.data_dir.clone(),
     };
@@ -779,10 +1011,10 @@ fn lane_main<E: Engine>(
             host: &host,
             triage: &triage,
             tags: &tags,
-            data_dir: &service.data_dir,
+            data_dir: &data_dir,
         },
         lane: lane.clone(),
-        governor: Some(governor),
+        governor,
         log,
         pool: service.pool.as_deref(),
     };
@@ -794,17 +1026,20 @@ fn lane_main<E: Engine>(
         let _ = store.prune_engine_events();
     };
     let mut lane_loop = LaneLoop {
-        lane,
+        lane: lane.clone(),
         store: &service.store,
         controls: &service.controls,
-        phase: &service.phase,
+        phase: &slot.phase,
         wake,
         commands,
         clock: Arc::new(SystemClock),
         periods: Periods::default(),
         janitor: &mut janitor,
         log,
+        board: several.then_some(&*service.board),
+        upkeep,
     };
     lane_loop.run(&mut runner, resume);
+    service.board.leave(&lane);
     runner.into_waiter()
 }

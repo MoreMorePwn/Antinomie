@@ -70,6 +70,29 @@ impl<'a, E: Engine> StagesRunner<'a, E> {
     }
 }
 
+/// What `lane` runs, from its lane file and its engine's snapshot.
+pub fn profile_of(
+    lanes: &LaneDir,
+    lane: &LaneId,
+    snapshot: &antinomie_monitor_core::Snapshot,
+) -> Option<super::board::LaneProfile> {
+    let file = lanes.load(lane).ok().flatten()?;
+    Some(super::board::LaneProfile {
+        vm_name: snapshot
+            .vms
+            .iter()
+            .find(|vm| vm.id == file.vm_id)
+            .map(|vm| vm.name.clone()),
+        arch: snapshot
+            .bases
+            .iter()
+            .find(|base| base.id == file.base_identity)
+            .map(|base| base.arch),
+        vm_id: file.vm_id,
+        base_identity: file.base_identity,
+    })
+}
+
 fn hosted_end(hosted: &Hosted) -> JobEnd {
     match hosted {
         Hosted::Aborted(_) => JobEnd::Aborted,
@@ -123,9 +146,27 @@ impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
         }
     }
 
+    fn profile(&mut self) -> Option<super::board::LaneProfile> {
+        profile_of(self.env.lanes, &self.lane, self.waiter.snapshot())
+    }
+
+    fn lane_vm(&self, job: &Job) -> Option<String> {
+        self.env
+            .policies
+            .get(&job.policy.name)
+            .and_then(|policy| policy.policy.vm.lane_vm.clone())
+    }
+
     fn command(&mut self, op: &str, params: Value) -> Result<Value, ApiError> {
         let request: super::lane_ops::LaneParams = super::service::params(params)?;
         let lane = request.lane.unwrap_or_else(|| self.lane.clone());
+        if lane != self.lane {
+            // Each lane's engine serves its own lane only.
+            return Err(ApiError::new(
+                ErrorCode::Internal,
+                format!("{op} for {lane} reached the thread of {}", self.lane),
+            ));
+        }
         let log = self.log;
         let summary = match op {
             "lane.reset" => provision::reset_lane(

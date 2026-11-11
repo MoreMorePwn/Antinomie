@@ -38,7 +38,7 @@ mod launch;
 pub mod plan;
 #[cfg(test)]
 mod pool_tests;
-mod prechecks;
+pub(crate) mod prechecks;
 mod provision;
 mod report;
 #[cfg(test)]

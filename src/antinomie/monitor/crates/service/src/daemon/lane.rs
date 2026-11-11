@@ -12,8 +12,17 @@
 //!
 //! [`LaneRunner`] is the seam between the loop and the stages, so the
 //! scheduling and the shutdown rules are tested without an engine.
+//!
+//! With several lanes (ANT-T0455 card C) every lane has a loop of its own on
+//! its own engine; they share the store and the [`LaneBoard`], which spreads
+//! the jobs over the free lanes (design 4.6.1). Only the first lane's loop
+//! does the daemon's upkeep (the wait expiry, the janitor and the resource
+//! governor).
 
-use super::{Controls, Phase};
+use super::{
+    Controls, Phase,
+    board::{LaneBoard, LaneProfile},
+};
 use crate::{
     api::{error::ApiError, ids::LaneId, job::Job},
     clock::Clock,
@@ -59,6 +68,14 @@ pub trait LaneRunner {
     fn govern(&mut self, now_ms: u64);
     /// A lane command, served while no job runs.
     fn command(&mut self, op: &str, params: Value) -> Result<Value, ApiError>;
+    /// What the lane runs, for the lane choice with several lanes.
+    fn profile(&mut self) -> Option<LaneProfile> {
+        None
+    }
+    /// The `vm.lane_vm` of the job's policy.
+    fn lane_vm(&self, _job: &Job) -> Option<String> {
+        None
+    }
 }
 
 /// How often the loop does its periodic work.
@@ -94,6 +111,11 @@ pub struct LaneLoop<'a> {
     /// engine events.
     pub janitor: &'a mut dyn FnMut(),
     pub log: &'a (dyn Fn(&str) + Send + Sync),
+    /// The lanes of the daemon when it runs more than one; `None`: this lane
+    /// takes every job it can, as with one lane.
+    pub board: Option<&'a LaneBoard>,
+    /// This loop does the daemon's upkeep (the wait expiry and the janitor).
+    pub upkeep: bool,
 }
 
 fn set(phase: &Mutex<Phase>, value: Phase) {
@@ -133,13 +155,13 @@ impl LaneLoop<'_> {
                 runner.govern(now);
                 next_govern = now + self.periods.govern_ms;
             }
-            if now >= next_expire {
+            if self.upkeep && now >= next_expire {
                 if let Err(error) = self.store.expire_waits() {
                     (self.log)(&format!("wait expiry: {error}"));
                 }
                 next_expire = now + self.periods.expire_ms;
             }
-            if now >= next_janitor {
+            if self.upkeep && now >= next_janitor {
                 (self.janitor)();
                 next_janitor = now + self.periods.janitor_ms;
             }
@@ -156,7 +178,32 @@ impl LaneLoop<'_> {
                 let _ = command.reply.send(answer);
             }
             let eligibility = runner.eligibility();
-            match self.store.claim_next(&self.lane, &mut |_| eligibility) {
+            let claimed = match self.board {
+                None => self.store.claim_next(&self.lane, &mut |_| eligibility),
+                Some(board) => {
+                    let now = self.clock.now_ms();
+                    board.post(&self.lane, eligibility, runner.profile(), now);
+                    match eligibility {
+                        Eligibility::Wait(mine) => match board.report(&self.lane, mine, now) {
+                            Some(why) => self
+                                .store
+                                .claim_next(&self.lane, &mut |_| Eligibility::Wait(why)),
+                            None => Ok(None),
+                        },
+                        _ => {
+                            let lane = &self.lane;
+                            let runner = &*runner;
+                            self.store.claim_next(lane, &mut |job| {
+                                board.decide(lane, job, runner.lane_vm(job).as_deref(), now)
+                            })
+                        }
+                    }
+                }
+            };
+            if let (Some(board), Ok(Some(_))) = (self.board, &claimed) {
+                board.claimed(&self.lane, self.clock.now_ms());
+            }
+            match claimed {
                 Ok(Some(job)) => {
                     set(self.phase, Phase::Lane(job.id.clone()));
                     (self.log)(&format!("job={} started, attempt {}", job.id, job.attempt));

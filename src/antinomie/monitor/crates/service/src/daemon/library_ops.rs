@@ -120,12 +120,12 @@ impl Service {
         Ok(sample)
     }
 
-    /// `vm.list`: the VMs of the engine; a lane's VM carries its lane.
+    /// `vm.list`: the VMs of every lane's engine; a lane's VM carries its
+    /// lane.
     pub(super) fn vm_list(&self) -> Result<Value, ApiError> {
         let lanes = self.lane_statuses();
-        let view = crate::store::lock(&self.view).lanes.clone();
-        let vms = view
-            .vms
+        let vms = self
+            .all_vms()
             .iter()
             .map(|vm| VmSummary {
                 id: vm.id.clone(),
@@ -143,7 +143,8 @@ impl Service {
     /// `base.list`: the installed bases. While the engine still lists them
     /// the answer is `unavailable` and retryable.
     pub(super) fn base_list(&self) -> Result<Value, ApiError> {
-        let view = crate::store::lock(&self.view).lanes.clone();
+        // The bases are lane 1's, shared by every lane.
+        let view = self.first_view().lanes;
         if view.bases_checking && view.bases.is_empty() {
             return Err(ApiError::new(
                 ErrorCode::Unavailable,

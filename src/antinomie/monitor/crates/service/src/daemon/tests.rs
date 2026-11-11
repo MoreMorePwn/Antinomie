@@ -3,9 +3,9 @@
 //! them), the lane loop with a scripted lane, and the shutdown rules.
 
 use super::{
-    Controls, EngineView, Phase, Stopping,
+    Controls, Phase, Stopping,
     lane::{JobEnd, LaneCommand, LaneLoop, LaneRunner, Periods},
-    service::Service,
+    service::{LaneSlot, Service},
     shutdown_step,
 };
 use crate::{
@@ -100,11 +100,15 @@ pub(super) fn svc_logged(
         intake,
         lanes: LaneDir::new(&data.join("service")),
         owner: Owner::Daemon,
-        view: Arc::new(Mutex::new(EngineView::default())),
-        phase: Arc::new(Mutex::new(Phase::Idle)),
+        slots: vec![LaneSlot::new(
+            crate::store::tests::lane(),
+            data.clone(),
+            wake,
+            commands,
+        )],
+        board: Default::default(),
+        left_out: Vec::new(),
         controls: Arc::new(Controls::default()),
-        wake: Mutex::new(wake),
-        commands: Mutex::new(commands),
         accelerator: Accelerator::Kvm,
         watch: Default::default(),
         gc_lock: Mutex::new(()),
@@ -532,9 +536,9 @@ struct Running {
 fn start(svc: Svc, lane: Duration, host: Duration) -> Running {
     let ran = Arc::new(Mutex::new(Vec::new()));
     let (wake_tx, wake_rx) = mpsc::channel();
-    *crate::store::lock(&svc.service.wake) = wake_tx;
+    *crate::store::lock(&svc.service.slots[0].wake) = wake_tx;
     let (command_tx, command_rx) = mpsc::channel();
-    *crate::store::lock(&svc.service.commands) = command_tx;
+    *crate::store::lock(&svc.service.slots[0].commands) = command_tx;
     let service = Arc::clone(&svc.service);
     let mut runner = Scripted {
         store: Arc::clone(&service.store),
@@ -550,7 +554,7 @@ fn start(svc: Svc, lane: Duration, host: Duration) -> Running {
             lane: crate::store::tests::lane(),
             store: &service.store,
             controls: &service.controls,
-            phase: &service.phase,
+            phase: &service.slots[0].phase,
             wake: &wake_rx,
             commands: &command_rx,
             clock: Arc::new(SystemClock),
@@ -560,6 +564,8 @@ fn start(svc: Svc, lane: Duration, host: Duration) -> Running {
             },
             janitor: &mut janitor,
             log: &log,
+            board: None,
+            upkeep: true,
         };
         lane_loop.run(&mut runner, &[]);
     });
@@ -596,7 +602,7 @@ impl Running {
             if let Some(line) = shutdown_step(service, &mut state, grace, Instant::now()) {
                 lines.push(line);
             }
-            let _ = crate::store::lock(&service.wake).send(());
+            let _ = crate::store::lock(&service.slots[0].wake).send(());
             std::thread::sleep(Duration::from_millis(10));
         }
         thread.join().unwrap();
@@ -633,7 +639,7 @@ fn at_shutdown_a_job_in_its_lane_stages_goes_back_to_the_queue_uncounted() {
     let job = submit_upload(&svc);
     let mut running = start(svc, Duration::from_secs(30), Duration::ZERO);
     running.wait_for("the lane stages", || {
-        *running.svc.service.phase.lock().unwrap() == Phase::Lane(job.id.clone())
+        *running.svc.service.slots[0].phase.lock().unwrap() == Phase::Lane(job.id.clone())
     });
     let lines = running.stop(Duration::from_secs(120));
     assert!(lines[0].contains("cancelled for shutdown"), "{lines:?}");
@@ -664,7 +670,7 @@ fn at_shutdown_a_job_in_its_host_stages_is_let_finish() {
     let job = submit_upload(&svc);
     let mut running = start(svc, Duration::ZERO, Duration::from_millis(600));
     running.wait_for("the host stages", || {
-        *running.svc.service.phase.lock().unwrap() == Phase::Host(job.id.clone())
+        *running.svc.service.slots[0].phase.lock().unwrap() == Phase::Host(job.id.clone())
     });
     let began = Instant::now();
     let lines = running.stop(Duration::from_secs(120));
@@ -684,7 +690,7 @@ fn a_host_stage_past_the_grace_is_interrupted_and_left_for_recovery() {
     let job = submit_upload(&svc);
     let mut running = start(svc, Duration::ZERO, Duration::from_secs(30));
     running.wait_for("the host stages", || {
-        *running.svc.service.phase.lock().unwrap() == Phase::Host(job.id.clone())
+        *running.svc.service.slots[0].phase.lock().unwrap() == Phase::Host(job.id.clone())
     });
     let lines = running.stop(Duration::from_millis(200));
     assert!(lines[0].contains("resumes at analyse"), "{lines:?}");
@@ -707,7 +713,7 @@ fn drain_lets_the_lane_stages_run_on_until_the_drain_timeout() {
     let second = submit_upload(&svc);
     let mut running = start(svc, Duration::from_millis(400), Duration::ZERO);
     running.wait_for("the lane stages", || {
-        *running.svc.service.phase.lock().unwrap() == Phase::Lane(job.id.clone())
+        *running.svc.service.slots[0].phase.lock().unwrap() == Phase::Lane(job.id.clone())
     });
     let lines = running.stop(Duration::from_secs(120));
     assert!(lines.is_empty(), "{lines:?}");
@@ -725,7 +731,7 @@ fn drain_lets_the_lane_stages_run_on_until_the_drain_timeout() {
         .store
         .claim_next(&crate::store::tests::lane(), &mut |_| Eligibility::Ready)
         .unwrap();
-    *service.phase.lock().unwrap() = Phase::Lane(second.id.clone());
+    *service.slots[0].phase.lock().unwrap() = Phase::Lane(second.id.clone());
     let mut state = Stopping {
         since: Some(Instant::now() - Duration::from_secs(601)),
         ..Stopping::default()
