@@ -144,7 +144,7 @@ fn validate_accepts_good_files_and_a_data_directory_with_none() {
 fn validate_reports_every_problem_with_its_line_and_exits_4() {
     let root = scratch("validate-bad");
     let data = root.join("data");
-    write(&data, "service.toml", "[daemon]\nlanes = 3\n");
+    write(&data, "service.toml", "[daemon]\nlanes = 5\n");
     write(
         &data,
         "policies/bad.toml",
@@ -162,7 +162,7 @@ fn validate_reports_every_problem_with_its_line_and_exits_4() {
             .unwrap_or_else(|| panic!("{file}: {needle}: {problems:?}"))
             .clone()
     };
-    assert_eq!(find("service.toml", "one lane per node")["line"], 2);
+    assert_eq!(find("service.toml", "must be 1 to 4")["line"], 2);
     assert_eq!(find("policies/bad.toml", "not in v1")["line"], 4);
     assert_eq!(find("policies/bad.toml", "above run.max_run_s")["line"], 6);
     assert_eq!(find("policies/typo.toml", "unknown field")["line"], 1);
