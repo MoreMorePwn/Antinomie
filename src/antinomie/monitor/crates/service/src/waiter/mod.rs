@@ -14,7 +14,10 @@
 //!
 //! [`ManualClock`]: crate::clock::ManualClock
 use crate::clock::Clock;
-use antinomie_monitor_core::{Command, Notification, RunSummary, Snapshot};
+use antinomie_monitor_core::{
+    Command, Notification, RunSummary, Snapshot,
+    analysis::{AnalysisReport, AnalysisState},
+};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
@@ -110,6 +113,9 @@ pub struct Waiter<E: Engine> {
     abandoned: Vec<u64>,
     /// An `Execute` given up as silent: the program may still start.
     pub(crate) unanswered_launch: Option<UnansweredLaunch>,
+    /// Standalone analyses as `AnalysisUpdated` last told them: the snapshot
+    /// keeps only eight, and a host worker waits for its own.
+    analyses: HashMap<String, AnalysisReport>,
 }
 
 /// An `Execute` whose answer did not come in time, and the runs that were
@@ -137,6 +143,7 @@ impl<E: Engine> Waiter<E> {
             cancel_interrupts: false,
             abandoned: Vec::new(),
             unanswered_launch: None,
+            analyses: HashMap::new(),
         }
     }
 
@@ -255,6 +262,15 @@ impl<E: Engine> Waiter<E> {
                 message,
             }) if *id > 0 => {
                 self.results.insert(*id, (*success, message.clone()));
+            }
+            Some(Notification::AnalysisUpdated {
+                run_id: None,
+                report,
+            }) => {
+                if self.analyses.len() >= 64 {
+                    self.analyses.clear();
+                }
+                self.analyses.insert(report.id.clone(), report.clone());
             }
             Some(Notification::Terminal {
                 run_id, data, eof, ..
@@ -506,6 +522,52 @@ impl<E: Engine> Waiter<E> {
                 return Ok(());
             }
             if deadline.is_some_and(|deadline| self.now_ms() >= deadline) {
+                return Err(WaitError::TimedOut { what: what.into() });
+            }
+            self.pump(Duration::from_millis(100))?;
+        }
+    }
+
+    /// The standalone analysis `id` as last seen: in the snapshot, or in the
+    /// engine's `AnalysisUpdated` notices (whichever has it finished).
+    pub fn analysis(&self, id: &str) -> Option<AnalysisReport> {
+        let done = |r: &AnalysisReport| {
+            !matches!(
+                r.state,
+                AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
+            )
+        };
+        let seen = self
+            .snapshot
+            .analysis_reports
+            .iter()
+            .find(|r| r.id == id)
+            .cloned();
+        let noticed = self.analyses.get(id).cloned();
+        match (seen, noticed) {
+            (Some(a), _) if done(&a) => Some(a),
+            (_, Some(b)) if done(&b) => Some(b),
+            (Some(a), _) => Some(a),
+            (None, b) => b,
+        }
+    }
+
+    /// Wait until the standalone analysis `id` satisfies `done`, for at most
+    /// `limit`.
+    pub fn wait_until_report(
+        &mut self,
+        what: &str,
+        limit: Duration,
+        id: &str,
+        mut done: impl FnMut(&AnalysisReport) -> bool,
+    ) -> Result<(), WaitError> {
+        let deadline = self.now_ms() + millis(limit);
+        loop {
+            self.drain()?;
+            if self.analysis(id).is_some_and(|r| done(&r)) {
+                return Ok(());
+            }
+            if self.now_ms() >= deadline {
                 return Err(WaitError::TimedOut { what: what.into() });
             }
             self.pump(Duration::from_millis(100))?;

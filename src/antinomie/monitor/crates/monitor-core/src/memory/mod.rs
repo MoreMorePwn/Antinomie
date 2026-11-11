@@ -558,9 +558,10 @@ pub struct PluginCatalog {
 }
 
 /// Folder of community Volatility 3 plugins (`.py` files), passed to
-/// Volatility with `-p`. They run as the user, outside any sandbox.
+/// Volatility with `-p`. They run as the user, outside any sandbox. Lane 0's
+/// for a lane data folder ([`crate::lanes`]).
 pub fn plugins_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("volatility-plugins")
+    crate::lanes::shared_root(data_dir).join("volatility-plugins")
 }
 
 /// Names, sizes and times of the Python files under `dir`: a changed folder
@@ -916,6 +917,21 @@ pub struct RunHandle {
 }
 
 impl RunHandle {
+    /// A handle whose run has already ended, as `run` records it (for tests
+    /// of what the app does when a run ends).
+    #[doc(hidden)]
+    pub fn ended(run: PluginRun) -> Self {
+        Self {
+            progress: Arc::new(Mutex::new(Progress {
+                finished: Some(run.clone()),
+                ..Progress::default()
+            })),
+            run,
+            process: Arc::new(Mutex::new(None)),
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     pub fn progress(&self) -> Progress {
         self.progress.lock().map(|p| p.clone()).unwrap_or_default()
     }

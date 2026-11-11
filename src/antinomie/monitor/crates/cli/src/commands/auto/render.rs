@@ -134,6 +134,24 @@ pub fn job_text(job: &Value) -> String {
             format!("{}: {}", word(&failure["code"]), word(&failure["message"])),
         );
     }
+    for item in job["host_work"].as_array().into_iter().flatten() {
+        line(
+            &mut out,
+            "host item:",
+            format!(
+                "{} {} (expected {} s, {}, limit {} s){}",
+                word(&item["name"]),
+                word(&item["state"]),
+                word(&item["expected_s"]),
+                word(&item["basis"]),
+                word(&item["limit_s"]),
+                item["note"]
+                    .as_str()
+                    .map(|note| format!(": {}", clean(note)))
+                    .unwrap_or_default()
+            ),
+        );
+    }
     for warning in job["warnings"].as_array().into_iter().flatten() {
         line(
             &mut out,
@@ -168,6 +186,20 @@ pub fn queue_text(status: &Value) -> String {
         },
         word(&status["owner"])
     );
+    if let Some(pool) = status.get("host_pool").filter(|p| !p.is_null()) {
+        let _ = writeln!(
+            out,
+            "host pool:  {} queued, {} running of {} worker(s), {} job(s){}",
+            word(&pool["queued"]),
+            word(&pool["running"]),
+            word(&pool["workers"]),
+            word(&pool["jobs"]),
+            pool["waiting_for"]
+                .as_str()
+                .map(|why| format!(", waiting for {}", clean(why)))
+                .unwrap_or_default()
+        );
+    }
     for lane in status["lanes"].as_array().into_iter().flatten() {
         let _ = writeln!(
             out,
@@ -257,5 +289,33 @@ mod tests {
         }));
         assert!(!text.contains('\x1b') && !text.contains('\x07'));
         assert!(text.contains("line1 line2"));
+    }
+
+    #[test]
+    fn host_items_and_the_pool_are_shown() {
+        let text = job_text(&serde_json::json!({
+            "id": "j_1", "state": "running", "stage": "analyse",
+            "policy": {"name": "default"}, "attempt": 1, "max_attempts": 2, "warnings": [],
+            "host_work": [
+                {"name": "static:floss", "state": "running", "expected_s": 150, "basis": "estimate", "limit_s": 300},
+                {"name": "report", "state": "queued", "expected_s": 30, "basis": "median", "limit_s": 60, "note": "x\x1by"}
+            ]
+        }));
+        assert!(
+            text.contains("static:floss running (expected 150 s, estimate, limit 300 s)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("report queued (expected 30 s, median, limit 60 s): x y"),
+            "{text}"
+        );
+        let queue = queue_text(&serde_json::json!({
+            "queued": 3, "running": 1, "owner": "daemon", "lanes": [],
+            "host_pool": {"workers": 2, "queued": 5, "running": 2, "jobs": 2, "waiting_for": null}
+        }));
+        assert!(
+            queue.contains("host pool:  5 queued, 2 running of 2 worker(s), 2 job(s)"),
+            "{queue}"
+        );
     }
 }

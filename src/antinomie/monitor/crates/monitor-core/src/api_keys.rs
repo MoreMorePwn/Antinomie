@@ -180,6 +180,9 @@ fn migrate_legacy(data_dir: &Path) {
         malwarebazaar: String,
         malshare: String,
     }
+    if crate::lanes::is_lane_folder(data_dir) {
+        return; // the old file is lane 0's to move
+    }
     let old = crate::samples::samples_dir(data_dir).join(KEYS_FILE);
     let Ok(bytes) = fs::read(&old) else {
         return;

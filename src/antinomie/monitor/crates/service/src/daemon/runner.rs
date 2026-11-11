@@ -40,6 +40,9 @@ pub struct StagesRunner<'a, E: Engine> {
     pub lane: LaneId,
     pub governor: Option<Governor<'a>>,
     pub log: &'a (dyn Fn(&str) + Send + Sync),
+    /// The host work pool: a collected job goes there and the lane is free
+    /// at once (ANT-T0454). `None` runs the host stages on the lane's thread.
+    pub pool: Option<&'a crate::pool::HostPool>,
 }
 
 impl<'a, E: Engine> StagesRunner<'a, E> {
@@ -84,19 +87,32 @@ impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
     }
 
     fn run_job(&mut self, job: &Job, to_host: &mut dyn FnMut()) -> JobEnd {
+        let pool = self.pool;
         let mut stages = self.stages();
         match stages.drive(job) {
-            Driven::Collected(end) => {
-                to_host();
-                hosted_end(&stages.host(job, &end))
-            }
+            Driven::Collected(end) => match pool {
+                Some(pool) => {
+                    pool.admit(job, end.outcome);
+                    JobEnd::Done
+                }
+                None => {
+                    to_host();
+                    hosted_end(&stages.host(job, &end))
+                }
+            },
             Driven::Aborted(_) => JobEnd::Aborted,
             _ => JobEnd::Done,
         }
     }
 
     fn resume(&mut self, job: &Job) -> JobEnd {
-        hosted_end(&self.stages().resume_host(job))
+        match self.pool {
+            Some(pool) => {
+                pool.resume(job, &mut self.waiter);
+                JobEnd::Done
+            }
+            None => hosted_end(&self.stages().resume_host(job)),
+        }
     }
 
     fn govern(&mut self, now_ms: u64) {

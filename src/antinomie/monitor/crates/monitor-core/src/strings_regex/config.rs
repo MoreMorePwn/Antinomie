@@ -47,6 +47,7 @@ impl Config {
 
     /// Check the bounds, then replace the saved file.
     pub fn save(&self, data_dir: &Path) -> Result<(), String> {
+        crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::RuleUpdate)?;
         self.validate()?;
         let path = config_path(data_dir);
         if let Some(parent) = path.parent() {

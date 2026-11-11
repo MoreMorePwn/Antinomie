@@ -29,6 +29,7 @@ the checks CI runs (see `.github/workflows/ci.yml`):
 ```bash
 scripts/check-privacy.sh
 python3 -I scripts/check-module-size.py
+python3 -I scripts/check-command-new.py
 cd src/antinomie/monitor
 cargo fmt --all -- --check
 cargo clippy --release --locked --all-targets -- -D warnings

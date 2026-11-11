@@ -83,7 +83,8 @@ impl PackageManager {
 /// (guestfs-tools carries the virt-* tools there, not guestfish). Not
 /// confirmed against an index: zypper `python3` (a capability that resolves to
 /// the current python3xx package), which of dnf `python3` / zypper
-/// `python3` carries `ensurepip`, and the other pacman and apt names, which
+/// `python3` carries `ensurepip`, binwalk's name outside apt (assumed to be
+/// `binwalk`), and the other pacman and apt names, which
 /// no package index was consulted for.
 pub const PACKAGES: &[(Dependency, [&str; 4])] = &[
     (
@@ -136,6 +137,10 @@ pub const PACKAGES: &[(Dependency, [&str; 4])] = &[
     (
         Dependency::PythonVenv,
         ["python3-venv", "python3", "python", "python3"],
+    ),
+    (
+        Dependency::Binwalk,
+        ["binwalk", "binwalk", "binwalk", "binwalk"],
     ),
     (
         Dependency::FileChooser,

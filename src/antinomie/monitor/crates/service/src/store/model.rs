@@ -143,6 +143,7 @@ impl JobRow {
                 .map(|id| JobId::try_from(id).map_err(internal))
                 .transpose()?,
             labels: from_json(&self.labels_json)?,
+            host_work: Vec::new(),
         })
     }
 }
@@ -223,7 +224,10 @@ pub(crate) fn assemble(conn: &Connection, row: JobRow) -> R<Job> {
         .then(|| queue_position(conn, &row.id, row.priority, row.created_ms))
         .transpose()?;
     let artifacts = artifacts_of(conn, &row.id)?;
-    row.into_job(position, artifacts)
+    let host_work = super::host_work::items_of(conn, &row.id)?;
+    let mut job = row.into_job(position, artifacts)?;
+    job.host_work = host_work;
+    Ok(job)
 }
 
 /// The policy a job froze at submit.

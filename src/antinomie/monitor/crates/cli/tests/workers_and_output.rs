@@ -134,6 +134,7 @@ fn doctor_names_the_owner_of_the_data_directory() {
     let mut stale = data_owner::record_for(&OwnerClaim {
         kind: OwnerKind::Gui,
         socket: None,
+        lane: None,
     });
     stale.pid = 4_000_000_000;
     data_owner::write_record(&root, &stale).unwrap();
@@ -150,6 +151,7 @@ fn doctor_names_the_owner_of_the_data_directory() {
     let mut record = data_owner::record_for(&OwnerClaim {
         kind: OwnerKind::Daemon,
         socket: None,
+        lane: None,
     });
     record.pid = std::process::id();
     data_owner::write_record(&root, &record).unwrap();

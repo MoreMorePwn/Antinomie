@@ -7,6 +7,8 @@
 [daemon]
 # socket = "<data>/run/antinomie.sock"
 lanes = 1
+host_workers = 2             # host work items at once (static tools, Triage, detection, report)
+host_time_factor = 2         # an item may take this many times its expected time
 shutdown = "cancel"          # or "drain": finish the running job first
 drain_timeout_s = 600
 shutdown_host_grace_s = 120

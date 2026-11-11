@@ -109,6 +109,7 @@ pub(super) fn svc_logged(
         watch: Default::default(),
         gc_lock: Mutex::new(()),
         log,
+        pool: None,
     });
     Svc {
         dir,

@@ -3,9 +3,11 @@
 //! card P3-5): `analyse`, `report`, `cleanup`.
 //!
 //! [`LaneStages::host`] takes a job `drive` collected ([`Driven::Collected`])
-//! and ends it. The lane is free by then, so these stages run beside the next
-//! job's lane stages when the caller has a second waiter; this card runs them
-//! on the waiter it is given (the daemon cards decide the threads).
+//! and ends it, running its work items ([`super::items`]) one after another on
+//! the waiter it is given. The daemon does not call it: it hands the job to the
+//! host work pool ([`crate::pool`]), which runs the same items on its own
+//! waiters beside the next job's lane stages (ANT-T0454); this sequential
+//! form is the pool's order for one job, and what the stage tests drive.
 //!
 //! | The stages end with | The job |
 //! |---|---|
@@ -22,9 +24,10 @@
 //! machine that needs time.
 use super::{
     LaneStages, StageStop,
-    analyse::Analysed,
     collect::CollectEnd,
-    plan::{self, HostPlan},
+    items::{ItemKind, JobWork, PhaseEnd, items_for},
+    plan,
+    timing::{self, Timing},
 };
 use crate::{
     api::{
@@ -33,9 +36,10 @@ use crate::{
         job::{Job, Outcome, Stage},
     },
     engine::Engine,
-    store::RequeueKind,
+    store::{RequeueKind, lock},
     waiter::{WaitError, incomplete_parts},
 };
+use std::{sync::Mutex, time::Duration};
 
 /// What became of a job in the host stages.
 #[derive(Debug)]
@@ -79,8 +83,15 @@ impl<E: Engine> LaneStages<'_, E> {
             Ok(job) => job,
             Err(stop) => return self.settle_host(job, Err(stop)),
         };
-        let triage = self.env.triage;
-        let outcome = triage
+        let outcome = self.resumed_outcome(job);
+        self.host_from(job, outcome)
+    }
+
+    /// The outcome `collect` found for a job resumed after a restart, read
+    /// again from the run's evidence.
+    pub(crate) fn resumed_outcome(&self, job: &Job) -> Outcome {
+        self.env
+            .triage
             .open_run(job)
             .ok()
             .and_then(|saved| {
@@ -93,8 +104,7 @@ impl<E: Engine> LaneStages<'_, E> {
                     },
                 )
             })
-            .unwrap_or(Outcome::Succeeded);
-        self.host_from(job, outcome)
+            .unwrap_or(Outcome::Succeeded)
     }
 
     fn host_from(&mut self, job: &Job, outcome: Outcome) -> Hosted {
@@ -104,10 +114,12 @@ impl<E: Engine> LaneStages<'_, E> {
         self.settle_host(job, result)
     }
 
+    /// The items of the job one after another, in their dependency order:
+    /// the host work pool's order for a single job ([`super::items`]).
     fn host_stages(
         &mut self,
         job: &Job,
-        mut outcome: Outcome,
+        outcome: Outcome,
     ) -> Result<(Job, Option<String>), StageStop> {
         self.cancel_point(job)?;
         let store = self.env.store;
@@ -115,31 +127,36 @@ impl<E: Engine> LaneStages<'_, E> {
             .frozen_policy(&job.id)
             .map_err(|e| self.store_error(Stage::Analyse, e))?;
         let plan = plan::hosted(job, &frozen.policy);
-        let mut tries = 0;
-        let analysed = loop {
-            tries += 1;
-            match self.analyse_and_report(job, &plan, &mut outcome) {
-                Err(StageStop::Failed(failure))
-                    if failure.code == FailureCode::AnalysisFailed
-                        && plan.retry_analysis
-                        && tries < plan.max_attempts.max(1) =>
-                {
-                    self.warn(
-                        job,
-                        "analysis_retry",
-                        &format!("{}; the stages are run again", failure.message),
-                    );
+        let items = items_for(&plan);
+        let inputs = timing::inputs_of(job, self.env.triage.load_scale());
+        let rules = Timing::default();
+        let limits: Vec<Duration> = items
+            .iter()
+            .map(|item| Duration::from_secs(rules.of(&item.kind, &plan, &inputs).limit_s))
+            .collect();
+        let work = Mutex::new(JobWork::new(plan.clone(), outcome));
+        'tries: loop {
+            self.begin_analyse(job, &plan)?;
+            for (index, item) in items.iter().enumerate() {
+                if item.kind.is_analyse() {
+                    self.cancel_point(job)?;
+                    self.run_item(job, &work, &item.kind, limits[index])?;
                 }
-                other => break other?,
             }
-        };
-        let _ = analysed;
-        self.cancel_point(job)?;
-        store
-            .begin_stage(&job.id, Stage::Cleanup)
-            .map_err(|e| self.store_error(Stage::Cleanup, e))?;
-        self.tag_library(job, &frozen);
-        self.end_job(job, outcome, None)
+            if self.end_analyse(job, &mut lock(&work))? == PhaseEnd::Again {
+                continue 'tries;
+            }
+            if let Some(index) = items.iter().position(|i| i.kind == ItemKind::Report) {
+                self.begin_report(job)?;
+                self.run_item(job, &work, &ItemKind::Report, limits[index])?;
+                if self.end_report(job, &mut lock(&work))? == PhaseEnd::Again {
+                    continue 'tries;
+                }
+            }
+            break;
+        }
+        let work = lock(&work);
+        self.conclude(job, &work)
     }
 
     /// `[verdict] tag_library` (coordinator decision for 0.9.0, design
@@ -147,7 +164,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// `auto:policy=<name>`, written under the automation actor
     /// (`auto:policy-<name>`) in its custody chain. A tag that cannot be
     /// written is a warning; the job does not fail for it.
-    fn tag_library(&mut self, job: &Job, frozen: &crate::config::LoadedPolicy) {
+    pub(super) fn tag_library(&mut self, job: &Job, frozen: &crate::config::LoadedPolicy) {
         if !frozen.policy.verdict.tag_library {
             return;
         }
@@ -173,75 +190,7 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    /// `analyse` then `report`, each with its records; a problem in a stage
-    /// the policy does not require is a warning and makes the job `partial`.
-    fn analyse_and_report(
-        &mut self,
-        job: &Job,
-        plan: &HostPlan,
-        outcome: &mut Outcome,
-    ) -> Result<Analysed, StageStop> {
-        let store = self.env.store;
-        let mut analysed = Analysed {
-            scan: None,
-            problems: Vec::new(),
-            incomplete: Vec::new(),
-        };
-        if plan.analyse_skipped() {
-            self.skip_stage(job, Stage::Analyse)?;
-            // Triage did not run: the job still gets its (inconclusive) label.
-            let mut none = Vec::new();
-            self.assess(job, None, &mut none)?;
-        } else {
-            analysed = self.stage(job, Stage::Analyse, false, |this| this.analyse(job, plan))?;
-            store
-                .end_stage(&job.id, StageStatus::Finished)
-                .map_err(|e| self.store_error(Stage::Analyse, e))?;
-            for problem in &analysed.problems {
-                self.warn(job, "analysis_failed", problem);
-            }
-            for note in &analysed.incomplete {
-                self.warn(job, "static_check_incomplete", note);
-            }
-            if !analysed.problems.is_empty() || !analysed.incomplete.is_empty() {
-                *outcome = Outcome::Partial;
-            }
-        }
-        self.cancel_point(job)?;
-        if plan.report_skipped() {
-            self.skip_stage(job, Stage::Report)?;
-            return Ok(analysed);
-        }
-        match self.stage(job, Stage::Report, false, |this| {
-            this.report(job, plan, &analysed)
-        }) {
-            Ok(_) => {
-                store
-                    .end_stage(&job.id, StageStatus::Finished)
-                    .map_err(|e| self.store_error(Stage::Report, e))?;
-            }
-            Err(StageStop::Failed(failure)) if !plan.requires(Stage::Report) => {
-                self.warn(
-                    job,
-                    "report_failed",
-                    &format!(
-                        "{}{}",
-                        failure.message,
-                        failure
-                            .detail
-                            .as_deref()
-                            .map(|d| format!(": {d}"))
-                            .unwrap_or_default()
-                    ),
-                );
-                *outcome = Outcome::Partial;
-            }
-            Err(other) => return Err(other),
-        }
-        Ok(analysed)
-    }
-
-    fn skip_stage(&mut self, job: &Job, stage: Stage) -> Result<(), StageStop> {
+    pub(super) fn skip_stage(&mut self, job: &Job, stage: Stage) -> Result<(), StageStop> {
         let store = self.env.store;
         store
             .begin_stage(&job.id, stage)
@@ -250,7 +199,7 @@ impl<E: Engine> LaneStages<'_, E> {
             .map_err(|e| self.store_error(stage, e))
     }
 
-    fn settle_host(
+    pub(crate) fn settle_host(
         &mut self,
         job: &Job,
         result: Result<(Job, Option<String>), StageStop>,

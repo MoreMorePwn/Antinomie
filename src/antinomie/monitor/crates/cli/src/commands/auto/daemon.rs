@@ -123,6 +123,7 @@ pub fn run(arguments: &DaemonArgs, context: &Context) -> Result<Reply, CliError>
     options.owner = OwnerClaim {
         kind: OwnerKind::Daemon,
         socket: Some(socket.clone()),
+        lane: None,
     };
     let backend = Backend::new(options.clone())
         .map_err(|message| CliError::from_engine_start(&data_dir, &message))?;

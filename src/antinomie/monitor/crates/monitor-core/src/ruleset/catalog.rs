@@ -131,6 +131,7 @@ pub fn load_catalog(data_dir: &Path) -> Result<Option<Catalog>, String> {
 }
 
 pub fn store_catalog(data_dir: &Path, catalog: &Catalog) -> Result<(), String> {
+    super::refuse_lane(data_dir)?;
     let root = rules_root(data_dir);
     crate::storage::private_dir(&root).map_err(|error| error.to_string())?;
     if catalog.schema == CATALOG_SCHEMA_SOURCES {

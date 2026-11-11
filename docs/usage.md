@@ -38,6 +38,11 @@ versions; existing VMs keep their pinned base.
   installed; otherwise **Tools > Analysis tools** downloads them for Antinomie. The Properties tab
   computes ssdeep and TLSH itself; it also shows Magika's file type when
   **Tools > Analysis tools** has installed Magika (or the system has it)
+- Embedded content (the signature scan of the Static analysis page) runs
+  `binwalk` from `/usr/bin` or `/usr/local/bin`; Antinomie does not download it.
+  It is optional: without it that section says binwalk is not installed and the
+  rest of the analysis is unaffected. On Debian/Ubuntu: `sudo apt install binwalk`.
+  **Tools > App dependencies** lists it (as optional) and adds it to the install command.
 - The Network tab (packet list and details), Wireshark packet display filters
   and network triage use the installed `tshark` command with `prlimit`
   resource limits; Antinomie decodes no protocol itself. On Debian/Ubuntu install
@@ -1214,7 +1219,8 @@ The network capture is the guest's own view on every route.
   hidden-process scan, TCP/UDP sockets, triage, indicators, findings, malfind,
   YARA, IOCs, syscall table, modules, kernel log, shell history, timeline and
   files recovered from the page cache). A run is saved with its dump and keeps
-  the dump's identity; it is listed beside Volatility's runs, opens in the same
+  the dump's identity (a run goes on, and its result is ready, while another tab is
+  shown); it is listed beside Volatility's runs, opens in the same
   table, text and Messages views, and its **Files** button opens the folder with
   MemNixFS's raw export (recovered files included), to copy or save from. MemNixFS reads only a dump of the
   guest's whole physical memory: QEMU `dump-guest-memory` ELF cores (what
@@ -1991,7 +1997,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   required one is missing. Without `--require` the tools the window also treats as
   required count; a missing KVM is a warning (VMs then run with TCG). Tool names:
   `qemu`, `qemu-img`, `gtk`, `kvm`, `curl`, `debian-account`, `bubblewrap`,
-  `tshark`, `prlimit`, `suricata`, `python-venv`, `wireshark`, `file-chooser`.
+  `tshark`, `prlimit`, `suricata`, `python-venv`, `wireshark`, `binwalk`, `file-chooser`.
 - `capabilities` prints the API version, the app version and revision, the lane
   count, the report formats and the accelerator (`kvm` or `tcg`).
 - `doctor` also reports who owns the data directory (`data_dir.owner`, from
@@ -2227,6 +2233,15 @@ it for as long as it runs.
 
 The pipeline, policies, retention, failure codes and troubleshooting are in
 [Auto mode](auto-mode.md); this section lists the commands.
+
+**Pipelining.** The VM is free as soon as a job's recording is collected: the
+next job starts in the VM while the previous job's host work (each static tool,
+the Triage scan, detection, the label and the report) runs in the host work
+pool, at most `[daemon] host_workers` items at once (2), first come, first
+served by job arrival. Each item may take twice its expected time
+(`[daemon] host_time_factor`); `auto status <job>` lists the items with their
+state, expected time and limit, and `auto status` the pool's queue
+([Auto mode](auto-mode.md#the-host-work-pool)).
 
 **The daemon.** `antinomie-cli --data-dir ~/auto auto daemon` runs in the
 foreground until it is stopped; put it in the background with your service

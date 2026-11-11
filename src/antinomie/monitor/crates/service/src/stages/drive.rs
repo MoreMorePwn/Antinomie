@@ -88,7 +88,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     /// Arm the waiter's cancel hook for `job`: a subscription to the store's
     /// `job.state` events that turns true on this job's `cancelling`.
-    pub(super) fn cancel_hook(&mut self, job: &Job) {
+    pub(crate) fn cancel_hook(&mut self, job: &Job) {
         let events = self.env.store.subscribe();
         let id = job.id.clone();
         self.waiter.cancel_when(true, move || {

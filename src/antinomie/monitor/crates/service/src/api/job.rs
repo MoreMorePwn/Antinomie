@@ -282,6 +282,53 @@ pub struct Job {
     pub failure: Option<Failure>,
     pub repeat_of: Option<JobId>,
     pub labels: BTreeMap<String, String>,
+    /// The host work items of the job (pipelined host stages, ANT-T0454):
+    /// empty until `collect` has handed the job to the host work pool.
+    #[serde(default)]
+    pub host_work: Vec<HostItem>,
+}
+
+/// Where a host work item is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostItemState {
+    /// In the pool's queue (first come, first served by job arrival).
+    Queued,
+    Running,
+    Done,
+    /// It ended with a problem (a warning of the job, or its failure when the
+    /// policy requires the stage).
+    Failed,
+    /// It passed its time limit and was stopped.
+    TimedOut,
+    /// Not run: the job ended first (cancelled, failed, past its deadline).
+    Skipped,
+}
+
+/// One piece of a job's host processing: a static tool (`static:floss`,
+/// `static:decompilation`, ...), `triage`, `detection`, `assess` (digest and
+/// label) or `report`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostItem {
+    pub name: String,
+    pub state: HostItemState,
+    /// Names of the items it waits for.
+    #[serde(default)]
+    pub after: Vec<String>,
+    /// The expected time (seconds): this host's recent median of the item,
+    /// else an estimate from the input size, else the fixed limit.
+    pub expected_s: u64,
+    /// Where `expected_s` came from: `median`, `estimate`, `fixed` or
+    /// `policy` (a fixed limit the policy or the job set).
+    pub basis: String,
+    /// Its own time limit (seconds): `daemon.host_time_factor` x
+    /// `expected_s`, or the policy's fixed limit. Time in the queue does not
+    /// count.
+    pub limit_s: u64,
+    pub started_ms: Option<u64>,
+    pub finished_ms: Option<u64>,
+    /// A problem in words, when it had one.
+    pub note: Option<String>,
 }
 
 /// The result of `job.submit`: the stored job, plus `replayed` when an

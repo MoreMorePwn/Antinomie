@@ -40,8 +40,9 @@ struct Stored {
     entries: Vec<Entry>,
 }
 
+/// Lane 0's list for a lane data folder: the lanes share the IOC data.
 fn path(data_dir: &Path) -> PathBuf {
-    data_dir.join(FILE)
+    crate::lanes::shared_root(data_dir).join(FILE)
 }
 
 /// Every entry, oldest first. A missing or unreadable file is an empty list.
@@ -54,6 +55,7 @@ pub fn load(data_dir: &Path) -> Vec<Entry> {
 }
 
 fn store(data_dir: &Path, entries: Vec<Entry>) -> Result<(), String> {
+    crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::KnownFalsePositives)?;
     std::fs::create_dir_all(data_dir)
         .map_err(|error| format!("{}: {error}", data_dir.display()))?;
     crate::storage::atomic_json(&path(data_dir), &Stored { schema: 1, entries })

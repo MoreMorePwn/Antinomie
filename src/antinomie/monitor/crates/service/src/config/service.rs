@@ -4,6 +4,16 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// `daemon.host_workers` when it is not set.
+pub const DEFAULT_HOST_WORKERS: u32 = 2;
+/// The most `daemon.host_workers` may be: the engine keeps eight standalone
+/// static analyses in its snapshot, and every static item is one of them.
+pub const MAX_HOST_WORKERS: u32 = 8;
+/// `daemon.host_time_factor` when it is not set.
+pub const DEFAULT_HOST_TIME_FACTOR: f64 = 2.0;
+/// The largest `daemon.host_time_factor`.
+pub const MAX_HOST_TIME_FACTOR: f64 = 20.0;
+
 /// What the daemon does on SIGTERM.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -15,15 +25,20 @@ pub enum Shutdown {
     Drain,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Daemon {
     /// Default `<data>/run/antinomie.sock`.
     pub socket: Option<PathBuf>,
     /// Values above 1 fail `unsupported` (decided D4).
     pub lanes: u32,
-    /// Default `min(4, cpus/4)`, at least 1.
+    /// Host work items run at once, across every job and lane (the host work
+    /// pool, ANT-T0454). Default 2; 1 to [`MAX_HOST_WORKERS`].
     pub host_workers: Option<u32>,
+    /// A host work item's time limit is this many times its expected time;
+    /// the job's host-stage deadline is this many times the expected work
+    /// ahead of it plus its own. Default 2, at least 1.
+    pub host_time_factor: Option<f64>,
     pub shutdown: Shutdown,
     pub drain_timeout_s: u32,
     /// At shutdown, how long a job already in its host stages (`analyse`,
@@ -38,6 +53,7 @@ impl Default for Daemon {
             socket: None,
             lanes: 1,
             host_workers: None,
+            host_time_factor: None,
             shutdown: Shutdown::Cancel,
             drain_timeout_s: 600,
             shutdown_host_grace_s: 120,
@@ -331,7 +347,7 @@ pub struct Log {
 }
 
 /// The whole of `service.toml`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ServiceConfig {
     pub daemon: Daemon,
@@ -364,12 +380,21 @@ impl ServiceConfig {
             .unwrap_or_else(|| data_dir.join("inbox"))
     }
 
-    /// Parallel host workers: the configured number, else `min(4, cpus/4)`,
-    /// at least 1.
-    pub fn host_workers(&self, cpus: usize) -> u32 {
+    /// Host work items at once: the configured number, else
+    /// [`DEFAULT_HOST_WORKERS`] (user decision 2026-11-11).
+    pub fn host_workers(&self) -> u32 {
         self.daemon
             .host_workers
-            .unwrap_or_else(|| (cpus / 4).clamp(1, 4) as u32)
+            .unwrap_or(DEFAULT_HOST_WORKERS)
+            .clamp(1, MAX_HOST_WORKERS)
+    }
+
+    /// `daemon.host_time_factor`, else [`DEFAULT_HOST_TIME_FACTOR`].
+    pub fn host_time_factor(&self) -> f64 {
+        self.daemon
+            .host_time_factor
+            .filter(|f| f.is_finite() && *f >= 1.0)
+            .unwrap_or(DEFAULT_HOST_TIME_FACTOR)
     }
 
     /// The free-RAM floor for a lane VM with `vm_ram_mib`: the configured
