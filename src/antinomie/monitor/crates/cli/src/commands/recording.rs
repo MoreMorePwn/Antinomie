@@ -10,9 +10,9 @@ use crate::{
 };
 use antinomie_monitor_core::{
     RunSummary,
-    recording::{find_run_read_only, list_runs_read_only, read_only_locations},
+    recording::{find_run_read_only, list_runs_read_only},
 };
-use antinomie_service::query::key::RunKey;
+use antinomie_service::{daemon::lanes::read_locations, query::key::RunKey};
 use antinomie_triage::{ArchiveScan, SavedRun, scan_progress::ScanProgress};
 use serde_json::{Value, json};
 use std::{
@@ -30,10 +30,11 @@ pub const RUN_HELP: &str = "The run: its id or the first characters of it (see `
 /// Shortest run-id prefix that is looked up.
 pub const RUN_PREFIX: usize = 4;
 
-/// Every saved run of the data directory, deleted VMs with kept recordings
-/// included. A VM that cannot be read does not hide the others.
+/// Every saved run of the data directory and of its lanes' folders
+/// (`<data>/lanes/N/`), deleted VMs with kept recordings included. A VM that
+/// cannot be read does not hide the others.
 pub fn list_all_runs(context: &Context) -> Result<Vec<RunSummary>, CliError> {
-    let locations = read_only_locations(&context.options)
+    let locations = read_locations(&context.options)
         .map_err(|error| CliError::internal(format!("cannot list the recordings: {error}")))?;
     let mut runs = Vec::new();
     for location in &locations {
@@ -44,14 +45,14 @@ pub fn list_all_runs(context: &Context) -> Result<Vec<RunSummary>, CliError> {
     Ok(runs)
 }
 
-/// The saved run `text` names. Every VM of the data directory is searched,
-/// deleted ones with kept recordings included.
+/// The saved run `text` names. Every VM of the data directory and of its
+/// lanes' folders is searched, deleted ones with kept recordings included.
 pub fn find_run(context: &Context, text: &str) -> Result<RunSummary, CliError> {
     let text = text.trim();
     if text.is_empty() {
         return Err(CliError::invalid("RUN is empty").with_field("run"));
     }
-    let locations = read_only_locations(&context.options)
+    let locations = read_locations(&context.options)
         .map_err(|error| CliError::internal(format!("cannot list the recordings: {error}")))?;
     let key = RunKey::try_from(text.to_owned()).ok().or_else(|| {
         text.contains(':')
@@ -60,15 +61,28 @@ pub fn find_run(context: &Context, text: &str) -> Result<RunSummary, CliError> {
     });
     if let Some(key) = key {
         let (vm_id, boot_id, run_id) = key.parts();
-        let run = locations
+        let mut found: Vec<RunSummary> = locations
             .iter()
             .filter(|location| location.vm_id == vm_id)
-            .find_map(|location| {
+            .filter_map(|location| {
                 find_run_read_only(location, &boot_id, &run_id)
                     .ok()
                     .flatten()
-            });
-        return run.ok_or_else(|| {
+            })
+            .collect();
+        // Two lanes' folders with the same run (a VM folder copied by hand):
+        // refused, never guessed.
+        if found.len() > 1 {
+            return Err(CliError::new(
+                ErrorCode::Conflict,
+                format!(
+                    "run {run_id} of VM {vm_id} is in {} data folders (lanes); remove the copy",
+                    found.len()
+                ),
+            )
+            .with_field("run"));
+        }
+        return found.pop().ok_or_else(|| {
             CliError::not_found(format!("no run {run_id} of VM {vm_id} in boot {boot_id}"))
                 .with_field("run")
         });

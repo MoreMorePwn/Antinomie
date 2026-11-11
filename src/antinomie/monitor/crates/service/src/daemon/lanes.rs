@@ -30,7 +30,10 @@ use crate::{
     },
     lane::LaneDir,
 };
-use antinomie_monitor_core::{BackendOptions, lanes as core_lanes};
+use antinomie_monitor_core::{
+    BackendOptions, VmLocations, lanes as core_lanes,
+    recording::{RecordingError, read_only_locations},
+};
 use std::path::{Path, PathBuf};
 
 pub use crate::config::service::MAX_LANES;
@@ -64,6 +67,50 @@ pub fn lane_options(first: &BackendOptions, lane: &LaneId) -> BackendOptions {
         }
         _ => first.clone(),
     }
+}
+
+/// The data folders the reads look in (multi-lane card D): lane 1's
+/// (`first`), then every lane folder under it that carries its lane record
+/// (`auto init --lane N` made it), in lane order. A lane that `daemon.lanes`
+/// no longer starts is still read: its runs stay where its jobs left them.
+/// A folder whose record does not read, names another lane, or resolves
+/// outside `first`'s `lanes/` (a link to another place) is not read.
+/// `first` being a lane folder itself (a command pointed at `lanes/N`) reads
+/// only that lane.
+pub fn read_lanes(first: &BackendOptions) -> Vec<(LaneId, BackendOptions)> {
+    match core_lanes::lane_of(&first.data_dir) {
+        Ok(Some(lane)) => return vec![(LaneId::new(lane.lane), first.clone())],
+        // A record that does not read: the folder alone, as before lanes.
+        Err(_) => return vec![(LaneId::new(1), first.clone())],
+        Ok(None) => {}
+    }
+    let mut found = vec![(LaneId::new(1), first.clone())];
+    let Ok(root) = std::fs::canonicalize(&first.data_dir) else {
+        return found;
+    };
+    for lane in core_lanes::lanes(&root) {
+        let id = LaneId::new(lane.lane);
+        if lane.shared_root == root && lane.data_dir == core_lanes::lane_dir(&root, lane.lane) {
+            found.push((id.clone(), lane_options(first, &id)));
+        }
+    }
+    found
+}
+
+/// Where every VM of every lane in [`read_lanes`] keeps its disk and
+/// recordings, lane by lane, each read without writing. Lane 1's folder that
+/// cannot be read is an error; another lane's is left out, so one lane
+/// cannot hide the others.
+pub fn read_locations(first: &BackendOptions) -> Result<Vec<VmLocations>, RecordingError> {
+    let mut all = Vec::new();
+    for (index, (_, options)) in read_lanes(first).iter().enumerate() {
+        match read_only_locations(options) {
+            Ok(found) => all.extend(found),
+            Err(error) if index == 0 => return Err(error),
+            Err(_) => {}
+        }
+    }
+    Ok(all)
 }
 
 /// A lane the plan starts.
