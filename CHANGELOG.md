@@ -49,6 +49,12 @@ x86 programs by their own table.
   - Deleting a base is refused while a VM of any lane is built on it. The window refuses to
     open a lane's folder and names lane 0's instead.
 
+- **binwalk is listed in the requirements (ANT-T0458).** Embedded content has always needed
+  binwalk on the host, but **Tools > App dependencies**, its install command and
+  `antinomie-cli doctor` did not name it. It is now an optional requirement (purpose: the
+  Embedded content signature scan; `binwalk` is also a `doctor --require` name; apt, dnf, pacman
+  and zypper package `binwalk`). A test fails when the analysis code names a host program
+  that is neither in the list nor a base utility (`file`, `objdump`, `readelf`, `python3`).
 - **Commands find a daemon at the configured socket, and the CLI documents match the code (ANT-T0451).**
   - A command that reaches the daemon now resolves the socket as the daemon does:
     `--socket`, else `[daemon] socket` of `<data>/service.toml`, else
