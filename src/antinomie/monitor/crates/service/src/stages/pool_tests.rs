@@ -3,22 +3,26 @@
 //! recording fixture, a `FakeEngine` behind the multiplexed connection, a
 //! manual clock. Order, the pool limit, the memory wait, cancel and restart
 //! mid host work, and the item limits (an item at 1.5 x its estimate
-//! finishes, one at 2.1 x is stopped; queue time does not count).
+//! finishes, one at 2.1 x is stopped; queue time does not count), and jobs
+//! of several lanes in one pool, in arrival order (ANT-T0455 card C).
 use super::{
-    host_tests::{Hooked, collected, real, world, world_with},
+    host_tests::{Hooked, attach_on, collected, real, recording, world, world_with},
     items::{ItemKind, JobWork},
     tests::{SECOND, W},
     timing::{Inputs, Timing},
 };
 use crate::{
-    api::job::{HostItemState, Job, JobState, Outcome},
+    api::{
+        ids::LaneId,
+        job::{EndReason, HostItemState, Job, JobState, Outcome},
+    },
     clock::Clock,
     daemon::Controls,
     engine::{FakeEngine, Mux, fake::Unscripted},
     lane::LaneDir,
     pool::{HostPool, PoolEnv},
     resources::Probes,
-    store::{Store, tests::manager},
+    store::{Eligibility, Store, tests::manager},
     waiter::Waiter,
 };
 use std::{
@@ -197,6 +201,86 @@ fn queued_jobs_go_through_the_pool_oldest_first_and_every_item_is_shown() {
     assert!(last_a <= first_b, "{last_a} > {first_b}");
     // A job is terminal in the store a moment before it leaves the pool.
     rig.until("both jobs to leave the pool", |r| r.pool.status().jobs == 0);
+    rig.stop();
+}
+
+/// A collected job of lane `n`, 1 ms after the one before it; lane `n` has
+/// its own lane file with the entry `collect` leaves (several lanes, ANT-T0455
+/// card C).
+fn arrived_on(w: &W, job: u8, n: u32) -> Job {
+    let on = LaneId::new(n);
+    if w.lanes.load(&on).unwrap().is_none() {
+        let mut file = crate::lane::tests::file();
+        file.lane = on.clone();
+        file.vm_id = format!("auto-{n}");
+        w.lanes.save(&file).unwrap();
+    }
+    w.fx.clock.advance(1);
+    let queued = w.fx.queued(job);
+    let claimed =
+        w.fx.store
+            .claim_next(&on, &mut |_| Eligibility::Ready)
+            .unwrap()
+            .unwrap();
+    assert_eq!(claimed.id, queued.id);
+    assert_eq!(claimed.lane.as_ref(), Some(&on));
+    let dir = recording(w, claimed.sample.as_ref().unwrap().sha256.as_str(), true);
+    attach_on(w, &claimed, &dir, EndReason::Exited, &on);
+    claimed
+}
+
+#[test]
+fn jobs_of_several_lanes_share_one_pool_in_arrival_order() {
+    let w = world("pool-lanes");
+    // Arrival: lane 2's job, then lane 1's, then lane 3's.
+    let jobs = [
+        arrived_on(&w, 1, 2),
+        arrived_on(&w, 2, 1),
+        arrived_on(&w, 3, 3),
+    ];
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let triage = Hooked {
+        opened: Some(Arc::clone(&opened)),
+        ..hooked(&w)
+    };
+    // One worker, so the order the runs are opened in is the order the items
+    // start in. The lanes hand their jobs over out of arrival order.
+    let mut rig = make_held_rig(&w, 1, triage);
+    for index in [2, 0, 1] {
+        rig.pool.admit(&jobs[index], Outcome::Succeeded);
+    }
+    assert_eq!(rig.pool.status().jobs, 3);
+    rig.start();
+    rig.until("the jobs to end", |r| jobs.iter().all(|j| r.terminal(j)));
+    for job in &jobs {
+        let done = rig.job(job);
+        assert_eq!(done.state, JobState::Succeeded, "{:?}", done.warnings);
+        assert_eq!(done.lane, job.lane, "a job keeps its lane");
+        assert!(
+            done.host_work
+                .iter()
+                .all(|i| i.state == HostItemState::Done)
+        );
+    }
+    // Every item of an older job started before any item of a newer one,
+    // whatever lane each came from.
+    let mut order: Vec<_> = opened.lock().unwrap().clone();
+    assert!(!order.is_empty());
+    order.dedup();
+    let arrival: Vec<_> = jobs.iter().map(|j| j.id.clone()).collect();
+    assert_eq!(order, arrival, "grouped by job, in arrival order");
+    // Each lane's file lets its own job go.
+    rig.until("every lane file to let its job go", |_| {
+        (1..=3).all(|n| {
+            w.lanes
+                .load(&LaneId::new(n))
+                .unwrap()
+                .unwrap()
+                .collected
+                .is_empty()
+        })
+    });
+    rig.until("the jobs to leave the pool", |r| r.pool.status().jobs == 0);
     rig.stop();
 }
 

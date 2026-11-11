@@ -259,6 +259,12 @@ fn one_lane_starts_only_lane_1_whatever_lane_files_exist() {
 
 // ---- the lane choice ------------------------------------------------------
 
+/// A fixture whose policy also accepts shell scripts (sample 20); the
+/// shipped policy takes ELF files only.
+fn scripts_too(name: &str) -> Fx {
+    Fx::with_policy(name, |policy| policy.sample.accept_types.push("sh".into()))
+}
+
 fn profile(n: u32, base_id: &str, arch: GuestArch) -> LaneProfile {
     LaneProfile {
         vm_id: vm_of(n),
@@ -343,7 +349,7 @@ fn the_least_recently_used_free_lane_takes_the_job_and_a_busy_one_waits() {
 
 #[test]
 fn a_lane_that_cannot_run_the_job_leaves_it_to_one_that_can() {
-    let fx = Fx::new("lanes-board-fit");
+    let fx = scripts_too("lanes-board-fit");
     // Sample 1 is an x86-64 ELF, sample 20 a shell script.
     let elf = fx.queued(1);
     let script = fx.queued(20);
@@ -568,9 +574,14 @@ fn with_lanes(
         }
         // Every lane has posted at least once before the jobs come.
         std::thread::sleep(Duration::from_millis(200));
-        body(&board, &ran);
+        // A failed check still stops the lanes, so the test fails instead of
+        // waiting for their threads.
+        let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&board, &ran)));
         controls.begin_stop();
         board.wake_all();
+        if let Err(panic) = checked {
+            std::panic::resume_unwind(panic);
+        }
     });
     let sent = sent
         .iter()
@@ -705,7 +716,7 @@ fn a_quarantined_lane_takes_nothing_and_the_others_go_on() {
 
 #[test]
 fn an_arm64_lane_leaves_x86_programs_to_the_x86_lane_and_takes_the_scripts() {
-    let fx = Fx::new("lanes-fit-2");
+    let fx = scripts_too("lanes-fit-2");
     let (ran, _) = with_lanes(
         &fx,
         &[X86_BASE, ARM_BASE],

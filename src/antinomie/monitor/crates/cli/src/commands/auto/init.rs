@@ -214,6 +214,28 @@ pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn lane_takes_one_to_four_and_refuses_five() {
+        let parse = |lane: &str| {
+            crate::args::Cli::try_parse_from(["antinomie-cli", "auto", "init", "--lane", lane])
+        };
+        for bad in ["0", "5"] {
+            let error = parse(bad)
+                .err()
+                .unwrap_or_else(|| panic!("--lane {bad} parsed"));
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ValueValidation,
+                "{bad}: {error}"
+            );
+            assert!(error.to_string().contains("1..=4"), "{error}");
+        }
+        for good in ["1", "4"] {
+            assert!(parse(good).is_ok(), "--lane {good}");
+        }
+    }
 
     #[test]
     fn the_default_policy_points_at_the_lane_and_still_validates() {
