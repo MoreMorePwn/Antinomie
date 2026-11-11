@@ -385,6 +385,30 @@ class PlanTests(unittest.TestCase):
         self.assertIn("--old-base", vm.missing(by_name["uring-legacy"], ctx))
         self.assertIsNone(vm.missing(by_name["debug-p2"], ctx))
 
+    def test_a_busybox_tier_that_passes_exits_0(self):
+        # The quick tier on an arm64 (or x86-64) BusyBox base: conf-quick passes, nic-routed needs a
+        # Debian base. That SKIP is not applicable and the tier exits 0; a missing --old-base still fails.
+        with tempfile.TemporaryDirectory() as tmp:
+            args = vm.parse(["quick", "/base", "--arch", "arm64", "--out", tmp, "--min-free", f"{tmp}:0",
+                             "--max-used-gb", "1000000"])
+            ctx = {**self.ctx(), "out": Path(tmp), "results": {}, "debian_base": False}
+            checks = vm.plan("quick", ctx, "arm64")
+            order = [c.name for c in checks]
+            self.assertEqual(order, ["conf-quick", "nic-routed"])
+            nic = vm.run_check(checks[1], ctx, args, 1)
+            self.assertEqual((nic["status"], nic.get("not_applicable")), ("SKIP", True), nic)
+            self.assertIn("needs a Debian base", nic["detail"])
+            results = {"conf-quick": {"name": "conf-quick", "status": "PASS", "seconds": 278.0,
+                                      "log": f"{tmp}/logs/conf-quick.log"}, "nic-routed": nic}
+            self.assertEqual(vm.exit_code(results, order), 0)
+            self.assertEqual(vm.exit_code({**results, "conf-quick": {**results["conf-quick"], "status": "FAIL"}},
+                                          order), 1)
+            legacy = {c.name: c for c in vm.plan("full", {**ctx, "old_base": None})}["uring-legacy"]
+            skipped = vm.run_check(legacy, {**ctx, "old_base": None}, args, 1)
+            self.assertEqual(skipped["status"], "SKIP")
+            self.assertFalse(skipped.get("not_applicable"))
+            self.assertEqual(vm.exit_code({"uring-legacy": skipped}, ["uring-legacy"]), 1)
+
     def test_an_old_host_on_a_base_of_a_newer_revision_is_not_applicable(self):
         ctx = {**self.ctx(), "base_revision": 20, "old_revision": 18}
         by_name = {c.name: c for c in vm.plan("full", ctx)}
