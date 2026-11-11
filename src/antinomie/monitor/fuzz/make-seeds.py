@@ -181,3 +181,26 @@ put("tool_text", "progress", bytes([1]) + b"    (12.34/100%)")
 put("socket_frames", "requests", b'{"frame":"engine.hello"}\n{"id":1,"op":"health"}\n{"id":2,"op":"job.get","params":{"job_id":"j_01ARZ3NDEKTSV4RRFFQ69G5FAV"}}\n{"id":2,"op":"cancel"}\n')
 put("socket_frames", "upload", b'{"id":3,"op":"upload.put","params":{"upload_id":"u_01ARZ3NDEKTSV4RRFFQ69G5FAV","offset":0,"data":"IyEvYmluL3NoCmVjaG8gaGkK"}}\n')
 put("socket_frames", "subscribe", b'{"id":4,"op":"events.subscribe","params":{"since_gseq":17,"types":["job.state"]}}\n')
+
+# JobSpec JSON: a minimal spec, a full one, and one with an unknown member.
+put("job_spec", "minimal", b'{"sample":{"sha256":"' + b"ab" * 32 + b'"}}')
+put("job_spec", "full", json.dumps({"sample": {"upload_id": "u_01ARZ3NDEKTSV4RRFFQ69G5FAV"}, "name": "a.sh", "policy": "default", "priority": 7,
+    "labels": {"case": "42", "src.x": "y"}, "idempotency_key": "k-1",
+    "overrides": {"timeout_s": 60, "args": ["-v"], "env": ["A=1"], "route": "inet_sim", "memory_dump": True}}).encode())
+put("job_spec", "unknown", b'{"sample":{"path":"/tmp/x"},"evil":1}')
+
+# Policy and service TOML: the shipped default policy text and a small service.toml.
+cfg = (root / "src/antinomie/monitor/crates/service/src/config/mod.rs").read_text()
+if 'DEFAULT_POLICY' in cfg and 'r#"' in cfg:
+    put("config_toml", "default-policy", cfg.split('r#"', 1)[1].split('"#', 1)[0])
+put("config_toml", "policy", '[vm]\nlane_vm = "auto-1"\n[sample]\naccept_types = ["sh", "elf"]\n[network]\nroute = "drop"\nallowed_routes = ["drop", "inet_sim"]\n[[verdict.rule]]\nwhen = "highest_tier == 'high' and counts.processes > 2"\nlabel = "suspicious"\n')
+put("config_toml", "service", '[[watch]]\npath = "/srv/drop"\npolicy = "default"\nrecursive = false\n')
+
+# Watch-folder names, NUL separated.
+put("watch_names", "plain", b"sample.exe\0report (1).sh\0.hidden\0upload.part\0")
+put("watch_names", "hostile", b"a\nb.sh\0\x1b]0;x\x07\0$(id)\0..\0-rf\0bad-\xff.sh\0" + b"n" * 200)
+
+# Label expressions.
+put("label_expr", "simple", b"highest_tier == 'high' and counts.findings >= 1")
+put("label_expr", "nested", b'(families in ["x", "y"] or techniques == "T1059") and counts.files_changed > 10')
+put("label_expr", "bad", b"((counts.processes and) or ")

@@ -1,0 +1,47 @@
+# Allow-list of process starts in non-test code (design A21, scripts/check-command-new.py).
+# <path> <count> <reason>. Nothing here runs a submitted sample on the host:
+# the service starts only the administrator's result hook and the engine's
+# fixed tool workers; samples run inside QEMU guests. Adding a line is a
+# reviewed decision; the check fails on any start not listed.
+src/antinomie/monitor/crates/monitor-core/build.rs 2 build script: git revision, C compiler for the guest helpers
+src/antinomie/monitor/crates/monitor-core/src/analysis/export.rs 1 Ghidra project export through the configured launcher
+src/antinomie/monitor/crates/monitor-core/src/analysis/tools.rs 1 analysis tool workers (fixed tools from the tool registry)
+src/antinomie/monitor/crates/monitor-core/src/analysis_tools.rs 4 tool installation: system python, venv, pip in a private venv
+src/antinomie/monitor/crates/monitor-core/src/backend.rs 1 python3 running the base-build script (scripts/build-base.py)
+src/antinomie/monitor/crates/monitor-core/src/backend/worker_vm_config.rs 1 qemu-img resize of the analysis VM disk
+src/antinomie/monitor/crates/monitor-core/src/build.rs 2 base-image build steps (setxkbmap query, tool --version)
+src/antinomie/monitor/crates/monitor-core/src/builder_vm.rs 4 builder VM: qemu-img, tar, qemu-system
+src/antinomie/monitor/crates/monitor-core/src/container.rs 3 container engine (docker/podman) for builds and tool containers
+src/antinomie/monitor/crates/monitor-core/src/data_move.rs 1 qemu-img rebase when the data folder moves
+src/antinomie/monitor/crates/monitor-core/src/dependencies.rs 2 dependency checks and installs (fixed programs)
+src/antinomie/monitor/crates/monitor-core/src/disks/fixture.rs 3 disk reader fixture helper (qemu-img)
+src/antinomie/monitor/crates/monitor-core/src/disks/measure.rs 2 qemu-img measure, under setpriv when available
+src/antinomie/monitor/crates/monitor-core/src/disks/reader/client.rs 1 sandboxed disk reader worker (bwrap)
+src/antinomie/monitor/crates/monitor-core/src/disks/sandbox.rs 1 bwrap sandbox for qemu-img
+src/antinomie/monitor/crates/monitor-core/src/distribution.rs 1 curl --version probe
+src/antinomie/monitor/crates/monitor-core/src/file_before_store.rs 1 the program itself re-run as the sample copier
+src/antinomie/monitor/crates/monitor-core/src/geoip.rs 1 tshark -G folders
+src/antinomie/monitor/crates/monitor-core/src/geoip/refresh.rs 1 curl download of the GeoIP database
+src/antinomie/monitor/crates/monitor-core/src/guest_account.rs 2 guest-account helper process and group kill
+src/antinomie/monitor/crates/monitor-core/src/http_fetch.rs 1 curl for the feed fetches
+src/antinomie/monitor/crates/monitor-core/src/kit.rs 1 tar/sh when installing the kit
+src/antinomie/monitor/crates/monitor-core/src/memory/memnixfs/mod.rs 1 memnixfs helper binary --help
+src/antinomie/monitor/crates/monitor-core/src/memory/mod.rs 1 memory-forensics python worker started with -I
+src/antinomie/monitor/crates/monitor-core/src/packet_filter.rs 3 tshark and its helpers (sandboxed)
+src/antinomie/monitor/crates/monitor-core/src/route/managed.rs 1 managed route helper binary (administrator-chosen route program)
+src/antinomie/monitor/crates/monitor-core/src/route/qemu.rs 1 qemu -netdev help probe
+src/antinomie/monitor/crates/monitor-core/src/route/tor.rs 1 tor daemon of the tor route
+src/antinomie/monitor/crates/monitor-core/src/samples/chain_export.rs 1 signing tool of the custody export
+src/antinomie/monitor/crates/monitor-core/src/snapshots.rs 3 qemu-img create/rebase/info for snapshots
+src/antinomie/monitor/crates/monitor-core/src/stealth/arm64.rs 1 qemu probe for arm64 stealth settings
+src/antinomie/monitor/crates/monitor-core/src/storage.rs 1 qemu-img info/create/resize/compare for the VM storage
+src/antinomie/monitor/crates/monitor-core/src/toolchain.rs 1 chmod of the unpacked toolchain
+src/antinomie/monitor/crates/monitor-core/src/uefi_disk.rs 4 qemu-img and guestfish for the UEFI disk
+src/antinomie/monitor/crates/monitor-core/src/vm.rs 3 QEMU itself (the guest) and qemu-img
+src/antinomie/monitor/crates/monitor-ui/src/app/debugger/pty.rs 1 the debugger console: the gdb client of the debugger tooling (env cleared), never a sample file on the host
+src/antinomie/monitor/crates/monitor-ui/src/disk_view/dump_actions.rs 2 zenity file dialog
+src/antinomie/monitor/crates/monitor-ui/src/disk_view/extraction.rs 1 zenity file dialog
+src/antinomie/monitor/crates/monitor-ui/src/folders.rs 4 xdg-open and dbus-send to show a folder
+src/antinomie/monitor/crates/monitor-ui/src/network_view/toolbar.rs 2 wireshark / shell helper chosen by the user in the network view
+src/antinomie/monitor/crates/service/src/notify/hook.rs 1 the administrator-configured result hook (design 4.11); the only exec the service makes
+src/antinomie/monitor/crates/triage/src/network.rs 1 timeout-wrapped helper probe (tshark version)

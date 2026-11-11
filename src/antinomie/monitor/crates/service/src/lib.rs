@@ -30,6 +30,8 @@ pub mod custody;
 pub mod daemon;
 /// The seam to the engine, and the fake behind it (design 7.1).
 pub mod engine;
+/// Entry points of the fuzz targets (card P5-2).
+pub mod fuzz_entry;
 /// The library's copy of a sample as a run's host copy (ANT-T0449).
 pub mod host_copy;
 /// Staging, uploads and the common intake checks (card P3-2b).

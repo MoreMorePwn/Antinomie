@@ -32,6 +32,8 @@ mod read_tests;
 pub mod runner;
 pub mod service;
 #[cfg(test)]
+mod t9_tests;
+#[cfg(test)]
 mod tests;
 mod watch_env;
 
