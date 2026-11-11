@@ -18,13 +18,16 @@ pub(crate) mod submit;
 
 #[derive(Subcommand, Debug)]
 pub enum Auto {
-    /// Make the lane: create the lane VM (routed), boot it once, stop it, take
-    /// its clean snapshot, write lanes/lane-1.json and, when there is none, a
-    /// default policy. Runs in this process: stop the daemon first.
+    /// Make a lane: create the lane VM (routed), boot it once, stop it, take
+    /// its clean snapshot, write service/lanes/lane-N.json and, when there is
+    /// none, a default policy. `--lane N` (2 to 4) makes another lane, in
+    /// <data>/lanes/N/, for `daemon.lanes`. Runs in this process: stop the
+    /// daemon first.
     Init(init::Init),
     /// Run the daemon in the foreground until SIGTERM or SIGINT: it owns the
-    /// data folder, runs the queue on the lane and serves the local socket
-    /// (owner only). Put it in the background with a service manager or `&`.
+    /// data folder, runs the queue on its lanes (one by default; `[daemon]
+    /// lanes` in service.toml) and serves the local socket (owner only). Put it
+    /// in the background with a service manager or `&`.
     Daemon(daemon::DaemonArgs),
     /// Submit a file (or a library sample) as a job. Without a daemon, the job
     /// runs in this process and the command exits with its code.
@@ -50,7 +53,7 @@ pub enum Auto {
     /// The queue: status, pause, resume.
     #[command(subcommand)]
     Queue(jobs::Queue),
-    /// The lanes: list, reset, unquarantine.
+    /// The lanes: list, reset, unquarantine (`--lane lane-N`).
     #[command(subcommand)]
     Lane(lanes::Lane),
     /// The policies you may submit to.

@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `auto init` (design 3.4.4, 4.5.3; card P3-5b): the lane VM, its clean
-//! snapshot, `lanes/lane-1.json`, and a default policy when there is none.
+//! snapshot, `service/lanes/lane-N.json`, and a default policy when there is
+//! none.
 //!
-//! It runs in this process and takes the data folder for itself, so it is
-//! refused with exit 21 while the daemon (or the window) owns the folder:
+//! It runs in this process and takes the lane's data folder for itself, so it
+//! is refused with exit 21 while the daemon (or the window) owns the folder:
 //! stop the daemon first. The VM is created routed (each job picks its route;
 //! nothing leaves between runs), never NAT and never isolated.
+//!
+//! `--lane N` (ANT-T0455 card C; 1 to 4, default 1) makes lane N for a daemon
+//! with `daemon.lanes = N` or more. Lane 1's VM lives in the data folder;
+//! lane N's in `<data>/lanes/N/`, built on a base of the data folder (lane N
+//! never installs one). Its default VM name is `auto-N`.
 use super::link::api;
 use crate::{
     commands::{
@@ -34,9 +40,14 @@ pub struct Init {
     /// The base (identity, start of it, or label); optional when exactly one is installed.
     #[arg(long, value_name = "ID")]
     pub base: Option<String>,
-    /// The lane VM's name (the policy's `vm.lane_vm`).
-    #[arg(long, default_value = "auto-1")]
-    pub name: String,
+    /// The lane to make: 1 (the data folder) to 4 (`<data>/lanes/N/`), for
+    /// `daemon.lanes` in service.toml.
+    #[arg(long, value_name = "N", default_value_t = 1,
+          value_parser = clap::value_parser!(u32).range(1..=i64::from(antinomie_service::config::service::MAX_LANES)))]
+    pub lane: u32,
+    /// The lane VM's name (the policy's `vm.lane_vm`) [default: auto-N].
+    #[arg(long)]
+    pub name: Option<String>,
     #[arg(long, default_value_t = 2)]
     pub cpus: u16,
     #[arg(long, default_value_t = 4096, value_name = "N")]
@@ -79,13 +90,18 @@ fn toml_string(text: &str) -> String {
 }
 
 pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
+    let lane = LaneId::new(arguments.lane);
+    let name = arguments
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("auto-{}", arguments.lane));
     let password = if arguments.password_stdin {
         Some(read_password()?)
     } else {
         None
     };
     let create = Create {
-        name: arguments.name.clone(),
+        name: name.clone(),
         base: arguments.base.clone(),
         cpus: arguments.cpus,
         ram_mib: arguments.ram_mib,
@@ -110,7 +126,7 @@ pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
                 .any(|p| p.policy.evidence.core_dump)
                 .then_some(15)
         });
-    let mut engine = DirectEngine::start(context)?;
+    let mut engine = DirectEngine::start_lane(context, Some(&lane))?;
     let made = (|| {
         wait_bases(&mut engine, context.timeout())?;
         let command = create_command(&create, engine.snapshot(), password)?;
@@ -122,9 +138,9 @@ pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
             _ => String::new(),
         };
         let plan = InitPlan {
-            lane: LaneId::new(1),
+            lane: lane.clone(),
             create: command,
-            vm_name: arguments.name.clone(),
+            vm_name: name.clone(),
             base_identity: base,
             snapshot: arguments.snapshot.clone(),
             replace: arguments.replace,
@@ -156,7 +172,7 @@ pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
             .and_then(|mut file| {
                 std::io::Write::write_all(
                     &mut file,
-                    default_policy(&arguments.name, &arguments.snapshot).as_bytes(),
+                    default_policy(&name, &arguments.snapshot).as_bytes(),
                 )
             })
             .map_err(|e| CliError::io(&path, &e))?;
@@ -184,6 +200,12 @@ pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
         human.push_str(&format!(
             "the lane's old VM {old} is kept; set vm.lane_vm in your policies to {:?} and delete the old VM when done\n",
             made.vm_name
+        ));
+    }
+    if arguments.lane > 1 {
+        human.push_str(&format!(
+            "lane {} runs when service.toml has [daemon] lanes = {} or more; it takes the jobs whose policy's lane VM has its base\n",
+            made.lane, arguments.lane
         ));
     }
     Ok(Reply::value(json!({"lane": made, "policy_written": written})).with_human(human))

@@ -2,7 +2,9 @@
 //! `auto lane list/reset/unquarantine` (design 3.4.4; card P3-5b). With a
 //! daemon they go to it (the lane's own thread does the work, when no job
 //! runs); without one `list` reads the lane files and the other two take the
-//! data folder for this command.
+//! lane's data folder for this command. With several lanes (ANT-T0455 card
+//! C) `list` shows every lane, and `--lane lane-N` picks the lane the other
+//! two work on (lane N's own engine).
 use super::link::{self, api};
 use crate::{
     context::Context,
@@ -31,7 +33,7 @@ pub enum Lane {
 
 #[derive(Args, Debug)]
 pub struct LaneArgs {
-    /// The lane [default: lane-1].
+    /// The lane, `lane-N` (or N) [default: lane-1].
     #[arg(long)]
     pub lane: Option<String>,
     /// Confirm (`reset` needs it; `unquarantine` accepts it and does not).
@@ -42,8 +44,12 @@ pub struct LaneArgs {
 fn lane_id(text: Option<&str>) -> Result<LaneId, CliError> {
     match text {
         None => Ok(LaneId::new(1)),
+        Some(number) if number.parse::<u32>().is_ok_and(|n| n >= 1) => {
+            Ok(LaneId::new(number.parse().unwrap_or(1)))
+        }
         Some(text) => LaneId::try_from(text.to_owned()).map_err(|_| {
-            CliError::invalid(format!("{text:?} is not a lane (lane-1)")).with_field("lane")
+            CliError::invalid(format!("{text:?} is not a lane (lane-1, lane-2, ...)"))
+                .with_field("lane")
         }),
     }
 }
@@ -108,7 +114,7 @@ pub fn run(command: &Lane, context: &Context) -> Result<Reply, CliError> {
                 .unwrap_or_default()
         }
         None => {
-            let mut engine = DirectEngine::start(context)?;
+            let mut engine = DirectEngine::start_lane(context, Some(&lane))?;
             let logger = context.logger;
             let done = if op == "lane.reset" {
                 provision::reset_lane(engine.waiter(), &lanes, &lane, &ProcFs, &mut |t| {

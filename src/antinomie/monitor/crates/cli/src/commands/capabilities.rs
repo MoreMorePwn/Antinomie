@@ -2,7 +2,7 @@
 //! `capabilities` (design 5.4.9). This card fills the members that do not
 //! depend on policies or a daemon; `max_sample_bytes`, `accept_*`, `routes`,
 //! `static_checks`, `detection`, `ioc_datasets` and `queries` follow with the
-//! policy and query cards.
+//! policy and query cards. `lanes` is the running daemon's when one answers.
 use crate::{context::Context, error::CliError, output::Reply};
 use antinomie_monitor_core::{
     api::{APP_REVISION, APP_VERSION},
@@ -21,11 +21,21 @@ pub fn run(context: &Context) -> Result<Reply, CliError> {
             .checks
             .iter()
             .any(|check| check.dependency == Dependency::Kvm && check.problem.is_none());
+    // The lanes a running daemon has (`daemon.lanes`, ANT-T0455 card C);
+    // without one, the one lane a command runs.
+    let lanes = match crate::commands::auto::link::daemon(context) {
+        Ok(Some(mut client)) => client
+            .call("capabilities", json!({}))
+            .ok()
+            .and_then(|caps| caps["lanes"].as_u64())
+            .unwrap_or(1),
+        _ => 1,
+    };
     Ok(Reply::value(json!({
         "api_version": API_VERSION,
         "app_version": APP_VERSION,
         "app_revision": APP_REVISION,
-        "lanes": 1,
+        "lanes": lanes,
         "report_formats": REPORT_FORMATS,
         "accelerator": if kvm_usable { "kvm" } else { "tcg" },
         "features": [],
