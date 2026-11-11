@@ -43,7 +43,8 @@ profiles, interop, stress-extreme: see ARM64_LATER).
 BASE is a BusyBox base bundle built from the current guest series; the quick
 tier also runs on a Debian Minimal base (its VMs get a throwaway account and
 the base's minima). The full tier's snapshot-uefi check runs on a Debian base
-only (SKIP on BusyBox): snapshot-check --uefi, the snapshot check on a VM of
+only (SKIP on BusyBox, not applicable, like nic-routed there: neither fails a
+BusyBox tier): snapshot-check --uefi, the snapshot check on a VM of
 the server device profile, whose disk is installed for UEFI and which boots
 through OVMF (AAVMF on arm64) with its own variable store. Everything a check writes goes under --out (default vm-regress-out): logs, runs, the
 fixtures built from tests/monitor and private HOME and XDG folders per check.
@@ -943,7 +944,11 @@ def run_check(check, ctx, args, attempt):
     log.write_text("")
     reason = missing(check, ctx)
     if reason:
-        return {**result, "status": "SKIP", "seconds": 0.0, "detail": reason}
+        # A Debian base's check (nic-routed, snapshot-uefi) on a BusyBox BASE is not a missing
+        # prerequisite but another kind of base: not applicable, so a BusyBox tier can pass.
+        other_base = missing(check, {**ctx, "debian_base": True}) is None
+        return {**result, "status": "SKIP", "seconds": 0.0, "detail": reason,
+                **({"not_applicable": True} if other_base else {})}
     reason = not_applicable(check, ctx)
     if reason:
         return {**result, "status": "SKIP", "seconds": 0.0, "detail": reason, "not_applicable": True}
