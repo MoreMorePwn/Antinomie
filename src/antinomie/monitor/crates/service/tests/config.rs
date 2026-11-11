@@ -362,14 +362,14 @@ fn service_toml_checks_lanes_safety_and_watch_folders() {
         PathBuf::from("/d/run/antinomie.sock")
     );
 
-    let text = "[daemon]\nlanes = 2\n[safety]\nunsafe_routes_ack = \"I understand\"\n\
+    let text = "[daemon]\nlanes = 5\n[safety]\nunsafe_routes_ack = \"I understand\"\n\
                 [[inbox.watch]]\npath = \"relative\"\n[[inbox.watch]]\npath = \"/srv/a\"\ndelete_after = \"keep\"\n";
     let (_, found) = parse_service("service.toml", text);
     let messages: Vec<String> = found.iter().map(|p| p.to_string()).collect();
     assert!(
         messages
             .iter()
-            .any(|m| m.contains(":2:") && m.contains("one lane per node")),
+            .any(|m| m.contains(":2:") && m.contains("must be 1 to 4")),
         "{messages:?}"
     );
     assert!(
@@ -380,6 +380,28 @@ fn service_toml_checks_lanes_safety_and_watch_folders() {
         messages.iter().any(|m| m.contains("absolute path")),
         "{messages:?}"
     );
+}
+
+#[test]
+fn lanes_are_one_by_default_and_one_to_four_when_set() {
+    let (config, found) = parse_service("service.toml", "");
+    assert!(found.is_empty(), "{found:?}");
+    assert_eq!(config.unwrap().daemon.lanes, 1);
+    for lanes in 1..=4 {
+        let (config, found) =
+            parse_service("service.toml", &format!("[daemon]\nlanes = {lanes}\n"));
+        assert!(found.is_empty(), "{lanes}: {found:?}");
+        assert_eq!(config.unwrap().daemon.lanes, lanes);
+    }
+    for lanes in [0, 5, 64] {
+        let (_, found) = parse_service("service.toml", &format!("[daemon]\nlanes = {lanes}\n"));
+        assert!(
+            found
+                .iter()
+                .any(|p| p.key.as_deref() == Some("daemon.lanes") && p.message.contains("1 to 4")),
+            "{lanes}: {found:?}"
+        );
+    }
 }
 
 #[test]
