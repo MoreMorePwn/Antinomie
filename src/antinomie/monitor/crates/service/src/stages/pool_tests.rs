@@ -195,7 +195,8 @@ fn queued_jobs_go_through_the_pool_oldest_first_and_every_item_is_shown() {
         .min()
         .unwrap();
     assert!(last_a <= first_b, "{last_a} > {first_b}");
-    assert_eq!(rig.pool.status().jobs, 0);
+    // A job is terminal in the store a moment before it leaves the pool.
+    rig.until("both jobs to leave the pool", |r| r.pool.status().jobs == 0);
     rig.stop();
 }
 
