@@ -1111,7 +1111,7 @@ prctl.set_dumpable_bad | prctl(option=PR_SET_DUMPABLE, arg2=SUID_DUMP_ROOT, arg3
 prctl.set_dumpable_off | prctl(option=PR_SET_DUMPABLE, arg2=SUID_DUMP_DISABLE, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_dumpable_same | prctl(option=PR_SET_DUMPABLE, arg2=SUID_DUMP_USER, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_name | prctl(option=PR_SET_NAME, arg2="ant-process", arg3=0, arg4=0, arg5=0) = 0 | arg1.name:complete:"ant-process"
-prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5054624, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
+prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=<addr>, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
 prctl.set_no_new_privs | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_no_new_privs_bad_args | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=1, arg4=0, arg5=0) = EINVAL |
 prctl.set_seccomp_filter | prctl(option=PR_SET_SECCOMP, arg2=SECCOMP_MODE_FILTER, arg3={len=1, filter=<addr>}, arg4=0, arg5=0) = 0 | arg2.program:complete:{len=1, filter=<addr>} arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]

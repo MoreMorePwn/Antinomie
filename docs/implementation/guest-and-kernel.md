@@ -1630,13 +1630,21 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   program runs on it. Revision 22 changes nothing the native conformance suite
   renders (the exit hold, non-resident core pages and the specimen digest are
   opt-in; the compat structures are AArch32-only), so the goldens were not
-  re-blessed. One golden value depends on the host that builds the trace
+  re-blessed. One golden value depended on the host that builds the trace
   fixture, not on the base: `prctl.set_name_long`'s `arg2` is the address of
-  the fixture's name string (`PR_SET_NAME`'s argument is an `unsigned long` in
-  the syscall table, so it keeps its value), and a static arm64 fixture
-  linked against another cross C library places `.rodata` elsewhere
-  (Ubuntu's glibc 2.43 cross libc: 64 KiB higher, 5120160 instead of
-  5054624).
+  the fixture's name string, and a static arm64 fixture linked against
+  another cross C library places `.rodata` elsewhere (Ubuntu's glibc 2.43
+  cross libc: 64 KiB higher, 5120160 instead of 5054624). The syscall table
+  types `prctl`'s `arg2` `unsigned long`, so the view showed the address as a
+  decimal number and the golden check kept it. The view now knows the options
+  that pass a pointer there (`PR_SET_NAME`, `PR_GET_NAME`, `PR_GET_PDEATHSIG`,
+  `PR_GET_UNALIGN`, `PR_GET_FPEMU`, `PR_GET_FPEXC`, `PR_GET_ENDIAN`,
+  `PR_GET_TSC`, `PR_GET_CHILD_SUBREAPER`, `PR_GET_TID_ADDRESS`, `PR_GET_AUXV`;
+  `triage/src/values.rs`), shows `arg2` as an address (`0x4d2020`, `NULL`) and
+  the golden check hides it as `<addr>`. `prctl.set_name_long` was re-blessed
+  to `arg2=<addr>` in the four user goldens; the other prctl lines keep their
+  text. `PR_SET_MM`'s address arguments (`arg3` and up), `PR_SET_VMA`'s and
+  the other options with a pointer past `arg2` are not classified yet.
 * **Final revision-21 arm64 bases** (superseded by the revision-22 bases
   above; 2026-11-06, series 0001-0053, `bases/0.9.0-r21-20261105/busybox-arm64`
   and `debian-minimal-arm64`). The

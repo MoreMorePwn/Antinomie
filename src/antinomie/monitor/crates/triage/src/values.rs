@@ -275,14 +275,33 @@ pub fn standard_fd_name(fd: u64) -> Option<&'static str> {
     }
 }
 
+/// Whether `prctl`'s `arg2` is a user pointer for this option. The table types
+/// it `unsigned long` because most options pass a number there; these pass a
+/// `char *` (`PR_SET_NAME`, `PR_GET_NAME`) or the address of an `int` or
+/// `unsigned long` the kernel writes (`PR_GET_PDEATHSIG`, `PR_GET_UNALIGN`,
+/// `PR_GET_FPEMU`, `PR_GET_FPEXC`, `PR_GET_ENDIAN`, `PR_GET_TSC`,
+/// `PR_GET_CHILD_SUBREAPER`, `PR_GET_TID_ADDRESS`, `PR_GET_AUXV`).
+fn prctl_pointer(nr: u64, index: usize, args: &[u64; 6]) -> bool {
+    const POINTER_OPTIONS: [u32; 11] = [2, 5, 9, 11, 15, 16, 19, 25, 37, 40, 0x4155_5856];
+    index == 1
+        && syscalls::syscall(nr).is_some_and(|info| info.name == "prctl")
+        && POINTER_OPTIONS.contains(&(args[0] as u32))
+}
+
 /// Argument `index` of syscall `nr` by meaning. `args` gives the other
-/// arguments some values depend on (socket option names by level).
+/// arguments some values depend on (socket option names by level, the
+/// pointer `prctl` takes for some options).
 pub fn argument(nr: u64, index: usize, args: &[u64; 6]) -> Shown {
     let value = args[index];
     if let Some(name) = syscalls::selector_name(nr, index, args) {
         return Shown::named(name, ValueKind::Flags, format!("{value:#x}"));
     }
-    match meaning(nr, index) {
+    let meaning = if prctl_pointer(nr, index, args) {
+        Meaning::Pointer
+    } else {
+        meaning(nr, index)
+    };
+    match meaning {
         Meaning::Pointer if value == 0 => Shown::new("NULL", ValueKind::Pointer),
         Meaning::Pointer => Shown::new(format!("{value:#x}"), ValueKind::Pointer),
         Meaning::Flags => flags(nr, index, value),
@@ -387,6 +406,38 @@ pub fn thousands(value: u64) -> String {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn prctl_names_are_pointers_in_arg2_and_other_options_stay_numbers() {
+        for abi in [syscalls::Abi::X86_64, syscalls::Abi::Aarch64] {
+            let nr = syscalls::id(abi, syscalls::table(abi).number("prctl").unwrap());
+            for option in [15, 16] {
+                let shown = argument(nr, 1, &[option, 0x4d_2020, 0, 0, 0, 0]);
+                assert_eq!(shown.text, "0x4d2020", "{abi:?} {option}");
+                assert_eq!(shown.kind, ValueKind::Pointer);
+                assert_eq!(argument(nr, 1, &[option, 0, 0, 0, 0, 0]).text, "NULL");
+            }
+            // PR_SET_TIMERSLACK takes a number.
+            let shown = argument(nr, 1, &[29, 50000, 0, 0, 0, 0]);
+            assert_eq!(shown.text, "50000");
+            assert_eq!(shown.kind, ValueKind::Number);
+        }
+        // Only prctl, and only arg2.
+        let nr = syscalls::id(syscalls::Abi::X86_64, 157);
+        assert_ne!(
+            argument(nr, 2, &[15, 0, 0x4d_2020, 0, 0, 0]).kind,
+            ValueKind::Pointer
+        );
+        let lseek = syscalls::table(syscalls::Abi::X86_64)
+            .number("lseek")
+            .unwrap();
+        let shown = argument(
+            syscalls::id(syscalls::Abi::X86_64, lseek),
+            1,
+            &[15, 0x4d_2020, 0, 0, 0, 0],
+        );
+        assert_eq!(shown.kind, ValueKind::Number);
+    }
 
     #[test]
     fn counts_use_thousands_separators() {

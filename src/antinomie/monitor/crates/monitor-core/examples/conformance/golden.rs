@@ -947,6 +947,54 @@ mod tests {
     }
 
     #[test]
+    fn prctl_set_name_hides_the_string_address_in_arg2() {
+        let ids = super::Volatile {
+            ids: Default::default(),
+            work_dir: None,
+            root_device: None,
+            work_device: None,
+        };
+        // The view reports the `char *` as an address; where the string
+        // lives depends on the C library the program was linked with.
+        let argument = |name: &str, text: &str, kind: &str| {
+            serde_json::json!({"name": name, "text": text, "raw": null, "data": null,
+                "decoded": false, "kind": kind, "value": text})
+        };
+        let view: crate::render::CallView = serde_json::from_value(serde_json::json!({
+            "key": [1, 2, 3], "nr": 157, "name": "prctl", "tid": 1, "entry_ns": null,
+            "cells": [], "info": "", "result": "0", "fields": [], "warnings": [],
+            "fallbacks": [],
+            "arguments": [
+                argument("option", "PR_SET_NAME", "selector"),
+                argument("arg2", "0x4d2020", "address"),
+                argument("arg3", "0", "number"),
+            ],
+        }))
+        .unwrap();
+        let case = crate::judge::CaseResult {
+            label: "prctl.set_name_long".into(),
+            seq: 1,
+            nr: 157,
+            name: "prctl".into(),
+            matched: None,
+            args_ok: true,
+            ret_ok: true,
+            data_ok: true,
+            async_ok: None,
+            file_ok: None,
+            success: true,
+            data_args: Vec::new(),
+            why: None,
+            problems: Vec::new(),
+            gaps: Vec::new(),
+        };
+        assert_eq!(
+            super::line(&case, false, &view, &ids),
+            "prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=<addr>, arg3=0) = 0 |"
+        );
+    }
+
+    #[test]
     fn moments_computed_from_the_clock_are_hidden_and_spans_kept() {
         let ids = super::Volatile {
             ids: Default::default(),

@@ -15,6 +15,8 @@ x86 programs by their own table.
 
 ### Host
 
+- **The golden check hides the string address in `prctl(PR_SET_NAME)` (ANT-T0461).** The Syscall Trace view now shows `arg2` of `prctl` as an address for the options that pass a pointer there (`PR_SET_NAME`, `PR_GET_NAME`, `PR_GET_PDEATHSIG`, `PR_GET_TID_ADDRESS` and the other `PR_GET_*` out-parameters), so the conformance golden files hide it as `<addr>` and a fixture built with another C library no longer fails `conf-quick`. `prctl.set_name_long` is re-blessed in the four user goldens.
+
 - **Detection scans a running program every 2 minutes, not on every change, and Scan now scans on request (ANT-T0460).**
   - While a program runs, YARA, IDS and Sigma scanned its evidence each time the recording grew. They now scan at most once per interval: **Settings > Detection rules > While a program runs > Scan every N min**, default 2, at least 2, or off (`live_detection_minutes` in `settings.json`, 0 is off; `antinomie-cli config set live_detection_minutes off` works).
   - The Scan button reads **Scan now** while the run is live; it scans at once and restarts the interval. The scan when the run ends is not delayed. The daemon has no live scans and is unchanged.
