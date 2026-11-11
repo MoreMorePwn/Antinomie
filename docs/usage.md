@@ -1083,6 +1083,16 @@ The network capture is the guest's own view on every route.
   button; in the tab badge it shows as a dash whose hover says "not scanned"
   (a zero would mean the engine scanned and found nothing). A result made with
   an older rule set says "Scanned with an older rule set." with **Rescan**.
+  **Settings > Detection > While a program runs > Scan every N min** (default
+  2 minutes, at least 2, up to 1440; clear the box for off, or `0` in
+  `settings.json` key `live_detection_minutes`, `off` is accepted by
+  `antinomie-cli config set live_detection_minutes off`) paces the scans of a run whose program is still
+  going: the engines scan its evidence at most once per interval, however often
+  the recording grows, and **Scan now** (the Scan button while the run is live)
+  scans what it has recorded so far at once and restarts the interval. With the
+  setting off a running program is scanned only by **Scan now**. The scan when
+  the run ends always happens. The daemon has no live scans: it scans a job
+  after its run.
   A run on a VM that keeps running is scanned as soon as its recording is
   **saved** (its tree ended, its terminal closed, every byte written and its
   pcap segment closed), without a VM stop; until then the engine says "Waiting

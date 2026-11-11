@@ -15,6 +15,10 @@ x86 programs by their own table.
 
 ### Host
 
+- **Detection scans a running program every 2 minutes, not on every change, and Scan now scans on request (ANT-T0460).**
+  - While a program runs, YARA, IDS and Sigma scanned its evidence each time the recording grew. They now scan at most once per interval: **Settings > Detection > While a program runs > Scan every N min**, default 2, at least 2, or off (`live_detection_minutes` in `settings.json`, 0 is off; `antinomie-cli config set live_detection_minutes off` works).
+  - The Scan button reads **Scan now** while the run is live; it scans at once and restarts the interval. The scan when the run ends is not delayed. The daemon has no live scans and is unchanged.
+
 - **Commands find a daemon at the configured socket, and the CLI documents match the code (ANT-T0451).**
   - A command that reaches the daemon now resolves the socket as the daemon does:
     `--socket`, else `[daemon] socket` of `<data>/service.toml`, else
