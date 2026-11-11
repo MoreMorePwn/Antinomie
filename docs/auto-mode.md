@@ -225,6 +225,15 @@ antinomie-cli --data-dir ~/auto auto status    # lane-1: idle ..., lane-2: idle 
   `auto-1` therefore runs on every lane built on lane 1's base.
 * Every lane's host work goes to the one host work pool, first come, first
   served by job arrival; `[daemon] host_workers` is the total for all lanes.
+* A run stays in the folder of the lane that recorded it (`<data>/lanes/N/`
+  for lane N). Every read from the data folder finds the runs of all lanes:
+  `run list` (`--vm`, `--job`), `run show`, `run export`, `triage`, `detect`,
+  `report`, `sample show --runs`, and the `recording.*` operations of the
+  daemon, the same through the daemon and with `--direct`. A lane that
+  `[daemon] lanes` no longer starts is still read. A run's job shows its lane
+  (`auto status JOB`); retention and `auto job delete --with-recording` delete
+  the run in its own lane's folder. A lane folder is read only when its
+  `lane.json` names its place, never through a link.
 
 All the keys are in [service configuration](service-config.md#several-lanes).
 

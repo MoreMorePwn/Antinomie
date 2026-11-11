@@ -2301,7 +2301,10 @@ starts a lane only when the machine has the memory for every lane VM (the log
 and `auto lane list` say why a lane did not start). A job goes to a free lane
 whose base and architecture can run it, the least recently used first; every
 lane's host work goes to the one host work pool. `auto status` and `capabilities`
-show every lane; `auto lane reset` and `unquarantine` take `--lane lane-N`. See
+show every lane; `auto lane reset` and `unquarantine` take `--lane lane-N`. A run
+stays in its lane's folder, and the read commands given the data folder (`run
+list`, `run show`, `run export`, `triage`, `detect`, `report`, `sample show
+--runs`) find the runs of every lane, directly and through the daemon. See
 [Auto mode](auto-mode.md#several-lanes).
 
 **Submitting and following jobs.**
