@@ -16,7 +16,7 @@ x86 programs by their own table.
 ### Host
 
 - **Detection scans a running program every 2 minutes, not on every change, and Scan now scans on request (ANT-T0460).**
-  - While a program runs, YARA, IDS and Sigma scanned its evidence each time the recording grew. They now scan at most once per interval: **Settings > Detection > While a program runs > Scan every N min**, default 2, at least 2, or off (`live_detection_minutes` in `settings.json`, 0 is off; `antinomie-cli config set live_detection_minutes off` works).
+  - While a program runs, YARA, IDS and Sigma scanned its evidence each time the recording grew. They now scan at most once per interval: **Settings > Detection rules > While a program runs > Scan every N min**, default 2, at least 2, or off (`live_detection_minutes` in `settings.json`, 0 is off; `antinomie-cli config set live_detection_minutes off` works).
   - The Scan button reads **Scan now** while the run is live; it scans at once and restarts the interval. The scan when the run ends is not delayed. The daemon has no live scans and is unchanged.
 
 - **Security tests, fuzzing and the process-start gate for Auto mode (ANT-T0387).** New cross-surface tests cover unknown spec members, route and privilege escalation, hostile watch-folder names and links, and log injection. Fuzz targets `job_spec`, `config_toml`, `watch_names` and `label_expr` join `socket_frames`. A watched file name that began with a dot could be stored 101 bytes long; it is now cut to 100. A verdict `when` expression is now limited to 2048 bytes and 32 nested parentheses (a hostile policy overflowed the stack). CI runs `scripts/check-command-new.py`, which fails on a process start that is not on `scripts/command-new-allowlist.txt`.

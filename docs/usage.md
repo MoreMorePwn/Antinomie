@@ -1083,7 +1083,7 @@ The network capture is the guest's own view on every route.
   button; in the tab badge it shows as a dash whose hover says "not scanned"
   (a zero would mean the engine scanned and found nothing). A result made with
   an older rule set says "Scanned with an older rule set." with **Rescan**.
-  **Settings > Detection > While a program runs > Scan every N min** (default
+  **Settings > Detection rules > While a program runs > Scan every N min** (default
   2 minutes, at least 2, up to 1440; clear the box for off, or `0` in
   `settings.json` key `live_detection_minutes`, `off` is accepted by
   `antinomie-cli config set live_detection_minutes off`) paces the scans of a run whose program is still
