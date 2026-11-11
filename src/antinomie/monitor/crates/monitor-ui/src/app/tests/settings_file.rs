@@ -35,6 +35,7 @@ fn customised() -> Settings {
         memory_online_symbols: false,
         sample_hash_lookup: true,
         automatic_detection: false,
+        live_detection_minutes: 10,
         outbound_catalog: true,
         address_lookup: AddressLookup::TsharkThenWhois,
         ..Settings::default()
