@@ -15,6 +15,27 @@ x86 programs by their own table.
 
 ### Host
 
+- **Auto mode pipelines the host work: the VM starts the next job while the last one is analysed (ANT-T0454).**
+  - Once `collect` has finished, the lane releases the VM and claims the next job. The
+    job's host work goes to a host work pool, split into items: each static tool
+    (`static:floss`, `static:decompilation`, ...; Regex with Strings), the Triage scan,
+    detection (YARA, Sigma, IDS), the digest and label (`assess`) and the report, which
+    waits for the others.
+  - At most `[daemon] host_workers` items run at once (now 2 by default, 1 to 8), across
+    every job, strictly first come, first served by job arrival: an older job's items all
+    start before a newer job's, and nothing jumps the head of the queue. An item starts only
+    with 2048 MiB of memory available.
+  - Each item may take `[daemon] host_time_factor` (new, default 2) times its expected
+    time: its recent median on this host, else an estimate from the sample or recording
+    size, else the stage's fixed limit. Time in the queue does not count. A policy's
+    `analysis.static_time_limit_min` still sets a fixed limit when it is given; it is no
+    longer set in the default policy.
+  - `auto status <job>` and the job's `host_work` list every item with its state, expected
+    time and limit; `auto status` and `queue.status` (`host_pool`) show the pool's queue.
+    The lane and the workers share the one engine through a connection that routes each
+    command's result to the thread that sent it.
+  - A stop lets the pool work on for `shutdown_host_grace_s`; what is left resumes in the
+    same order at the next start, keeping static tools that had finished.
 - **Commands find a daemon at the configured socket, and the CLI documents match the code (ANT-T0451).**
   - A command that reaches the daemon now resolves the socket as the daemon does:
     `--socket`, else `[daemon] socket` of `<data>/service.toml`, else

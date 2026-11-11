@@ -32,7 +32,8 @@ instead, and the same `auto submit` then talks to it.
 ## The pipeline
 
 A job moves through nine stages. The VM stages hold the lane; the host stages do
-not, so the next job starts while the previous one is analysed.
+not: once `collect` has finished, the lane releases the VM and starts the next
+job, and the job's host work goes to the **host work pool** (see below).
 
 | Stage | Where | What happens | Deadline |
 |---|---|---|---|
@@ -42,9 +43,43 @@ not, so the next job starts while the previous one is analysed.
 | `launch` | lane | Starts the program in the app terminal with the job's arguments, environment and user | 30 s |
 | `run` | lane | Lets it run until it exits or the run limit (the policy's `run.timeout_s`, at most `run.max_run_s`) | the limit |
 | `collect` | lane | Waits for the network capture, memory dump and core dump to finish, stops the VM, waits until the recording is saved and the disk layer has settled | collect 300 s, stop 120 s, layer 1800 s |
-| `analyse` | host | Static checks of the library copy in bubblewrap, then the Triage scan and the detection engines on the recording | per tool, up to the policy's limit |
-| `report` | host | The assessment, the label and the report files you asked for | 300 s |
+| `analyse` | host | Static checks of the library copy in bubblewrap, the Triage scan and the detection engines on the recording, the digest and the assessment | per item, 2 x its expected time |
+| `report` | host | The report files you asked for | 2 x its expected time |
 | `cleanup` | host | Retention, result files and the command hook | 60 s |
+
+### The host work pool
+
+The host work of a job is split into items: `triage` (the Triage scan), one
+`static:<tool>` item for each static check (`static:strings+regex`: Regex reads
+the strings), `detection` (YARA, Sigma and IDS, after `triage`), `assess` (the
+run's digest and the label, after `triage` and `detection`) and `report` (after
+all of them). At most `[daemon] host_workers` items run at once (2 by default),
+across every job.
+
+* **Order: first come, first served by job arrival.** Every item of an older job
+  starts before any item of a newer one; a job's items start in the order above.
+  The first item waiting is the head of the queue: while it waits for a worker,
+  for the items before it or for memory, nothing behind it starts, so a small
+  item never goes ahead of a heavy one.
+* **Memory.** An item starts only with at least 2048 MiB of `MemAvailable`;
+  below it the head waits (`auto status` says so) and starts when there is room.
+* **Time limits.** Each item has an expected time: its median over the last runs
+  on this host (once it ran three times), else an estimate from the size of the
+  sample (static tools) or of the recording (the others), else the stage's fixed
+  limit. It may take `[daemon] host_time_factor` (2) times that. A policy that
+  sets `analysis.static_time_limit_min` gives every static tool that fixed limit
+  instead. Time spent waiting in the queue, for memory or for the engine to take
+  a static analysis does not count. A job's host stages as a whole may take the
+  factor times the expected work ahead of it when it arrived plus its own; past
+  that the job fails `internal` (`watchdog`).
+* **What you see.** `auto status <job>` lists each item with its state
+  (`queued`, `running`, `done`, `failed`, `timed_out`, `skipped`), expected time
+  and limit; the job's `host_work` member carries the same. `auto status` shows
+  the pool's queue length and running items.
+* **Cancel, stop and restart.** Cancelling a job skips its queued items and stops
+  its running ones at their next wait. At a stop the pool goes on for
+  `shutdown_host_grace_s`; what is left stays `running` and is queued again, in
+  the same order, at the next start (finished static items are kept).
 
 A run that reaches its limit is not a failure: malware often never exits, and the
 job `succeeded` with the run ended at the time limit. A piece of evidence that
@@ -64,8 +99,9 @@ copy with comments is in `packaging/policies/default.toml.example`.
 
 * **Static checks and required checks.** `analysis.static_checks` (`"triage"`
   by default, `"none"` or a list) runs the library copy's tools before the
-  Triage scan. A check that runs out of its time (`analysis.static_time_limit_min`,
-  stretched on a busy host like the guest waits, up to four times) or stops short
+  Triage scan. A check that runs out of its time (2 x its expected time, or
+  `analysis.static_time_limit_min` when the policy sets it, stretched on a busy
+  host like the guest waits) or stops short
   does not fail the job: the job ends `partial` with a `static_check_incomplete`
   warning that names the check. List checks in `analysis.required_checks`
   (default none) to make their timeout, or their being unavailable, a failure of
