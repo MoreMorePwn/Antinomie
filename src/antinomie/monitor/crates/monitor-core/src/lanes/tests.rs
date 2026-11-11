@@ -303,8 +303,10 @@ fn a_lane_reads_lane_1s_engine_and_route_settings_and_never_writes_them() {
         crate::settings::path(&lane),
         tree.shared.join(crate::settings::FILE)
     );
-    let mut settings = crate::settings::EngineSettings::default();
-    settings.quota_gib = 7;
+    let settings = crate::settings::EngineSettings {
+        quota_gib: 7,
+        ..Default::default()
+    };
     crate::storage::atomic_json(&tree.shared.join(crate::settings::FILE), &settings).unwrap();
     assert_eq!(crate::settings::load(&lane).unwrap().unwrap().quota_gib, 7);
     refused(crate::settings::save(&lane, &settings));

@@ -754,6 +754,9 @@ fn an_arm64_lane_leaves_x86_programs_to_the_x86_lane_and_takes_the_scripts() {
 
 // ---- the daemon with several engines --------------------------------------
 
+/// The commands a fake engine was sent.
+type SentLog = Arc<Mutex<Vec<crate::engine::fake::Sent>>>;
+
 struct Rig {
     fx: Fx,
     lines: Arc<Mutex<Vec<String>>>,
@@ -783,13 +786,7 @@ impl Rig {
         }
     }
 
-    fn engines(
-        &self,
-        n: u32,
-    ) -> (
-        Vec<LaneEngine<FakeEngine>>,
-        Vec<Arc<Mutex<Vec<crate::engine::fake::Sent>>>>,
-    ) {
+    fn engines(&self, n: u32) -> (Vec<LaneEngine<FakeEngine>>, Vec<SentLog>) {
         let first = first_options(&self.fx.dir);
         let mut engines = Vec::new();
         let mut logs = Vec::new();
