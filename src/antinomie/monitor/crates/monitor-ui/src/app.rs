@@ -821,6 +821,8 @@ impl eframe::App for MonitorApp {
         if let Some(choices) = self.triage.take_report_choices() {
             self.settings.report_export = choices;
         }
+        // Plugin runs end and results load whichever tab is drawn.
+        self.memory_view.background(ctx);
         self.jobs_tick(ctx);
         let mut close = ctx.input(|input| input.viewport().close_requested())
             || self

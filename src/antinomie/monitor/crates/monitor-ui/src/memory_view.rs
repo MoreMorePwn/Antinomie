@@ -400,7 +400,15 @@ impl MemoryView {
         out
     }
 
-    fn poll(&mut self, ctx: &egui::Context, data_dir: &Path) {
+    /// Everything that must advance whether or not the Memory tab is drawn:
+    /// the result query, and plugin and report runs ending. The app calls it
+    /// every frame; the tab only shows the state it leaves.
+    pub(crate) fn background(&mut self, ctx: &egui::Context) {
+        self.poll_result();
+        self.poll_jobs(ctx);
+    }
+
+    fn poll_result(&mut self) {
         let finished = self
             .loading
             .as_ref()
@@ -435,6 +443,10 @@ impl MemoryView {
         {
             self.cancel_result_load();
         }
+    }
+
+    fn poll(&mut self, ctx: &egui::Context, data_dir: &Path) {
+        self.poll_result();
         let listed = match &self.catalog {
             Catalog::Loading(receiver) => receiver.try_recv().ok(),
             _ => None,
@@ -487,6 +499,14 @@ impl MemoryView {
         if !self.installs.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
+        self.poll_jobs(ctx);
+        if matches!(self.catalog, Catalog::Loading(_)) || matches!(self.engine, Engine::Loading(_))
+        {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+    }
+
+    fn poll_jobs(&mut self, ctx: &egui::Context) {
         let mut finished = Vec::new();
         self.jobs.retain(|job| match job.progress().finished {
             Some(run) => {
@@ -495,11 +515,7 @@ impl MemoryView {
             }
             None => true,
         });
-        if !self.jobs.is_empty()
-            || self.loading.is_some()
-            || matches!(self.catalog, Catalog::Loading(_))
-            || matches!(self.engine, Engine::Loading(_))
-        {
+        if !self.jobs.is_empty() || self.loading.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
         for run in finished {

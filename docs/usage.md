@@ -1214,7 +1214,8 @@ The network capture is the guest's own view on every route.
   hidden-process scan, TCP/UDP sockets, triage, indicators, findings, malfind,
   YARA, IOCs, syscall table, modules, kernel log, shell history, timeline and
   files recovered from the page cache). A run is saved with its dump and keeps
-  the dump's identity; it is listed beside Volatility's runs, opens in the same
+  the dump's identity (a run goes on, and its result is ready, while another tab is
+  shown); it is listed beside Volatility's runs, opens in the same
   table, text and Messages views, and its **Files** button opens the folder with
   MemNixFS's raw export (recovered files included), to copy or save from. MemNixFS reads only a dump of the
   guest's whole physical memory: QEMU `dump-guest-memory` ELF cores (what
