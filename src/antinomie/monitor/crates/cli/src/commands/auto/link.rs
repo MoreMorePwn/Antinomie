@@ -123,6 +123,7 @@ pub fn locked_store(
         &OwnerClaim {
             kind: OwnerKind::Cli,
             socket: None,
+            lane: None,
         },
     )
     .map_err(|message| CliError::from_engine_start(data_dir, &message))?;

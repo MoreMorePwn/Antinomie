@@ -386,6 +386,7 @@ pub fn refresh_catalog(
     fetcher: &dyn Fetcher,
     cancel: &AtomicBool,
 ) -> Result<Catalog, String> {
+    super::refuse_lane(data_dir)?;
     let staging = rules_root(data_dir)
         .join("staging")
         .join(crate::storage::unique_id());
@@ -414,6 +415,7 @@ pub fn download_archive(
     fetcher: &dyn Fetcher,
     cancel: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
+    super::refuse_lane(data_dir)?;
     let max_size = entry.size.min(MAX_ARCHIVE_BYTES);
     let staging = rules_root(data_dir)
         .join("staging")

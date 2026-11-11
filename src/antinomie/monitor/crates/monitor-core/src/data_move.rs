@@ -59,7 +59,7 @@ fn repair_vm(options: &BackendOptions, directory: &Path) -> Result<(), String> {
     let Some(identity) = bundle.base_identity.clone() else {
         return Ok(());
     };
-    let base_dir = options.data_dir.join("bases").join(&identity);
+    let base_dir = crate::lanes::bases_dir(&options.data_dir).join(&identity);
     let before = bundle.clone();
     let fix = |path: &mut PathBuf| {
         if let Some(found) = find_in(path, &base_dir) {

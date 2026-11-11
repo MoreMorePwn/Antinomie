@@ -411,6 +411,7 @@ fn direct(arguments: &Submit, mut spec: Value, context: &Context) -> Result<Repl
     options.owner = OwnerClaim {
         kind: OwnerKind::Cli,
         socket: None,
+        lane: None,
     };
     let backend = Backend::new(options.clone())
         .map_err(|message| CliError::from_engine_start(&data_dir, &message))?;

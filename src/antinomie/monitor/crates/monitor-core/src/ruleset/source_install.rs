@@ -161,6 +161,7 @@ pub fn install_source(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<SourceInstall, String> {
+    super::refuse_lane(data_dir)?;
     check_source_pack(pack)?;
     let unknown = pack.unknown_options(options);
     if !unknown.is_empty() {

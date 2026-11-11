@@ -148,7 +148,7 @@ fn parent(options: &BackendOptions, chosen: &Option<PathBuf>) -> Result<PathBuf,
     if !canonical.is_dir() {
         return Err("storage parent must be a directory".into());
     }
-    if canonical.starts_with(options.data_dir.join("bases")) {
+    if canonical.starts_with(crate::lanes::bases_dir(&options.data_dir)) {
         return Err("storage parent overlaps installed immutable bases".into());
     }
     for vm in storage::load_vms(options)? {
@@ -356,7 +356,7 @@ pub(crate) fn installed_bases(options: &BackendOptions) -> Result<Vec<BaseSummar
 pub(crate) fn installed_bases_checked(
     options: &BackendOptions,
 ) -> Result<(Vec<BaseSummary>, Vec<BaseProblem>), String> {
-    let root = options.data_dir.join("bases");
+    let root = crate::lanes::bases_dir(&options.data_dir);
     if !root.exists() {
         return Ok((Vec::new(), Vec::new()));
     }

@@ -139,7 +139,11 @@ impl Backend {
         storage::migrate_default_data(&options)?;
         storage::private_dir(&options.data_dir).map_err(|e| e.to_string())?;
         options.data_dir = fs::canonicalize(&options.data_dir).map_err(|e| e.to_string())?;
+        let lane = crate::lanes::check_start(&options)?;
         let data_owner = acquire_data_owner(&options.data_dir, &options.owner)?;
+        if let Some(marker) = &lane {
+            crate::lanes::write_marker(&options.data_dir, marker)?;
+        }
         // wireproxy or tor left running by a session that was killed.
         for line in crate::route::reap_stale_helpers(&options.data_dir) {
             eprintln!("{line}");

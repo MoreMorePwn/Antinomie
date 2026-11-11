@@ -348,6 +348,41 @@ behind it.
   process that finds the lock taken reports "data folder is already in use" with
   the owner's description (the CLI exits 21, `busy`), and the migration of an old
   data folder first checks the owner. `doctor` reports `data_dir.owner`.
+* **Lane data folders (`lanes.rs`, multi-lane M1, ANT-T0455 card B).** Groundwork
+  for a daemon with several lanes, one engine and one VM each, in one process
+  (`daemon.lanes` stays 1 by default; the daemon side is card C). Lane 0 is the
+  data folder the operator chose. Lane N (1 to 64) has its own data folder,
+  `<lane 0>/lanes/N/`, for its VMs, runs and settings, and shares lane 0's
+  `bases`, `samples`, `ioc`, `rules`, `tools` and `volatility-plugins` and the
+  known false positives, with no symbolic links:
+  * Its engine starts with `BackendOptions::shared_root` set to lane 0's folder
+    and an owner claim with `lane: Some(N)` (recorded in `run/owner.json`, so a
+    refusal names "lane N of the Antinomie daemon"). The start checks that the
+    data folder is exactly `<shared_root>/lanes/N`, that the shared root is not
+    a lane itself and that a root and a lane come together, then writes
+    `<lane>/lane.json` (`{"schema":1,"lane":N}`) once it holds the lane's lock.
+  * Every path helper that takes a data folder (`samples::samples_dir`,
+    `ruleset::rules_root`, `analysis_tools::tools_dir`, `ioc::feeds::root`,
+    `lanes::bases_dir`, `memory::plugins_dir`) reads `lane.json` and resolves a
+    lane folder into lane 0's, in any process. The shared root is the lane
+    folder's grandparent, not a stored path, so a moved tree keeps its lanes
+    and `data_move::repair` re-points a lane VM at the moved shared base. A
+    folder without `lane.json` resolves to itself, as before.
+  * Only lane 0 changes the shared folders. A lane engine refuses `ImportBase`,
+    `DeleteBase`, `DownloadBase`, `BuildBase`, `InstallTool` and `RemoveTool`,
+    and the rule pack and group writers, the rules catalog, the strings regex
+    patterns, the IOC dataset writers, the known false positives, tool install
+    and remove and the GeoIP update refuse a lane folder. Every refusal is a
+    `lanes::LaneRefusal` whose text contains `lanes::SHARED_WRITER` ("only lane 0
+    changes the folders the lanes share"). A lane skips the rule index
+    migration and the staging sweep, which lane 0 does. The sample library is
+    shared and written by every lane; its in-process writer lock is keyed by the
+    database's canonical path, so all engines of a process share it.
+  * `DeleteBase` on lane 0 also checks the VMs of every lane folder and is
+    refused while one is built on the base ("used by … Lane 1 (lane 1)"), or
+    while a lane's record or VM list does not read.
+  * The window (or any plain engine) is refused on a lane folder and sent to
+    lane 0, and the old-data-folder migration refuses a folder with lanes.
 * **Shared settings (`settings.rs`).** `<data>/settings.json` holds the engine
   settings every front end needs (triage and detection options, quotas, limits,
   report export, disk view and so on). Version 1; written only by the process
