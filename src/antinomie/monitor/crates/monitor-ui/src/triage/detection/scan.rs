@@ -97,6 +97,7 @@ impl View {
             self.seen_generation = self.rules_generation;
             self.digest_generation = u64::MAX;
         }
+        self.live_run = !input.run_finished;
         for (index, engine) in ENGINES.iter().enumerate() {
             let key = self.evidence_identity(ctx, *engine, input);
             self.ready_key[index] = key.clone();
@@ -148,6 +149,24 @@ impl View {
                 && self.scanned_generation[index] == self.rules_generation
             {
                 continue;
+            }
+            // While the program runs the evidence changes all the time; scan
+            // it only once per interval. The scan at the run's end is not held.
+            if self.live_run {
+                let has_result = matches!(self.results[index], Some(Ok(_)));
+                match live_gate(self.last_launch[index], has_result, self.live_interval, now) {
+                    Ok(()) => {}
+                    Err(wait) => {
+                        if self.last_launch[index].is_none() && has_result {
+                            // Count the saved result as a scan that just ran.
+                            self.last_launch[index] = Some(now);
+                        }
+                        if let Some(wait) = wait {
+                            ctx.request_repaint_after(wait);
+                        }
+                        continue;
+                    }
+                }
             }
             match self.start_engine(ctx, *engine, None, false, &key, true) {
                 Admit::Started => {
@@ -267,6 +286,7 @@ impl View {
         automatic: bool,
     ) -> Admit {
         self.auto_started[index] = automatic;
+        self.last_launch[index] = Some(Instant::now());
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
         let (tx, rx) = mpsc::sync_channel(1);

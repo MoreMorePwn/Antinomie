@@ -8,6 +8,7 @@ impl MonitorApp {
         self.triage.set_rules(
             &self.options.data_dir,
             self.settings.automatic_detection,
+            self.settings.live_detection_minutes,
             &self.rules_summary,
             self.rules_generation,
         );

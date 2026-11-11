@@ -300,14 +300,8 @@ pub fn test(
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<String, String> {
     let result = match key {
-        ApiKey::Abusech => crate::samples::search(
-            curl,
-            secret.expose(),
-            &crate::samples::Query::Tag("Mirai".into()),
-            1,
-            cancel,
-        )
-        .map(|_| "abuse.ch accepted the Auth-Key".to_owned()),
+        ApiKey::Abusech => crate::samples::check_key(curl, secret.expose(), cancel)
+            .map(|()| "abuse.ch accepted the Auth-Key".to_owned()),
         ApiKey::MalShare => crate::malshare::check_key(curl, secret.expose(), cancel)
             .map(|()| "MalShare accepted the API key".to_owned()),
     };

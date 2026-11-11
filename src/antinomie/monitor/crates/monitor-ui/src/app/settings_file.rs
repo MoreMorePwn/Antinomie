@@ -29,6 +29,7 @@ impl Settings {
             file_before_file_mib: self.file_before_file_mib,
             file_before_run_mib: self.file_before_run_mib,
             automatic_detection: self.automatic_detection,
+            live_detection_minutes: self.live_detection_minutes,
             outbound_catalog: self.outbound_catalog,
             address_lookup: self.address_lookup,
             report_export: self.report_export.clone(),
@@ -58,6 +59,7 @@ impl Settings {
         self.file_before_file_mib = file.file_before_file_mib;
         self.file_before_run_mib = file.file_before_run_mib;
         self.automatic_detection = file.automatic_detection;
+        self.live_detection_minutes = file.live_detection_minutes;
         self.outbound_catalog = file.outbound_catalog;
         self.address_lookup = file.address_lookup;
         self.report_export = file.report_export;

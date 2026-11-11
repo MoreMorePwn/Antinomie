@@ -302,7 +302,7 @@ impl View {
             ui.label(RichText::new("Not scanned.").color(theme::muted()));
             let ready = self.rx.is_none() && self.identity.is_some();
             if ui
-                .add_enabled(ready, egui::Button::new("Scan"))
+                .add_enabled(ready, egui::Button::new(self.scan_label()))
                 .on_hover_text("Scan this run with the installed rules.")
                 .clicked()
             {
@@ -320,7 +320,15 @@ impl View {
 
     fn scan_buttons(&mut self, ui: &mut egui::Ui, index: usize, scan: Option<&ArchiveScan>) {
         let ready = self.rx.is_none() && self.identity.is_some();
-        if ui.add_enabled(ready, egui::Button::new("Scan")).clicked() {
+        if ui
+            .add_enabled(ready, egui::Button::new(self.scan_label()))
+            .on_hover_text(if self.live_run {
+                "Scan what the run has recorded so far, without waiting for the next timed scan."
+            } else {
+                "Scan this run with the installed rules."
+            })
+            .clicked()
+        {
             self.scan_now(ui.ctx(), index, scan);
         }
         if self.rx.is_some() {
@@ -386,10 +394,34 @@ impl View {
         }
     }
 
+    /// What paces the scans while the program still runs.
+    pub(super) fn live_note(&self) -> String {
+        match self.live_interval {
+            None => "Live scans off: scanned when the run ends.".to_owned(),
+            Some(interval) => {
+                let minutes = interval.as_secs() / 60;
+                format!("Live scan every {minutes} min.")
+            }
+        }
+    }
+
+    /// The label of the manual scan button: while the program runs it is the
+    /// way to scan between the timed scans.
+    fn scan_label(&self) -> &'static str {
+        if self.live_run {
+            "Scan now"
+        } else {
+            "Scan"
+        }
+    }
+
     /// Left to right: the scan status (only when no scan runs), the matched
     /// rules, their state and how much was evaluated.
     fn status_parts(&self, index: usize, scanning: bool) -> Vec<StatusPart> {
         let mut parts = Vec::new();
+        if self.live_run && !scanning {
+            parts.push(StatusPart::Muted(self.live_note()));
+        }
         if !scanning {
             let status = match self.progress[index].as_ref() {
                 Some(progress) => engine::progress_text(progress),
@@ -1121,5 +1153,24 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn the_scan_button_and_note_follow_the_run_and_the_interval() {
+        let mut view = View::default();
+        assert_eq!(view.scan_label(), "Scan");
+        view.live_run = true;
+        assert_eq!(view.scan_label(), "Scan now");
+        view.live_interval = Some(Duration::from_secs(300));
+        assert_eq!(view.live_note(), "Live scan every 5 min.");
+        view.live_interval = None;
+        assert!(view.live_note().contains("off"));
+        let shown = view
+            .status_parts(0, false)
+            .iter()
+            .any(|part| matches!(part, StatusPart::Muted(text) if text.contains("Live scans off")));
+        assert!(shown);
+        view.live_run = false;
+        assert!(view.status_parts(0, false).is_empty());
     }
 }
