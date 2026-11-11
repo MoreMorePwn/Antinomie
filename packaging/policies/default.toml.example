@@ -43,7 +43,7 @@ core_nonresident  = false   # trigger cores also read pages not in memory (guest
 
 [analysis]
 static_checks         = "triage"
-static_time_limit_min = 2
+# static_time_limit_min = 2   # fixed minutes per static tool; unset: 2 x its expected time
 required_checks       = []      # checks whose timeout fails the job; others only make it partial
 triage                = true
 detection             = { yara = true, sigma = true, ids = true }

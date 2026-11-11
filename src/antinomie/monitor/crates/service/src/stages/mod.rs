@@ -33,8 +33,11 @@ pub mod host;
 #[cfg(test)]
 mod host_tests;
 mod hosted;
+pub mod items;
 mod launch;
 pub mod plan;
+#[cfg(test)]
+mod pool_tests;
 mod prechecks;
 mod provision;
 mod report;
@@ -46,6 +49,7 @@ mod run;
 mod run_tests;
 #[cfg(test)]
 mod tests;
+pub mod timing;
 mod upload;
 
 use crate::{
@@ -61,7 +65,6 @@ use crate::{
     store::{Eligibility, Store},
     waiter::{WaitError, Waiter},
 };
-pub use analyse::Analysed;
 use antinomie_monitor_core::RunSummary;
 pub use cleanup::Stopped;
 pub use collect::CollectEnd;

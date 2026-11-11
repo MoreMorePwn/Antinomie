@@ -157,7 +157,9 @@ pub const TOOL_OWN_LIMIT_MIN: u32 = 5;
 pub struct HostPlan {
     /// The static checks of the host-side analysis; empty: none.
     pub static_checks: Vec<AnalysisKind>,
-    pub static_limit_min: u32,
+    /// A fixed limit in minutes for every tool, when the policy or the job
+    /// set one; `None`: each tool's limit comes from its expected time.
+    pub static_limit_min: Option<u32>,
     /// Checks whose timeout fails the stage (`analysis.required_checks`).
     pub required_checks: Vec<AnalysisKind>,
     pub triage: bool,
@@ -180,16 +182,6 @@ impl HostPlan {
     /// Nothing for `report` to write.
     pub fn report_skipped(&self) -> bool {
         self.formats.is_empty() && !self.bundle
-    }
-
-    /// `static_s` = tools x limit x 60 + 60 (design 4.1).
-    pub fn static_wait(&self) -> Duration {
-        let minutes = if self.static_limit_min == 0 {
-            TOOL_OWN_LIMIT_MIN
-        } else {
-            self.static_limit_min
-        };
-        Duration::from_secs(self.static_checks.len() as u64 * u64::from(minutes) * 60 + 60)
     }
 
     pub fn requires(&self, stage: Stage) -> bool {
@@ -256,7 +248,7 @@ pub fn hosted(job: &Job, policy: &Policy) -> HostPlan {
         static_checks,
         static_limit_min: o
             .static_time_limit_min
-            .unwrap_or(policy.analysis.static_time_limit_min),
+            .or(policy.analysis.static_time_limit_min),
         required_checks: policy
             .analysis
             .required_checks

@@ -385,7 +385,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
         antinomie_service::api::spec::StaticCheck::Strings,
         antinomie_service::api::spec::StaticCheck::Entropy,
     ]);
-    policy.analysis.static_time_limit_min = 1;
+    policy.analysis.static_time_limit_min = Some(1);
     policy.analysis.detection = antinomie_service::config::policy::Detection {
         yara: false,
         sigma: false,
