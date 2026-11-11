@@ -187,6 +187,47 @@ starts in a row that did not reach a working guest. Queued jobs stay queued with
 
 After a base update make a new lane VM with `auto init --replace`.
 
+With several lanes a quarantine holds only its own lane: the other lanes go on
+with the queue, and jobs wait (`waiting_for: lane`) only for what no other lane
+can run. `auto lane list` shows every lane; `reset` and `unquarantine` take
+`--lane lane-N` (default `lane-1`).
+
+## Several lanes
+
+One lane runs one VM at a time. A machine with the memory for more VMs can run
+up to four lanes, each with its own lane VM, so up to four jobs run their VMs
+at once. One lane stays the default.
+
+```sh
+# with the daemon stopped: lane 2's VM, in <data>/lanes/2/, on an installed base
+antinomie-cli --data-dir ~/auto auto init --lane 2 --base busybox --ram-mib 512
+# then in <data>/service.toml:
+#   [daemon]
+#   lanes = 2
+antinomie-cli --data-dir ~/auto auto daemon
+antinomie-cli --data-dir ~/auto auto status    # lane-1: idle ..., lane-2: idle ...
+```
+
+* Lane N's VM is named `auto-N` unless `--name` says otherwise. It is built on a
+  base of the data folder; a lane never installs or deletes a base, and the data
+  folder refuses to delete a base while a lane's VM uses it or a lane is
+  creating a VM from it.
+* The lanes share the data folder's bases, library, rules, tools, IOC data,
+  engine settings and route settings. The job store, the policies and the host
+  work pool are one for all lanes.
+* A lane starts when its VM exists and the machine has `MemAvailable` for the
+  RAM of every lane VM before it plus this lane's own floor (its VM's RAM plus
+  2048 MiB, or `[resources] min_free_ram_mib`). The daemon's log says how many
+  lanes started and why the others did not; so does `auto lane list`.
+* A job goes to a free lane that can run it (the base of the policy's
+  `vm.lane_vm`, and an ELF of the lane's architecture); among several, the
+  least recently used, so the jobs spread. A policy whose `vm.lane_vm` is
+  `auto-1` therefore runs on every lane built on lane 1's base.
+* Every lane's host work goes to the one host work pool, first come, first
+  served by job arrival; `[daemon] host_workers` is the total for all lanes.
+
+All the keys are in [service configuration](service-config.md#several-lanes).
+
 ## Watch folders
 
 A folder the daemon polls every two seconds; each file that appears becomes a job.

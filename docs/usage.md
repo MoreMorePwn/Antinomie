@@ -2281,12 +2281,23 @@ snapshot now and lifts a quarantine when that works; `auto lane unquarantine` li
 it without reverting when the checks pass (the clean snapshot is there, the VM is
 stopped, nothing is still being saved).
 
+**Several lanes.** `auto init --lane N` (2 to 4) makes another lane: its VM
+(`auto-N` by default) lives in `<data>/lanes/N/`, is built on a base of the data
+folder and writes `<data>/service/lanes/lane-N.json`. With `[daemon] lanes = N`
+in `service.toml` the daemon runs lanes 1 to N, one engine and one VM each, and
+starts a lane only when the machine has the memory for every lane VM (the log
+and `auto lane list` say why a lane did not start). A job goes to a free lane
+whose base and architecture can run it, the least recently used first; every
+lane's host work goes to the one host work pool. `auto status` and `capabilities`
+show every lane; `auto lane reset` and `unquarantine` take `--lane lane-N`. See
+[Auto mode](auto-mode.md#several-lanes).
+
 **Submitting and following jobs.**
 
 | Command | What it does |
 |---|---|
 | `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a job; prints the job. `--policy`, `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V`, `--as user\|root\|UID:GID`, `--route drop\|inet_sim` (only these two, by design: a job never uses another route, whereas `run exec --route` takes all six), `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--idempotency-key K`, `--name`. The policy decides what a job may change. `--wait` waits for the end and exits with the job's code; `--follow` also prints the job's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded job labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected job exits 13 |
-| `auto status [JOB]` | One job, or the queue and the lane |
+| `auto status [JOB]` | One job, or the queue and the lanes |
 | `auto list` | Jobs, newest first: `--state`, `--outcome`, `--sha256`, `--label K[=V]`, `--since 24h`, `--limit`, `--cursor` |
 | `auto wait JOB...` | Waits until the jobs have ended (`--timeout` bounds it, exit 14) and exits with the worst code; `--verdict-exit` as above |
 | `auto events JOB` | The job's stored events; `--since SEQ` starts after an event, `--follow` keeps printing new ones until the job ends, `--types job.stage,job.state` filters. `auto events --all --follow [--since GSEQ]` follows every job and the engine |
