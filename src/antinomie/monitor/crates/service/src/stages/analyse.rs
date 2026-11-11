@@ -60,6 +60,12 @@ const POLL: Duration = Duration::from_millis(20);
 /// queue may be busy with the lane): not counted against the item's limit.
 pub const ENGINE_QUEUE_WAIT: Duration = Duration::from_secs(4 * 3600);
 
+/// A Triage scan, or the problem in words with whether the limit ended it.
+pub(super) type TriageDone = Result<(SavedRun, ArchiveScan), (String, bool)>;
+/// The detection engines' outcomes, the problems, and whether the limit ended
+/// the item.
+pub(super) type DetectionDone = (Vec<(DetectionEngine, Outcome)>, Vec<String>, bool);
+
 /// What the static analysis left: `hard` is a failure of the analysis
 /// itself (or of a required check), `soft` a check that stopped short.
 #[derive(Default)]
@@ -346,7 +352,7 @@ impl<E: Engine> LaneStages<'_, E> {
         &mut self,
         job: &Job,
         limit: Duration,
-    ) -> Result<Result<(SavedRun, ArchiveScan), (String, bool)>, StageStop> {
+    ) -> Result<TriageDone, StageStop> {
         let triage: &dyn HostTriage = self.env.triage;
         self.progress(job, Stage::Analyse, "indexing the recording");
         let worked = self.bounded(limit, |cancel| {
@@ -378,7 +384,7 @@ impl<E: Engine> LaneStages<'_, E> {
         plan: &HostPlan,
         scanned: &(SavedRun, ArchiveScan),
         limit: Duration,
-    ) -> Result<(Vec<(DetectionEngine, Outcome)>, Vec<String>, bool), StageStop> {
+    ) -> Result<DetectionDone, StageStop> {
         let triage: &dyn HostTriage = self.env.triage;
         let engines: Vec<DetectionEngine> = plan.engines.clone();
         let (saved, scan) = scanned;

@@ -152,7 +152,7 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     {
         sink.error(
             "daemon.host_workers",
-            &format!("must be 1 to {}", super::service::MAX_HOST_WORKERS),
+            format!("must be 1 to {}", super::service::MAX_HOST_WORKERS),
         );
     }
     if let Some(factor) = config.daemon.host_time_factor
@@ -160,7 +160,7 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     {
         sink.error(
             "daemon.host_time_factor",
-            &format!(
+            format!(
                 "must be 1 to {} (times the expected time of an item)",
                 super::service::MAX_HOST_TIME_FACTOR
             ),
