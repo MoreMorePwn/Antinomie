@@ -368,7 +368,7 @@ Import the output folder with **Add base → Import base…**.
 | **Host** | Linux x86-64, glibc 2.39 or newer, with a graphical session. Tested on Debian 13 and Ubuntu 24.04. WSL2 works with an X11 display; KVM access depends on its virtualization setup. |
 | **Virtualization** | QEMU 6.0 or newer (`qemu-system-x86_64`, `qemu-img`) with the GTK display backend; Routed networks (cloud profiles' metadata service) need QEMU 7.2. KVM is strongly recommended; TCG works without it but is not performance-qualified. |
 | **Downloads** | `curl` for bases, rules and analysis tools. |
-| **Analysis** | bubblewrap for isolation; TShark and `prlimit` for packet decoding and filters. Other tools depend on the analysis you choose. |
+| **Analysis** | bubblewrap for isolation; TShark and `prlimit` for packet decoding and filters. Optional: `binwalk` for the Embedded content scan (`sudo apt install binwalk`). Other tools depend on the analysis you choose. |
 | **Debian VMs** | `guestfish` (`libguestfs-tools`) to create and reset them. |
 
 The app checks dependencies at startup (**Tools → App dependencies**). From a

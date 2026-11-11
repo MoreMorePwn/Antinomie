@@ -33,11 +33,12 @@ pub fn slug(dependency: Dependency) -> &'static str {
         Dependency::Suricata => "suricata",
         Dependency::PythonVenv => "python-venv",
         Dependency::Wireshark => "wireshark",
+        Dependency::Binwalk => "binwalk",
         Dependency::FileChooser => "file-chooser",
     }
 }
 
-const ALL: [Dependency; 13] = [
+const ALL: [Dependency; 14] = [
     Dependency::Qemu,
     Dependency::QemuImg,
     Dependency::Gtk,
@@ -50,6 +51,7 @@ const ALL: [Dependency; 13] = [
     Dependency::Suricata,
     Dependency::PythonVenv,
     Dependency::Wireshark,
+    Dependency::Binwalk,
     Dependency::FileChooser,
 ];
 

@@ -37,6 +37,8 @@ pub enum Dependency {
     Suricata,
     PythonVenv,
     Wireshark,
+    /// Binwalk, the signature scan of the Embedded content analysis.
+    Binwalk,
     /// Zenity, the file chooser of the Explorer and Upload.
     FileChooser,
 }
@@ -211,6 +213,9 @@ pub const SURICATA: &[&str] = &[
     "/usr/local/bin/suricata",
 ];
 
+/// Where the Embedded content analysis looks for binwalk.
+pub const BINWALK: &[&str] = &["/usr/bin/binwalk", "/usr/local/bin/binwalk"];
+
 /// The system Python can create the virtual environment of the Sigma tool;
 /// Debian and Ubuntu ship `ensurepip` separately, in python3-venv.
 fn venv_problem() -> Option<String> {
@@ -312,6 +317,18 @@ pub fn check(options: &BackendOptions) -> Report {
                 .is_none()
                 .then(|| "wireshark is missing or not executable".to_owned()),
             hint: "On Debian/Ubuntu: sudo apt install wireshark",
+            optional: true,
+            wrong_version: false,
+        },
+        Check {
+            dependency: Binwalk,
+            name: "binwalk",
+            purpose: "Signature scan of the Embedded content analysis (without it that section reports the tool missing)",
+            problem: BINWALK
+                .iter()
+                .all(|path| executable(Path::new(path)).is_none())
+                .then(|| "binwalk is not installed".to_owned()),
+            hint: "On Debian/Ubuntu: sudo apt install binwalk",
             optional: true,
             wrong_version: false,
         },
@@ -601,6 +618,85 @@ fn probe_output(program: &Path, args: &[&str], timeout: Duration) -> Result<Stri
 mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt};
+
+    /// System programs the analysis code names by path, outside its tests.
+    fn analysis_program_names() -> std::collections::BTreeSet<String> {
+        fn walk(directory: &Path, names: &mut std::collections::BTreeSet<String>) {
+            for entry in fs::read_dir(directory).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, names);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    let text = fs::read_to_string(&path).unwrap();
+                    let code = text.split("#[cfg(test)]").next().unwrap();
+                    for literal in code.split('"').skip(1).step_by(2) {
+                        let name = ["/usr/local/bin/", "/usr/bin/", "/usr/sbin/", "/bin/"]
+                            .iter()
+                            .find_map(|prefix| literal.strip_prefix(prefix));
+                        if let Some(name) = name
+                            && !name.is_empty()
+                            && name
+                                .chars()
+                                .all(|ch| ch.is_ascii_alphanumeric() || "-_.".contains(ch))
+                        {
+                            names.insert(name.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+        let mut names = Default::default();
+        walk(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/analysis"),
+            &mut names,
+        );
+        names
+    }
+
+    #[test]
+    fn every_host_tool_the_analysis_runs_is_in_the_requirements_list() {
+        // Listed in App dependencies: program name -> its requirement.
+        let listed = [
+            ("bwrap", Dependency::Bubblewrap),
+            ("prlimit", Dependency::Prlimit),
+            ("binwalk", Dependency::Binwalk),
+            ("suricata", Dependency::Suricata),
+        ];
+        // Base system utilities (file, binutils, Python); a missing one is
+        // reported by the check that runs it, and Python by "Python venv".
+        let base = ["file", "objdump", "readelf", "python3"];
+        let report = check(&BackendOptions::default());
+        for (_, dependency) in listed {
+            assert!(
+                report
+                    .checks
+                    .iter()
+                    .any(|check| check.dependency == dependency),
+                "{dependency:?} is not in the requirements list"
+            );
+        }
+        for name in analysis_program_names() {
+            assert!(
+                listed.iter().any(|(program, _)| *program == name) || base.contains(&name.as_str()),
+                "the analysis runs {name}, which is not in the requirements list: add a \
+                 Dependency, its check and its packages, or list it as a base utility here"
+            );
+        }
+        // The analysis finds binwalk where the check looks for it.
+        let binwalk = report
+            .checks
+            .iter()
+            .find(|check| check.dependency == Dependency::Binwalk)
+            .unwrap();
+        assert!(binwalk.optional && binwalk.purpose.contains("Embedded content"));
+        assert_eq!(
+            package(Dependency::Binwalk, PackageManager::Apt),
+            Some("binwalk")
+        );
+        assert!(
+            BINWALK.contains(&"/usr/bin/binwalk") && !analysis_program_names().contains("binwalk")
+        );
+    }
 
     #[test]
     fn a_command_names_the_tools_it_needs() {

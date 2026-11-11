@@ -38,6 +38,11 @@ versions; existing VMs keep their pinned base.
   installed; otherwise **Tools > Analysis tools** downloads them for Antinomie. The Properties tab
   computes ssdeep and TLSH itself; it also shows Magika's file type when
   **Tools > Analysis tools** has installed Magika (or the system has it)
+- Embedded content (the signature scan of the Static analysis page) runs
+  `binwalk` from `/usr/bin` or `/usr/local/bin`; Antinomie does not download it.
+  It is optional: without it that section says binwalk is not installed and the
+  rest of the analysis is unaffected. On Debian/Ubuntu: `sudo apt install binwalk`.
+  **Tools > App dependencies** lists it (as optional) and adds it to the install command.
 - The Network tab (packet list and details), Wireshark packet display filters
   and network triage use the installed `tshark` command with `prlimit`
   resource limits; Antinomie decodes no protocol itself. On Debian/Ubuntu install
@@ -1989,7 +1994,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   required one is missing. Without `--require` the tools the window also treats as
   required count; a missing KVM is a warning (VMs then run with TCG). Tool names:
   `qemu`, `qemu-img`, `gtk`, `kvm`, `curl`, `debian-account`, `bubblewrap`,
-  `tshark`, `prlimit`, `suricata`, `python-venv`, `wireshark`, `file-chooser`.
+  `tshark`, `prlimit`, `suricata`, `python-venv`, `wireshark`, `binwalk`, `file-chooser`.
 - `capabilities` prints the API version, the app version and revision, the lane
   count, the report formats and the accelerator (`kvm` or `tcg`).
 - `doctor` also reports who owns the data directory (`data_dir.owner`, from

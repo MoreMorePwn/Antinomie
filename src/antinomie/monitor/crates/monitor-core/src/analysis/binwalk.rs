@@ -4,9 +4,8 @@ use super::tools;
 use super::*;
 use std::time::Duration;
 
-const SYSTEM: &[&str] = &["/usr/bin/binwalk", "/usr/local/bin/binwalk"];
 pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
-    let Some(binwalk) = tools::find(SYSTEM) else {
+    let Some(binwalk) = tools::find(crate::dependencies::BINWALK) else {
         section.state = AnalysisSectionState::Unavailable;
         section.summary = "binwalk is not installed on this system".into();
         return;
