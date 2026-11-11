@@ -35,7 +35,10 @@ use std::{
 fn fixtures(svc: &Svc) -> ManuallyDrop<Data> {
     let root = svc.dir.join("data");
     std::fs::create_dir_all(root.join(VM).join("runs")).unwrap();
-    ManuallyDrop::new(Data { root })
+    ManuallyDrop::new(Data {
+        root,
+        vm: VM.into(),
+    })
 }
 
 /// A finished run with RWX calls under cookie 55 and an HTTP capture its

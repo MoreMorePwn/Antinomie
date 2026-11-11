@@ -68,6 +68,8 @@ pub use context::ReadContext;
 pub use service::{JobIndex, QueryApi, QueryService};
 
 #[cfg(test)]
+mod lane_read_tests;
+#[cfg(test)]
 mod packet_tests;
 #[cfg(test)]
 mod read_tests;

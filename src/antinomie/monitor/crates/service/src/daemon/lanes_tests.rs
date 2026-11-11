@@ -1094,3 +1094,186 @@ fn one_lane_runs_as_before_beside_the_files_of_other_lanes() {
     let engines = stop(daemon);
     assert_eq!(engines.len(), 1);
 }
+
+// ---- reads across lanes (card D) ------------------------------------------
+
+/// A caller of the socket with these scopes only.
+fn caller_with(scopes: Vec<crate::api::ops::Scope>) -> CallContext {
+    CallContext {
+        caller: crate::api::ops::Caller {
+            client_id: "local:7".into(),
+            scopes,
+            policies: vec![],
+        },
+        cancel: Default::default(),
+        transport: Transport::Socket,
+    }
+}
+
+/// `n` lanes, each with two finished jobs whose runs the lane recorded in its
+/// own folder (lane 1: the data folder; lane N: `lanes/N/`), the last one a
+/// full recording; then the daemon with `n` engines reads them all.
+fn reads_across(n: u32) {
+    use crate::{
+        api::{error::ErrorCode, job::JobRecording, ops::Scope},
+        query::testing::{Data, add_run, standard},
+        store::JobPatch,
+    };
+    use std::mem::ManuallyDrop;
+    let rig = Rig::new(&format!("lanes-reads-{n}"));
+    let lanes = LaneDir::new(&rig.fx.dir.join("service"));
+    for lane in 1..=n {
+        lanes.save(&lane_file(lane, X86_BASE)).unwrap();
+    }
+    // The fixture folders belong to the rig, which removes them.
+    let first = ManuallyDrop::new(Data {
+        root: rig.fx.dir.clone(),
+        vm: vm_of(1),
+    });
+    std::fs::create_dir_all(first.vm_dir().join("runs")).unwrap();
+    let mut made = Vec::new();
+    let mut sample = 0u8;
+    for lane in 1..=n {
+        let folder = if lane == 1 {
+            ManuallyDrop::new(Data {
+                root: first.root.clone(),
+                vm: vm_of(1),
+            })
+        } else {
+            ManuallyDrop::new(first.lane(lane, &vm_of(lane)))
+        };
+        for k in 0..2 {
+            sample += 1;
+            let job = on_lane(&rig.fx, sample, lane, Stage::Run);
+            // The same run id in every lane: one run per lane all the same.
+            let run = if k == 1 && lane == n {
+                standard(&folder)
+            } else {
+                add_run(
+                    &folder,
+                    "boot-1",
+                    &format!("run-{k}"),
+                    1_000 * u64::from(sample),
+                    "Finalized",
+                )
+            };
+            rig.fx
+                .store
+                .patch(
+                    &job.id,
+                    JobPatch {
+                        recording: Some(JobRecording {
+                            vm_id: run.vm.clone(),
+                            boot_id: run.boot.clone(),
+                            run_id: run.id.clone(),
+                            run_key: run.key().as_str().to_owned(),
+                            phase: crate::api::job::RecordingPhase::Complete,
+                            directory: Some(run.dir.display().to_string()),
+                        }),
+                        ..JobPatch::default()
+                    },
+                )
+                .unwrap();
+            rig.fx
+                .store
+                .finish(&job.id, Outcome::Succeeded, None)
+                .unwrap();
+            made.push((LaneId::new(lane), job.id, run));
+        }
+    }
+    let before = first.snapshot();
+    let (engines, _) = rig.engines(n);
+    let daemon = Daemon::start_lanes(rig.setup(n), engines, Vec::new()).unwrap();
+
+    // One list from the daemon holds every lane's runs, each with its job.
+    let listed = op(&daemon, "recording.run.list", json!({})).unwrap();
+    let items = listed["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2 * n as usize, "{listed}");
+    for (lane, job, run) in &made {
+        let item = items
+            .iter()
+            .find(|i| i["run_key"] == json!(run.key()))
+            .unwrap_or_else(|| panic!("{lane} {} not listed", run.id));
+        assert_eq!(item["job_id"], json!(job), "{lane}");
+        assert_eq!(item["vm_id"], run.vm.as_str());
+        // The job's lane, its VM and the folder its run sits in agree.
+        assert_eq!(rig.fx.store.get(job).unwrap().lane.as_ref(), Some(lane));
+        assert!(run.dir.starts_with(lane_data_dir(&rig.fx.dir, lane)));
+        if *lane != LaneId::new(1) {
+            assert!(!run.dir.starts_with(rig.fx.dir.join(vm_of(1))));
+        }
+        let got = op(&daemon, "recording.run.get", json!({"run_key": run.key()})).unwrap();
+        assert_eq!(got["value"]["job_id"], json!(job), "{got}");
+        let by_job = op(&daemon, "recording.run.list", json!({"job_id": job})).unwrap();
+        assert_eq!(by_job["items"].as_array().unwrap().len(), 1);
+        assert_eq!(by_job["items"][0]["run_key"], json!(run.key()));
+    }
+
+    // T9: the scopes hold for a run of another lane.
+    let (_, _, full) = made.last().unwrap();
+    let key = full.key();
+    let reader = caller_with(vec![Scope::Read]);
+    let nobody = caller_with(vec![]);
+    let service = daemon.service();
+    assert!(
+        service
+            .call("recording.artifact.list", json!({"run_key": key}), &reader)
+            .is_ok()
+    );
+    for (op_name, params) in [
+        (
+            "recording.captured.read",
+            json!({"run_key": key, "field": "x", "offset": "0", "len": 4}),
+        ),
+        (
+            "recording.files.content",
+            json!({"run_key": key, "version_id": "v1", "range": {"offset": 0, "len": 4}}),
+        ),
+        (
+            "recording.network.packet",
+            json!({"run_key": key, "capture_id": "c1", "n": 1}),
+        ),
+    ] {
+        let error = service.call(op_name, params, &reader).unwrap_err();
+        assert_eq!(
+            error.code,
+            ErrorCode::Forbidden,
+            "{op_name}: {}",
+            error.message
+        );
+    }
+    for (op_name, params) in [
+        ("recording.run.list", json!({})),
+        ("recording.run.get", json!({"run_key": key})),
+        ("recording.artifact.list", json!({"run_key": key})),
+    ] {
+        let error = service.call(op_name, params, &nobody).unwrap_err();
+        assert_eq!(
+            error.code,
+            ErrorCode::Forbidden,
+            "{op_name}: {}",
+            error.message
+        );
+    }
+    // Nothing was written into any lane's recordings by the reads.
+    let after = first.snapshot();
+    let recordings = |files: &[(std::path::PathBuf, u64, i64, i64)]| -> Vec<_> {
+        files
+            .iter()
+            .filter(|(path, ..)| path.components().any(|c| c.as_os_str() == "runs"))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(recordings(&after), recordings(&before));
+    let _ = stop(daemon);
+}
+
+#[test]
+fn a_daemon_with_two_lanes_reads_the_runs_of_both_in_their_own_folders() {
+    reads_across(2);
+}
+
+#[test]
+fn a_daemon_with_three_lanes_reads_the_runs_of_all_three_in_their_own_folders() {
+    reads_across(3);
+}

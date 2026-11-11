@@ -1635,6 +1635,7 @@ fn reads_stay_consistent_while_a_writer_appends_to_the_trace() {
     let service = data.service().with_layers(layers);
     let key = run.key();
     let writer_run = Run {
+        vm: run.vm.clone(),
         boot: run.boot.clone(),
         id: run.id.clone(),
         dir: run.dir.clone(),
