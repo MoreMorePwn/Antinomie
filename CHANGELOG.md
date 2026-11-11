@@ -15,6 +15,7 @@ x86 programs by their own table.
 
 ### Host
 
+- **Security tests, fuzzing and the process-start gate for Auto mode (ANT-T0387).** New cross-surface tests cover unknown spec members, route and privilege escalation, hostile watch-folder names and links, and log injection. Fuzz targets `job_spec`, `config_toml`, `watch_names` and `label_expr` join `socket_frames`. A verdict `when` expression is now limited to 2048 bytes and 32 nested parentheses (a hostile policy overflowed the stack). CI runs `scripts/check-command-new.py`, which fails on a process start that is not on `scripts/command-new-allowlist.txt`.
 - **Commands find a daemon at the configured socket, and the CLI documents match the code (ANT-T0451).**
   - A command that reaches the daemon now resolves the socket as the daemon does:
     `--socket`, else `[daemon] socket` of `<data>/service.toml`, else

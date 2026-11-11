@@ -193,7 +193,17 @@ put("job_spec", "unknown", b'{"sample":{"path":"/tmp/x"},"evil":1}')
 cfg = (root / "src/antinomie/monitor/crates/service/src/config/mod.rs").read_text()
 if 'DEFAULT_POLICY' in cfg and 'r#"' in cfg:
     put("config_toml", "default-policy", cfg.split('r#"', 1)[1].split('"#', 1)[0])
-put("config_toml", "policy", '[vm]\nlane_vm = "auto-1"\n[sample]\naccept_types = ["sh", "elf"]\n[network]\nroute = "drop"\nallowed_routes = ["drop", "inet_sim"]\n[[verdict.rule]]\nwhen = "highest_tier == 'high' and counts.processes > 2"\nlabel = "suspicious"\n')
+put("config_toml", "policy", """[vm]
+lane_vm = "auto-1"
+[sample]
+accept_types = ["sh", "elf"]
+[network]
+route = "drop"
+allowed_routes = ["drop", "inet_sim"]
+[[verdict.rule]]
+when = "highest_tier == 'high' and counts.processes > 2"
+label = "suspicious"
+""")
 put("config_toml", "service", '[[watch]]\npath = "/srv/drop"\npolicy = "default"\nrecursive = false\n')
 
 # Watch-folder names, NUL separated.
