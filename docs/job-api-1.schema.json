@@ -615,6 +615,14 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "host_work": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostItem"
+          },
+          "description": "The host work items of the job (pipelined host stages, ANT-T0454):\nempty until `collect` has handed the job to the host work pool.",
+          "default": []
         }
       },
       "required": [
@@ -1420,6 +1428,104 @@
         "internal"
       ]
     },
+    "HostItem": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/HostItemState"
+        },
+        "after": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names of the items it waits for.",
+          "default": []
+        },
+        "expected_s": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The expected time (seconds): this host's recent median of the item,\nelse an estimate from the input size, else the fixed limit."
+        },
+        "basis": {
+          "type": "string",
+          "description": "Where `expected_s` came from: `median`, `estimate`, `fixed` or\n`policy` (a fixed limit the policy or the job set)."
+        },
+        "limit_s": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Its own time limit (seconds): `daemon.host_time_factor` x\n`expected_s`, or the policy's fixed limit. Time in the queue does not\ncount."
+        },
+        "started_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "finished_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A problem in words, when it had one."
+        }
+      },
+      "required": [
+        "name",
+        "state",
+        "expected_s",
+        "basis",
+        "limit_s"
+      ],
+      "description": "One piece of a job's host processing: a static tool (`static:floss`,\n`static:decompilation`, ...), `triage`, `detection`, `assess` (digest and\nlabel) or `report`."
+    },
+    "HostItemState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "running",
+            "done"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "queued",
+          "description": "In the pool's queue (first come, first served by job arrival)."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "It ended with a problem (a warning of the job, or its failure when the\npolicy requires the stage)."
+        },
+        {
+          "type": "string",
+          "const": "timed_out",
+          "description": "It passed its time limit and was stopped."
+        },
+        {
+          "type": "string",
+          "const": "skipped",
+          "description": "Not run: the job ended first (cancelled, failed, past its deadline)."
+        }
+      ],
+      "description": "Where a host work item is."
+    },
     "Submitted": {
       "type": "object",
       "properties": {
@@ -1614,6 +1720,14 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "host_work": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostItem"
+          },
+          "description": "The host work items of the job (pipelined host stages, ANT-T0454):\nempty until `collect` has handed the job to the host work pool.",
+          "default": []
         },
         "replayed": {
           "type": "boolean",
@@ -2539,6 +2653,17 @@
         },
         "owner": {
           "$ref": "#/$defs/Owner"
+        },
+        "host_pool": {
+          "$ref": "#/$defs/HostPoolStatus",
+          "description": "The host work pool (ANT-T0454).",
+          "default": {
+            "workers": 0,
+            "queued": 0,
+            "running": 0,
+            "jobs": 0,
+            "waiting_for": null
+          }
         }
       },
       "required": [
@@ -2651,6 +2776,48 @@
         "none"
       ],
       "description": "Who holds the data directory."
+    },
+    "HostPoolStatus": {
+      "type": "object",
+      "properties": {
+        "workers": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "`daemon.host_workers`."
+        },
+        "queued": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Items waiting to start (the queue length)."
+        },
+        "running": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "jobs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Jobs with host work left."
+        },
+        "waiting_for": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the first queued item does not start, when it waits for memory."
+        }
+      },
+      "required": [
+        "workers",
+        "queued",
+        "running",
+        "jobs"
+      ],
+      "description": "The host work pool: one for every lane, at most `workers` items at once."
     },
     "Capabilities": {
       "type": "object",
