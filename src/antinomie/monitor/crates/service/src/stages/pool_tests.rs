@@ -282,7 +282,10 @@ fn a_cancel_mid_host_work_ends_the_job_cancelled_and_skips_the_rest() {
         "{:?}",
         done.host_work
     );
-    assert!(w.lane_file().collected.is_empty());
+    // The lane file lets a job go a moment after it is terminal in the store.
+    rig.until("the lane file to let the jobs go", |_| {
+        w.lane_file().collected.is_empty()
+    });
     rig.stop();
 }
 
@@ -358,7 +361,10 @@ fn a_stop_mid_host_work_leaves_the_jobs_and_a_restart_resumes_them_in_order() {
         .min()
         .unwrap();
     assert!(last_a <= first_b);
-    assert!(w.lane_file().collected.is_empty());
+    // The lane file lets a job go a moment after it is terminal in the store.
+    rig.until("the lane file to let the jobs go", |_| {
+        w.lane_file().collected.is_empty()
+    });
     rig.stop();
 }
 
