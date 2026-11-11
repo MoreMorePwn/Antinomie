@@ -1122,6 +1122,7 @@ pub fn fuzz_section(kind: AnalysisKind, specimen: &[u8], listings: &Path) {
             enabled: true,
             checks: vec![kind],
             time_limit_minutes: 0,
+            limits: super::limits::AnalysisLimits::DEFAULT,
         },
     );
     report.sections = vec![section];

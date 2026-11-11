@@ -135,6 +135,31 @@ fn bad_expressions_are_refused_with_where() {
     assert_eq!(error.at, 27, "the offset points at the bad word");
 }
 
+/// Found by the `label_expr` fuzz target (ANT-T0387): thousands of nested
+/// parentheses or chained terms overflowed the stack.
+#[test]
+fn a_hostile_expression_is_refused_before_it_can_overflow_the_stack() {
+    let nest = format!(
+        "{}highest_tier == 'high'{}",
+        "(".repeat(100),
+        ")".repeat(100)
+    );
+    let error = Expr::parse(&nest).unwrap_err();
+    assert!(error.to_string().contains("nest deeper"), "{error}");
+    let huge = "(".repeat(5000);
+    assert!(Expr::parse(&huge).is_err());
+    let open_only = "(".repeat(100_000);
+    assert!(Expr::parse(&open_only).is_err());
+    let chain = vec!["highest_tier == 'high'"; 200_000].join(" and ");
+    let error = Expr::parse(&chain).unwrap_err();
+    assert!(error.to_string().contains("longer than"), "{error}");
+    // Within the limits both still work.
+    let ok = format!("{}counts.findings >= 1{}", "(".repeat(32), ")".repeat(32));
+    assert!(Expr::parse(&ok).is_ok());
+    let chain = vec!["highest_tier == 'high'"; 60].join(" or ");
+    let _ = Expr::parse(&chain).unwrap().eval(&facts());
+}
+
 // ---- the default mapping ----------------------------------------------
 
 #[test]
