@@ -147,8 +147,24 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
             "unsupported: one lane per node (decided D4); values above 1 are not available",
         );
     }
-    if config.daemon.host_workers == Some(0) {
-        sink.error("daemon.host_workers", "must be at least 1");
+    if let Some(workers) = config.daemon.host_workers
+        && !(1..=super::service::MAX_HOST_WORKERS).contains(&workers)
+    {
+        sink.error(
+            "daemon.host_workers",
+            &format!("must be 1 to {}", super::service::MAX_HOST_WORKERS),
+        );
+    }
+    if let Some(factor) = config.daemon.host_time_factor
+        && !(factor.is_finite() && (1.0..=super::service::MAX_HOST_TIME_FACTOR).contains(&factor))
+    {
+        sink.error(
+            "daemon.host_time_factor",
+            &format!(
+                "must be 1 to {} (times the expected time of an item)",
+                super::service::MAX_HOST_TIME_FACTOR
+            ),
+        );
     }
     if config.daemon.drain_timeout_s == 0 {
         sink.error("daemon.drain_timeout_s", "must be at least 1");
@@ -407,7 +423,11 @@ fn check_policy(policy: &Policy, catalog: &dyn VmCatalog, sink: &mut Sink<'_>) {
             "has no effect while evidence.dump_trigger is off",
         );
     }
-    if policy.analysis.static_time_limit_min > MAX_STATIC_MINUTES {
+    if policy
+        .analysis
+        .static_time_limit_min
+        .is_some_and(|minutes| minutes > MAX_STATIC_MINUTES)
+    {
         sink.error(
             "analysis.static_time_limit_min",
             format!("0 to {MAX_STATIC_MINUTES}"),
