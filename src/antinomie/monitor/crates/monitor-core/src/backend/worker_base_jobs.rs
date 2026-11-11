@@ -4,7 +4,7 @@ use super::*;
 use crate::lanes::SharedWrite;
 
 impl Worker {
-    /// A lane engine leaves the shared folders to lane 0 ([`crate::lanes`]).
+    /// A lane engine leaves the shared folders to lane 1 ([`crate::lanes`]).
     fn refuse_on_lane(&self, action: SharedWrite) -> Result<(), String> {
         match self.options.owner.lane {
             Some(lane) => Err(crate::lanes::LaneRefusal {

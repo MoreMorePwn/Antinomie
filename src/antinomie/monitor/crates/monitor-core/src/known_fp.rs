@@ -40,7 +40,7 @@ struct Stored {
     entries: Vec<Entry>,
 }
 
-/// Lane 0's list for a lane data folder: the lanes share the IOC data.
+/// Lane 1's list for a lane data folder: the lanes share the IOC data.
 fn path(data_dir: &Path) -> PathBuf {
     crate::lanes::shared_root(data_dir).join(FILE)
 }

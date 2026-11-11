@@ -558,7 +558,7 @@ pub struct PluginCatalog {
 }
 
 /// Folder of community Volatility 3 plugins (`.py` files), passed to
-/// Volatility with `-p`. They run as the user, outside any sandbox. Lane 0's
+/// Volatility with `-p`. They run as the user, outside any sandbox. Lane 1's
 /// for a lane data folder ([`crate::lanes`]).
 pub fn plugins_dir(data_dir: &Path) -> PathBuf {
     crate::lanes::shared_root(data_dir).join("volatility-plugins")

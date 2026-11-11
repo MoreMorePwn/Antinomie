@@ -563,7 +563,7 @@ impl RouteConfig {
     }
 }
 
-/// `<data>/network/routes.json`; a lane's data folder reads lane 0's (the
+/// `<data>/network/routes.json`; a lane's data folder reads lane 1's (the
 /// lanes of a daemon route alike). Its Tor and helper state stays its own.
 fn config_path(data_dir: &Path) -> PathBuf {
     crate::lanes::shared_root(data_dir)

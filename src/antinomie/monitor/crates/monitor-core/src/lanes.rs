@@ -2,31 +2,33 @@
 //! Lane data folders (multi-lane M1, addendum P5-1 card B).
 //!
 //! A node may run several lanes in one process, each with its own engine and
-//! VM. Lane 0 is the data folder the operator chose. Lane N (1 and up) has its
-//! own data folder, `<lane 0>/lanes/N/`, for its VMs, runs and settings, and
-//! shares lane 0's bases, samples, ioc, rules, tools and volatility-plugins
-//! folders.
+//! VM. Lane 1 is the data folder the operator chose. Lane N (2 and up) has its
+//! own data folder, `<lane 1>/lanes/N/`, for its VMs, runs and settings, and
+//! shares lane 1's bases, samples, ioc, rules, tools and volatility-plugins
+//! folders. The numbers are the daemon's (`lane-1`, `lane-N`), so the folder,
+//! the owner record and the service's lane id agree; `lanes/1/` is never a
+//! lane (ANT-T0455 card C).
 //!
 //! The engine of lane N starts with [`BackendOptions::shared_root`] set to lane
-//! 0's folder and an owner claim naming lane N. It records the lane in
+//! 1's folder and an owner claim naming lane N. It records the lane in
 //! `<lane>/lane.json`. Every path helper that takes a data folder
 //! ([`crate::samples::samples_dir`], [`crate::ruleset::rules_root`],
 //! [`crate::analysis_tools::tools_dir`], [`crate::ioc::feeds::root`],
 //! [`bases_dir`], [`crate::memory::plugins_dir`]) reads that record and
-//! resolves into lane 0's folder, in any process, without symbolic links. The
+//! resolves into lane 1's folder, in any process, without symbolic links. The
 //! shared root is the lane folder's grandparent, so moving the whole tree
 //! keeps the lanes working.
 //!
-//! Only lane 0 changes the shared folders. A lane engine refuses base imports,
+//! Only lane 1 changes the shared folders. A lane engine refuses base imports,
 //! deletes, downloads and builds and tool installs and removals, and the rule,
 //! feed, known false positive and GeoIP writers refuse a lane folder
-//! ([`refuse_in_lane`]); the known false positives are lane 0's too. The
+//! ([`refuse_in_lane`]); the known false positives are lane 1's too. The
 //! sample library is the exception: every lane writes it, serialised by its
 //! writer lock (`samples::write_lock`) and SQLite.
 //!
 //! The engine settings (`settings.json`) and the route settings
-//! (`network/routes.json`) are lane 0's too: a lane reads them through the
-//! same resolution, and only lane 0 writes them (ANT-T0455 card C). A lane's
+//! (`network/routes.json`) are lane 1's too: a lane reads them through the
+//! same resolution, and only lane 1 writes them (ANT-T0455 card C). A lane's
 //! Tor and helper state under `network/` stays its own.
 //!
 //! A base must not go while a lane creates a VM from it: `DeleteBase` and a
@@ -43,14 +45,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The folder of lane 0 that holds the other lanes' data folders.
+/// The folder of lane 1 that holds the other lanes' data folders.
 pub const LANES_DIR: &str = "lanes";
 /// The record that makes a data folder a lane's.
 pub const MARKER_FILE: &str = "lane.json";
+/// The lowest lane number a lane data folder may have: lane 1 is the data
+/// folder itself.
+pub const MIN_LANE: u32 = 2;
 /// The highest lane number a data folder may have.
 pub const MAX_LANE: u32 = 64;
 /// Part of every refusal of a shared writer on a lane; front ends match on it.
-pub const SHARED_WRITER: &str = "only lane 0 changes the folders the lanes share";
+pub const SHARED_WRITER: &str =
+    "only lane 1 (the main data folder) changes the folders the lanes share";
 
 const MARKER_MAX: u64 = 4096;
 
@@ -65,7 +71,7 @@ pub struct LaneMarker {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Lane {
     pub lane: u32,
-    /// Lane 0's data folder, canonical.
+    /// Lane 1's data folder, canonical.
     pub shared_root: PathBuf,
     /// This lane's data folder, canonical.
     pub data_dir: PathBuf,
@@ -104,7 +110,7 @@ pub fn lane_of(data_dir: &Path) -> Result<Option<Lane>, String> {
     }
     let marker: LaneMarker =
         serde_json::from_slice(&bytes).map_err(|error| format!("{}: {error}", path.display()))?;
-    if marker.schema != 1 || marker.lane == 0 || marker.lane > MAX_LANE {
+    if marker.schema != 1 || marker.lane < MIN_LANE || marker.lane > MAX_LANE {
         return Err(format!("{}: not a lane record", path.display()));
     }
     let data_dir =
@@ -131,7 +137,7 @@ pub fn lane_of(data_dir: &Path) -> Result<Option<Lane>, String> {
     }))
 }
 
-/// The folder whose shared folders `data_dir` uses: lane 0's for a lane
+/// The folder whose shared folders `data_dir` uses: lane 1's for a lane
 /// folder, `data_dir` itself otherwise. A lane record that does not read
 /// resolves nowhere new; the lane's engine refuses to start on it, and the
 /// writers refuse it ([`refuse_in_lane`]).
@@ -147,7 +153,7 @@ pub fn bases_dir(data_dir: &Path) -> PathBuf {
     shared_root(data_dir).join("bases")
 }
 
-/// The lane folders under `shared_root` (lane 0), in lane order. Folders
+/// The lane folders under `shared_root` (lane 1), in lane order. Folders
 /// under `lanes/` without a record are not lanes; a record that does not read
 /// is an error, for a caller that must not miss a lane.
 pub fn lanes_checked(shared_root: &Path) -> Result<Vec<Lane>, String> {
@@ -177,14 +183,14 @@ pub fn lanes(shared_root: &Path) -> Vec<Lane> {
     found
 }
 
-/// Whether `data_dir` is lane 0 of at least one lane folder, or is a lane.
+/// Whether `data_dir` is lane 1 of at least one lane folder, or is a lane.
 pub fn has_lanes(data_dir: &Path) -> bool {
     is_lane_folder(data_dir)
         || fs::read_dir(data_dir.join(LANES_DIR))
             .is_ok_and(|entries| entries.flatten().any(|entry| is_lane_folder(&entry.path())))
 }
 
-/// A change of the shared folders that only lane 0 makes.
+/// A change of the shared folders that only lane 1 makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SharedWrite {
     ImportBase,
@@ -259,11 +265,11 @@ pub fn refuse_in_lane(data_dir: &Path, action: SharedWrite) -> Result<(), String
     Err(LaneRefusal { lane, action }.to_string())
 }
 
-/// The file of the base lock, in lane 0's `run/` folder.
+/// The file of the base lock, in lane 1's `run/` folder.
 pub const BASE_LOCK_FILE: &str = "base.lock";
 
 /// The base lock of a shared root, held while it lives: an exclusive `flock`
-/// on `<lane 0>/run/base.lock`. A lock taken through another descriptor, in
+/// on `<lane 1>/run/base.lock`. A lock taken through another descriptor, in
 /// this process or another, waits for it.
 #[derive(Debug)]
 pub struct BaseLock {
@@ -311,8 +317,10 @@ pub(crate) fn check_start(options: &BackendOptions) -> Result<Option<LaneMarker>
             )),
         },
         (Some(lane), Some(root)) => {
-            if lane == 0 || lane > MAX_LANE {
-                return Err(format!("lane {lane} is not between 1 and {MAX_LANE}"));
+            if !(MIN_LANE..=MAX_LANE).contains(&lane) {
+                return Err(format!(
+                    "lane {lane} is not between {MIN_LANE} and {MAX_LANE} (lane 1 is the data folder itself)"
+                ));
             }
             let root = fs::canonicalize(root)
                 .map_err(|e| format!("shared root {}: {e}", root.display()))?;
@@ -343,7 +351,7 @@ pub(crate) fn check_start(options: &BackendOptions) -> Result<Option<LaneMarker>
             Ok(Some(LaneMarker { schema: 1, lane }))
         }
         (Some(lane), None) => Err(format!(
-            "lane {lane} needs the shared root (lane 0's data folder)"
+            "lane {lane} needs the shared root (lane 1's data folder)"
         )),
         (None, Some(root)) => Err(format!(
             "a shared root ({}) is only for a lane engine; the owner claim names no lane",

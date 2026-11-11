@@ -5,14 +5,15 @@
 //!
 //! | Lane | Data folder | Engine |
 //! |---|---|---|
-//! | `lane-1` | the data folder itself (core's lane 0: it owns the shared folders) | started first, as before |
-//! | `lane-N` (2 to [`MAX_LANES`]) | `<data>/lanes/N/` (core's lane N) | `BackendOptions { data_dir: lanes/N, shared_root: Some(<data>), owner.lane: Some(N) }` |
+//! | `lane-1` | the data folder itself (it owns the shared folders) | started first, as before |
+//! | `lane-N` (2 to [`MAX_LANES`]) | `<data>/lanes/N/` (core's lane N, [`core_lanes::MIN_LANE`] and up) | `BackendOptions { data_dir: lanes/N, shared_root: Some(<data>), owner.lane: Some(N) }` |
 //!
 //! The lane files of every lane are lane 1's (`<data>/service/lanes/lane-N.json`),
 //! as are the job store, `service.toml`, the policies and the host work pool.
 //! A lane engine reads lane 1's engine settings and route settings (core
 //! resolves `settings.json` and `network/routes.json` of a lane folder into
-//! lane 0's), so the lanes are configured once.
+//! lane 1's), so the lanes are configured once. Core numbers the lanes the
+//! same way: lane 1 is the data folder, `<data>/lanes/1/` is never a lane.
 //!
 //! **Which lanes start** ([`plan_lanes`]): lane 1 always, as before. Lane N
 //! (2 to `daemon.lanes`) when it has a lane file and a VM (`auto init --lane

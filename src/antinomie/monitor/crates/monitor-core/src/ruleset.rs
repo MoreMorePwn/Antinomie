@@ -218,12 +218,12 @@ pub struct Snapshot {
     pub excluded_rules: u64,
 }
 
-/// Rule packs and groups change only through lane 0 ([`crate::lanes`]).
+/// Rule packs and groups change only through lane 1 ([`crate::lanes`]).
 fn refuse_lane(data_dir: &Path) -> Result<(), String> {
     crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::RuleUpdate)
 }
 
-/// The rules folder; lane 0's for a lane data folder ([`crate::lanes`]).
+/// The rules folder; lane 1's for a lane data folder ([`crate::lanes`]).
 pub fn rules_root(data_dir: &Path) -> PathBuf {
     crate::lanes::shared_root(data_dir).join("rules")
 }

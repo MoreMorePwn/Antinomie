@@ -307,7 +307,7 @@ impl EngineSettings {
     }
 }
 
-/// `<data>/settings.json`; a lane's data folder reads lane 0's
+/// `<data>/settings.json`; a lane's data folder reads lane 1's
 /// ([`crate::lanes`]: the lanes of a daemon share one set of engine settings).
 pub fn path(data_dir: &Path) -> PathBuf {
     crate::lanes::shared_root(data_dir).join(FILE)

@@ -2,7 +2,7 @@
 //! Commands from the frontend that do not need a running guest.
 use super::*;
 
-/// How long a lane's `Create` waits for a base deletion on lane 0 to end.
+/// How long a lane's `Create` waits for a base deletion on lane 1 to end.
 const BASE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl Worker {
@@ -321,12 +321,12 @@ impl Worker {
         if self.snapshot.vms.iter().any(|current| current.id == vm.id) {
             return Err("VM identity already exists".into());
         }
-        // A lane's VM is built on lane 0's base: hold the base lock until the
-        // VM is saved, so lane 0 cannot delete the base in between.
+        // A lane's VM is built on lane 1's base: hold the base lock until the
+        // VM is saved, so lane 1 cannot delete the base in between.
         let _bases = match self.options.owner.lane {
             Some(_) => Some(
                 crate::lanes::base_lock(&self.options.data_dir, BASE_LOCK_WAIT)?
-                    .ok_or("lane 0 is deleting a base; try again in a moment")?,
+                    .ok_or("lane 1 is deleting a base; try again in a moment")?,
             ),
             None => None,
         };

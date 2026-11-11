@@ -39,15 +39,16 @@ x86 programs by their own table.
   - A stop lets the pool work on for `shutdown_host_grace_s`; what is left resumes in the
     same order at the next start, keeping static tools that had finished.
 
-- **Lane data folders share lane 0's bases, samples, rules, tools and IOC data (ANT-T0455, part B).**
-  - Groundwork for several lanes in one daemon (`daemon.lanes` stays 1 by default). Lane N
-    keeps its VMs and runs in `<data>/lanes/N/` and uses lane 0's `bases`, `samples`, `ioc`,
+- **Lane data folders share lane 1's bases, samples, rules, tools and IOC data (ANT-T0455, part B).**
+  - Groundwork for several lanes in one daemon (`daemon.lanes` stays 1 by default). Lane 1 is
+    the data folder; lane N (2 and up) keeps its VMs and runs in `<data>/lanes/N/` and uses
+    lane 1's `bases`, `samples`, `ioc`,
     `rules`, `tools`, `volatility-plugins` and known false positives directly, without
     symbolic links. A lane does not change them: base import, delete, download and build,
     tool install and remove, and rule, IOC dataset, known false positive and GeoIP updates
-    are refused there with "only lane 0 changes the folders the lanes share".
+    are refused there with "only lane 1 (the main data folder) changes the folders the lanes share".
   - Deleting a base is refused while a VM of any lane is built on it. The window refuses to
-    open a lane's folder and names lane 0's instead.
+    open a lane's folder and names lane 1's instead.
 
 - **Auto mode runs up to four lanes at once (`[daemon] lanes`, ANT-T0455, part C).** One lane
   stays the default.

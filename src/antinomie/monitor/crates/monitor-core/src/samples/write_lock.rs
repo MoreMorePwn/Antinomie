@@ -57,7 +57,7 @@ pub struct WriteGuard {
 
 /// Wait for the write lock of `database`. The lock is keyed by the file's
 /// canonical path, so every engine of a process (the lanes of a daemon, which
-/// reach lane 0's library from their own data folders) and every spelling of
+/// reach lane 1's library from their own data folders) and every spelling of
 /// the path share one lock.
 pub fn lock(database: &Path) -> WriteGuard {
     let canonical = key(database);
@@ -116,7 +116,7 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    /// The lanes of a daemon reach lane 0's library from their own folders;
+    /// The lanes of a daemon reach lane 1's library from their own folders;
     /// whatever the spelling, one database has one lock.
     #[test]
     fn two_spellings_of_one_database_share_its_lock() {
