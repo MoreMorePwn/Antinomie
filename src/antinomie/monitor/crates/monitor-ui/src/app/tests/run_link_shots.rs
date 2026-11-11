@@ -8,7 +8,7 @@
 //! ANTINOMIE_QA_SIZE = 1280x820, ANTINOMIE_QA_SECONDS = 25.
 use super::*;
 use crate::theme::Theme;
-use antinomie_monitor_core::{provenance::Provenance, RunState, VmLocations};
+use antinomie_monitor_core::{memory::PluginRun, provenance::Provenance, RunState, VmLocations};
 
 const BPFDOOR: &str = "f9c3d854547992ccfc7f6670b3cc7866";
 const REKOOBE: &str = "469c1c9b34fe60cabbaed8d668019d61";
@@ -144,6 +144,8 @@ fn native_run_link_fixture() {
     struct QaApp {
         app: MonitorApp,
         deadline: Instant,
+        frames: u32,
+        shot: String,
     }
     impl eframe::App for QaApp {
         fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -153,6 +155,25 @@ fn native_run_link_fixture() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             eframe::App::ui(&mut self.app, root, frame);
+            // ANTINOMIE_QA_SHOT = <file.ppm>: save one frame after 4 s.
+            self.frames += 1;
+            if self.frames == 20 && !self.shot.is_empty() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            }
+            let image = ctx.input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                    _ => None,
+                })
+            });
+            if let Some(image) = image {
+                let mut out =
+                    format!("P6\n{} {}\n255\n", image.size[0], image.size[1]).into_bytes();
+                for pixel in &image.pixels {
+                    out.extend_from_slice(&[pixel.r(), pixel.g(), pixel.b()]);
+                }
+                let _ = std::fs::write(&self.shot, out);
+            }
             ctx.request_repaint_after(Duration::from_millis(200));
         }
     }
@@ -192,11 +213,22 @@ fn native_run_link_fixture() {
             app.settings.set_theme(theme_choice);
             theme::apply_theme(&cc.egui_ctx, theme_choice);
             seed(&mut app, &data);
-            app.focus_panel = Some(if scene == "memory" {
-                crate::workspace::Panel::Memory
-            } else {
-                crate::workspace::Panel::CoreDump
+            app.focus_panel = Some(match scene.as_str() {
+                "memory" => crate::workspace::Panel::Memory,
+                // A plugin run that has ended, with the Memory tab never drawn.
+                "bgjob" => crate::workspace::Panel::Jobs,
+                _ => crate::workspace::Panel::CoreDump,
             });
+            if scene == "bgjob" {
+                app.memory_view.push_ended_run_for_qa(PluginRun {
+                    id: "r1".into(),
+                    plugin: "linux.pslist.PsList".into(),
+                    dump_id: "by-hand-live".into(),
+                    state: antinomie_monitor_core::memory::RunState::Finished,
+                    rows: 3,
+                    ..PluginRun::default()
+                });
+            }
             if var("ANTINOMIE_QA_THIS_RUN") == "1" {
                 app.core_view.set_this_run_only(true);
                 app.memory_view.set_this_run_only(true);
@@ -204,6 +236,8 @@ fn native_run_link_fixture() {
             Ok(Box::new(QaApp {
                 app,
                 deadline: Instant::now() + Duration::from_secs(seconds),
+                frames: 0,
+                shot: var("ANTINOMIE_QA_SHOT"),
             }))
         }),
     )

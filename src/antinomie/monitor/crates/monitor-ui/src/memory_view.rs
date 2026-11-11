@@ -328,6 +328,12 @@ impl MemoryView {
         })
     }
 
+    /// A run that has already ended, as `background` finds it (QA fixture).
+    #[cfg(test)]
+    pub(crate) fn push_ended_run_for_qa(&mut self, run: PluginRun) {
+        self.jobs.push(RunHandle::ended(run));
+    }
+
     /// What the Memory tab is running now, for the Jobs window: plugin and
     /// report runs, and catalog plugin downloads.
     pub(crate) fn running_jobs(&self) -> Vec<crate::jobs::Job> {

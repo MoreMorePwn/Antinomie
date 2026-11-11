@@ -443,21 +443,14 @@ fn a_dump_links_to_its_run_by_provenance_then_by_the_runs_own_record() {
 
 #[test]
 fn a_plugin_run_ends_without_the_memory_tab_being_drawn() {
-    let dir = std::env::temp_dir().join(format!(
-        "ant-memory-bg-{}",
-        antinomie_monitor_core::storage::unique_id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
     let run = PluginRun {
         id: "r1".into(),
         plugin: "linux.pslist.PsList".into(),
         dump_id: "d".into(),
         state: RunState::Finished,
         rows: 3,
-        dir: dir.clone(),
         ..PluginRun::default()
     };
-    run.save().unwrap();
     let mut view = MemoryView::default();
     view.jobs.push(RunHandle::ended(run));
     assert_eq!(view.running_jobs().len(), 1);
@@ -469,5 +462,4 @@ fn a_plugin_run_ends_without_the_memory_tab_being_drawn() {
         view.status,
         Some(("PsList finished: 3 rows".to_owned(), false))
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
