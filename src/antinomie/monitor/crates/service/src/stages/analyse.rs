@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `analyse` (design 4.1; card P3-5): the host-side work on a finished,
-//! settled recording.
+//! settled recording, as the separate work items of the host work pool
+//! (ANT-T0454, [`super::items`]).
 //!
 //! 1. **Static analysis of the library copy**, `Command::AnalyzeSample` in
-//!    bubblewrap (outside the lane, so the VM is not busy), for the policy's
-//!    checks, bounded by `static_s` = tools x limit x 60 + 60.
-//! 2. **The Triage scan**, then **the detection engines** over the finished
-//!    recording, then the run's **digest**. These are the builders the GUI and
+//!    bubblewrap (outside the lane, so the VM is not busy): one item per tool
+//!    (Regex goes with Strings, or FLOSS, whose strings it reads), each
+//!    bounded by its own limit ([`super::timing`]).
+//! 2. **The Triage scan** (item `triage`), then **the detection engines**
+//!    (item `detection`) over the finished recording, then the run's
+//!    **digest** (item `assess`). These are the builders the GUI and
 //!    `antinomie-cli triage/detect` call (`antinomie_triage`); they run on a
-//!    worker thread bounded by `analyse_s` (900 s) and a cancel flag.
-//! 3. **The assessment**: the Triage summary and the detections go through the
-//!    policy's verdict mapping ([`crate::verdict`]); the result is stored with
-//!    the job (`job.assessment`). It is computed here and not in `report`, so
-//!    a job that asks for no report still has its label (departure from 4.1,
-//!    which has `report` build it).
+//!    worker thread bounded by the item's limit and a cancel flag.
+//! 3. **The assessment** (item `assess`): the Triage summary and the
+//!    detections go through the policy's verdict mapping ([`crate::verdict`]);
+//!    the result is stored with the job (`job.assessment`). It is computed
+//!    here and not in `report`, so a job that asks for no report still has
+//!    its label (departure from 4.1, which has `report` build it).
 //!
 //! A static check that ran out of time or stopped short is not a problem of
 //! the stage: it is a job warning (`static_check_incomplete`) and the job ends
@@ -27,13 +30,10 @@
 use super::{
     LaneStages, StageStop,
     host::{Built, HostTriage},
-    plan::{ANALYSE_WAIT, DIGEST_WAIT, HostPlan},
+    plan::HostPlan,
 };
 use crate::{
-    api::{
-        failure::{Failure, FailureCode},
-        job::{Job, Stage},
-    },
+    api::job::{Job, Stage},
     engine::Engine,
     verdict::{Facts, Mapping, assessment_of},
     waiter::{WaitError, millis},
@@ -55,23 +55,23 @@ use std::{
 /// How often a bounded worker is looked at; the engine is pumped meanwhile.
 const POLL: Duration = Duration::from_millis(20);
 
-/// What `analyse` leaves for `report`.
-pub struct Analysed {
-    /// The saved run and its index, when Triage ran.
-    pub scan: Option<(SavedRun, ArchiveScan)>,
-    /// Steps that failed, in words (the job has them as warnings).
-    pub problems: Vec<String>,
-    /// Static checks that ran out of time or stopped short, in words. They
-    /// are warnings and make the job `partial`, but never fail the stage.
-    pub incomplete: Vec<String>,
-}
+/// How long a static item may wait for the engine to take it and start it
+/// (the engine runs one standalone analysis at a time, and its command
+/// queue may be busy with the lane): not counted against the item's limit.
+pub const ENGINE_QUEUE_WAIT: Duration = Duration::from_secs(4 * 3600);
+
+/// A Triage scan, or the problem in words with whether the limit ended it.
+pub(super) type TriageDone = Result<(SavedRun, ArchiveScan), (String, bool)>;
+/// The detection engines' outcomes, the problems, and whether the limit ended
+/// the item.
+pub(super) type DetectionDone = (Vec<(DetectionEngine, Outcome)>, Vec<String>, bool);
 
 /// What the static analysis left: `hard` is a failure of the analysis
 /// itself (or of a required check), `soft` a check that stopped short.
 #[derive(Default)]
-struct StaticOutcome {
-    hard: Vec<String>,
-    soft: Vec<String>,
+pub(super) struct StaticOutcome {
+    pub(super) hard: Vec<String>,
+    pub(super) soft: Vec<String>,
 }
 
 impl StaticOutcome {
@@ -120,8 +120,22 @@ fn judge_report(plan: &HostPlan, report: &AnalysisReport) -> StaticOutcome {
         }
     }
     if report.state == AnalysisState::Partial && out.hard.is_empty() && out.soft.is_empty() {
-        out.soft
-            .push("static analysis finished partly (a tool stopped short)".into());
+        // Name the checks that had nothing to give (one item per tool since
+        // ANT-T0454, so each warning says which).
+        let unavailable: Vec<String> = report
+            .sections
+            .iter()
+            .filter(|s| s.state == AnalysisSectionState::Unavailable)
+            .map(|s| check_name(s.kind))
+            .collect();
+        out.soft.push(if unavailable.is_empty() {
+            "static analysis finished partly (a tool stopped short)".into()
+        } else {
+            format!(
+                "static analysis finished partly: the {} check was not available",
+                unavailable.join(" and ")
+            )
+        });
     }
     out
 }
@@ -201,141 +215,213 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    /// The library copy through `AnalyzeSample`.
-    fn static_analysis(&mut self, job: &Job, plan: &HostPlan) -> Result<StaticOutcome, StageStop> {
+    /// One static item: the library copy through `AnalyzeSample` for the
+    /// checks of `group`. The engine runs one standalone analysis at a time,
+    /// so the time it sits in the engine's queue is not counted: `limit`
+    /// starts when the engine reports it running. Past it the analysis is
+    /// cancelled (`CancelAnalysis`) and the item has timed out.
+    pub(super) fn static_item(
+        &mut self,
+        job: &Job,
+        plan: &HostPlan,
+        group: &[AnalysisKind],
+        limit: Duration,
+    ) -> Result<(StaticOutcome, bool, u64), StageStop> {
         let Some(sample) = job.sample.as_ref() else {
-            return Ok(StaticOutcome::hard("the job has no sample to analyse"));
+            return Ok((
+                StaticOutcome::hard("the job has no sample to analyse"),
+                false,
+                0,
+            ));
         };
-        // A loaded host stretches the tools' time like it stretches the
-        // guest waits; a limit of 0 is the engine's own and stays.
-        let scale = self.env.triage.load_scale().max(1.0);
-        let mut plan = plan.clone();
-        plan.static_limit_min = (f64::from(plan.static_limit_min) * scale).ceil() as u32;
-        let plan = &plan;
+        let asked = self.waiter.now_ms();
+        let words = group
+            .iter()
+            .map(|k| check_name(*k))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        // The engine's own limit per tool: the policy's fixed one (stretched
+        // on a loaded host like the guest waits), else the item's whole limit
+        // so the item's own deadline is the one that ends it.
+        let minutes = match plan.static_limit_min {
+            Some(0) => 0,
+            Some(minutes) => {
+                (f64::from(minutes) * self.env.triage.load_scale().max(1.0)).ceil() as u32
+            }
+            None => limit.as_secs().div_ceil(60) as u32,
+        }
+        .min(antinomie_monitor_core::analysis::TIME_LIMIT_MAX_MINUTES);
         let selection = AnalysisSelection {
             enabled: true,
-            checks: plan.static_checks.clone(),
-            time_limit_minutes: plan.static_limit_min,
+            checks: group.to_vec(),
+            time_limit_minutes: minutes,
             limits: AnalysisLimits::default(),
         };
-        self.progress(job, Stage::Analyse, "static analysis of the library copy");
-        let limit = plan.static_wait();
-        let began = self.waiter.now_ms();
+        self.progress(
+            job,
+            Stage::Analyse,
+            &format!("static analysis of the library copy: {words}"),
+        );
         let id = match self.waiter.command(
             Command::AnalyzeSample {
                 sha256: sample.sha256.to_string(),
                 selection,
             },
-            Some(limit),
+            Some(ENGINE_QUEUE_WAIT),
         ) {
             Ok(id) => id,
             Err(WaitError::Failed(message)) => {
-                return Ok(StaticOutcome::hard(format!(
-                    "static analysis was refused: {message}"
-                )));
+                return Ok((
+                    StaticOutcome::hard(format!("static analysis was refused: {message}")),
+                    false,
+                    0,
+                ));
             }
             Err(WaitError::TimedOut { .. }) => {
-                return Ok(StaticOutcome::unfinished(
-                    plan,
-                    "static analysis did not start in time".into(),
+                return Ok((
+                    StaticOutcome::unfinished(plan, "static analysis did not start in time".into()),
+                    true,
+                    0,
                 ));
             }
             Err(other) => return Err(StageStop::Abort(other)),
         };
-        let left = limit.saturating_sub(Duration::from_millis(self.waiter.now_ms() - began));
-        let finished = |report: &antinomie_monitor_core::analysis::AnalysisReport| {
+        let waiting = |r: &AnalysisReport| {
+            matches!(r.state, AnalysisState::Acquiring | AnalysisState::Queued)
+        };
+        let finished = |r: &AnalysisReport| {
             !matches!(
-                report.state,
+                r.state,
                 AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
             )
         };
         let watched = id.clone();
-        match self
-            .waiter
-            .wait_until("the static analysis to finish", Some(left), move |s| {
-                s.analysis_reports
-                    .iter()
-                    .any(|r| r.id == watched && finished(r))
-            }) {
+        match self.waiter.wait_until_report(
+            "the static analysis to start",
+            ENGINE_QUEUE_WAIT,
+            &watched,
+            move |r| !waiting(r),
+        ) {
             Ok(()) => {}
             Err(WaitError::TimedOut { .. }) => {
-                return Ok(StaticOutcome::unfinished(
-                    plan,
-                    format!(
-                        "static analysis did not finish within {} seconds",
-                        limit.as_secs()
-                    ),
+                let _ = self.waiter.send(Command::CancelAnalysis {
+                    analysis_id: id.clone(),
+                });
+                return Ok((
+                    StaticOutcome::unfinished(plan, "static analysis did not start in time".into()),
+                    true,
+                    0,
                 ));
             }
             Err(other) => return Err(StageStop::Abort(other)),
         }
-        let report = self
-            .waiter
-            .snapshot()
-            .analysis_reports
-            .iter()
-            .find(|r| r.id == id)
-            .cloned();
-        Ok(match report {
-            Some(r) if matches!(r.state, AnalysisState::Complete | AnalysisState::Partial) => {
-                judge_report(plan, &r)
+        // The time it waited for the engine is not its own (the run-time
+        // history records only the time it ran).
+        let waited = self.waiter.now_ms().saturating_sub(asked);
+        match self.waiter.wait_until_report(
+            "the static analysis to finish",
+            limit,
+            &watched,
+            finished,
+        ) {
+            Ok(()) => {}
+            Err(WaitError::TimedOut { .. }) => {
+                let _ = self.waiter.send(Command::CancelAnalysis {
+                    analysis_id: id.clone(),
+                });
+                return Ok((
+                    StaticOutcome::unfinished(
+                        plan,
+                        format!(
+                            "static analysis ({words}) did not finish within {} seconds",
+                            limit.as_secs()
+                        ),
+                    ),
+                    true,
+                    waited,
+                ));
             }
-            Some(r) => StaticOutcome::hard(format!(
-                "static analysis ended {:?}{}",
-                r.state,
-                r.reason.map(|r| format!(": {r}")).unwrap_or_default()
-            )),
-            None => StaticOutcome::hard("static analysis left no report"),
+            Err(other) => return Err(StageStop::Abort(other)),
+        }
+        Ok((
+            match self.waiter.analysis(&id) {
+                Some(r) if matches!(r.state, AnalysisState::Complete | AnalysisState::Partial) => {
+                    judge_report(plan, &r)
+                }
+                Some(r) => StaticOutcome::hard(format!(
+                    "static analysis ended {:?}{}",
+                    r.state,
+                    r.reason.map(|r| format!(": {r}")).unwrap_or_default()
+                )),
+                None => StaticOutcome::hard("static analysis left no report"),
+            },
+            false,
+            waited,
+        ))
+    }
+
+    /// The Triage item: open the saved run and index it. `Err` in the inner
+    /// result is the problem in words, with whether the limit ended it.
+    pub(super) fn triage_item(
+        &mut self,
+        job: &Job,
+        limit: Duration,
+    ) -> Result<TriageDone, StageStop> {
+        let triage: &dyn HostTriage = self.env.triage;
+        self.progress(job, Stage::Analyse, "indexing the recording");
+        let worked = self.bounded(limit, |cancel| {
+            let saved = triage.open_run(job)?;
+            let scan = triage.index(&saved, cancel)?;
+            Ok::<_, String>((saved, scan))
+        });
+        Ok(match worked {
+            Ok(Ok(done)) => Ok(done),
+            Ok(Err(error)) => Err((format!("the Triage scan failed: {error}"), false)),
+            Err(why) => {
+                if let Some(stop) = why.stop() {
+                    return Err(stop);
+                }
+                Err((
+                    why.words("the Triage scan"),
+                    matches!(why, Bounded::TimedOut),
+                ))
+            }
         })
     }
 
-    /// The Triage scan, the engines and the digest.
-    fn triage(
+    /// The detection item: the policy's engines over the indexed run. A
+    /// skipped engine is a warning at once; the problems are returned, with
+    /// whether the limit ended the item.
+    pub(super) fn detection_item(
         &mut self,
         job: &Job,
         plan: &HostPlan,
-        problems: &mut Vec<String>,
-    ) -> Result<Option<(SavedRun, ArchiveScan)>, StageStop> {
+        scanned: &(SavedRun, ArchiveScan),
+        limit: Duration,
+    ) -> Result<DetectionDone, StageStop> {
         let triage: &dyn HostTriage = self.env.triage;
         let engines: Vec<DetectionEngine> = plan.engines.clone();
-        self.progress(job, Stage::Analyse, "indexing the recording");
-        let worked = self.bounded(ANALYSE_WAIT, |cancel| {
-            let saved = triage.open_run(job)?;
-            let scan = triage.index(&saved, cancel)?;
-            let mut notes = Vec::new();
-            let outcomes = if engines.is_empty() {
-                Vec::new()
-            } else {
-                match triage.detect(&saved, &scan, &engines, cancel) {
-                    Ok(outcomes) => outcomes,
-                    Err(error) => {
-                        notes.push(format!("the detection engines did not run: {error}"));
-                        Vec::new()
-                    }
-                }
-            };
-            if let Err(error) = triage.save_digest(&saved, &scan, &outcomes) {
-                notes.push(format!("the run's digest was not written: {error}"));
-            }
-            Ok::<_, String>((saved, scan, outcomes, notes))
-        });
-        let (saved, scan, outcomes, notes) = match worked {
-            Ok(Ok(done)) => done,
+        let (saved, scan) = scanned;
+        self.progress(job, Stage::Analyse, "running the detection engines");
+        let worked = self.bounded(limit, |cancel| triage.detect(saved, scan, &engines, cancel));
+        let mut problems = Vec::new();
+        let outcomes = match worked {
+            Ok(Ok(outcomes)) => outcomes,
             Ok(Err(error)) => {
-                problems.push(format!("the Triage scan failed: {error}"));
-                return Ok(None);
+                problems.push(format!("the detection engines did not run: {error}"));
+                Vec::new()
             }
             Err(why) => {
                 if let Some(stop) = why.stop() {
                     return Err(stop);
                 }
-                problems.push(why.words("the Triage scan"));
-                return Ok(None);
+                let timed_out = matches!(why, Bounded::TimedOut);
+                problems.push(why.words("the detection engines"));
+                return Ok((Vec::new(), problems, timed_out));
             }
         };
-        problems.extend(notes);
-        for (engine, outcome) in outcomes {
-            let name = antinomie_triage::detection::name(engine);
+        for (engine, outcome) in &outcomes {
+            let name = antinomie_triage::detection::name(*engine);
             match outcome {
                 Outcome::Scanned(_) => {}
                 Outcome::Skipped(_, words) => {
@@ -350,15 +436,34 @@ impl<E: Engine> LaneStages<'_, E> {
                 }
             }
         }
-        Ok(Some((saved, scan)))
+        Ok((outcomes, problems, false))
     }
 
+    /// The digest of an indexed run with the engines' results.
+    pub(super) fn save_digest_item(
+        &mut self,
+        scanned: &(SavedRun, ArchiveScan),
+        outcomes: &[(DetectionEngine, Outcome)],
+        limit: Duration,
+    ) -> Result<Option<String>, StageStop> {
+        let triage: &dyn HostTriage = self.env.triage;
+        let (saved, scan) = scanned;
+        match self.bounded(limit, |_| triage.save_digest(saved, scan, outcomes)) {
+            Ok(Ok(())) => Ok(None),
+            Ok(Err(error)) => Ok(Some(format!("the run's digest was not written: {error}"))),
+            Err(why) => match why.stop() {
+                Some(stop) => Err(stop),
+                None => Ok(Some(why.words("the run's digest"))),
+            },
+        }
+    }
     /// The summary and detections of the scanned run, through the mapping.
     pub(super) fn assess(
         &mut self,
         job: &Job,
         scanned: Option<&(SavedRun, ArchiveScan)>,
         problems: &mut Vec<String>,
+        limit: Duration,
     ) -> Result<(), StageStop> {
         let store = self.env.store;
         let frozen = store
@@ -387,7 +492,7 @@ impl<E: Engine> LaneStages<'_, E> {
                     ..Choices::default()
                 };
                 let now = super::host::now_ms();
-                let built = self.bounded(ANALYSE_WAIT, |_| {
+                let built = self.bounded(limit, |_| {
                     triage
                         .build(saved, scan, choices, now)
                         .map(|built| facts_of(&built, end_reason, datasets))
@@ -420,12 +525,16 @@ impl<E: Engine> LaneStages<'_, E> {
     /// budgeted read makes it, partial when the budget ended it. Never fails
     /// the stage; what is missing is a warning of the job, which the caller
     /// adds once the stage is not failing (a retry makes the digest again).
-    fn digest(&mut self, job: &Job) -> Result<Option<String>, StageStop> {
+    pub(super) fn digest(
+        &mut self,
+        job: &Job,
+        limit: Duration,
+    ) -> Result<Option<String>, StageStop> {
         if job.recording.is_none() {
             return Ok(None);
         }
         let triage: &dyn HostTriage = self.env.triage;
-        let note = match self.bounded(DIGEST_WAIT, |cancel| triage.ensure_digest(job, cancel)) {
+        let note = match self.bounded(limit, |cancel| triage.ensure_digest(job, cancel)) {
             Ok(Ok(note)) => note,
             Ok(Err(error)) => Some(format!("the run's digest was not made: {error}")),
             Err(why) => {
@@ -436,47 +545,6 @@ impl<E: Engine> LaneStages<'_, E> {
             }
         };
         Ok(note)
-    }
-
-    /// The `analyse` stage. `Ok` carries the problems that did not fail it.
-    pub fn analyse(&mut self, job: &Job, plan: &HostPlan) -> Result<Analysed, StageStop> {
-        let mut problems = Vec::new();
-        let mut incomplete = Vec::new();
-        if !plan.static_checks.is_empty() {
-            let outcome = self.static_analysis(job, plan)?;
-            problems.extend(outcome.hard);
-            incomplete.extend(outcome.soft);
-            self.cancel_point(job)?;
-        }
-        let scanned = if plan.triage || !plan.engines.is_empty() {
-            self.triage(job, plan, &mut problems)?
-        } else {
-            None
-        };
-        self.cancel_point(job)?;
-        let digest_note = self.digest(job)?;
-        self.cancel_point(job)?;
-        let triage_ran = plan.triage && scanned.is_some();
-        self.assess(job, scanned.as_ref().filter(|_| triage_ran), &mut problems)?;
-        if !problems.is_empty() && plan.requires(Stage::Analyse) {
-            return Err(StageStop::Failed(Failure::new(
-                FailureCode::AnalysisFailed,
-                Stage::Analyse,
-                "the analysis of the recording failed",
-                Some(&problems.join("; ")),
-            )));
-        }
-        if let Some(note) = digest_note {
-            let _ = self
-                .env
-                .store
-                .add_warning(&job.id, "digest_incomplete", &note);
-        }
-        Ok(Analysed {
-            scan: scanned,
-            problems,
-            incomplete,
-        })
     }
 }
 

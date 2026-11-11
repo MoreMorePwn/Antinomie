@@ -179,8 +179,8 @@ fn ceilings_are_enforced() {
             "engine maximum of 1024",
         ),
         (
-            "static_time_limit_min = 2",
-            "static_time_limit_min = 481",
+            "# static_time_limit_min = 2",
+            "static_time_limit_min = 481 #",
             "0 to 480",
         ),
         (
@@ -354,8 +354,8 @@ fn service_toml_checks_lanes_safety_and_watch_folders() {
     assert_eq!(config.resources.min_free_disk_gib, 20);
     assert!(config.resources.require_kvm);
     assert_eq!(config.retention.jobs_days, 90);
-    assert_eq!(config.host_workers(16), 4);
-    assert_eq!(config.host_workers(2), 1);
+    assert_eq!(config.host_workers(), 2);
+    assert_eq!(config.host_time_factor(), 2.0);
     assert_eq!(config.min_free_ram_mib(2048), 4096);
     assert_eq!(
         config.socket_path(std::path::Path::new("/d")),
@@ -380,6 +380,38 @@ fn service_toml_checks_lanes_safety_and_watch_folders() {
         messages.iter().any(|m| m.contains("absolute path")),
         "{messages:?}"
     );
+}
+
+#[test]
+fn host_workers_and_the_time_factor_are_bounded() {
+    let (config, found) = parse_service(
+        "service.toml",
+        "[daemon]\nhost_workers = 3\nhost_time_factor = 2.5\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+    let config = config.unwrap();
+    assert_eq!(config.host_workers(), 3);
+    assert_eq!(config.host_time_factor(), 2.5);
+    for (text, key) in [
+        ("[daemon]\nhost_workers = 0\n", "daemon.host_workers"),
+        ("[daemon]\nhost_workers = 9\n", "daemon.host_workers"),
+        (
+            "[daemon]\nhost_time_factor = 0.5\n",
+            "daemon.host_time_factor",
+        ),
+        (
+            "[daemon]\nhost_time_factor = 21.0\n",
+            "daemon.host_time_factor",
+        ),
+    ] {
+        let (_, found) = parse_service("service.toml", text);
+        assert!(
+            found
+                .iter()
+                .any(|p| p.severity == Severity::Error && p.to_string().contains(key)),
+            "{text}: {found:?}"
+        );
+    }
 }
 
 #[test]

@@ -189,10 +189,9 @@ pub fn resolve(spec: &JobSpec, caller: &Caller, loaded: &LoadedPolicy) -> Result
                     .clone()
                     .unwrap_or_else(|| policy.analysis.static_checks.clone()),
             ),
-            static_time_limit_min: Some(
-                o.static_time_limit_min
-                    .unwrap_or(policy.analysis.static_time_limit_min),
-            ),
+            static_time_limit_min: o
+                .static_time_limit_min
+                .or(policy.analysis.static_time_limit_min),
             detection: Some(detection),
             reports: Some(
                 o.reports

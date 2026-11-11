@@ -13,6 +13,7 @@ pub mod admission;
 mod artifacts;
 pub mod canon;
 mod events;
+pub(crate) mod host_work;
 pub mod job_index;
 mod lifecycle;
 pub mod machine;

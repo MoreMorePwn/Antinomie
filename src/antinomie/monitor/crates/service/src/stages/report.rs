@@ -15,8 +15,7 @@
 //! `partial`. A failure to build or write is `analysis_failed`.
 use super::{
     LaneStages, StageStop,
-    analyse::Analysed,
-    plan::{HostPlan, REPORT_WAIT, format_of},
+    plan::{HostPlan, format_of},
 };
 use crate::{
     api::{
@@ -29,8 +28,9 @@ use crate::{
     store::NewArtifact,
 };
 use antinomie_monitor_core::report::{Choices, Format, Part};
+use antinomie_triage::{ArchiveScan, SavedRun};
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 fn kind_of(format: Format) -> (ArtifactKind, MediaType, bool) {
     // The last member: indicators are raw (no defang) in this format.
@@ -87,7 +87,8 @@ impl<E: Engine> LaneStages<'_, E> {
         &mut self,
         job: &Job,
         plan: &HostPlan,
-        analysed: &Analysed,
+        scanned: Option<&(SavedRun, ArchiveScan)>,
+        limit: Duration,
     ) -> Result<Vec<Artifact>, StageStop> {
         let fail = |message: &str, detail: &str| {
             StageStop::Failed(Failure::new(
@@ -97,7 +98,7 @@ impl<E: Engine> LaneStages<'_, E> {
                 Some(detail),
             ))
         };
-        let Some((saved, scan)) = analysed.scan.as_ref() else {
+        let Some((saved, scan)) = scanned else {
             return Err(fail(
                 "there is no Triage scan to report",
                 "the analysis did not produce one",
@@ -122,7 +123,7 @@ impl<E: Engine> LaneStages<'_, E> {
         let triage: &dyn super::host::HostTriage = self.env.triage;
         let now = super::host::now_ms();
         self.progress(job, Stage::Report, "building and writing the report");
-        let worked = self.bounded(REPORT_WAIT, |cancel| {
+        let worked = self.bounded(limit, |cancel| {
             let built = triage.build(saved, scan, choices, now)?;
             let written = triage.write(built, cancel)?;
             let mut filed = Vec::new();

@@ -106,6 +106,16 @@ policy's `max_sample_mib` and a quarter of the lane VM's RAM;
 | `rejected` | yes | Refused at submit by validation or policy; consumed no lane time |
 
 `outcome` is null while the job is not terminal and equals `state` afterwards.
+
+`host_work` (0.9.0, ANT-T0454) lists the job's host work items once `collect`
+has handed it to the host work pool: `name` (`triage`, `static:<tool>`,
+`detection`, `assess`, `report`), `state` (`queued`, `running`, `done`,
+`failed`, `timed_out`, `skipped`), `after` (the items it waits for),
+`expected_s` and its `basis` (`median`, `estimate`, `fixed`, `policy`),
+`limit_s`, `started_ms`, `finished_ms` and `note`. `queue.status` has
+`host_pool`: `workers`, `queued` (the pool's queue length), `running`, `jobs`
+and `waiting_for` (why the head waits, when it waits for memory).
+
 The policy is frozen at submit: a job whose policy has gone or now denies it ends
 `failed` with `policy_denied`.
 

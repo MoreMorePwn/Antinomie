@@ -42,6 +42,8 @@ pub mod lane;
 pub mod library;
 /// Result files and the command hook (card P4-4).
 pub mod notify;
+/// The host work pool: pipelined host stages (ANT-T0454).
+pub mod pool;
 /// `QueryApi`, the read-only recording queries (cards Q-1 and later).
 pub mod query;
 /// Resource floors and the queue pause (card P3-5c).

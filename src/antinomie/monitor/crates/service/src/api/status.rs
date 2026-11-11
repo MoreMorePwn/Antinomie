@@ -96,6 +96,23 @@ pub struct QueueStatus {
     pub lanes: Vec<LaneStatus>,
     pub limits: QueueLimits,
     pub owner: Owner,
+    /// The host work pool (ANT-T0454).
+    #[serde(default)]
+    pub host_pool: HostPoolStatus,
+}
+
+/// The host work pool: one for every lane, at most `workers` items at once.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostPoolStatus {
+    /// `daemon.host_workers`.
+    pub workers: u32,
+    /// Items waiting to start (the queue length).
+    pub queued: u32,
+    pub running: u32,
+    /// Jobs with host work left.
+    pub jobs: u32,
+    /// Why the first queued item does not start, when it waits for memory.
+    pub waiting_for: Option<String>,
 }
 
 /// A loaded indicator dataset and its entry count.

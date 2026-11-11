@@ -267,7 +267,10 @@ impl Default for Detection {
 #[serde(deny_unknown_fields, default)]
 pub struct AnalysisPolicy {
     pub static_checks: StaticChecks,
-    pub static_time_limit_min: u32,
+    /// A fixed limit in minutes for every static tool (0: each tool's own).
+    /// Unset (the default): each tool may take `daemon.host_time_factor`
+    /// times its expected time (ANT-T0454).
+    pub static_time_limit_min: Option<u32>,
     /// Static checks whose timing out or stopping short fails the `analyse`
     /// stage when it is required; any other check that does so only makes
     /// the job `partial` with a warning. Default: none.
@@ -282,7 +285,7 @@ impl Default for AnalysisPolicy {
     fn default() -> Self {
         Self {
             static_checks: StaticChecks::Preset(StaticPreset::Triage),
-            static_time_limit_min: 2,
+            static_time_limit_min: None,
             required_checks: Vec::new(),
             triage: true,
             detection: Detection::default(),

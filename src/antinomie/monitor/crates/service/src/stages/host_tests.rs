@@ -163,7 +163,7 @@ pub(super) fn data_dir(w: &W) -> PathBuf {
     w.fx.dir.join("data")
 }
 
-fn real(w: &W) -> RealTriage {
+pub(super) fn real(w: &W) -> RealTriage {
     RealTriage::new(BackendOptions {
         data_dir: data_dir(w),
         ..BackendOptions::default()
@@ -911,7 +911,7 @@ fn static_policy(p: &mut crate::config::Policy) {
         crate::api::spec::StaticCheck::Metadata,
         crate::api::spec::StaticCheck::Strings,
     ]);
-    p.analysis.static_time_limit_min = 1;
+    p.analysis.static_time_limit_min = Some(1);
     p.analysis.required_stages = Vec::new();
 }
 
@@ -920,23 +920,31 @@ fn the_static_analysis_of_the_library_copy_goes_through_the_engine() {
     let w = world_with("host-static", static_policy);
     let job = collected(&w, 1);
     let mut waiter = w.engine(|fake| {
-        fake.on("AnalyzeSample")
-            .after(100 * MS)
-            .then(3 * SECOND, |s| {
-                s.analysis_reports.push(report_entry("rep-1", "complete"))
-            })
-            .ok("rep-1");
+        for id in ["rep-1", "rep-2"] {
+            fake.on("AnalyzeSample")
+                .after(100 * MS)
+                .then(3 * SECOND, move |s| {
+                    s.analysis_reports.push(report_entry(id, "complete"))
+                })
+                .ok(id);
+        }
     });
     let done = finished(host(&w, &mut waiter, &job));
     assert_eq!(done.state, JobState::Succeeded);
+    // One work item per tool (ANT-T0454): one analysis each.
     let sent = waiter.engine_mut().sent();
-    assert_eq!(sent.len(), 1);
-    let text = format!("{:?}", sent[0]);
+    assert_eq!(sent.len(), 2);
+    let first = format!("{:?}", sent[0]);
+    let second = format!("{:?}", sent[1]);
     assert!(
-        text.contains("AnalyzeSample") && text.contains("Metadata") && text.contains("Strings"),
-        "{text}"
+        first.contains("AnalyzeSample") && first.contains("Metadata") && !first.contains("Strings"),
+        "{first}"
     );
-    assert!(text.contains(&job.sample.as_ref().unwrap().sha256.to_string()));
+    assert!(
+        second.contains("Strings") && !second.contains("Metadata"),
+        "{second}"
+    );
+    assert!(first.contains(&job.sample.as_ref().unwrap().sha256.to_string()));
 }
 
 #[test]
@@ -961,7 +969,8 @@ fn a_refused_or_unfinished_static_analysis_is_a_problem_not_a_stop() {
         "triage and the report still ran"
     );
 
-    // Never finishes: tools x limit x 60 + 60 = 180 s for two tools at 1 minute.
+    // Never finishes: the policy's fixed limit, 1 minute x 60 + 60 = 120 s for
+    // the first tool's item; the second is refused (unscripted).
     let w = world_with("host-static-slow", static_policy);
     let job = collected(&w, 1);
     let began = w.fx.clock.now_ms();
@@ -976,14 +985,14 @@ fn a_refused_or_unfinished_static_analysis_is_a_problem_not_a_stop() {
     assert_eq!(done.state, JobState::Partial);
     let took = (w.fx.clock.now_ms() - began) / 1000;
     assert!(
-        (180..260).contains(&took),
-        "static_s was waited out: {took} s"
+        (120..200).contains(&took),
+        "the item's limit was waited out: {took} s"
     );
     assert!(
         w.job(&job.id)
             .warnings
             .iter()
-            .any(|x| x.text.contains("did not finish within 180"))
+            .any(|x| x.text.contains("did not finish within 120"))
     );
 
     // Finished partly: a warning, the job is partial.
@@ -1049,8 +1058,10 @@ fn analyse_with(
         p.analysis.required_checks = required_checks;
     });
     let job = collected(&w, 1);
+    // Both tools' items get the same report.
     let mut waiter = w.engine(move |fake| {
         fake.on("AnalyzeSample")
+            .forever()
             .then(SECOND, move |s| s.analysis_reports.push(report.clone()))
             .ok("rep-1");
     });
@@ -1160,6 +1171,7 @@ fn an_engine_that_dies_leaves_the_job_for_the_resume_and_the_resume_finishes_it(
     // stage was left started; entering it again is allowed.
     let mut fresh = w.engine(|fake| {
         fake.on("AnalyzeSample")
+            .forever()
             .then(SECOND, |s| {
                 s.analysis_reports.push(report_entry("rep-1", "complete"))
             })
@@ -1218,3 +1230,22 @@ fn a_stage_that_finished_cannot_be_entered_twice_in_an_attempt() {
 // Keep the helpers the other test files of this module reuse.
 #[allow(dead_code)]
 fn _uses(_: &dyn SampleTags, _: StageStop) {}
+
+#[test]
+fn a_tool_with_nothing_to_give_is_named_in_its_warning() {
+    // A shell script: the engine has no structures to read and calls the
+    // analysis partial; the job is partial and the warning names the check.
+    let report = report_with_sections(
+        "rep-1",
+        "partial",
+        &[("metadata", "complete"), ("structures", "unavailable")],
+    );
+    let (w, job, hosted) = analyse_with("host-static-unavailable", false, Vec::new(), report);
+    assert_eq!(finished(hosted).state, JobState::Partial);
+    let warnings = w.job(&job.id).warnings;
+    assert!(
+        warnings.iter().any(|x| x.code == "static_check_incomplete"
+            && x.text.contains("the structures check was not available")),
+        "{warnings:?}"
+    );
+}
