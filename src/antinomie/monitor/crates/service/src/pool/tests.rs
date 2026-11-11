@@ -374,3 +374,53 @@ fn a_job_behind_a_long_queue_gets_the_time_of_the_work_ahead_too() {
     // Nothing is ahead of the oldest job.
     assert_eq!(state.ahead_s(&(0, job(3, 0).id)), 0);
 }
+
+/// BH-07 (bug hunt 0.9.0): the job's host-stage deadline is the factor times
+/// the expected times, with no floor, while each item may take at least
+/// `MIN_LIMIT` (30 s). Once the medians are small (three quick jobs), a job
+/// is failed by its deadline while its running item is well inside its own
+/// limit.
+#[test]
+fn bh_07_a_job_is_not_failed_by_its_deadline_while_an_item_is_within_its_limit() {
+    let plan = plan(&[AnalysisKind::Metadata], false);
+    let items = items_for(&plan);
+    let timing = Timing::default();
+    // Three earlier jobs on this host: every item took one second.
+    for spec in &items {
+        for _ in 0..3 {
+            timing.medians.record(&spec.kind.name(), 1);
+        }
+    }
+    let inputs = Inputs {
+        sample_bytes: Some(1 << 20),
+        recording_bytes: Some(512 << 20),
+        load: 1.0,
+    };
+    let views: Vec<_> = items
+        .iter()
+        .map(|spec| host_item(spec, &items, &timing.of(&spec.kind, &plan, &inputs)))
+        .collect();
+    let own: u64 = views.iter().map(|v| v.expected_s).sum();
+    let budget = PoolState::budget_ms(0, own, timing.factor);
+    let job = job(1, 1);
+    let id = job.id.clone();
+    let key = PoolState::key(&job);
+    let mut pooled = pool_job(job, plan, budget);
+    pooled.views = views;
+    let mut state = PoolState::new(2);
+    state.jobs.insert(key, pooled);
+    // The first item (Triage) starts at 0 ms ...
+    let first = state.next(0, &mut || None, &no_deadline);
+    let (_, name) = item(&first);
+    let Some(Task::Item { limit, .. }) = first else {
+        unreachable!()
+    };
+    // ... and is still running 20 s later, inside its own limit.
+    let at_ms = 20_000;
+    assert!(std::time::Duration::from_millis(at_ms) < limit);
+    let _ = state.next(at_ms, &mut || None, &no_deadline);
+    assert!(
+        state.get(&id).unwrap().stop.is_none(),
+        "the job was failed by its {budget} ms deadline while {name} was {at_ms} ms into its {limit:?} limit"
+    );
+}
