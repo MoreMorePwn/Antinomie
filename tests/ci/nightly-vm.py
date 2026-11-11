@@ -5,17 +5,28 @@ app version boots, a heavy launched program and the same load under Capture
 All are recorded in never-drop mode without loss or parser errors (the guest
 runs slower instead) and Capture All names the processes; with Capture All
 allowed to drop when the host falls behind, it loses telemetry only while it
-sheds; and a network capture records packets. Needs KVM, QEMU and the release
-guest-run example.
+sheds; and a network capture records packets. With the CLI given, one Auto
+job also runs end to end: `auto init` makes a lane on the base and a benign
+shell script goes through every stage in the command itself (no daemon) to a
+report. Needs KVM, QEMU, bubblewrap (for the Auto job) and the release
+guest-run example (and antinomie-cli).
 
-    nightly-vm.py GUEST_RUN WORK_DIR
+    nightly-vm.py GUEST_RUN WORK_DIR [CLI]
 """
 import hashlib
+import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import urllib.request
+
+# The Auto mode tiers' checks of a job (tests/monitor/auto_vm.py).
+_spec = importlib.util.spec_from_file_location(
+    "auto_vm", Path(__file__).resolve().parents[2] / "tests/monitor/auto_vm.py")
+auto_vm = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(auto_vm)
 
 BUCKET = "https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/resolve"
 # Heavy enough to overflow the guest buffers, small enough for a CI runner.
@@ -82,8 +93,64 @@ def check(condition, message, failures):
         failures.append(message)
 
 
+AUTO_PROGRAM = """#!/bin/sh
+# Nightly Auto job (benign).
+echo "nightly auto $(uname -r)"
+ls -l / > /dev/null
+sleep 2
+"""
+
+
+def auto_job(cli, base, work, failures):
+    """One Auto job: a lane on the base, a shell script submitted and run in
+    the command (no daemon), the job's outcome, run and report files."""
+    data, home = work / "data-auto", work / "home-auto"
+    home.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, HOME=str(home), XDG_DATA_HOME=str(home / "share"), XDG_CONFIG_HOME=str(home / "config"),
+               XDG_CACHE_HOME=str(home / "cache"))
+    log = work / "auto.stderr"
+
+    def call(*args, timeout=900):
+        done = subprocess.run([cli, "--data-dir", str(data), "-o", "json", *map(str, args)], env=env,
+                              capture_output=True, text=True, timeout=timeout)
+        with open(log, "a") as file:
+            file.write(f"$ {' '.join(map(str, args))}\n{done.stderr}\nexit {done.returncode}\n")
+        try:
+            return done.returncode, auto_vm.unwrap(json.loads(done.stdout))
+        except ValueError:
+            return done.returncode, None
+
+    print("== auto", flush=True)
+    code, _ = call("base", "install", base)
+    check(code == 0, f"auto: base install exit {code}", failures)
+    code, lane = call("auto", "init", "--ram-mib", 1024, "--cpus", 2, "--disk-gib", 2)
+    check(code == 0 and bool(lane), f"auto: auto init exit {code}", failures)
+    if code != 0:
+        return
+    policy = data / "policies" / "default.toml"
+    policy.write_text(auto_vm.set_toml_key(policy.read_text(), "sample", "accept_types", '["elf", "sh"]'))
+    (data / "service.toml").write_text(auto_vm.service_toml(min_free_disk_gib=2))
+    program = work / "auto-job.sh"
+    program.write_text(AUTO_PROGRAM)
+    program.chmod(0o755)
+    code, result = call("auto", "submit", program, "--timeout-run", 60, "--wait", timeout=1800)
+    job = auto_vm.job_of(result) or {}
+    if job.get("id"):
+        code_status, status = call("auto", "status", job["id"], timeout=120)
+        job = auto_vm.job_of(status) if code_status == 0 and status else job
+    ok, why = auto_vm.outcome_ok(job)
+    check(code in (0, 11) and ok, f"auto: the job ended {why} (exit {code})", failures)
+    run = job.get("run") or {}
+    check(run.get("exit") == 0 and (job.get("recording") or {}).get("phase") == "complete",
+          f"auto: the program exited {run.get('exit')}, recording {(job.get('recording') or {}).get('phase')}",
+          failures)
+    kinds = {artifact.get("kind") for artifact in job.get("artifacts") or []}
+    check({"report.html", "report.json"} <= kinds, f"auto: report files {sorted(kinds)}", failures)
+
+
 def main():
     guest_run, work = sys.argv[1], Path(sys.argv[2]).resolve()
+    cli = sys.argv[3] if len(sys.argv) > 3 else None
     work.mkdir(parents=True, exist_ok=True)
     version = app_version()
     base = download_base(version, work / "bases")
@@ -136,6 +203,8 @@ def main():
     packets = max((c.get("packets") or 0 for c in captures), default=0)
     sizes = max((c.get("bytes") or 0 for c in captures), default=0)
     check(bool(captures) and sizes > 24, f"network capture recorded {sizes} bytes ({packets} packets counted)", failures)
+    if cli:
+        auto_job(cli, base, work, failures)
     if failures:
         raise SystemExit(f"{len(failures)} check(s) failed")
     print("all checks passed")
