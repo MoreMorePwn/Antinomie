@@ -1183,7 +1183,7 @@ fn a_lane_folder_names_paths_the_way_lane_one_does() {
         "lanes/3/vm-3/runs/r2"
     );
     // Outside every data folder: the file name only, lane or not.
-    let elsewhere = std::path::Path::new("/home/someone/private/sample.bin");
+    let elsewhere = std::path::Path::new("/srv/elsewhere/sample.bin");
     assert_eq!(build::in_data_dir(&lane, elsewhere), "sample.bin");
     assert_eq!(build::in_data_dir(&root, elsewhere), "sample.bin");
     // A run report of a lane run, from lane 1's folder and from the lane's.
