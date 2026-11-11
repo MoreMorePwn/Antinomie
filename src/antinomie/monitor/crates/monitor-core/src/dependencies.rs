@@ -626,7 +626,12 @@ mod tests {
                 let path = entry.path();
                 if path.is_dir() {
                     walk(&path, names);
-                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                } else if path.extension().is_some_and(|extension| extension == "rs")
+                    && !path.file_name().is_some_and(|name| {
+                        name.to_str()
+                            .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+                    })
+                {
                     let text = fs::read_to_string(&path).unwrap();
                     let code = text.split("#[cfg(test)]").next().unwrap();
                     for literal in code.split('"').skip(1).step_by(2) {
@@ -662,9 +667,9 @@ mod tests {
             ("binwalk", Dependency::Binwalk),
             ("suricata", Dependency::Suricata),
         ];
-        // Base system utilities (file, binutils, Python); a missing one is
+        // Base system utilities (file, tar, binutils, Python); a missing one is
         // reported by the check that runs it, and Python by "Python venv".
-        let base = ["file", "objdump", "readelf", "python3"];
+        let base = ["file", "objdump", "readelf", "python3", "tar"];
         let report = check(&BackendOptions::default());
         for (_, dependency) in listed {
             assert!(
