@@ -106,6 +106,18 @@ mod tests {
         }
     }
 
+    /// Found by the `watch_names` target (ANT-T0387): a 100-byte name that
+    /// starts with a dot got a `_` in front and came out 101 bytes long.
+    #[test]
+    fn a_long_dotted_name_is_still_at_most_100_bytes() {
+        let name = [b".".as_slice(), &[b'n'; 150]].concat();
+        let safe = sanitize(&name);
+        assert_eq!(safe.len(), 100);
+        assert!(safe.starts_with('_'));
+        watch_names(&name);
+        watch_names(&[b".".as_slice(), &[b'n'; 99]].concat());
+    }
+
     #[test]
     fn every_entry_survives_hostile_and_generated_bytes() {
         let deep = "(".repeat(5000);

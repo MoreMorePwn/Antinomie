@@ -38,6 +38,7 @@ pub fn sanitize(name: &[u8]) -> String {
         .collect();
     if out.is_empty() || out.starts_with('.') {
         out.insert(0, '_');
+        out.truncate(100);
     }
     out
 }
