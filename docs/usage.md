@@ -1369,7 +1369,9 @@ retain their existing controls, and QEMU's separate display uses its own frame.
 removed: the abuse.ch Auth-Key (MalwareBazaar, and the IOC datasets and rule
 packs that follow) and the MalShare key. Each key shows only its last four
 characters, which features use it and when it was last used; **Test** asks the
-service whether it accepts the key. Keys are kept in the data folder in a file
+service whether it accepts the key (for abuse.ch with a one-hash MalwareBazaar lookup
+of a hash that is not listed, so "hash not found" counts as accepted; only a refusal
+or a failed connection is a failure). Keys are kept in the data folder in a file
 only you can read and are never written to run exports, reports, logs or
 screenshots. Malware samples has no key field of its own: it points here.
 
