@@ -507,8 +507,18 @@ class TracerQaTests(unittest.TestCase):
         for status in ("PASS", "FLAKY"):
             argv, env = self.run_qa(status, self.LOG)
             self.assertIn("recorded_tracer_triage", argv)
+            self.assertEqual(argv[argv.index("-p") + 1:argv.index("-p") + 3], ["antinomie-triage", "--lib"])
             self.assertTrue(env["ANTINOMIE_TRACER_RUNS"].startswith("writes="))
             self.assertEqual(env["ANTINOMIE_TRACER_FIXTURE_SHA256"], "ab")
+
+    def test_a_cargo_log_that_ran_no_test_is_not_a_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "qa.log"
+            log.write_text("running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 1602 filtered out\n")
+            self.assertFalse(vm.tests_ran(log))
+            log.write_text("running 0 tests\nrunning 1 test\ntest recorded_tracer_triage ... ok\n")
+            self.assertTrue(vm.tests_ran(log))
+            self.assertFalse(vm.tests_ran(Path(tmp) / "missing.log"))
 
     def test_the_last_runs_result_counts_when_this_run_has_none(self):
         with tempfile.TemporaryDirectory() as tmp:

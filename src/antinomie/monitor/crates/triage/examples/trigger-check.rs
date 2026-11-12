@@ -12,7 +12,10 @@
 //!   architecture) writes a cron entry and sleeps: persistence.cron;
 //! * `compat`: the same program built for the 32-bit ABI (i386 on x86-64,
 //!   AArch32 on arm64), when FIXTURE32 is given and exists (a host without
-//!   the 32-bit compiler builds none: "SKIP compat");
+//!   the 32-bit compiler builds none: "SKIP compat"). It is judged on both;
+//!   an AArch32 program gets its ELF32 core, an ia32 one on x86-64 never
+//!   gets a core (the guest has no ia32 core writer), so there its core
+//!   must be Failed with that reason;
 //! * `quiet`: `sh -c 'sleep 2'`, which matches nothing at High;
 //! * `fast` (a base of guest contract revision 22 or later, else SKIP):
 //!   FIXTURE writes its cron entry and exits at once (SECONDS 0, about a
@@ -20,7 +23,8 @@
 //!   its core is still taken, and the run's note says it was held.
 //!
 //! The first three and `fast` must have one trigger record whose core was written
-//! (complete, or partial: pages not resident have no bytes); the
+//! (complete, or partial: pages not resident have no bytes; ia32 `compat`:
+//! failed, as above); the
 //! last none, and a note saying the trigger was armed but never matched. Every
 //! program is benign. The data folder must be new and disposable.
 use antinomie_monitor_core::dump_trigger::{DumpTrigger, TriggerTier};
@@ -199,7 +203,7 @@ fn describe(run: &RunSummary) -> String {
 }
 
 /// One trigger record of `rule`, whose core was written.
-fn fired(run: &RunSummary, rule: &str) -> Result<(), String> {
+fn fired(run: &RunSummary, rule: &str, ia32: bool) -> Result<(), String> {
     let log = run.triggers.as_ref().ok_or("no trigger log")?;
     let record = log
         .records
@@ -212,6 +216,19 @@ fn fired(run: &RunSummary, rule: &str) -> Result<(), String> {
         ));
     }
     let core = record.core.as_ref().ok_or("no core asked")?;
+    // An ia32 program on x86-64: the trigger fires, the core is refused
+    // with the documented reason (core_limits.rs, guest status -95).
+    if ia32 {
+        let refused = matches!(core.state, RunArtifactState::Failed)
+            && core.error.as_deref().is_some_and(|e| e.contains("ia32"));
+        if !refused {
+            return Err(format!(
+                "ia32 core {:?}: {:?}, expected Failed (no ia32 core writer)",
+                core.state, core.error
+            ));
+        }
+        return Ok(());
+    }
     // Partial is a core whose non-resident pages have no bytes (the guest
     // reads resident pages only): taken, as a sleeping static program's is.
     let written = core.path.as_ref().is_some_and(|path| path.is_file());
@@ -331,7 +348,7 @@ fn check(bundle: &str, data: &str, native: &str, compat: Option<&str>) -> Result
             let run = d.settled(&vm_id, &id)?;
             println!("RUN {name} {id}: {}", describe(&run));
             match rule {
-                Some(rule) => fired(&run, rule).and_then(|()| {
+                Some(rule) => fired(&run, rule, name == "compat" && !arm64).and_then(|()| {
                     // The exit hold is what made the core possible.
                     if name == "fast" && !run.notes.iter().any(|n| n.contains("held at its exit")) {
                         return Err("the fast program's note does not say it was held".into());

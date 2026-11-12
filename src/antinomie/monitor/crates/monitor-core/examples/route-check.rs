@@ -21,7 +21,8 @@
 //!   run network capture, InetSim, Tor, VPN, SOCKS5), the toolbar network
 //!   capture, and the failure paths: a SOCKS5 proxy that is down, a VPN
 //!   whose configuration file is missing, a Tor program that does not
-//!   exist (each must fail before the run exists), a program that does
+//!   exist (each refused before the guest is asked, leaving one Failed to
+//!   start record that says why), a program that does
 //!   not exist (the run is listed as failed to start), the VPN route's
 //!   wireproxy dying during a run (the run and the user are told, nothing
 //!   leaves afterwards, no other run joins it) and a full snapshot restored
@@ -910,7 +911,9 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
         );
     }
 
-    // Refused before the run exists: nothing is listed for them.
+    // Refused before anything is sent to the guest. On a Routed VM the run
+    // keeps one record, Failed to start, that says why (backend
+    // route_failure.rs, since 0.8.3): Run History shows what was asked for.
     let refused = |d: &mut Driver,
                    t: &mut Table,
                    name: &str,
@@ -919,7 +922,7 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
                    wanted: &str|
      -> Result<(), String> {
         save_routes(data, &config)?;
-        let listed = d.history(&vm_id).len();
+        let before: Vec<String> = d.history(&vm_id).into_iter().map(|r| r.id).collect();
         let result = d.probe(Some(kind), true);
         let text = error_text(&result);
         t.check(
@@ -928,11 +931,35 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
             result.is_err() && text.contains(wanted),
             text,
         );
+        // The record is written by the JSON queue (storage::queue_json), so it
+        // can appear a moment after the refusal: wait for it, then a little
+        // longer so a second record would be seen too.
+        let waited = Instant::now();
+        let mut after = d.history(&vm_id);
+        while after.len() <= before.len() && waited.elapsed() < Duration::from_secs(60) {
+            thread::sleep(Duration::from_millis(250));
+            after = d.history(&vm_id);
+        }
+        thread::sleep(Duration::from_secs(1));
+        let after = d.history(&vm_id);
+        let new: Vec<_> = after.iter().filter(|r| !before.contains(&r.id)).collect();
         t.check(
             vm,
-            &format!("{name}: no run left in history"),
-            d.history(&vm_id).len() == listed,
-            format!("{} runs listed", d.history(&vm_id).len()),
+            &format!("{name}: one record, failed to start, says why"),
+            after.len() == before.len() + 1
+                && new.iter().all(|r| {
+                    r.state == RunState::FailedToStart
+                        && r.recording_error
+                            .as_deref()
+                            .is_some_and(|e| e.contains("Not started:") && e.contains(wanted))
+                }),
+            format!(
+                "{} runs listed, new {:?}",
+                after.len(),
+                new.iter()
+                    .map(|r| (&r.state, r.recording_error.as_deref()))
+                    .collect::<Vec<_>>()
+            ),
         );
         Ok(())
     };
