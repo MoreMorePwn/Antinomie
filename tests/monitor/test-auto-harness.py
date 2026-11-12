@@ -204,8 +204,13 @@ class JobCheckTests(unittest.TestCase):
         job = finished_job()
         report = {"schema": "antinomie-triage-report", "schema_version": 2,
                   "run": {"run_id": "r1", "vm_id": "auto_1_x"}, "sample": {"sha256": "a" * 64},
-                  "summary": {"assessment": "observed_only"}, "processes": [{"pid": 1}]}
+                  "summary": {"assessment": "observed_only"},
+                  "processes": {"columns": ["Process"], "rows": [["demo (1 \u00b7 1)"]], "omitted": 0,
+                                "indicator_columns": [], "data": [{"id": "proc-1", "pid": 1}]}}
         self.assertTrue(all(ok for ok, _ in av.report_json_checks(report, job)))
+        self.assertFalse(all(ok for ok, _ in av.report_json_checks(dict(report, processes=[{"pid": 1}]), job)))
+        self.assertFalse(all(ok for ok, _ in av.report_json_checks(
+            dict(report, processes=dict(report["processes"], rows=[])), job)))
         report["run"]["run_id"] = "other"
         self.assertFalse(all(ok for ok, _ in av.report_json_checks(report, job)))
 

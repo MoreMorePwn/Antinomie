@@ -479,9 +479,18 @@ def report_json_checks(report, job):
     summary = report.get("summary") or {}
     want = (job.get("assessment") or {}).get("assessment")
     out.append((summary.get("assessment") == want, f"report.json assessment {summary.get('assessment')} = job's {want}"))
-    out.append((isinstance(report.get("processes"), list) and len(report["processes"]) >= 1,
-                f"report.json lists {len(report.get('processes') or [])} process(es)"))
+    rows = table_rows(report.get("processes"))
+    out.append((rows is not None and len(rows) >= 1,
+                f"report.json lists {len(rows or [])} process row(s)"))
     return out
+
+
+def table_rows(table):
+    """The rows of a report.json table section ({columns, rows, omitted,
+    indicator_columns, data}), or None when it is not one."""
+    if isinstance(table, dict) and isinstance(table.get("rows"), list):
+        return table["rows"]
+    return None
 
 
 # ---------------------------------------------------------------- the run folder
