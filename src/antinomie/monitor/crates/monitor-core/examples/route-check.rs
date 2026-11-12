@@ -931,6 +931,16 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
             result.is_err() && text.contains(wanted),
             text,
         );
+        // The record is written by the JSON queue (storage::queue_json), so it
+        // can appear a moment after the refusal: wait for it, then a little
+        // longer so a second record would be seen too.
+        let waited = Instant::now();
+        let mut after = d.history(&vm_id);
+        while after.len() <= before.len() && waited.elapsed() < Duration::from_secs(60) {
+            thread::sleep(Duration::from_millis(250));
+            after = d.history(&vm_id);
+        }
+        thread::sleep(Duration::from_secs(1));
         let after = d.history(&vm_id);
         let new: Vec<_> = after.iter().filter(|r| !before.contains(&r.id)).collect();
         t.check(
