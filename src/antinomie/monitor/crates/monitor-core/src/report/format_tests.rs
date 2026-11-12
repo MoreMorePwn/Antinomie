@@ -448,3 +448,36 @@ fn bh_20_a_guest_path_with_a_pipe_keeps_the_misp_composite_in_two_parts() {
     assert_eq!(parts.len(), 2, "MISP reads {parts:?} from {value:?}");
     assert_eq!(parts[1], sha);
 }
+
+/// BH-21: STIX 2.1 (3.6) keeps `created` for every version of one id. The
+/// export makes ids from content (the same identity, sample, technique and
+/// indicator ids in every export), so a second export of a run, or the export
+/// of another run of the same sample, must not give an id a new `created`.
+#[test]
+fn bh_21_a_stix_id_keeps_its_created_time_in_a_later_export() {
+    let mut report = noisy();
+    let first = json(&stix::render(&report).unwrap());
+    report.generated_ms += 86_400_000;
+    let second = json(&stix::render(&report).unwrap());
+    let created = |bundle: &Value| -> Vec<(String, String)> {
+        bundle["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|o| {
+                Some((
+                    o["id"].as_str()?.to_owned(),
+                    o["created"].as_str()?.to_owned(),
+                ))
+            })
+            .collect()
+    };
+    let later: std::collections::BTreeMap<String, String> =
+        created(&second).into_iter().collect();
+    let changed: Vec<String> = created(&first)
+        .into_iter()
+        .filter(|(id, at)| later.get(id).is_some_and(|again| again != at))
+        .map(|(id, _)| id)
+        .collect();
+    assert!(changed.is_empty(), "same id, new created: {changed:?}");
+}
