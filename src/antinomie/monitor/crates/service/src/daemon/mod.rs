@@ -649,6 +649,17 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             None => None,
         };
 
+        // A decrypted sample that a daemon killed during a launch left in a
+        // host-copy folder goes now (the next launch would sweep it too).
+        for dir in std::iter::once(&data_dir).chain(starting.iter().map(|s| &s.options.data_dir)) {
+            let removed = crate::host_copy::sweep(&dir.join(crate::host_copy::DIR));
+            if removed > 0 {
+                log(&format!(
+                    "removed {removed} host copy file(s) a stopped process left in {}",
+                    dir.display()
+                ));
+            }
+        }
         let mut lane_threads = Vec::new();
         let mut first_mux = None;
         let governor_share = GovernorShare::default();
