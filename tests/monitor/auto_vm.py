@@ -51,6 +51,9 @@ LABELS = ("malicious", "suspicious", "clean_observed", "inconclusive")
 HOST_TOOL_WARNINGS = ("static_check_incomplete", "detection_skipped")
 GIB = 1 << 30
 MIB = 1 << 20
+# A Unix socket path holds at most 107 bytes (sun_path less its NUL); the
+# daemon refuses a longer one (exit 4).
+SOCKET_PATH_MAX = 107
 
 
 class Failure(Exception):
@@ -300,9 +303,14 @@ def toml_list(values):
     return "[" + ", ".join(json.dumps(v) for v in values) + "]"
 
 
-def service_toml(lanes=1, require_kvm=True, host_workers=None, min_free_disk_gib=None, retention=None):
-    """The service.toml the tiers write: only what they change."""
+def service_toml(lanes=1, require_kvm=True, host_workers=None, min_free_disk_gib=None, retention=None,
+                 socket=None):
+    """The service.toml the tiers write: only what they change. `socket`
+    (Work.socket_override) moves the daemon's socket out of a data folder
+    whose path is too long for one."""
     out = ["[daemon]", f"lanes = {int(lanes)}"]
+    if socket is not None:
+        out.append(f"socket = {json.dumps(str(socket))}")
     if host_workers is not None:
         out.append(f"host_workers = {int(host_workers)}")
     out += ["", "[resources]", f"require_kvm = {'true' if require_kvm else 'false'}"]
@@ -479,9 +487,18 @@ def report_json_checks(report, job):
     summary = report.get("summary") or {}
     want = (job.get("assessment") or {}).get("assessment")
     out.append((summary.get("assessment") == want, f"report.json assessment {summary.get('assessment')} = job's {want}"))
-    out.append((isinstance(report.get("processes"), list) and len(report["processes"]) >= 1,
-                f"report.json lists {len(report.get('processes') or [])} process(es)"))
+    rows = table_rows(report.get("processes"))
+    out.append((rows is not None and len(rows) >= 1,
+                f"report.json lists {len(rows or [])} process row(s)"))
     return out
+
+
+def table_rows(table):
+    """The rows of a report.json table section ({columns, rows, omitted,
+    indicator_columns, data}), or None when it is not one."""
+    if isinstance(table, dict) and isinstance(table.get("rows"), list):
+        return table["rows"]
+    return None
 
 
 # ---------------------------------------------------------------- the run folder
@@ -529,6 +546,38 @@ class Work:
 
     def lane_dir(self, lane):
         return self.data if int(lane) == 1 else self.data / "lanes" / str(int(lane))
+
+    def short_socket_dir(self, data=None):
+        """The private folder for the socket of a data folder whose default
+        socket path is too long: named after a hash of the data path (so a
+        resumed run finds it again), in /tmp (not $TMPDIR, which may itself
+        be long)."""
+        data = Path(data) if data else self.data
+        digest = hashlib.sha256(os.fsencode(os.path.abspath(data))).hexdigest()[:16]
+        return Path("/tmp") / f"antinomie-t-{digest}"
+
+    def socket_override(self, data=None):
+        """None when <data>/run/antinomie.sock fits a Unix socket path, else
+        antinomie.sock in short_socket_dir() (created 0700, ours, no link):
+        the path to write as `[daemon] socket` in service.toml, which the
+        daemon and its clients both read."""
+        data = Path(data) if data else self.data
+        if len(os.fsencode(os.path.abspath(data / "run" / "antinomie.sock"))) <= SOCKET_PATH_MAX:
+            return None
+        folder = self.short_socket_dir(data)
+        try:
+            folder.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        info = os.lstat(folder)
+        if not os.path.isdir(folder) or os.path.islink(folder) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise Failure(f"{folder} is not a private folder of this user; remove it or use a shorter --work")
+        return folder / "antinomie.sock"
+
+    def socket_path(self, data=None):
+        """Where the daemon of `data` listens (see socket_override)."""
+        data = Path(data) if data else self.data
+        return self.socket_override(data) or data / "run" / "antinomie.sock"
 
     def lane_file(self, lane):
         return self.data / "service" / "lanes" / f"lane-{int(lane)}.json"
@@ -644,6 +693,7 @@ CLI_SURFACE = {
     ("auto", "lane", "reset"): ("--yes", "--lane"),
     ("auto", "gc"): ("--dry-run",),
     ("config", "validate"): ("--policy",),
+    ("config", "set"): (),
     ("snapshot", "create"): ("--mode",),
     ("snapshot", "restore"): ("--yes", "--cold-boot"),
     ("run", "list"): ("--job",),
@@ -699,7 +749,7 @@ class Daemon:
                                         cwd=self.cli.work.root, stdout=log, stderr=subprocess.STDOUT,
                                         stdin=subprocess.DEVNULL, start_new_session=True)
         log.close()
-        socket = self.cli.data / "run" / "antinomie.sock"
+        socket = self.cli.work.socket_path(self.cli.data)
         deadline = time.monotonic() + 120 * self.factor
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
@@ -997,6 +1047,10 @@ def cleanup(work, daemons=(), keep=False, data_folders=None, say=print, data_roo
     for name in ("base-copy",):
         if (work.root / name).exists():
             safe_rmtree(work.root / name, work.root)
+    for data in folders:
+        short = work.short_socket_dir(data)
+        if short.is_dir() and not short.is_symlink() and os.lstat(short).st_uid == os.getuid():
+            shutil.rmtree(short)
     say(f"     cleanup: VM data deleted; logs stay in {work.out}")
     return stray
 
