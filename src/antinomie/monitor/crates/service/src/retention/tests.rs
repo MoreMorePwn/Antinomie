@@ -28,6 +28,7 @@ struct FakeRuns {
     open: Mutex<BTreeSet<String>>,
     deleted: Mutex<Vec<(String, String)>>,
     fail_for: Mutex<BTreeSet<String>>,
+    unreadable: Mutex<BTreeSet<String>>,
 }
 
 /// The fake's name of `job`'s run: the job id for the run every test job
@@ -67,6 +68,9 @@ impl FakeRuns {
 
 impl Runs for FakeRuns {
     fn inspect(&self, job: &Job) -> Result<RunState, String> {
+        if self.unreadable.lock().unwrap().contains(&key(job)) {
+            return Err("permission denied".into());
+        }
         Ok(match self.runs.lock().unwrap().get(&key(job)) {
             Some((bytes, in_progress)) => RunState::Present {
                 bytes: *bytes,
@@ -823,4 +827,70 @@ fn job_delete_with_recording_deletes_every_attempts_run() {
     deleted.sort();
     assert_eq!(deleted, [id.to_string(), format!("{id}/key-1")]);
     assert!(!rig.exists(&id));
+}
+
+/// BH-06: a recording retention cannot read keeps its job record, so it is
+/// never left with nothing naming it.
+#[test]
+fn a_job_whose_recording_cannot_be_read_keeps_its_record() {
+    let rig = Rig::new("unreadable");
+    let old = rig.ended(Outcome::Succeeded, NOW - 120 * DAY, Some(10));
+    rig.runs.unreadable.lock().unwrap().insert(old.to_string());
+    let report = rig.run(false);
+    assert!(rig.exists(&old));
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.kind == "job" && s.why.contains("could not be read")),
+        "{report:?}"
+    );
+}
+
+/// BH-06: a VM may keep its recordings outside the data folder
+/// (`recording_root`); retention reads and deletes a run there, and still
+/// refuses any other folder outside.
+#[test]
+fn the_real_runs_accept_a_run_under_its_vms_recording_folder() {
+    use antinomie_monitor_core::BackendOptions;
+    let rig = Rig::new("recroot");
+    let data = rig.fx.dir.join("data");
+    let elsewhere = rig.fx.dir.join("srv-rec");
+    let other = rig.fx.dir.join("other");
+    fs::create_dir_all(data.join("vm")).unwrap();
+    fs::create_dir_all(elsewhere.join("vm/runs/r1")).unwrap();
+    fs::create_dir_all(other.join("r2")).unwrap();
+    fs::write(elsewhere.join("vm/runs/r1/run.json"), [0u8; 7]).unwrap();
+    let data = fs::canonicalize(&data).unwrap();
+    let elsewhere = fs::canonicalize(&elsewhere).unwrap();
+    fs::write(
+        data.join("vm-locations.json"),
+        serde_json::to_vec(&serde_json::json!([{
+            "id": "vm",
+            "disk_directory": data.join("vm"),
+            "recording_directory": elsewhere.join("vm"),
+            "recording_directories": [elsewhere.join("vm")],
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+    let options = BackendOptions {
+        data_dir: data.clone(),
+        ..BackendOptions::default()
+    };
+    let runs = RealRuns {
+        options: &options,
+        query: None,
+    };
+    assert_eq!(
+        runs.inspect(&job_with_folder(&rig, &elsewhere.join("vm/runs/r1"), "r1")),
+        Ok(RunState::Present {
+            bytes: 7,
+            in_progress: false
+        })
+    );
+    assert!(
+        runs.inspect(&job_with_folder(&rig, &other.join("r2"), "r2"))
+            .is_err()
+    );
 }

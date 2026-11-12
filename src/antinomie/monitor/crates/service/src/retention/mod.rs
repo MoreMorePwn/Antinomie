@@ -5,7 +5,7 @@
 //! |---|---|
 //! | Recordings of auto jobs | Each run a job's attempts recorded (an attempt retried after its launch leaves one too). After `recordings_days` (14), through the engine's own deletion (`samples::delete_run` with a plan, as the window does); a failed job keeps its recording until `jobs_days` while `keep_failed` is set |
 //! | Size cap | Above `max_recordings_gib` (200) the oldest recordings go first (those `keep_failed` protects last) |
-//! | Job records and artifacts | After `jobs_days` (90): the rows, the events and the job's folder; a job whose recording is still there loses the recording first, or stays |
+//! | Job records and artifacts | After `jobs_days` (90): the rows, the events and the job's folder; a job whose recording is still there loses the recording first, or stays; so does a job whose recording cannot be read |
 //! | Staged uploads | 24 hours (the staging store's own expiry) |
 //! | Rejected inbox files | 7 days |
 //! | Processed inbox files | `[inbox] processed_keep_days` (7): plain files of `inbox/processed/` older than that |
@@ -163,6 +163,9 @@ impl Retention<'_> {
         // the runs its earlier attempts recorded.
         let mut held: Vec<Held> = Vec::new();
         let mut by_age: Vec<usize> = Vec::new();
+        // Jobs with a recording that could not be read: their records stay
+        // (rule 3), or the recording would be left with nothing naming it.
+        let mut unreadable: Vec<JobId> = Vec::new();
         for (id, finished_ms) in &finished {
             let Ok(job) = self.store.get(id) else {
                 continue;
@@ -186,7 +189,10 @@ impl Retention<'_> {
                             by_age.push(held.len() - 1);
                         }
                     }
-                    Err(why) => report.skip("recording", id, format!("not readable: {why}")),
+                    Err(why) => {
+                        report.skip("recording", id, format!("not readable: {why}"));
+                        unreadable.push(id.clone());
+                    }
                 }
             }
         }
@@ -246,6 +252,14 @@ impl Retention<'_> {
                 continue;
             };
             if !job.state.is_terminal() {
+                continue;
+            }
+            if unreadable.contains(id) {
+                report.skip(
+                    "job",
+                    id,
+                    "its recording could not be read, so the record stays with it",
+                );
                 continue;
             }
             let mut stays = false;

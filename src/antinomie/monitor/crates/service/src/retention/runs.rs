@@ -9,6 +9,7 @@ use crate::{
 };
 use antinomie_monitor_core::{
     BackendOptions, RunArtifacts,
+    recording::read_only_locations,
     samples::{delete_run_as, plan_run_deletion},
 };
 use std::{collections::BTreeSet, path::PathBuf};
@@ -51,8 +52,24 @@ impl RealRuns<'_> {
         }
     }
 
+    /// The recording folders of the VM that recorded `job`'s run, as the
+    /// engine knows them (a VM's `recording_root` may be outside the data
+    /// folder), real paths.
+    fn recording_roots(&self, job: &Job) -> Vec<PathBuf> {
+        let Some(recording) = &job.recording else {
+            return Vec::new();
+        };
+        read_only_locations(&self.options_for(job))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|location| location.vm_id == recording.vm_id)
+            .flat_map(|location| location.recording_directories)
+            .filter_map(|root| std::fs::canonicalize(root).ok())
+            .collect()
+    }
+
     /// The run's folder as the job names it, only when it is a plain folder
-    /// inside the data folder.
+    /// inside the data folder or inside a recording folder of its VM.
     fn run_dir(&self, job: &Job) -> Result<Option<PathBuf>, String> {
         let Some(recording) = &job.recording else {
             return Ok(None);
@@ -83,8 +100,17 @@ impl RealRuns<'_> {
                 let real = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
                 let data =
                     std::fs::canonicalize(&self.options.data_dir).map_err(|e| e.to_string())?;
-                if !real.starts_with(&data) || real.file_name() != path.file_name() {
-                    return Err("the run's folder is outside the data folder".into());
+                if real.file_name() != path.file_name()
+                    || !(real.starts_with(&data)
+                        || self
+                            .recording_roots(job)
+                            .iter()
+                            .any(|root| real.starts_with(root)))
+                {
+                    return Err(
+                        "the run's folder is outside the data folder and its VM's recordings"
+                            .into(),
+                    );
                 }
                 Ok(Some(path))
             }

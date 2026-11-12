@@ -308,7 +308,12 @@ The daemon runs a pass an hour (the first one minute after it starts). It never
 touches the library, never deletes a sample and never removes a job that has not
 ended; a recording that is being read, or whose evidence is still being written,
 is skipped and taken in a later pass. A recording goes through the app's own
-deletion, which keeps its kept files. `auto gc --dry-run` prints what a pass would
+deletion, which keeps its kept files. A job retried after its launch (a lost
+guest, a stop or a restart of the daemon) recorded a run for each such attempt:
+retention and `--with-recording` delete all of them, and the job record stays
+until they are gone. A recording kept in a VM's recordings folder outside the
+data folder is handled the same way; a recording that cannot be read keeps its
+job record, so it is never left with nothing naming it. `auto gc --dry-run` prints what a pass would
 delete; `auto gc` runs one; `auto delete JOB [--with-recording]` removes one ended
 job. Without a daemon these take the data folder for the command.
 

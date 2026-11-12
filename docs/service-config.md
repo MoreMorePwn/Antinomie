@@ -187,7 +187,7 @@ take it again; a rewritten file is a new file. `SIGHUP` re-reads the folder list
 
 | Key | Default | What is removed |
 |---|---|---|
-| `[retention] recordings_days` | 14 | The recording of a finished job older than this, through the engine's run deletion (the run's record is copied into the sample's record; captures and dumps that belong to the VM stay with it, as when the window deletes a run) |
+| `[retention] recordings_days` | 14 | The recordings of a finished job older than this (the run of each attempt that launched, in the data folder or a VM's recordings folder), through the engine's run deletion (the run's record is copied into the sample's record; captures and dumps that belong to the VM stay with it, as when the window deletes a run) |
 | `[retention] keep_failed` | true | A failed job's recording is kept until `jobs_days` |
 | `[retention] max_recordings_gib` | 200 | Above this the oldest recordings go first (those `keep_failed` protects last). At least 1: 0 is refused, it does not mean "no cap" |
 | `[retention] jobs_days` | 90 | A finished job's record, events, artifacts and folder; the job's recordings (one per attempt that launched) go with it, or the job stays; a job whose recording cannot be read stays |
