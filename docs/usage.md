@@ -2223,8 +2223,10 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   takes the engine lock, so it refuses while the window owns the data directory.
   `settings.json` is the file the window itself now uses for its engine settings,
   including the VM start waits (`start.boot_wait_secs`, `start.tcg_multiplier`,
-  `start.network_wait_secs`, `start.guest_connect_secs`, `start.kvm_fallback`), which the CLI and the daemon start
-  their engine with.
+  `start.network_wait_secs`, `start.guest_connect_secs`, `start.kvm_fallback`), the
+  capture quota (`quota_gib`), the VM shutdown timeout (`shutdown_timeout_s`) and the
+  caps on earlier file bytes (`file_before_file_mib`, `file_before_run_mib`), which the
+  CLI and the daemon start their engine with.
   `config validate [--policy NAME]` checks `service.toml` and `policies/*.toml`
   without starting anything (see [service configuration](service-config.md)); it
   prints each problem as `file:line:column` and exits 4 when there is an error.

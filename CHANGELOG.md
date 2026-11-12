@@ -1030,6 +1030,7 @@ x86 programs by their own table.
 - **A free lane finds a job it can run behind any number it cannot.** The queue claim read only the first 64 queued jobs, so with several lanes (an arm64 lane and an x86-64 lane, say) a free lane stayed idle while a job it could run waited behind 64 for another lane, or behind 64 in `backoff`. It now reads the whole queue, a page at a time, in the same order.
 - **`run/PAUSE`, low disk and a missing KVM stop every lane.** With several lanes only lane 1's loop looked at them, between its own jobs: while lane 1 ran a job, lanes 2 to 4 went on starting jobs after the PAUSE file appeared, and stayed paused after it was removed. Every lane now looks before it claims a job, so the pause and its end reach every free lane within five seconds. One lane is unchanged.
 - **`[retention] max_recordings_gib = 0` is refused.** It was accepted as a cap of 0 bytes, so every retention pass deleted every finished job's recording, `keep_failed` ones included. `config validate` and the daemon's start now refuse it (at least 1); it does not mean "no cap".
+- **The CLI and the daemon use `settings.json`'s capture quota and shutdown timeout.** `quota_gib`, `shutdown_timeout_s` and the earlier-file-bytes caps (`file_before_file_mib`, `file_before_run_mib`) set in the window or with `antinomie-cli config set` were ignored by every CLI command and by `auto daemon`, which always used the defaults (4 GiB, 10 s); only the start waits were read. They now apply, as in the window.
 
 ### Guest
 
