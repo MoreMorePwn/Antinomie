@@ -542,7 +542,11 @@ the read is cancelled.
 - `q` is the Triage filter language of `antinomie-triage` (the one the window's
   tables and trace use). `recording.trace.page` takes the syscall filter
   (`syscall.name == "openat"`, a bare word matches the call text); the Triage
-  tables take their own fields. A syntax or unknown-field error is
+  tables take their own fields. With `q` or `hide_groups`, the `total` of the
+  matching calls is counted on the first page, within a quarter of the light
+  read deadline, and kept for later pages of the same filter and `generation`;
+  a page has no `total` when that count did not finish or a cursor page has
+  none kept (the rows are the same). A syntax or unknown-field error is
   `invalid_argument` with `field: "q"` and `details.position` (the 1-based column).
   The fields of each table, and its sortable columns, are the Triage crate's own
   `FieldSpec` names (`finding.rule`, `file.path`, `network.bytes`, `ioc.value`,

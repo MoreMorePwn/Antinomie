@@ -392,6 +392,74 @@ fn the_trace_pages_in_event_order_with_totals_and_cursors() {
 }
 
 #[test]
+fn bh_28_a_filtered_total_is_counted_once_and_never_on_a_cursor_page() {
+    let data = Data::new("tracetotal");
+    let run = standard(&data);
+    let key = run.key();
+    let params = |cursor: Option<&str>| {
+        let mut params = json!({"run_key": key, "q": "syscall.name == \"openat\"", "limit": 1});
+        if let Some(cursor) = cursor {
+            params["cursor"] = json!(cursor);
+        }
+        params
+    };
+    // The pool's own deadline is the request's, not the settings' below.
+    let patient = || {
+        let mut context = ctx();
+        context.deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(60));
+        context
+    };
+    let page = |service: &QueryService, cursor: Option<&str>| {
+        reply!(
+            call(service, "recording.trace.page", params(cursor), &patient()),
+            Trace
+        )
+    };
+    // The first page counts the matches once and keeps the answer; the next
+    // page takes it from there.
+    let service = data.service();
+    let first = page(&service, None);
+    assert_eq!(first.items.len(), 1);
+    assert_eq!(first.total, Some(2));
+    assert_eq!(first.total_exact, Some(true));
+    assert_eq!(service.totals.lock().unwrap().len(), 1);
+    let cursor = first.next_cursor.clone().expect("a second openat");
+    let second = page(&service, Some(&cursor));
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.total, Some(2));
+    assert_eq!(service.totals.lock().unwrap().len(), 1);
+    // A cursor page with no total kept does not walk the trace: same rows,
+    // no total.
+    let fresh = data.service();
+    let again = page(&fresh, Some(&cursor));
+    assert_eq!(again.items.len(), 1);
+    assert_eq!(again.items[0].call, second.items[0].call);
+    assert_eq!((again.total, again.total_exact), (None, None));
+    assert!(fresh.totals.lock().unwrap().is_empty());
+    // A count that runs out of its budget gives the rows without a total;
+    // an unfiltered page still counts from the index.
+    let settings = super::limits::QuerySettings {
+        light_timeout: std::time::Duration::ZERO,
+        ..Default::default()
+    };
+    let hurried = QueryService::with_settings(data.options(), settings);
+    let rushed = page(&hurried, None);
+    assert_eq!(rushed.items.len(), 1);
+    assert_eq!(rushed.total, None);
+    assert!(hurried.totals.lock().unwrap().is_empty());
+    let all = reply!(
+        call(
+            &hurried,
+            "recording.trace.page",
+            json!({"run_key": key}),
+            &patient()
+        ),
+        Trace
+    );
+    assert_eq!(all.total, Some(5));
+}
+
+#[test]
 fn the_trace_filters_by_process_and_hidden_groups() {
     let data = Data::new("tracefilter");
     let run = standard(&data);

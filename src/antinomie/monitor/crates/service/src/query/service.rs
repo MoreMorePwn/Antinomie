@@ -80,6 +80,7 @@ pub struct QueryService {
     pub(super) audit: Option<crate::audit::AuditLog>,
     pub(super) scrub: Scrub,
     pub(super) trees: Mutex<super::process::TreeCache>,
+    pub(super) totals: Mutex<super::trace::TotalCache>,
     pub(super) scans: super::scan::ScanStore,
     pub(super) attributions: Mutex<super::attribution::AttributionCache>,
 }
@@ -106,6 +107,7 @@ impl QueryService {
             jobs: None,
             audit: None,
             trees: Mutex::new(super::process::TreeCache::default()),
+            totals: Mutex::new(super::trace::TotalCache::default()),
             attributions: Mutex::new(super::attribution::AttributionCache::default()),
         }
     }
