@@ -277,6 +277,18 @@ pub(crate) fn mark_due(vm_id: &str) {
     }
 }
 
+/// How long a finalize that found the disk full waits before it is due again.
+const NO_SPACE_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A finalize failed because the disk (or the user's quota) was full.
+pub(crate) fn out_of_space(why: &str) -> bool {
+    let why = why.to_ascii_lowercase();
+    why.contains("no space left on device")
+        || why.contains("os error 28)")
+        || why.contains("disk quota exceeded")
+        || why.contains("os error 122)")
+}
+
 /// Start the finalize of every due VM of `vms` (this engine's) in a thread
 /// of its own (the copy can take a while); the due VMs of another engine in
 /// the process stay for that engine. The first call for a data folder also
@@ -317,10 +329,17 @@ pub(crate) fn finalize_due(options: &BackendOptions, vms: &[String]) {
                 busy.remove(&vm);
             }
             // A start that is running or a finalize at work elsewhere is
-            // tried again; any other failure leaves the record for the next
-            // start to finish.
-            if matches!(&result, Err(why) if why.contains("still being finished")) {
-                mark_due(&vm);
+            // tried again, and so is a disk that was full (after a pause:
+            // the space may come back, and a lane waits for this layer);
+            // any other failure leaves the record for the next start to
+            // finish.
+            match &result {
+                Err(why) if why.contains("still being finished") => mark_due(&vm),
+                Err(why) if out_of_space(why) => {
+                    std::thread::sleep(NO_SPACE_RETRY);
+                    mark_due(&vm);
+                }
+                _ => {}
             }
         });
     }
