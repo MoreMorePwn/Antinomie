@@ -248,16 +248,18 @@ fn detect_without_save_writes_nothing_into_the_recording() {
     let fixture = Data::new("detect");
     let data = fixture.data();
     let data = data.to_str().unwrap();
-    // No static analysis of a sample and no capture: neither engine has
-    // evidence, and says why.
+    // No static analysis of a sample and no capture. YARA falls back to the
+    // library copy of the run's sample (ANT-T0462, BH-11) and, with no rules
+    // enabled in this fixture, says so; IDS has no capture and says why.
     let (code, value) = cli(&fixture.args(data, &["detect", RUN, "--engine", "yara,ids"]));
     assert_eq!(code, 0, "{value}");
     let engines = value["result"]["engines"].as_array().unwrap();
     assert_eq!(engines.len(), 2);
-    for engine in engines {
-        assert_eq!(engine["outcome"], "not_scanned", "{engine}");
-        assert!(!engine["reason"].as_str().unwrap().is_empty());
-    }
+    assert_eq!(engines[0]["engine"], "YARA", "{}", engines[0]);
+    assert_eq!(engines[0]["outcome"], "scanned", "{}", engines[0]);
+    assert_eq!(engines[0]["state"], "no_rules", "{}", engines[0]);
+    assert_eq!(engines[1]["outcome"], "not_scanned", "{}", engines[1]);
+    assert!(!engines[1]["reason"].as_str().unwrap().is_empty());
     assert_eq!(engines[1]["evidence_key"], "missing:pcap");
     assert_eq!(value["result"]["saved"], false);
     assert!(!fixture.run_dir().join("triage-detection").exists());
