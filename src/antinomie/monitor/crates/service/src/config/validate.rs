@@ -590,6 +590,15 @@ fn check_vm_facts(policy: &Policy, facts: &VmFacts, non_drop: bool, sink: &mut S
                 ),
             );
         }
+        RevertMode::SnapshotFull if facts.disk_snapshots.contains(&vm.revert_to) => sink.warn(
+            "vm.revert",
+            format!(
+                "snapshot `{}` of VM `{}` holds the disk only, so snapshot_full restores \
+                 its disk and boots the guest cold, as snapshot_disk does; take a full \
+                 snapshot (with memory) to resume a running guest",
+                vm.revert_to, facts.name
+            ),
+        ),
         _ => {}
     }
     if let (Some(want), Some(have)) = (&vm.stealth, &facts.stealth)
