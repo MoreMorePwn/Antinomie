@@ -1036,6 +1036,7 @@ x86 programs by their own table.
 - **A decrypted sample left by a killed launch is removed.** The plain host copy staged under `<data>/host-copy/` during a launch was removed only when the launch ended, so a daemon or CLI killed meanwhile (SIGKILL, the OOM killer, a power loss) left it there. The daemon's start and every later staging now remove copies whose process is gone.
 - **With several lanes, a job only a quarantined lane can run shows `waiting_for: lane_quarantined`.** It showed `lane` (a busy lane) for as long as the quarantine lasted, a wait that never expires. The free lane that cannot run it now passes on the wait of the lanes that can.
 - **`config validate` warns about `vm.revert = "snapshot_full"` over a disk-only snapshot.** `auto init` takes a disk snapshot, and a full revert to it restores the disk and boots the guest cold, as `snapshot_disk` does, with nothing said. The policy check now gives a warning that names the snapshot.
+- **A long non-ASCII summary from an analysis tool no longer crashes the engine.** When a listing was refused, the summary of the section (the sandboxed worker's text, up to 4096 bytes) was cut at byte 4000, which panicked the engine's thread when that byte fell inside a multi-byte character. The Disks reader cut a guest path longer than 4096 bytes the same way, so Compare and Find failed on such a disk. Both now cut on a character boundary.
 
 ### Guest
 

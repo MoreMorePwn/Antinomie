@@ -118,7 +118,8 @@ fn join(directory: &ext4_view::PathBuf, name: &[u8]) -> Option<ext4_view::PathBu
 
 fn text(path: &ext4_view::PathBuf) -> String {
     let mut text = String::from_utf8_lossy(path.as_ref()).into_owned();
-    text.truncate(PATH_LIMIT);
+    // The guest names the path: cut it on a character boundary.
+    text.truncate(text.floor_char_boundary(PATH_LIMIT));
     text
 }
 

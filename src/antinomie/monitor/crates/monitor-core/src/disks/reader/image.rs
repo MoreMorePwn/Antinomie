@@ -656,7 +656,7 @@ fn find(fs: &Ext4, query: FindQuery, limits: content::Limits) -> Result<FindResu
                     break 'walk;
                 }
                 let mut path = full_text;
-                path.truncate(PATH_LIMIT);
+                path.truncate(path.floor_char_boundary(PATH_LIMIT));
                 let (offset, snippet) =
                     found.map_or((None, None), |hit| (Some(hit.offset), Some(hit.snippet)));
                 results.matches.push(FoundEntry {

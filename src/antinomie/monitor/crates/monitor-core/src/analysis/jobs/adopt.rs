@@ -46,7 +46,9 @@ fn adopt(
 fn note(section: &mut AnalysisSection, text: String) {
     section.summary = format!("{}; {text}", section.summary);
     if section.summary.len() > 4096 {
-        section.summary.truncate(4000);
+        // On a character boundary: the summary is the worker's text.
+        let cut = section.summary.floor_char_boundary(4000);
+        section.summary.truncate(cut);
     }
 }
 
@@ -241,7 +243,10 @@ mod bh_26_tests {
             adopt_listings(&directory, &mut report, &[]);
         }));
         let _ = fs::remove_dir_all(&directory);
-        assert!(outcome.is_ok(), "adopt_listings panicked on a worker summary");
+        assert!(
+            outcome.is_ok(),
+            "adopt_listings panicked on a worker summary"
+        );
         assert!(report.sections[0].summary.len() <= 4096);
     }
 }
