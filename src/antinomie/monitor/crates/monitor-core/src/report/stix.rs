@@ -58,7 +58,30 @@ pub(in crate::report) fn pattern(indicator: &Indicator) -> Option<String> {
     }
 }
 
-pub(in crate::report) fn object(kind: &str, seed: &str, at: &str, mut fields: Value) -> Value {
+/// The `created` time of an object every export shares (the identity, the
+/// sample's malware, an ATT&CK technique, what ties them): STIX 2.1 (3.6)
+/// keeps `created` for every version of an id, and these ids are made from
+/// content, so a later export, or the export of another run of the sample,
+/// carries the same id (BH-21). Each export is a new version: its
+/// `modified` is the export's time.
+pub(in crate::report) const SHARED_CREATED: &str = "2026-01-01T00:00:00.000Z";
+
+/// An SDO or SRO of the bundle. Its `created` is [`SHARED_CREATED`]; its
+/// `modified` is `at`, the export's time.
+pub(in crate::report) fn object(kind: &str, seed: &str, at: &str, fields: Value) -> Value {
+    object_since(kind, seed, SHARED_CREATED, at, fields)
+}
+
+/// [`object`] created at `created`, a time that does not change from export
+/// to export (a run's objects: the run's start). `modified` is `at`, or
+/// `created` when that is later.
+pub(in crate::report) fn object_since(
+    kind: &str,
+    seed: &str,
+    created: &str,
+    at: &str,
+    mut fields: Value,
+) -> Value {
     let map = fields.as_object_mut().expect("an object");
     map.insert("type".into(), json!(kind));
     map.insert("spec_version".into(), json!("2.1"));
@@ -66,8 +89,10 @@ pub(in crate::report) fn object(kind: &str, seed: &str, at: &str, mut fields: Va
         "id".into(),
         json!(format!("{kind}--{}", uuid5(&format!("stix:{kind}:{seed}")))),
     );
-    map.insert("created".into(), json!(at));
-    map.insert("modified".into(), json!(at));
+    // Both are `iso` times of one form, so text order is time order.
+    let modified = if at < created { created } else { at };
+    map.insert("created".into(), json!(created));
+    map.insert("modified".into(), json!(modified));
     fields
 }
 
@@ -76,9 +101,21 @@ pub(in crate::report) fn id_of(value: &Value) -> String {
 }
 
 pub(in crate::report) fn relationship(kind: &str, from: &str, to: &str, at: &str) -> Value {
-    object(
+    relationship_since(kind, from, to, SHARED_CREATED, at)
+}
+
+/// [`relationship`] created at `created` ([`object_since`]).
+pub(in crate::report) fn relationship_since(
+    kind: &str,
+    from: &str,
+    to: &str,
+    created: &str,
+    at: &str,
+) -> Value {
+    object_since(
         "relationship",
         &format!("{kind}:{from}:{to}"),
+        created,
         at,
         json!({"relationship_type": kind, "source_ref": from, "target_ref": to}),
     )
@@ -88,6 +125,13 @@ pub(in crate::report) fn relationship(kind: &str, from: &str, to: &str, at: &str
 pub fn render(report: &Report) -> Result<String, String> {
     let at = iso(report.generated_ms);
     let run = &report.run.run_id;
+    // The run's own objects (its analysis, indicators, notes and report) are
+    // created when it started, so every export of the run gives them the
+    // same `created`.
+    let since = report
+        .run
+        .started_ms
+        .map_or_else(|| SHARED_CREATED.to_owned(), iso);
     let mut objects: Vec<Value> = Vec::new();
     let identity = object(
         "identity",
@@ -120,9 +164,10 @@ pub fn render(report: &Report) -> Result<String, String> {
         if report.not_started() {
             // Nothing ran: the sample is a file and a note says why; there is
             // no malware analysis and nothing it was seen doing.
-            objects.push(object(
+            objects.push(object_since(
                 "note",
                 &format!("{run}:not-started"),
+                &since,
                 &at,
                 json!({
                     "abstract": format!("Run {run} did not start"),
@@ -173,9 +218,10 @@ pub fn render(report: &Report) -> Result<String, String> {
             "matched_indicators" | "suspicious_behaviour" => "suspicious",
             _ => "unknown",
         };
-        objects.push(object(
+        objects.push(object_since(
             "malware-analysis",
             &format!("{run}:{sample_ref}"),
+            &since,
             &at,
             json!({
                 "product": "antinomie",
@@ -245,9 +291,21 @@ pub fn render(report: &Report) -> Result<String, String> {
         if let Some(confidence) = first.confidence {
             fields["confidence"] = json!(confidence);
         }
-        let item = object("indicator", &format!("{run}:{pattern}"), &at, fields);
+        let item = object_since(
+            "indicator",
+            &format!("{run}:{pattern}"),
+            &since,
+            &at,
+            fields,
+        );
         if let Some(malware) = &malware_id {
-            objects.push(relationship("indicates", &id_of(&item), malware, &at));
+            objects.push(relationship_since(
+                "indicates",
+                &id_of(&item),
+                malware,
+                &since,
+                &at,
+            ));
         }
         objects.push(item);
     }
@@ -303,9 +361,10 @@ pub fn render(report: &Report) -> Result<String, String> {
                 "url": hit.reference,
             }]);
         }
-        objects.push(object(
+        objects.push(object_since(
             "note",
             &format!("{run}:{}:{}", hit.engine, hit.rule_id),
+            &since,
             &at,
             fields,
         ));
@@ -318,9 +377,10 @@ pub fn render(report: &Report) -> Result<String, String> {
             .filter(|o| !matches!(o["type"].as_str(), Some("identity" | "relationship")))
             .map(id_of)
             .collect();
-        objects.push(object(
+        objects.push(object_since(
             "report",
             &format!("{run}:{malware}"),
+            &since,
             &at,
             json!({
                 "name": format!("Antinomie triage of run {run}"),
