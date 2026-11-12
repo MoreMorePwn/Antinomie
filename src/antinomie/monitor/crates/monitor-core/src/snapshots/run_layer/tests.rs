@@ -37,8 +37,7 @@ fn finish(fixture: &Fixture) -> Result<Option<Outcome>, String> {
     loop {
         match finalize(&fixture.options, &fixture.vm.id) {
             Err(why)
-                if why.contains("still being finished")
-                    && std::time::Instant::now() < deadline =>
+                if why.contains("still being finished") && std::time::Instant::now() < deadline =>
             {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
@@ -77,10 +76,7 @@ fn a_boots_writes_go_to_the_automatic_layer_and_merge_back_down() {
     // A running boot is not finished.
     assert!(finalize(&fixture.options, &fixture.vm.id).is_err());
     ended(&fixture.options, &fixture.vm.id);
-    assert_eq!(
-        finish(&fixture).unwrap(),
-        Some(Outcome::Merged)
-    );
+    assert_eq!(finish(&fixture).unwrap(), Some(Outcome::Merged));
     // Back to one overlay holding both boots' data; nothing left over.
     assert_eq!(active(&fixture), disk);
     fixture.read(&disk, 9);
@@ -158,10 +154,7 @@ fn a_commit_cut_short_is_repeated_safely() {
     // Dies after the data reached the sealed layer, before the switch back.
     commit(&fixture.options, &top).unwrap();
     ended(&fixture.options, &fixture.vm.id);
-    assert_eq!(
-        finish(&fixture).unwrap(),
-        Some(Outcome::Merged)
-    );
+    assert_eq!(finish(&fixture).unwrap(), Some(Outcome::Merged));
     fixture.read(&disk, 3);
     assert_eq!(active(&fixture), disk);
     // Dies after the switch back, before the file and record went.
@@ -177,10 +170,7 @@ fn a_commit_cut_short_is_repeated_safely() {
     manifest.active_disk = record.sealed.clone();
     save(&fixture.directory, &manifest).unwrap();
     ended(&fixture.options, &fixture.vm.id);
-    assert_eq!(
-        finish(&fixture).unwrap(),
-        Some(Outcome::Cleaned)
-    );
+    assert_eq!(finish(&fixture).unwrap(), Some(Outcome::Cleaned));
     assert!(!fixture.directory.join(&record.top).exists());
     assert_eq!(active(&fixture), disk);
 }
@@ -208,10 +198,7 @@ fn a_user_snapshot_taken_during_the_boot_is_never_merged() {
     assert_ne!(after, top);
     fixture.write(4);
     ended(&fixture.options, &fixture.vm.id);
-    assert_eq!(
-        finish(&fixture).unwrap(),
-        Some(Outcome::KeptInChain)
-    );
+    assert_eq!(finish(&fixture).unwrap(), Some(Outcome::KeptInChain));
     // The checkpoint is the user's: its layer is the boot's layer, the sealed
     // layer is still below it, and the working disk is untouched.
     let tree = list(&fixture.options, &fixture.vm).unwrap();
@@ -244,10 +231,7 @@ fn a_user_snapshot_that_exists_before_the_boot_stays_as_it_is() {
     .unwrap();
     fixture.write(6);
     ended(&fixture.options, &fixture.vm.id);
-    assert_eq!(
-        finish(&fixture).unwrap(),
-        Some(Outcome::Merged)
-    );
+    assert_eq!(finish(&fixture).unwrap(), Some(Outcome::Merged));
     let tree = list(&fixture.options, &fixture.vm).unwrap();
     assert_eq!(tree.nodes.len(), 1);
     assert_eq!(tree.nodes[0].id, checkpoint.id);
