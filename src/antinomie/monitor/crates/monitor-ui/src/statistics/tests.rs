@@ -10,6 +10,8 @@ use antinomie_triage::statistics::fixture::{nr, Call, Fixture, ROOT};
 use eframe::egui;
 use std::time::{Duration, Instant};
 
+mod hierarchy;
+mod properties;
 mod window;
 
 pub(super) const SCREEN: egui::Vec2 = egui::vec2(1280.0, 820.0);
