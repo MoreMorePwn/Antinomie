@@ -105,7 +105,9 @@ version = "0.0.0"
 dependencies = [
  "antinomie-monitor-core",
  "antinomie-service",
+ "antinomie-triage",
  "libfuzzer-sys",
+ "serde_json",
 ]
 
 [[package]]

@@ -71,6 +71,37 @@ pub(crate) fn run_sandboxed_sized(
     cancel: &AtomicBool,
     address_space_size: u64,
 ) -> Result<(), String> {
+    let bounds = Bounds {
+        timeout,
+        address_space_size,
+        grace: crate::sandbox_process::host_stop_grace(),
+    };
+    run_bounded(program, args, writable, mounts, env, cancel, bounds)
+}
+
+/// The limits of one sandboxed tool.
+pub(super) struct Bounds {
+    pub(super) timeout: Duration,
+    pub(super) address_space_size: u64,
+    /// SIGTERM, then this long before SIGKILL, when the tool is stopped (its
+    /// time limit, a cancel); zero stops it at once (ANT-T0471).
+    pub(super) grace: Duration,
+}
+
+pub(super) fn run_bounded(
+    program: &Path,
+    args: &[String],
+    writable: &Path,
+    mounts: &Mounts<'_>,
+    env: &[(&str, &str)],
+    cancel: &AtomicBool,
+    bounds: Bounds,
+) -> Result<(), String> {
+    let Bounds {
+        timeout,
+        address_space_size,
+        grace,
+    } = bounds;
     crate::dependencies::require_tool(Path::new("/usr/bin/bwrap"), "bubblewrap")?;
     crate::dependencies::require_tool(Path::new("/usr/bin/prlimit"), "prlimit")?;
     let account = sandbox_passwd(writable)?;
@@ -151,6 +182,9 @@ pub(crate) fn run_sandboxed_sized(
         }
     })();
     if result.is_err() {
+        // A tool being stopped gets SIGTERM and the grace to end; what is
+        // left is killed by the cleanup below.
+        terminate_sandbox(&mut child, &mut log, &mut reader, grace);
         // Retain both launcher and namespace ownership on this background
         // caller until exact cleanup is confirmed, including early setup.
         if let Err(error) = cleanup_sandbox(&mut child, &mut log) {
@@ -170,4 +204,48 @@ pub(crate) fn run_sandboxed_sized(
         ));
     }
     result.map_err(|error| log.error(&error))
+}
+
+/// The graceful stop of a sandboxed tool (ANT-T0471): SIGTERM to its group,
+/// then up to `grace` for it to end. Nothing is sent when `grace` is zero or
+/// when the tool has already ended. Returns whether it ended in the grace;
+/// [`cleanup_sandbox`] kills (SIGSTOP, SIGKILL) whatever is still there.
+pub(super) fn terminate_sandbox(
+    process: &mut SandboxProcess,
+    log: &mut SandboxLog,
+    reader: &mut UnixStream,
+    grace: Duration,
+) -> bool {
+    if grace.is_zero() || matches!(process.poll_status(), Ok(Some(_))) {
+        return false;
+    }
+    match process.terminate() {
+        Ok(true) => {}
+        Ok(false) => return false,
+        Err(error) => {
+            let _ = log.record(format!("\n[graceful stop failed: {error}]\n").as_bytes());
+            return false;
+        }
+    }
+    let until = Instant::now() + grace;
+    let ended = loop {
+        let _ = log.drain(reader);
+        match process.poll_status() {
+            Ok(Some(_)) => break true,
+            Ok(None) if Instant::now() < until => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => break false,
+        }
+    };
+    let note = if ended {
+        "\n[stopped: SIGTERM sent; it ended within the grace]\n".to_owned()
+    } else {
+        format!(
+            "\n[stopped: SIGTERM sent; still running after the {} s grace, SIGKILL follows]\n",
+            grace.as_secs_f64()
+        )
+    };
+    let _ = log.record(note.as_bytes());
+    ended
 }

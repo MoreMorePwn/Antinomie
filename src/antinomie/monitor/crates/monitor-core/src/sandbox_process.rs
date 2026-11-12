@@ -17,6 +17,27 @@ use std::{
 const MAX_SANDBOX_INFO_SIZE: usize = 8192;
 const MAX_SANDBOX_CHILDREN: usize = 64;
 
+/// The grace between the graceful stop (SIGTERM) of a sandboxed host tool and
+/// its SIGKILL, in milliseconds (ANT-T0471). 0, the default and the desktop
+/// app's, keeps the immediate stop (SIGSTOP, then SIGKILL).
+static HOST_STOP_GRACE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Set the grace of every later stop of a sandboxed host tool in this process
+/// (the analysis worker, the detection worker, the other isolated tools): a
+/// tool that is stopped (its time limit, a cancel) gets SIGTERM, then SIGKILL
+/// once `grace` has passed. The daemon sets it from `daemon.stop_grace_s`.
+pub fn set_host_stop_grace(grace: std::time::Duration) {
+    HOST_STOP_GRACE_MS.store(
+        u64::try_from(grace.as_millis()).unwrap_or(u64::MAX),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// The grace of [`set_host_stop_grace`] (zero: stop at once).
+pub fn host_stop_grace() -> std::time::Duration {
+    std::time::Duration::from_millis(HOST_STOP_GRACE_MS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 /// Private metadata reader plus the launcher's host PID-namespace baseline.
 pub(crate) struct LaunchInfo {
     info: UnixStream,
@@ -164,6 +185,9 @@ fn pidfd_exited(fd: &OwnedFd) -> Result<bool, String> {
 
 struct SandboxInit {
     fd: OwnedFd,
+    /// Its host PID: with `--new-session` the init leads the sandbox's
+    /// process group, so this is also the group the graceful stop signals.
+    pid: u32,
     /// Only a verified namespace init can be signaled individually; an early
     /// child with inaccessible namespaces is terminated through its owned group.
     namespace_init: bool,
@@ -184,6 +208,7 @@ pub(crate) struct SandboxProcess {
     init_known_dead: bool,
     reaped: bool,
     group_killed: bool,
+    terminate_sent: bool,
 }
 impl SandboxProcess {
     /// Adopt the spawned child before any fallible process metadata probe.
@@ -202,6 +227,7 @@ impl SandboxProcess {
             init_known_dead: false,
             reaped: false,
             group_killed: false,
+            terminate_sent: false,
         }
     }
 
@@ -326,7 +352,11 @@ impl SandboxProcess {
             }
             return Err("escaped sandbox child namespace ownership is unverified".into());
         }
-        self.init = Some(SandboxInit { fd, namespace_init });
+        self.init = Some(SandboxInit {
+            fd,
+            pid: raw_pid,
+            namespace_init,
+        });
         Ok(())
     }
 
@@ -466,6 +496,50 @@ impl SandboxProcess {
             self.completed_status = Some(status);
         }
         Ok(status)
+    }
+
+    /// The graceful stop (ANT-T0471): SIGTERM to the process group the
+    /// verified namespace init leads (bwrap `--new-session`), which holds the
+    /// tool and its children. The init ignores it, as a namespace init without
+    /// a handler does; once the tool has exited the init and the launcher end
+    /// too. Only a pinned, live namespace init is used: its open pidfd keeps
+    /// its PID, and so the group's ID, from being reused.
+    ///
+    /// | Outcome | Meaning |
+    /// |---|---|
+    /// | `Ok(true)` | SIGTERM sent (now or by an earlier call); poll [`Self::poll_status`] until the grace ends, then [`Self::cleanup_poll`] |
+    /// | `Ok(false)` | Nothing verified to signal (not yet started, already ending, an unverified topology): go to `cleanup_poll` at once |
+    /// | `Err` | The signal failed; go to `cleanup_poll` at once |
+    pub(crate) fn terminate(&mut self) -> Result<bool, String> {
+        if self.terminate_sent {
+            return Ok(true);
+        }
+        if self.reaped || self.completed_status.is_some() || self.stop_requested {
+            return Ok(false);
+        }
+        self.refresh_init()?;
+        let Some(init) = &self.init else {
+            return Ok(false);
+        };
+        if !init.namespace_init || pidfd_exited(&init.fd)? {
+            return Ok(false);
+        }
+        let Some(identity) = process_identity(init.pid)? else {
+            return Ok(false);
+        };
+        if identity.group != init.pid || identity.parent != self.child.id() {
+            return Ok(false);
+        }
+        let group = i32::try_from(init.pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .ok_or("invalid sandbox init PID")?;
+        match rustix::process::kill_process_group(group, rustix::process::Signal::TERM) {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+            Err(error) => return Err(format!("sandbox graceful stop: {error}")),
+        }
+        self.terminate_sent = true;
+        Ok(true)
     }
 
     /// Advance one finite cleanup stage; never sleep or release an unresolved owner.

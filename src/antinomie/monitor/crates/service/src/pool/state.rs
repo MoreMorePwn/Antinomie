@@ -15,6 +15,16 @@
 //! jobs. Once every item of a job has started, the head moves to the next
 //! job.
 //!
+//! **The deadline** (ANT-T0471, user decision 2026-11-12, replacing BH-07's
+//! "never cut a running item"): an item that starts is given the smaller of
+//! its own limit and the time left before its job's host-stage deadline, so
+//! at the deadline every running item reaches its limit and gets the
+//! graceful stop of any limit (a cancel flag, SIGTERM to its sandboxed tool,
+//! SIGKILL after `daemon.stop_grace_s`). Past the deadline nothing of the job
+//! starts; once its running items have ended (those it stopped are
+//! `timed_out`) the job fails `deadline_exceeded` and its queued items are
+//! `skipped`. What finished is kept.
+//!
 //! The steps between items that are the job's own (the end of `analyse`, the
 //! end of `report` and `cleanup`, the ending of a cancelled or failed job) are
 //! quick store writes; they are handed out as tasks too, but take no worker
@@ -114,7 +124,11 @@ pub enum Task {
         job: JobId,
         index: usize,
         kind: ItemKind,
+        /// The item's limit, cut to the time left before the job's deadline.
         limit: Duration,
+        /// The time left before the job's deadline (it also bounds a wait
+        /// that does not count against the limit, the engine's queue).
+        until: Duration,
         /// The first `analyse` item of this run of the stages.
         begin_analyse: bool,
     },
@@ -208,12 +222,12 @@ impl PoolState {
 
     /// The next task under the rule of the module text. `memory` says why
     /// the floor is not met, or `None`. `deadline` is the failure of a job
-    /// past its host-stage deadline.
+    /// past its host-stage deadline, given its items.
     pub fn next(
         &mut self,
         now_ms: u64,
         memory: &mut dyn FnMut() -> Option<String>,
-        deadline: &dyn Fn(&Job) -> Failure,
+        deadline: &dyn Fn(&Job, &[HostItem]) -> Failure,
     ) -> Option<Task> {
         let free = self.running < self.workers;
         let mut head_seen = false;
@@ -227,14 +241,15 @@ impl PoolState {
             }
             if job.stop.is_none() && now_ms >= job.deadline_ms {
                 if job.running > 0 {
-                    // Each running item is bounded by its own limit: the
-                    // deadline never cuts one short. The job fails once they
-                    // end, and starts nothing new meanwhile (it keeps its
-                    // place at the head, as a busy job does).
+                    // Each running item's limit ends at the deadline at the
+                    // latest: it is being stopped (SIGTERM, the grace, then
+                    // SIGKILL). The job fails once they end, and starts
+                    // nothing new meanwhile (it keeps its place at the head,
+                    // as a busy job does).
                     head_seen |= has_queued;
                     continue;
                 }
-                job.stop = Some(PoolStop::Failed(deadline(&job.job)));
+                job.stop = Some(PoolStop::Failed(deadline(&job.job, &job.views)));
             }
             if let Some(stop) = &job.stop {
                 for view in &mut job.views {
@@ -280,6 +295,7 @@ impl PoolState {
         }
         let (key, index) = start?;
         let job = self.jobs.get_mut(&key)?;
+        let until = Duration::from_millis(job.deadline_ms.saturating_sub(now_ms));
         let view = &mut job.views[index];
         view.state = HostItemState::Running;
         view.started_ms = Some(now_ms);
@@ -291,7 +307,8 @@ impl PoolState {
         Some(Task::Item {
             job: job.job.id.clone(),
             index,
-            limit: Duration::from_secs(view.limit_s),
+            limit: Duration::from_secs(view.limit_s).min(until),
+            until,
             kind,
             begin_analyse,
         })
@@ -310,12 +327,29 @@ impl PoolState {
             return;
         };
         job.running = job.running.saturating_sub(1);
+        let deadline_ms = job.deadline_ms;
         let view = &mut job.views[index];
         view.finished_ms = Some(now_ms);
         match result {
             Ok((state, note)) => {
-                view.state = state;
-                view.note = note;
+                // An item whose limit the deadline cut, and which had not
+                // finished by then, was stopped by the deadline.
+                let cut = view
+                    .started_ms
+                    .is_some_and(|at| at.saturating_add(view.limit_s * 1000) > deadline_ms);
+                let stopped = cut
+                    && now_ms >= deadline_ms
+                    && matches!(state, HostItemState::Failed | HostItemState::TimedOut);
+                if stopped {
+                    view.state = HostItemState::TimedOut;
+                    view.note = Some(match note {
+                        Some(note) => format!("stopped at the job's host-stage deadline: {note}"),
+                        None => "stopped at the job's host-stage deadline".into(),
+                    });
+                } else {
+                    view.state = state;
+                    view.note = note;
+                }
             }
             Err(stop) => {
                 view.state = HostItemState::Failed;

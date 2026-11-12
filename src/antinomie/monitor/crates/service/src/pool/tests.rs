@@ -7,7 +7,7 @@ use crate::{
     api::{
         failure::{Failure, FailureCode},
         ids::JobId,
-        job::{HostItemState, Job, Outcome, Stage},
+        job::{HostItem, HostItemState, Job, Outcome, Stage},
     },
     stages::{
         items::{ItemKind, JobWork, PhaseEnd, host_item, items_for},
@@ -16,7 +16,10 @@ use crate::{
     },
 };
 use antinomie_monitor_core::analysis::{AnalysisKind, detection::Engine as DetectionEngine};
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 pub(super) fn plan(statics: &[AnalysisKind], engines: bool) -> HostPlan {
     HostPlan {
@@ -84,7 +87,7 @@ fn add(state: &mut PoolState, job: Job, plan: HostPlan) -> JobId {
     id
 }
 
-fn no_deadline(_: &Job) -> Failure {
+fn no_deadline(_: &Job, _: &[HostItem]) -> Failure {
     Failure::new(FailureCode::Internal, Stage::Analyse, "late", None)
 }
 
@@ -385,11 +388,13 @@ fn a_job_behind_a_long_queue_gets_the_time_of_the_work_ahead_too() {
     assert_eq!(state.ahead_s(&(0, job(3, 0).id)), 0);
 }
 
-/// BH-07 (bug hunt 0.9.0): the job's host-stage deadline is the factor times
-/// the expected times, with no floor, while each item may take at least
-/// `MIN_LIMIT` (30 s). Once the medians are small (three quick jobs), a job
-/// is failed by its deadline while its running item is well inside its own
-/// limit.
+/// BH-07 (bug hunt 0.9.0): the job's host-stage deadline was the factor
+/// times the expected times, with no floor, while each item may take at
+/// least `MIN_LIMIT` (30 s). Once the medians are small (three quick jobs), a
+/// job was failed by its deadline while its running item was well inside its
+/// own limit. The deadline now has the floor of the item limits, so (since
+/// ANT-T0471 cuts a running item at the deadline) the first item keeps its
+/// whole limit.
 #[test]
 fn bh_07_a_job_is_not_failed_by_its_deadline_while_an_item_is_within_its_limit() {
     let plan = plan(&[AnalysisKind::Metadata], false);
@@ -411,7 +416,9 @@ fn bh_07_a_job_is_not_failed_by_its_deadline_while_an_item_is_within_its_limit()
         .map(|spec| host_item(spec, &items, &timing.of(&spec.kind, &plan, &inputs)))
         .collect();
     let own: u64 = views.iter().map(|v| v.expected_s).sum();
-    let budget = PoolState::budget_ms(0, own, timing.factor);
+    let own_limits: u64 = views.iter().map(|v| v.limit_s).sum();
+    let budget = PoolState::budget_floor_ms(0, own, own_limits, timing.factor);
+    let first_limit = Duration::from_secs(views[0].limit_s);
     let job = job(1, 1);
     let id = job.id.clone();
     let key = PoolState::key(&job);
@@ -425,9 +432,10 @@ fn bh_07_a_job_is_not_failed_by_its_deadline_while_an_item_is_within_its_limit()
     let Some(Task::Item { limit, .. }) = first else {
         unreachable!()
     };
-    // ... and is still running 20 s later, inside its own limit.
+    // ... with its whole limit, and is still running 20 s later, inside it.
+    assert_eq!(limit, first_limit);
     let at_ms = 20_000;
-    assert!(std::time::Duration::from_millis(at_ms) < limit);
+    assert!(Duration::from_millis(at_ms) < limit);
     let _ = state.next(at_ms, &mut || None, &no_deadline);
     assert!(
         state.get(&id).unwrap().stop.is_none(),
@@ -436,7 +444,8 @@ fn bh_07_a_job_is_not_failed_by_its_deadline_while_an_item_is_within_its_limit()
 }
 
 /// BH-07: the budget is never shorter than the work ahead plus the job's own
-/// item limits, and the deadline never ends a job while an item runs.
+/// item limits. ANT-T0471: a running item's limit ends at the deadline; the
+/// job fails once it has ended (after its graceful stop).
 #[test]
 fn the_deadline_covers_the_item_limits_and_waits_for_a_running_item() {
     // Four items of 1 s expected each and a 30 s limit each.
@@ -451,11 +460,12 @@ fn the_deadline_covers_the_item_limits_and_waits_for_a_running_item() {
     let mut state = PoolState::new(2);
     state.jobs.insert(key, pool_job(job, plan, 5_000));
     let first = state.next(0, &mut || None, &no_deadline);
-    let Some(Task::Item { index, .. }) = first else {
+    let Some(Task::Item { index, limit, .. }) = first else {
         panic!("not an item: {first:?}")
     };
-    // Past the deadline with the item still running: not failed yet, and
-    // nothing else of the job starts.
+    assert_eq!(limit, Duration::from_secs(5));
+    // Past the deadline with the item still running (being stopped): not
+    // failed yet, and nothing else of the job starts.
     assert!(state.next(6_000, &mut || None, &no_deadline).is_none());
     assert!(state.get(&id).unwrap().stop.is_none());
     // Once the item ended, the deadline fails the job.
@@ -553,4 +563,122 @@ fn t0464_an_item_that_goes_ahead_in_its_job_still_waits_for_memory() {
     assert!(state.waiting_for.is_some());
     let second = next(&mut state);
     assert_eq!(item(&second), (older, "static:strings".into()));
+}
+
+/// ANT-T0471 (user decision 2026-11-12, replacing T0462 decision 2): at the
+/// job's deadline its running items are stopped (their limits end there),
+/// what finished is kept, nothing more starts, and the job fails
+/// `deadline_exceeded` naming the stopped and the unstarted items.
+#[test]
+fn t0471_a_running_item_is_stopped_at_the_deadline_and_finished_results_are_kept() {
+    let plan = plan(&[AnalysisKind::Metadata], true);
+    let job = job(1, 1);
+    let id = job.id.clone();
+    let key = PoolState::key(&job);
+    let mut state = PoolState::new(2);
+    state.jobs.insert(key, pool_job(job, plan, 5_000));
+    // triage and static:metadata start; both limits end at the deadline.
+    let first = state.next(0, &mut || None, &crate::pool::deadline_failure);
+    let second = state.next(1_000, &mut || None, &crate::pool::deadline_failure);
+    let (
+        Some(Task::Item {
+            index: triage,
+            limit: a,
+            until: ua,
+            ..
+        }),
+        Some(Task::Item {
+            index: metadata,
+            limit: b,
+            until: ub,
+            kind,
+            ..
+        }),
+    ) = (first, second)
+    else {
+        panic!("two items expected");
+    };
+    assert_eq!(kind.name(), "static:metadata");
+    assert_eq!((a, ua), (Duration::from_secs(5), Duration::from_secs(5)));
+    assert_eq!((b, ub), (Duration::from_secs(4), Duration::from_secs(4)));
+    // Triage finishes before the deadline: kept.
+    state.item_ended(&id, triage, 3_000, Ok((HostItemState::Done, None)));
+    // detection could start now, but past the deadline nothing starts.
+    assert!(
+        state
+            .next(5_000, &mut || None, &crate::pool::deadline_failure)
+            .is_none()
+    );
+    assert_eq!(
+        state.get(&id).unwrap().views[metadata].state,
+        HostItemState::Running
+    );
+    // The static item reached its (cut) limit: it was stopped and ends
+    // after its grace.
+    state.item_ended(
+        &id,
+        metadata,
+        6_000,
+        Ok((HostItemState::TimedOut, Some("did not finish".into()))),
+    );
+    let settle = state.next(6_000, &mut || None, &crate::pool::deadline_failure);
+    let Some(Task::Settle(settled, PoolStop::Failed(failure))) = settle else {
+        panic!("not a deadline failure: {settle:?}");
+    };
+    assert_eq!(settled, id);
+    assert_eq!(failure.code, FailureCode::DeadlineExceeded);
+    assert_eq!(
+        failure.detail.as_deref(),
+        Some("timed out: static:metadata; not started: detection, assess, report")
+    );
+    let views = &state.get(&id).unwrap().views;
+    let states: Vec<(&str, HostItemState)> =
+        views.iter().map(|v| (v.name.as_str(), v.state)).collect();
+    assert_eq!(
+        states,
+        vec![
+            ("triage", HostItemState::Done),
+            ("static:metadata", HostItemState::TimedOut),
+            ("detection", HostItemState::Skipped),
+            ("assess", HostItemState::Skipped),
+            ("report", HostItemState::Skipped),
+        ]
+    );
+    assert!(
+        views[metadata]
+            .note
+            .as_deref()
+            .is_some_and(|n| n.starts_with("stopped at the job's host-stage deadline"))
+    );
+    // The finished item keeps its time.
+    assert_eq!(views[triage].finished_ms, Some(3_000));
+}
+
+/// An item that the deadline cut and that ended `failed` past it (an
+/// in-process step that saw its cancel flag) counts as stopped: `timed_out`.
+/// One that finished in its grace is `done`.
+#[test]
+fn t0471_an_item_cut_by_the_deadline_is_timed_out_unless_it_finished() {
+    let plan = plan(&[AnalysisKind::Metadata, AnalysisKind::Strings], false);
+    let job = job(1, 1);
+    let id = job.id.clone();
+    let mut state = PoolState::new(3);
+    state
+        .jobs
+        .insert(PoolState::key(&job), pool_job(job, plan, 5_000));
+    let mut started = Vec::new();
+    for _ in 0..3 {
+        let Some(Task::Item { index, .. }) = state.next(0, &mut || None, &no_deadline) else {
+            panic!("an item expected");
+        };
+        started.push(index);
+    }
+    state.item_ended(&id, started[0], 5_500, Ok((HostItemState::Failed, None)));
+    state.item_ended(&id, started[1], 5_500, Ok((HostItemState::Done, None)));
+    // Ended before the deadline with a problem: a plain failure.
+    state.item_ended(&id, started[2], 4_000, Ok((HostItemState::Failed, None)));
+    let views = &state.get(&id).unwrap().views;
+    assert_eq!(views[started[0]].state, HostItemState::TimedOut);
+    assert_eq!(views[started[1]].state, HostItemState::Done);
+    assert_eq!(views[started[2]].state, HostItemState::Failed);
 }

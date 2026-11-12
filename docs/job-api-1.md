@@ -135,6 +135,7 @@ The policy is frozen at submit: a job whose policy has gone or now denies it end
 | `guest_lost` | run, collect | yes |
 | `recording_failed` | collect | yes |
 | `analysis_failed` | analyse, report | yes |
+| `deadline_exceeded` | analyse, report | maybe |
 | `cancelled` | any | no |
 | `internal` | any | maybe |
 

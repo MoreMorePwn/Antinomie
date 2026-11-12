@@ -1424,6 +1424,7 @@
         "guest_lost",
         "recording_failed",
         "analysis_failed",
+        "deadline_exceeded",
         "cancelled",
         "internal"
       ]

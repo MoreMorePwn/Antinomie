@@ -81,8 +81,18 @@ mapping therefore applies to jobs too.
   a static analysis does not count. A job's host stages as a whole may take the
   factor times the expected work ahead of it when it arrived plus its own, and
   never less than the factor times the work ahead plus the sum of its own items'
-  limits; past that the job fails `internal` (`watchdog`). A running item is not
-  cut short by this deadline: the job fails when it ends.
+  limits. An item's limit ends at this deadline at the latest. At the deadline
+  the job's running items are stopped, nothing more of it starts, and once the
+  stopped items have ended the job fails `deadline_exceeded`: what had finished
+  is kept, the stopped items are `timed_out` and the queued ones `skipped`, and
+  the failure's detail names both.
+* **Stopping an item.** An item past its limit (or stopped by its job's
+  deadline) is stopped gracefully, as Kubernetes, Slurm and Celery do: SIGTERM to
+  its sandboxed tool's process group (the static analysis worker, the detection
+  worker), `[daemon] stop_grace_s` (30) seconds to end, then SIGKILL. Only the
+  recorded process group of the tool's own sandbox is signalled. Work the daemon
+  does in its own process (indexing, the digest, the report) gets its cancel
+  flag and stops at its next check.
 * **What you see.** `auto status <job>` lists each item with its state
   (`queued`, `running`, `done`, `failed`, `timed_out`, `skipped`), expected time
   and limit; the job's `host_work` member carries the same. `auto status` shows
@@ -341,6 +351,7 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `guest_lost` | run, collect | once | The guest or QEMU died. A sample that does that twice ends `failed` |
 | `recording_failed` | collect | once | The recording could not be completed |
 | `analysis_failed` | analyse, report | yes | Only when the policy marks the stage required (`analysis.required_stages`); otherwise the job is `partial` with a warning. A static check that only timed out or stopped short is not this failure unless it is in `analysis.required_checks` (it is a `static_check_incomplete` warning and the job is `partial`) |
+| `deadline_exceeded` | analyse, report | no | The host stages passed their deadline (`host_time_factor` x the expected work, see "Time limits"): the running items were stopped (`timed_out`), the queued ones never started; what finished is kept. A busy host or too low a factor; try again later or raise `host_time_factor` |
 | `cancelled` | any | no | Cancelled by request; what was recorded is kept |
 | `internal` | any | maybe | A bug, or the watchdog: the whole job ran past `run` plus 30 minutes. `details.log` names the job log |
 
