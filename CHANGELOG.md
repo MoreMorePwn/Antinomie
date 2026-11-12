@@ -32,8 +32,9 @@ x86 programs by their own table.
     waits for the others.
   - At most `[daemon] host_workers` items run at once (now 2 by default, 1 to 8), across
     every job, strictly first come, first served by job arrival: an older job's items all
-    start before a newer job's, and nothing jumps the head of the queue. An item starts only
-    with 2048 MiB of memory available.
+    start before a newer job's. Inside a job, an item whose dependencies have ended starts
+    while an earlier item waits for its own (ANT-T0464). An item starts only with 2048 MiB
+    of memory available.
   - Each item may take `[daemon] host_time_factor` (new, default 2) times its expected
     time: its recent median on this host, else an estimate from the sample or recording
     size, else the stage's fixed limit. Time in the queue does not count. A policy's

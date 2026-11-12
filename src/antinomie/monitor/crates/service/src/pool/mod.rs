@@ -12,7 +12,7 @@
 //!
 //! | Rule | Detail |
 //! |---|---|
-//! | Order | First come, first served by job arrival; within a job, dependency order; the head waits, nothing jumps it ([`state`]) |
+//! | Order | First come, first served by job arrival; within a job, list (dependency) order, but an item whose dependencies have ended starts while an earlier one waits for its own (ANT-T0464); no item of a newer job starts before every item of the older one has ([`state`]) |
 //! | Memory | Before an item starts, `MemAvailable` must be at least [`ITEM_FLOOR_MIB`]; below it the head waits (`status` names the wait) |
 //! | Limits | Each item has an expected time and a limit of `daemon.host_time_factor` x that ([`crate::stages::timing`]); time in the queue does not count |
 //! | Job deadline | `host_time_factor` x (the expected time of the items ahead of it when it arrived + its own); past it the job fails `internal` (`watchdog`) |

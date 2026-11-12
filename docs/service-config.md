@@ -136,7 +136,8 @@ with its own lane VM, so N jobs run their VMs side by side.
   while one lane can take jobs.
 - **One host work pool.** The host work of every lane's jobs goes to the one
   pool: `[daemon] host_workers` items at once in total, first come, first served
-  by job arrival whatever lane ran the job.
+  by job arrival whatever lane ran the job (inside a job, an item whose
+  dependencies have ended may start while an earlier one waits for its own).
 - **Recovery.** After a crash every lane's interrupted job goes back to the
   queue, and the jobs that had finished `collect` on any lane go back to the
   host work pool in the order they arrived.
