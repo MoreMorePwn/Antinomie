@@ -194,7 +194,8 @@ and links (`*_ref`, `*_refs`), and each one names an id of the same file.
   `summary.other_families`), each indicator as an attribute (`ip-dst|port`,
   `domain`, `url`, `hostname`, `ja3-fingerprint-md5`, `x509-fingerprint-sha1`,
   `sha256`, `filename|sha256`; a hash seen through a folder such as `/tmp`, with
-  no file name of its own, is `sha256` alone) with `to_ids` true only for indicators a stored
+  no file name of its own, is `sha256` alone, and a file name holding `|` is
+  percent-encoded (`%7C`, `%` as `%25`) with the path as it is in the comment) with `to_ids` true only for indicators a stored
   dataset matched, a `misp-galaxy:mitre-attack-pattern="Name - Txxxx"` tag and
   a `Galaxy`/`GalaxyCluster` entry per ATT&CK technique. The event is
   unpublished with distribution 0 (your organisation only). The cluster uuids
