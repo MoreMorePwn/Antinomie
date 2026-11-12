@@ -179,7 +179,9 @@ A VM that ran a sample keeps what the sample did, so every job starts from a kno
 state. The lane VM has a clean Disk snapshot, `auto-clean`, taken by `auto init`
 after the guest booted once. Before each job the daemon checks the snapshot is the
 one it recorded, restores it and cold-boots (`vm.revert = "snapshot_disk"`, the
-default). A lane VM with no snapshot may use `reset` instead; `snapshot_full`
+default). `vm.revert = "reset"` is not available on Auto lanes, because every lane
+keeps its clean snapshot: `config validate` refuses it and points at
+`snapshot_disk`, which gives the same clean disk. `snapshot_full`
 resumes a booted guest and needs the VM to be created and snapshotted headless,
 with a full (memory) snapshot: over the disk-only `auto-clean` it could only boot
 cold, so `config validate` refuses it and the daemon does not load that policy.

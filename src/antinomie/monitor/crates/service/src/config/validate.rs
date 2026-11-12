@@ -575,7 +575,9 @@ fn check_vm_facts(policy: &Policy, facts: &VmFacts, non_drop: bool, sink: &mut S
         RevertMode::Reset if !facts.snapshots.is_empty() => sink.error(
             "vm.revert",
             format!(
-                "reset is refused by the engine on VM `{}`, which has snapshots",
+                "reset is refused on VM `{}`, which has snapshots (every Auto lane keeps \
+                 its clean snapshot): use `vm.revert = \"snapshot_disk\"`, which gives the \
+                 same clean disk",
                 facts.name
             ),
         ),

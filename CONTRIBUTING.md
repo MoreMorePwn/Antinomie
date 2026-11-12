@@ -357,6 +357,11 @@ for it, and its children live in a directory of the same name (`app.rs` with
   a change under the guest patches, transport or protocol folders, or to
   `ANTC_REVISION`, needs the `full` tier (`auto` decides). See "VM regression
   tiers" in `docs/implementation/guest-and-kernel.md`.
+- **Auto mode VM tiers (0.9.0).** A change to Auto mode, the service or the
+  lane is checked on a VM with `tests/monitor/test-auto-smoke.py` (T5), and
+  for a release with `test-auto-isolation.py` (T6), `test-auto-faults.py` (T7)
+  and `test-auto-soak.py` (T8). See "VM tiers T5 to T8" in
+  `docs/implementation/headless-lanes.md`.
 - **Size.** A file holds at most 1,200 lines of non-test code.
   `scripts/check-module-size.py` enforces this in CI. Files that were already
   larger are listed in `scripts/module-size-allowlist.txt` and may shrink but
@@ -495,4 +500,5 @@ not replace the tag or imply that an existing release archive was rebuilt.
 Every push runs `.github/workflows/ci.yml` (`scripts/check-privacy.sh`,
 `scripts/check-module-size.py`, `cargo fmt --check`, strict Clippy, the release-mode tests, the build-script
 tests and shellcheck); `.github/workflows/nightly.yml` boots the current
-BusyBox base under KVM every night (`tests/ci/nightly-vm.py`).
+BusyBox base under KVM every night and runs one Auto job on it
+(`tests/ci/nightly-vm.py`).
