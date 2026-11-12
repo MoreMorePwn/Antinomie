@@ -339,10 +339,10 @@ class IsolationAndFaultTests(unittest.TestCase):
 
     def test_the_quota_namespace_command(self):
         command = faults.quota_argv(Path("/r/test-auto-faults.py"), ["--work", "/w", "--case", "qemu-kill,disk-full"],
-                                    Path("/w/cases/disk-full/quota"), 1536, "/usr/bin/python3")
+                                    Path("/w/cases/disk-full/quota"), 2560, "/usr/bin/python3")
         self.assertEqual(command[:6], ["unshare", "--user", "--map-current-user", "--mount", "--keep-caps", "sh"])
         shell = command[-1]
-        self.assertTrue(shell.startswith("mount -t tmpfs -o size=1536m,mode=0700 antinomie-quota /w/cases/disk-full/quota && "))
+        self.assertTrue(shell.startswith("mount -t tmpfs -o size=2560m,mode=0700 antinomie-quota /w/cases/disk-full/quota && "))
         self.assertIn("exec setpriv --inh-caps=-all --ambient-caps=-all /usr/bin/python3 -I /r/test-auto-faults.py", shell)
         self.assertEqual(shell.count("--case"), 1)
         self.assertTrue(shell.endswith("--case disk-full --quota-inner /w/cases/disk-full/quota"))

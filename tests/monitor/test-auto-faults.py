@@ -20,7 +20,10 @@ harness started, and the lane's QEMU as service/lanes/lane-1.json records it
                   --quota-mib in a user and mount namespace of this script
                   (unshare --user --map-current-user --mount; no root), or
                   --quota-dir, a mount point below --work. With
-                  min_free_disk_gib = 1: (a) filled to below the floor, a job
+                  min_free_disk_gib = 1 and the engine's quota_gib = 1 (the
+                  daemon admits a job with the floor plus that capture quota
+                  free, 2 GiB; the default 4 GiB would need 5): (a) filled
+                  to below the floor, a job
                   waits queued (waiting_for resources, or queue_paused with
                   the queue paused low_disk) and runs when the space is back; (b) filled to
                   ENOSPC in the run stage, the job ends partial or failed (it
@@ -93,6 +96,11 @@ EXPECTED = {
                       "waits lane_quarantined",
 }
 CASES = tuple(EXPECTED)
+# disk-full: the floor (service.toml) and the capture quota (settings.json
+# quota_gib, its minimum). The daemon admits a job only with floor + quota
+# GiB free on the data folder (antinomie-service resources.rs).
+DISK_FLOOR_GIB = 1
+DISK_QUOTA_GIB = 1
 POLICY = {("sample", "accept_types"): '["elf", "sh"]', ("run", "allow_root"): "true",
           ("retry", "backoff_s"): "[10, 10]"}
 
@@ -108,7 +116,9 @@ def cases(text):
 def parser():
     p = av.common_parser(__doc__, prog="test-auto-faults.py")
     p.add_argument("--case", type=cases, default=list(CASES), help=f"cases, in order [{','.join(CASES)}]")
-    p.add_argument("--quota-mib", type=int, default=1536, help="disk-full: size of the tmpfs quota [1536]")
+    p.add_argument("--quota-mib", type=int, default=2560,
+                   help="disk-full: size of the tmpfs quota; it must hold the floor plus the capture quota "
+                        "(2 GiB) and the case's data [2560]")
     p.add_argument("--quota-dir", type=Path, default=None,
                    help="disk-full: an existing small filesystem mounted below --work, instead of the tmpfs")
     p.add_argument("--quota-inner", type=Path, default=None, help=argparse.SUPPRESS)
@@ -186,9 +196,11 @@ class Case:
         self.watch = av.MemWatch(self.work, args.mem_floor_mb, self.daemon)
         self.lane = None
 
-    def setup(self, min_free_disk_gib=None):
+    def setup(self, min_free_disk_gib=None, quota_gib=None):
         av.install_base(self.cli, self.work.copy_base(self.args.base))
         self.lane = av.init_lane(self.cli, self.args, 1, factor=self.factor)
+        if quota_gib is not None:
+            self.cli.ok("config", "set", "quota_gib", quota_gib, timeout=120)
         (self.work.data / "service.toml").write_text(
             av.service_toml(lanes=1, require_kvm=self.accel == "kvm", min_free_disk_gib=min_free_disk_gib,
                             socket=self.work.socket_override()))
@@ -290,6 +302,12 @@ def floor_wait(job):
 
 
 def disk_full_steps(case, filler):
+    free = shutil.disk_usage(filler.parent).free
+    needed = (DISK_FLOOR_GIB + DISK_QUOTA_GIB) * av.GIB + 256 * av.MIB
+    if free < needed:
+        raise av.Failure(f"the quota filesystem has {free // av.MIB} MiB free after the setup; a job is admitted "
+                         f"only with {DISK_FLOOR_GIB + DISK_QUOTA_GIB} GiB free (floor + capture quota): "
+                         f"raise --quota-mib or use a larger --quota-dir")
     case.daemon.start(case.name, case.args.mem_gate_mb)
     observed, holds = [], True
     # (a) below the floor before the job
@@ -373,7 +391,10 @@ def run_case(args, name, factor, accel, data=None, data_root=None):
     print(f"== {name}: expected {EXPECTED[name]}", flush=True)
     started = time.monotonic()
     try:
-        case.setup(min_free_disk_gib=1 if name == "disk-full" else None)
+        if name == "disk-full":
+            case.setup(min_free_disk_gib=DISK_FLOOR_GIB, quota_gib=DISK_QUOTA_GIB)
+        else:
+            case.setup()
         holds, observed = RUNNERS[name](case)
     except av.Abort:
         raise

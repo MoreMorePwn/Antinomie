@@ -693,6 +693,7 @@ CLI_SURFACE = {
     ("auto", "lane", "reset"): ("--yes", "--lane"),
     ("auto", "gc"): ("--dry-run",),
     ("config", "validate"): ("--policy",),
+    ("config", "set"): (),
     ("snapshot", "create"): ("--mode",),
     ("snapshot", "restore"): ("--yes", "--cold-boot"),
     ("run", "list"): ("--job",),
