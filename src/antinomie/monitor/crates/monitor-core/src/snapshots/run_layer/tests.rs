@@ -26,6 +26,27 @@ fn active(fixture: &Fixture) -> PathBuf {
     active_disk(&fixture.options, &fixture.vm).unwrap()
 }
 
+/// `finalize` as the worker uses it: a "still being finished" refusal is tried
+/// again. The lock is a non-blocking `flock`, and other tests of the process
+/// start `qemu-img` children in parallel; a child forked while this test held
+/// the lock keeps a copy of it until it execs, so the next `finalize` can be
+/// refused for a moment (seen in 2 of 5 runs of `snapshots::`). The worker
+/// retries through `mark_due`; the tests wait up to 5 s the same way.
+fn finish(fixture: &Fixture) -> Result<Option<Outcome>, String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match finalize(&fixture.options, &fixture.vm.id) {
+            Err(why)
+                if why.contains("still being finished")
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
+}
+
 #[test]
 fn a_boots_writes_go_to_the_automatic_layer_and_merge_back_down() {
     let _serial = serial();
@@ -57,7 +78,7 @@ fn a_boots_writes_go_to_the_automatic_layer_and_merge_back_down() {
     assert!(finalize(&fixture.options, &fixture.vm.id).is_err());
     ended(&fixture.options, &fixture.vm.id);
     assert_eq!(
-        finalize(&fixture.options, &fixture.vm.id).unwrap(),
+        finish(&fixture).unwrap(),
         Some(Outcome::Merged)
     );
     // Back to one overlay holding both boots' data; nothing left over.
@@ -69,7 +90,7 @@ fn a_boots_writes_go_to_the_automatic_layer_and_merge_back_down() {
         "not managed again"
     );
     assert!(pending_record(&fixture.options, &fixture.vm.id).is_none());
-    assert_eq!(finalize(&fixture.options, &fixture.vm.id).unwrap(), None);
+    assert_eq!(finish(&fixture).unwrap(), None);
 }
 
 #[test]
@@ -113,7 +134,7 @@ fn a_crash_leaves_a_bootable_disk_and_the_next_start_finishes_it() {
     assert!(!index.complete);
     assert!(index.note.unwrap().contains("not (fully) copied"));
     ended(&fixture.options, &fixture.vm.id);
-    finalize(&fixture.options, &fixture.vm.id).unwrap();
+    finish(&fixture).unwrap();
     assert_eq!(active(&fixture), disk);
 }
 
@@ -138,7 +159,7 @@ fn a_commit_cut_short_is_repeated_safely() {
     commit(&fixture.options, &top).unwrap();
     ended(&fixture.options, &fixture.vm.id);
     assert_eq!(
-        finalize(&fixture.options, &fixture.vm.id).unwrap(),
+        finish(&fixture).unwrap(),
         Some(Outcome::Merged)
     );
     fixture.read(&disk, 3);
@@ -157,7 +178,7 @@ fn a_commit_cut_short_is_repeated_safely() {
     save(&fixture.directory, &manifest).unwrap();
     ended(&fixture.options, &fixture.vm.id);
     assert_eq!(
-        finalize(&fixture.options, &fixture.vm.id).unwrap(),
+        finish(&fixture).unwrap(),
         Some(Outcome::Cleaned)
     );
     assert!(!fixture.directory.join(&record.top).exists());
@@ -188,7 +209,7 @@ fn a_user_snapshot_taken_during_the_boot_is_never_merged() {
     fixture.write(4);
     ended(&fixture.options, &fixture.vm.id);
     assert_eq!(
-        finalize(&fixture.options, &fixture.vm.id).unwrap(),
+        finish(&fixture).unwrap(),
         Some(Outcome::KeptInChain)
     );
     // The checkpoint is the user's: its layer is the boot's layer, the sealed
@@ -224,7 +245,7 @@ fn a_user_snapshot_that_exists_before_the_boot_stays_as_it_is() {
     fixture.write(6);
     ended(&fixture.options, &fixture.vm.id);
     assert_eq!(
-        finalize(&fixture.options, &fixture.vm.id).unwrap(),
+        finish(&fixture).unwrap(),
         Some(Outcome::Merged)
     );
     let tree = list(&fixture.options, &fixture.vm).unwrap();
@@ -256,7 +277,7 @@ fn resize_and_delete_wait_for_a_pending_layer() {
     .unwrap();
     assert!(ensure_idle(&fixture.options, &fixture.vm.id).is_err());
     ended(&fixture.options, &fixture.vm.id);
-    finalize(&fixture.options, &fixture.vm.id).unwrap();
+    finish(&fixture).unwrap();
     ensure_idle(&fixture.options, &fixture.vm.id).unwrap();
 }
 
@@ -384,7 +405,7 @@ fn the_marker_follows_a_boot_from_live_to_saving_to_finalizing() {
     assert_eq!(value["phase"], "saving");
 
     // Finishing removes the file: no entry means done.
-    finalize(&fixture.options, &fixture.vm.id).unwrap();
+    finish(&fixture).unwrap();
     assert!(disk_layers(&fixture.options, &vms).is_empty());
 }
 
