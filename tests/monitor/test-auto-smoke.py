@@ -46,7 +46,9 @@ def plan(args, sample, base_copy):
     jobs = args.jobs or args.lanes
     steps = [f"antinomie-cli base install {base_copy}"]
     steps += [f"antinomie-cli auto init --lane {n} --ram-mib {args.ram_mib} --cpus {args.cpus} "
-              f"--disk-gib {args.disk_gib}" for n in range(1, args.lanes + 1)]
+              f"--disk-gib {args.disk_gib}"
+              + (" --password-stdin (a random password of this run)" if args.random_guest_password else "")
+              for n in range(1, args.lanes + 1)]
     steps += [f"service.toml: [daemon] lanes = {args.lanes}; [resources] require_kvm per --accel",
               "antinomie-cli config validate",
               "antinomie-cli auto daemon (recorded PID; MemAvailable watched every 2 s)",

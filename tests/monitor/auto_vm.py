@@ -56,6 +56,30 @@ MIB = 1 << 20
 SOCKET_PATH_MAX = 107
 
 
+# The secrets of this run (the random guest password): never in a log, an
+# error message or a file. Kept in memory only.
+_SECRETS = set()
+_GUEST_PASSWORD = []
+
+
+def guest_password():
+    """The run's random throwaway guest password (--random-guest-password):
+    made once per run, 8 to 128 bytes as the engine wants, URL-safe so it
+    holds no NUL, CR or LF."""
+    if not _GUEST_PASSWORD:
+        password = secrets.token_urlsafe(24)
+        _SECRETS.add(password)
+        _GUEST_PASSWORD.append(password)
+    return _GUEST_PASSWORD[0]
+
+
+def redact(text):
+    """`text` with every secret of the run replaced."""
+    for secret in _SECRETS:
+        text = text.replace(secret, "<redacted>")
+    return text
+
+
 class Failure(Exception):
     """A step that cannot go on; the script reports it and cleans up."""
 
@@ -101,6 +125,10 @@ def common_parser(description, prog=None):
                    help="stop the daemon (its recorded PID) when MemAvailable drops below this [2500]")
     p.add_argument("--min-free-gb", type=float, default=20.0,
                    help="refuse to start with less free disk under --work [20]")
+    p.add_argument("--random-guest-password", action="store_true",
+                   help="for a base that needs a guest account (Debian minimal): give `auto init` a random "
+                        "throwaway password, new for each run, on standard input (--password-stdin); it lives "
+                        "only in this process's memory and is never written to a log or a file")
     p.add_argument("--keep", action="store_true", help="keep the VM data (data folders, base copy) at the end")
     p.add_argument("--dry-run", action="store_true",
                    help="prepare the folder, build the programs, check the CLI and print the plan; start no VM")
@@ -643,6 +671,7 @@ class Cli:
             code = None
             out = expired.stdout.decode(errors="replace") if isinstance(expired.stdout, bytes) else (expired.stdout or "")
             err = expired.stderr.decode(errors="replace") if isinstance(expired.stderr, bytes) else (expired.stderr or "")
+        out, err = redact(out), redact(err)
         with open(self.log, "a") as log:
             log.write(f"$ {shlex.join(argv[3:])}\n# exit {code} in {time.monotonic() - started:.1f} s\n")
             if err.strip():
@@ -682,7 +711,7 @@ def missing_flags(help_text, flags):
 # The commands and flags the tiers call: a dry run checks them against --help.
 CLI_SURFACE = {
     ("base", "install"): (),
-    ("auto", "init"): ("--lane", "--ram-mib", "--cpus", "--disk-gib", "--name", "--snapshot"),
+    ("auto", "init"): ("--lane", "--ram-mib", "--cpus", "--disk-gib", "--name", "--snapshot", "--password-stdin"),
     ("auto", "daemon"): (),
     ("auto", "submit"): ("--policy", "--timeout-run", "--args", "--as", "--name"),
     ("auto", "status"): (),
@@ -913,8 +942,13 @@ def init_lane(cli, args, lane=1, gate=True, name=None, factor=1.0):
     if gate:
         mem_gate(args.mem_gate_mb, 3600 * factor, f"auto init --lane {lane}")
     extra = ["--name", name] if name else []
+    stdin = None
+    if getattr(args, "random_guest_password", False):
+        # On standard input only: the argv goes to cli.log.
+        extra.append("--password-stdin")
+        stdin = guest_password() + "\n"
     result = cli.ok("auto", "init", "--lane", lane, "--ram-mib", args.ram_mib, "--cpus", args.cpus,
-                    "--disk-gib", args.disk_gib, *extra, engine=True, timeout=int(1800 * factor))
+                    "--disk-gib", args.disk_gib, *extra, engine=True, timeout=int(1800 * factor), stdin=stdin)
     return result.get("lane") or result
 
 

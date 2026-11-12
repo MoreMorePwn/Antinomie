@@ -3,14 +3,22 @@
 """The Auto mode VM tiers (test-auto-smoke/isolation/faults/soak.py and
 auto_vm.py) without a VM: argument handling, the policy and service.toml
 edits, the job, event and report checks, the recorded-PID rule, the probe
-codes, the quota namespace command, the soak's table and its resume files."""
+codes, the quota namespace command, the soak's table and its resume files.
+
+Needs Python 3.11 or later (`tomllib`): run it with /usr/bin/python3 where
+the default python3 is older, e.g. `/usr/bin/python3 -I tests/monitor/test-auto-harness.py`."""
+import sys
+
+if sys.version_info < (3, 11):
+    sys.exit(f"test-auto-harness.py needs Python 3.11 or later (tomllib); this is {sys.version.split()[0]}: "
+             "run it with /usr/bin/python3")
+
 import contextlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
-import sys
 import tempfile
 import tomllib
 import unittest
@@ -286,6 +294,36 @@ class ProcessTests(unittest.TestCase):
             self.assertTrue(any("lacks --lane" in m for ok, m in results if not ok))
             missing = av.check_cli_surface(av.Cli(Path(tmp) / "none", work, "tcg"))
             self.assertFalse(missing[0][0])
+
+    def test_a_random_guest_password_goes_to_auto_init_on_stdin_only(self):
+        parser = av.common_parser("x")
+        base = ["--work", "w", "--base", "b"]
+        self.assertFalse(parser.parse_args(base).random_guest_password)
+        args = parser.parse_args(base + ["--random-guest-password", "--mem-gate-mb", "0"])
+        self.assertTrue(args.random_guest_password)
+        password = av.guest_password()
+        self.assertEqual(password, av.guest_password(), "one password per run")
+        self.assertTrue(8 <= len(password.encode()) <= 128)
+        self.assertFalse(set(password) & {"\0", "\r", "\n"})
+        with tempfile.TemporaryDirectory() as tmp:
+            work = av.Work(tmp).prepare()
+            fake = Path(tmp) / "cli"
+            # The fake CLI says what it read on stdin, as a careless one might.
+            fake.write_text("#!/bin/sh\nread line\necho \"{\\\"lane\\\": \\\"$line\\\"}\"\n"
+                            "echo \"read $line\" >&2\n")
+            fake.chmod(0o755)
+            cli = av.Cli(fake, work, "kvm")
+            with unittest.mock.patch.object(av, "mem_gate"):
+                lane = av.init_lane(cli, args, 1)
+            # The fake echoed exactly the password it read; the harness
+            # redacted it before it parsed or logged the reply.
+            self.assertEqual(lane, "<redacted>", "the password went to stdin")
+            log = (work.out / "cli.log").read_text()
+            self.assertIn("--password-stdin", log)
+            self.assertNotIn(password, log)
+            self.assertIn("<redacted>", log)
+            leftovers = [p for p in Path(tmp).rglob("*") if p.is_file() and password in p.read_text(errors="replace")]
+            self.assertEqual(leftovers, [])
 
     def test_engine_flags_go_only_to_engine_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
