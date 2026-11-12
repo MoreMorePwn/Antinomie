@@ -74,6 +74,7 @@ impl Store {
                         rusqlite::params![id.as_str(), to_json(recording)?, recording.run_key],
                     )
                     .map_err(db)?;
+                super::recordings::remember(tx, id, recording)?;
             }
             load_job(&tx.tx, id.as_str())
         })

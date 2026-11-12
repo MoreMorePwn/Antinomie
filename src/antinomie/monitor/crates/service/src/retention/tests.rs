@@ -30,7 +30,25 @@ struct FakeRuns {
     fail_for: Mutex<BTreeSet<String>>,
 }
 
+/// The fake's name of `job`'s run: the job id for the run every test job
+/// names (`run_key` "key"), the id and the key for another (an earlier
+/// attempt's run).
+fn key(job: &Job) -> String {
+    match &job.recording {
+        Some(recording) if recording.run_key != "key" => {
+            format!("{}/{}", job.id, recording.run_key)
+        }
+        _ => job.id.to_string(),
+    }
+}
+
 impl FakeRuns {
+    fn put_key(&self, key: &str, bytes: u64) {
+        self.runs
+            .lock()
+            .unwrap()
+            .insert(key.to_owned(), (bytes, false));
+    }
     fn put(&self, job: &JobId, bytes: u64, in_progress: bool) {
         self.runs
             .lock()
@@ -49,7 +67,7 @@ impl FakeRuns {
 
 impl Runs for FakeRuns {
     fn inspect(&self, job: &Job) -> Result<RunState, String> {
-        Ok(match self.runs.lock().unwrap().get(job.id.as_str()) {
+        Ok(match self.runs.lock().unwrap().get(&key(job)) {
             Some((bytes, in_progress)) => RunState::Present {
                 bytes: *bytes,
                 in_progress: *in_progress,
@@ -58,22 +76,17 @@ impl Runs for FakeRuns {
         })
     }
     fn is_open(&self, job: &Job) -> bool {
-        self.open.lock().unwrap().contains(job.id.as_str())
+        self.open.lock().unwrap().contains(&key(job))
     }
     fn delete(&self, job: &Job, actor: &str) -> Result<u64, String> {
-        if self.fail_for.lock().unwrap().contains(job.id.as_str()) {
+        if self.fail_for.lock().unwrap().contains(&key(job)) {
             return Err("the engine refused".into());
         }
-        let (bytes, _) = self
-            .runs
-            .lock()
-            .unwrap()
-            .remove(job.id.as_str())
-            .ok_or("gone")?;
+        let (bytes, _) = self.runs.lock().unwrap().remove(&key(job)).ok_or("gone")?;
         self.deleted
             .lock()
             .unwrap()
-            .push((job.id.to_string(), actor.to_owned()));
+            .push((key(job), actor.to_owned()));
         Ok(bytes)
     }
 }
@@ -729,4 +742,85 @@ fn the_real_runs_delete_a_lane_jobs_recording_in_its_own_lane_folder() {
         ) && e.by == "auto:policy-default"),
         "{events:?}"
     );
+}
+
+/// BH-02: an attempt that launched and was retried left a run of its own; the
+/// job names only the last one. Retention and `job.delete` delete both.
+fn with_earlier_run(rig: &Rig, finished_ms: u64) -> JobId {
+    rig.fx.clock.set(finished_ms.saturating_sub(2000));
+    let job = rig.fx.running(1);
+    for (run_key, run_id) in [("key-1", "r-first"), ("key", "r-second")] {
+        rig.fx
+            .store
+            .patch(
+                &job.id,
+                JobPatch {
+                    recording: Some(JobRecording {
+                        vm_id: "vm".into(),
+                        boot_id: "boot".into(),
+                        run_id: run_id.into(),
+                        run_key: run_key.into(),
+                        phase: RecordingPhase::Complete,
+                        directory: None,
+                    }),
+                    ..JobPatch::default()
+                },
+            )
+            .unwrap();
+    }
+    rig.runs.put(&job.id, 10, false);
+    rig.runs.put_key(&format!("{}/key-1", job.id), 20);
+    rig.fx.clock.set(finished_ms);
+    rig.fx
+        .store
+        .finish(&job.id, Outcome::Succeeded, None)
+        .unwrap();
+    job.id
+}
+
+#[test]
+fn every_attempts_recording_goes_with_retention_and_the_record_waits_for_all() {
+    let rig = Rig::new("attempts");
+    let id = with_earlier_run(&rig, NOW - 20 * DAY);
+    let earlier = super::earlier_runs(&rig.fx.store, &rig.fx.store.get(&id).unwrap()).unwrap();
+    assert_eq!(earlier.len(), 1);
+    assert_eq!(earlier[0].recording.as_ref().unwrap().run_id, "r-first");
+    let report = rig.run(false);
+    let mut deleted = rig.runs.deleted_jobs();
+    deleted.sort();
+    assert_eq!(deleted, [id.to_string(), format!("{id}/key-1")]);
+    assert_eq!(report.freed_bytes, 30);
+    // A job record past `jobs_days` stays while one of its runs cannot go.
+    let rig = Rig::new("attempts2");
+    let old = with_earlier_run(&rig, NOW - 120 * DAY);
+    rig.runs.open.lock().unwrap().insert(format!("{old}/key-1"));
+    let report = rig.run(false);
+    assert!(rig.exists(&old));
+    assert!(report.skipped.iter().any(|s| s.kind == "job"));
+    rig.runs.open.lock().unwrap().clear();
+    rig.run(false);
+    assert!(!rig.exists(&old));
+}
+
+#[test]
+fn job_delete_with_recording_deletes_every_attempts_run() {
+    let rig = Rig::new("attemptsdelete");
+    let log = |_: &str| {};
+    let id = with_earlier_run(&rig, NOW - DAY);
+    rig.runs.open.lock().unwrap().insert(format!("{id}/key-1"));
+    let error = delete_job(&rig.fx.store, &rig.runs, &id, true, &log).unwrap_err();
+    assert_eq!(
+        error.reason(),
+        Some(crate::api::error::ErrorReason::RecordingOpen)
+    );
+    assert!(
+        rig.runs.deleted_jobs().is_empty(),
+        "an open earlier run removes nothing"
+    );
+    rig.runs.open.lock().unwrap().clear();
+    delete_job(&rig.fx.store, &rig.runs, &id, true, &log).unwrap();
+    let mut deleted = rig.runs.deleted_jobs();
+    deleted.sort();
+    assert_eq!(deleted, [id.to_string(), format!("{id}/key-1")]);
+    assert!(!rig.exists(&id));
 }
