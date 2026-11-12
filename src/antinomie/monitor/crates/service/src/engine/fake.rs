@@ -86,6 +86,9 @@ pub struct Sent {
     /// The `Debug` text of the command, for tests that check a field.
     pub detail: String,
     pub at_ms: u64,
+    /// The engine's custody actor when the command came
+    /// ([`Engine::set_custody_actor`]); `None` is `app`.
+    pub actor: Option<String>,
 }
 
 enum Item {
@@ -114,6 +117,7 @@ pub struct FakeEngine {
     dead: Option<String>,
     unscripted: Unscripted,
     shutdowns: usize,
+    custody_actor: Option<String>,
 }
 
 impl FakeEngine {
@@ -129,6 +133,7 @@ impl FakeEngine {
             dead: None,
             unscripted: Unscripted::Fail,
             shutdowns: 0,
+            custody_actor: None,
         }
     }
 
@@ -207,6 +212,11 @@ impl FakeEngine {
     /// takes the engine by value).
     pub fn sent_log(&self) -> Arc<Mutex<Vec<Sent>>> {
         self.sent.clone()
+    }
+
+    /// The custody actor set now ([`Engine::set_custody_actor`]).
+    pub fn custody_actor(&self) -> Option<&str> {
+        self.custody_actor.as_deref()
     }
 
     /// Names of the commands received, in order.
@@ -374,6 +384,7 @@ impl Engine for FakeEngine {
             name: name.clone(),
             detail: format!("{command:?}"),
             at_ms: self.clock.now_ms(),
+            actor: self.custody_actor.clone(),
         });
         let step = self.take_step(&name).unwrap_or_else(|| {
             Step::new(match self.unscripted {
@@ -430,6 +441,16 @@ impl Engine for FakeEngine {
     fn shutdown(&mut self) -> Result<(), String> {
         self.shutdowns += 1;
         self.dead = Some("the engine was shut down".into());
+        Ok(())
+    }
+
+    fn set_custody_actor(&mut self, actor: Option<&str>) -> Result<(), String> {
+        if let Some(actor) = actor
+            && !antinomie_monitor_core::samples::actor::is_valid(actor)
+        {
+            return Err(format!("{actor:?} is not a custody actor"));
+        }
+        self.custody_actor = actor.map(str::to_owned);
         Ok(())
     }
 }

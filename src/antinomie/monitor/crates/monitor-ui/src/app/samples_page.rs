@@ -149,8 +149,9 @@ pub(super) struct SamplesPage {
     report: report_export::Slot,
     /// The custody log across every sample; shows instead of the list.
     custody_all: Option<custody_all::CustodyAll>,
-    /// Analyze ›: the archived copy being written for static analysis.
-    analyzing: Option<(Receiver<Result<PathBuf, String>>, String)>,
+    /// Analyze ›: the request of the static analysis last asked for, until
+    /// the engine answers it.
+    analyzing: Option<u64>,
     /// The Add note / Edit note window.
     note_editor: Option<notes::Editor>,
     /// The Delete run… dialog.
@@ -442,78 +443,37 @@ impl MonitorApp {
         self.samples_page.count()
     }
 
-    /// Run static analysis on a library sample: its archived copy is written
-    /// to a file of the library folder, then analysed like a file of a disk.
-    pub(super) fn analyze_sample(
-        &mut self,
-        ctx: &egui::Context,
-        record: &SampleRecord,
-        archive: PathBuf,
-    ) {
-        if self.samples_page.analyzing.is_some() {
-            return;
+    /// Run static analysis on a library sample on the host, with no VM: the
+    /// engine decrypts it in memory and keeps the report in
+    /// `<data>/analyses/<id>`, where the sample window finds it. No plain copy
+    /// is written anywhere else (BH-23).
+    pub(super) fn analyze_sample(&mut self, record: &SampleRecord) {
+        // The launch form's selection when it enables analysis, else the
+        // default triage set.
+        let mut selection = self.exec.analysis.clone();
+        selection.enabled = true;
+        if selection.checks.is_empty() {
+            selection.checks = antinomie_monitor_core::AnalysisKind::TRIAGE.to_vec();
         }
-        let Some(vm_id) = self.selected.clone() else {
-            self.report_error("Select a VM first: the analysis uses its tools.".into());
-            return;
-        };
-        let (sender, receiver) = mpsc::channel();
-        let folder = self.options.data_dir.join("samples").join("analysis-input");
-        let (sha256, wake) = (record.sha256.clone(), ctx.clone());
-        let file = folder.join(record.guest_path().trim_start_matches("/tmp/"));
-        let started = std::thread::Builder::new()
-            .name("sample-analyze".into())
-            .spawn(move || {
-                let result = antinomie_monitor_core::samples::open_sample(&archive, &sha256)
-                    .and_then(|bytes| {
-                        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
-                        std::fs::write(&file, bytes).map_err(|error| error.to_string())?;
-                        Ok(file)
-                    });
-                let _ = sender.send(result);
-                wake.request_repaint();
-            });
-        match started {
-            Ok(_) => self.samples_page.analyzing = Some((receiver, vm_id)),
-            Err(error) => self.report_error(error.to_string()),
-        }
+        self.samples_page.analyzing = self.send_request(Command::AnalyzeSample {
+            sha256: record.sha256.clone(),
+            selection,
+        });
+        self.focus_panel = Some(crate::workspace::Panel::StaticAnalysis);
     }
 
-    /// Send the analysis once the archived copy is written.
-    fn poll_analyze(&mut self) {
-        let Some((receiver, _)) = &self.samples_page.analyzing else {
-            return;
-        };
-        let Ok(result) = receiver.try_recv() else {
-            return;
-        };
-        let Some((_, vm_id)) = self.samples_page.analyzing.take() else {
-            return;
-        };
-        match result {
-            Ok(path) => {
-                // The launch form's selection when it enables analysis, else
-                // the default triage set.
-                let mut analysis = self.exec.analysis.clone();
-                analysis.enabled = true;
-                if analysis.checks.is_empty() {
-                    analysis.checks = antinomie_monitor_core::AnalysisKind::TRIAGE.to_vec();
-                }
-                self.send(Command::AnalyzeHostFile {
-                    vm_id,
-                    path,
-                    analysis,
-                });
-                self.focus_panel = Some(crate::workspace::Panel::StaticAnalysis);
-            }
-            Err(error) => self.report_error(format!("The sample could not be read: {error}")),
+    /// Whether `id` is the request of Analyze ›; it is forgotten once asked.
+    pub(super) fn sample_analysis_answered(&mut self, id: u64) -> bool {
+        if self.samples_page.analyzing == Some(id) {
+            self.samples_page.analyzing = None;
+            return true;
         }
+        false
     }
 
     /// The Samples page body.
     pub(super) fn samples_page(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        self.poll_analyze();
         self.samples_page.poll();
         self.samples_page.poll_lookup();
         self.samples_page.follow_runs(&self.snapshot);

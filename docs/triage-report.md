@@ -194,7 +194,8 @@ and links (`*_ref`, `*_refs`), and each one names an id of the same file.
   `summary.other_families`), each indicator as an attribute (`ip-dst|port`,
   `domain`, `url`, `hostname`, `ja3-fingerprint-md5`, `x509-fingerprint-sha1`,
   `sha256`, `filename|sha256`; a hash seen through a folder such as `/tmp`, with
-  no file name of its own, is `sha256` alone) with `to_ids` true only for indicators a stored
+  no file name of its own, is `sha256` alone, and a file name holding `|` is
+  percent-encoded (`%7C`, `%` as `%25`) with the path as it is in the comment) with `to_ids` true only for indicators a stored
   dataset matched, a `misp-galaxy:mitre-attack-pattern="Name - Txxxx"` tag and
   a `Galaxy`/`GalaxyCluster` entry per ATT&CK technique. The event is
   unpublished with distribution 0 (your organisation only). The cluster uuids
@@ -214,7 +215,11 @@ and links (`*_ref`, `*_refs`), and each one names an id of the same file.
   names the rule's author, licence and source, and a `report` that lists the
   objects. When the rules name a family, the `malware` object is that family
   (`is_family` true) and the sample is its `file`. Object ids are version-5
-  UUIDs of the content, so a second export of the same run has the same ids; an
+  UUIDs of the content, so a second export of the same run has the same ids;
+  each id keeps its `created` (the run's start for the run's analysis,
+  indicators, notes and report; a fixed 2026-01-01 for the identity, the
+  malware and the techniques, which other runs and the sample report share)
+  and `modified` is the export's time, so a later export is a new version; an
   indicator pattern appears once, with the paths it was seen at in its
   description. MISP and STIX carry only indicators a consumer can match: the
   guest's own resolver, the Tor gateway's stand-in addresses (198.18.0.0/15; the

@@ -445,8 +445,7 @@ pub struct Library {
     /// The database file, the key of this library's writer lock.
     database: PathBuf,
     custody: Arc<dyn CustodySink>,
-    /// The actor of the custody entries this value writes; `None` takes the
-    /// process's current actor ([`super::actor::current`]).
+    /// The actor of the custody entries this value writes; `None` is `app`.
     pub(super) actor: Option<String>,
 }
 
@@ -557,8 +556,8 @@ impl Library {
             .map_err(|e| e.to_string())
     }
 
-    /// Write this library's custody entries under `actor` instead of the
-    /// process's current one. An invalid name is refused.
+    /// Write this library's custody entries under `actor` instead of `app`.
+    /// An invalid name is refused.
     pub fn with_actor(mut self, actor: &str) -> Result<Self, String> {
         if !super::actor::is_valid(actor) {
             return Err(format!("{actor:?} is not a custody actor"));
@@ -569,7 +568,9 @@ impl Library {
 
     /// Who this library's entries name.
     pub(super) fn actor(&self) -> String {
-        self.actor.clone().unwrap_or_else(super::actor::current)
+        self.actor
+            .clone()
+            .unwrap_or_else(|| super::actor::APP.to_owned())
     }
 
     /// Report an event; the change it describes is already saved.

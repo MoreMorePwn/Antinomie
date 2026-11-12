@@ -207,7 +207,7 @@ impl MonitorApp {
                 }
             }
             Some(Go::Analyze) => {
-                self.analyze_sample(ui.ctx(), &data.record, data.archive.clone());
+                self.analyze_sample(&data.record);
             }
             Some(Go::Report(kind)) => {
                 if let Some(reference) = &data.report {

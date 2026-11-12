@@ -91,8 +91,21 @@ pub struct Backend {
     guest_epoch: Arc<AtomicU64>,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
     debug_link: DebugLink,
+    /// The actor of this engine's own custody entries (the push record, the
+    /// run log); see [`Self::set_custody_actor`].
+    custody_actor: Arc<crate::samples::actor::ActorSlot>,
 }
 impl Backend {
+    /// Name `actor` in the custody entries this engine writes on its own
+    /// thread from now on: the record that a library sample was sent into
+    /// the guest, and the start and end of a run of one. `None` goes back to
+    /// `app`. Each engine has its own actor, so the lanes of a daemon, one
+    /// engine each, name their own jobs' callers (design 4.11). An invalid
+    /// name is refused and nothing changes.
+    pub fn set_custody_actor(&self, actor: Option<&str>) -> Result<(), String> {
+        self.custody_actor.set(actor)
+    }
+
     /// The path a debug server thread uses to reach the guest through this
     /// backend's transport thread. Only the debug opcodes pass.
     pub fn debug_link(&self) -> DebugLink {
@@ -151,6 +164,15 @@ impl Backend {
         for line in crate::data_move::repair(&options) {
             eprintln!("data folder: {line}");
         }
+        // Decrypted copies an earlier Samples > Analyze left in the library
+        // (BH-23); lane 1 owns the library.
+        if options.shared_root.is_none() {
+            match crate::samples::remove_analysis_inputs(&options.data_dir) {
+                Ok(true) => eprintln!("removed the plain sample copies of an earlier Analyze"),
+                Ok(false) => {}
+                Err(error) => eprintln!("could not remove the plain sample copies: {error}"),
+            }
+        }
         let vms = storage::load_vms(&options)?;
         let freed = crate::vm::remove_stale_guest_ram(
             &options,
@@ -184,6 +206,8 @@ impl Backend {
         let worker_epoch = guest_epoch.clone();
         let flusher = crate::recording_flush::Flusher::new()?;
         let (debug_service, debug_link) = DebugService::new();
+        let custody_actor = Arc::new(crate::samples::actor::ActorSlot::new());
+        let worker_custody_actor = custody_actor.clone();
         let analysis_tools = crate::analysis_tools::statuses(&options.data_dir);
         let host_tools_dir = crate::analysis_tools::tools_dir(&options.data_dir);
         let thread = thread::Builder::new()
@@ -225,6 +249,7 @@ impl Backend {
                     debug: debug_service,
                     evidence: Default::default(),
                     boot_wait_state: Default::default(),
+                    custody_actor: worker_custody_actor,
                     wake,
                 }
                 .run();
@@ -246,6 +271,7 @@ impl Backend {
             guest_epoch,
             latest_snapshot,
             debug_link,
+            custody_actor,
         })
     }
     pub fn send(&self, command: Command) -> Result<u64, String> {
@@ -798,6 +824,9 @@ struct Worker {
     evidence: evidence_delete::EvidenceDeleter,
     /// A launch waiting for the guest to finish booting.
     boot_wait_state: boot_wait::BootWaitState,
+    /// The actor of this engine's own custody entries
+    /// ([`Backend::set_custody_actor`]).
+    custody_actor: Arc<crate::samples::actor::ActorSlot>,
 }
 
 /// Attempts at reconnecting a guest that stopped answering, before the VM is

@@ -23,6 +23,7 @@ fn notification_backend() -> (Backend, SyncSender<Notification>) {
             guest_epoch: Arc::new(AtomicU64::new(0)),
             latest_snapshot: Arc::new(Mutex::new(None)),
             debug_link: DebugService::new().1,
+            custody_actor: Default::default(),
         },
         sender,
     )
@@ -59,6 +60,7 @@ fn admission_backend() -> AdmissionParts {
             guest_epoch: Arc::new(AtomicU64::new(0)),
             latest_snapshot: Arc::new(Mutex::new(None)),
             debug_link: DebugService::new().1,
+            custody_actor: Default::default(),
         },
         queued,
         sender,
@@ -174,6 +176,7 @@ fn closing_owner_returns_a_result_for_each_accepted_queued_command() {
         debug: DebugService::new().0,
         evidence: Default::default(),
         boot_wait_state: Default::default(),
+        custody_actor: Default::default(),
     };
     worker.run();
     drop(command_sender);
@@ -291,6 +294,7 @@ fn full_completion_lane_surfaces_terminal_failure_for_an_accepted_command() {
         guest_epoch: Arc::new(AtomicU64::new(0)),
         latest_snapshot: Arc::new(Mutex::new(None)),
         debug_link: DebugService::new().1,
+        custody_actor: Default::default(),
     };
     let id = backend
         .send(Command::RefreshVmSnapshots { vm_id: "vm".into() })
@@ -326,6 +330,7 @@ fn full_completion_lane_surfaces_terminal_failure_for_an_accepted_command() {
         debug: DebugService::new().0,
         evidence: Default::default(),
         boot_wait_state: Default::default(),
+        custody_actor: Default::default(),
     };
     completion_sender
         .try_send(Notification::CommandResult {
@@ -814,6 +819,7 @@ pub(super) fn download_worker(root: PathBuf) -> Worker {
         debug: DebugService::new().0,
         evidence: Default::default(),
         boot_wait_state: Default::default(),
+        custody_actor: Default::default(),
         wake: None,
     }
 }
@@ -1170,6 +1176,7 @@ fn invalid_launch_settings_are_rejected_before_lifecycle_io() {
         debug: DebugService::new().0,
         evidence: Default::default(),
         boot_wait_state: Default::default(),
+        custody_actor: Default::default(),
         wake: None,
     };
     for command in [
@@ -1266,6 +1273,7 @@ fn fixed_display_guards_selected_boot_without_changing_pinned_disk() {
         debug: DebugService::new().0,
         evidence: Default::default(),
         boot_wait_state: Default::default(),
+        custody_actor: Default::default(),
         wake: None,
     };
     worker
@@ -1373,6 +1381,7 @@ fn base_import_and_failed_credential_creation_preserve_published_state() {
         debug: DebugService::new().0,
         evidence: Default::default(),
         boot_wait_state: Default::default(),
+        custody_actor: Default::default(),
         wake: None,
     };
     for guest in [false, true] {
@@ -1543,6 +1552,7 @@ fn running_vm_duplicate_and_delete_guards_preserve_data() {
         debug: DebugService::new().0,
         evidence: Default::default(),
         boot_wait_state: Default::default(),
+        custody_actor: Default::default(),
         wake: None,
     };
     assert!(

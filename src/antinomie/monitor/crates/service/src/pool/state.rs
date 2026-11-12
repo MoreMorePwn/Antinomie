@@ -5,11 +5,15 @@
 //! **First come, first served by job arrival** (user decision 2026-11-11,
 //! sections 2 and 5). Jobs are ordered by `created_ms`, then id; a job's
 //! items by their list order, which is a dependency order. The queue's head
-//! is the first item, of the oldest job, that has not started. Only the head
-//! may start, and only when a worker is free, the items it waits for have
-//! ended and the memory floor is met. While the head waits for any of these,
-//! no item of a newer job starts: a small item never goes ahead of a heavy
-//! one. Once every item of a job has started, the head moves to the next job.
+//! job is the oldest job with an item that has not started. Only its items
+//! may start, and only when a worker is free and the memory floor is met. In
+//! that job the first item not started goes first; while it waits for the
+//! items it depends on, a later item of the same job whose own dependencies
+//! have ended starts in its place (ANT-T0464, user decision 2026-11-12,
+//! option B). No item of a newer job starts while the head job has one that
+//! has not started: a small item never goes ahead of a heavy one between
+//! jobs. Once every item of a job has started, the head moves to the next
+//! job.
 //!
 //! The steps between items that are the job's own (the end of `analyse`, the
 //! end of `report` and `cleanup`, the ending of a cancelled or failed job) are
@@ -255,18 +259,19 @@ impl PoolState {
                 continue;
             }
             head_seen = true;
-            // The head of the queue: the job's first item not started.
-            let Some(index) =
-                (0..job.items.len()).find(|i| job.views[*i].state == HostItemState::Queued)
-            else {
-                continue;
-            };
-            if !free
-                || !job.in_phase(index)
-                || !job.items[index].after.iter().all(|d| job.finished(*d))
-            {
+            if !free {
                 continue;
             }
+            // The head job: its first item not started whose dependencies
+            // have ended, in list order (option B: one waiting for the items
+            // before it lets a later independent one of this job start).
+            let Some(index) = (0..job.items.len()).find(|i| {
+                job.views[*i].state == HostItemState::Queued
+                    && job.in_phase(*i)
+                    && job.items[*i].after.iter().all(|d| job.finished(*d))
+            }) else {
+                continue;
+            };
             if let Some(why) = memory() {
                 self.waiting_for = Some(why);
                 continue;

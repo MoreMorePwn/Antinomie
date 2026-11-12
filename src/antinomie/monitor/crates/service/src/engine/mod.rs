@@ -37,6 +37,16 @@ pub trait Engine {
     fn shutdown(&mut self) -> Result<(), String> {
         Ok(())
     }
+
+    /// Name `actor` in the custody entries the engine writes on its own
+    /// thread (the push record, the run's start and end) until it is set
+    /// again; `None` is `app`. The actor belongs to this engine alone, so
+    /// every lane names its own job's caller (BH-29). The default keeps
+    /// nothing, for engines that write no custody.
+    fn set_custody_actor(&mut self, actor: Option<&str>) -> Result<(), String> {
+        let _ = actor;
+        Ok(())
+    }
 }
 
 impl Engine for Backend {
@@ -48,5 +58,8 @@ impl Engine for Backend {
     }
     fn shutdown(&mut self) -> Result<(), String> {
         Backend::shutdown(self)
+    }
+    fn set_custody_actor(&mut self, actor: Option<&str>) -> Result<(), String> {
+        Backend::set_custody_actor(self, actor)
     }
 }

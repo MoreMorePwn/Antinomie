@@ -159,10 +159,24 @@ pub(in crate::report) fn attributes(indicator: &Indicator, seed: &str, at: u64) 
                         at,
                     ));
                 } else {
+                    // MISP splits a composite value at `|`; a guest path that
+                    // holds one is percent-encoded (`%` too, so it reads back
+                    // exactly) and named as it is in the comment (BH-20).
+                    let (name, note) = if indicator.path.contains('|') {
+                        (
+                            indicator.path.replace('%', "%25").replace('|', "%7C"),
+                            format!(
+                                "{note}; file name percent-encoded, written through {}",
+                                indicator.path
+                            ),
+                        )
+                    } else {
+                        (indicator.path.clone(), note.clone())
+                    };
                     out.push(attribute(
                         "filename|sha256",
                         "Artifacts dropped",
-                        &format!("{}|{hash}", indicator.path),
+                        &format!("{name}|{hash}"),
                         ids,
                         &note,
                         seed,

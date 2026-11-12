@@ -63,10 +63,11 @@ the core and memory dumps. The high or critical YARA hit of the default verdict
 mapping therefore applies to jobs too.
 
 * **Order: first come, first served by job arrival.** Every item of an older job
-  starts before any item of a newer one; a job's items start in the order above.
-  The first item waiting is the head of the queue: while it waits for a worker,
-  for the items before it or for memory, nothing behind it starts, so a small
-  item never goes ahead of a heavy one.
+  starts before any item of a newer one, so a small item of a newer job never
+  goes ahead of a heavy one. A job's items start in the order above; when the
+  first one waiting depends on items still running, a later item of the same job
+  whose own dependencies have ended starts in its place. While the oldest job
+  waits for a worker or for memory, nothing starts.
 * **Memory.** An item starts only with at least 2048 MiB of `MemAvailable`;
   below it the head waits (`auto status` says so) and starts when there is room.
 * **Time limits.** Each item has an expected time: an estimate from the size of
@@ -182,8 +183,8 @@ default). `vm.revert = "reset"` is not available on Auto lanes, because every la
 keeps its clean snapshot: `config validate` refuses it and points at
 `snapshot_disk`, which gives the same clean disk. `snapshot_full`
 resumes a booted guest and needs the VM to be created and snapshotted headless,
-with a full (memory) snapshot: over the disk-only `auto-clean` it boots cold like
-`snapshot_disk`, and `config validate` warns about it.
+with a full (memory) snapshot: over the disk-only `auto-clean` it could only boot
+cold, so `config validate` refuses it and the daemon does not load that policy.
 
 With `vm.revert_after = true` the lane also reverts right after the job, so no
 used disk sits idle; the cost is one more restore per job.

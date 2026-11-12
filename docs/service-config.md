@@ -49,8 +49,8 @@ runs while a window or the daemon owns the data directory.
 - The lane VM (`vm.lane_vm`, found in the data directory): its network must match
   `vm.network`; a policy that allows `inet_sim` needs a routed VM; `reset` is
   refused when the VM has snapshots, which every Auto lane has (use `snapshot_disk`); `snapshot_disk` and `snapshot_full` need the
-  snapshot named by `vm.revert_to` (a warning when `snapshot_full` names a
-  disk-only snapshot, which boots cold); `vm.stealth` is compared with the VM's
+  snapshot named by `vm.revert_to` (`snapshot_full` is refused over a
+  disk-only snapshot, from which it could only boot cold); `vm.stealth` is compared with the VM's
   profile and never applied.
 - `service.toml`: `daemon.lanes` 1 to 4 (default 1), no `safety.unsafe_routes_ack`
   (reserved), absolute watch folder paths, watch folders that name a policy that
@@ -136,7 +136,8 @@ with its own lane VM, so N jobs run their VMs side by side.
   while one lane can take jobs.
 - **One host work pool.** The host work of every lane's jobs goes to the one
   pool: `[daemon] host_workers` items at once in total, first come, first served
-  by job arrival whatever lane ran the job.
+  by job arrival whatever lane ran the job (inside a job, an item whose
+  dependencies have ended may start while an earlier one waits for its own).
 - **Recovery.** After a crash every lane's interrupted job goes back to the
   queue, and the jobs that had finished `collect` on any lane go back to the
   host work pool in the order they arrived.
@@ -307,8 +308,11 @@ an attempt) and repairs the mirror files.
 ## Custody actors
 
 Every custody entry names who caused it: `app` and `analyst` in the window,
-`auto:policy-<name>`, `web:<user>` or `local:<uid>` in headless mode. Entries of
-kind `automation` record the job, policy digest, route and submitter. The
+`auto:policy-<name>`, `web:<user>` or `local:<uid>` in headless mode. A job's
+entries (`added`, `sent`, `run_started`, `run_ended`, `automation`) name its
+caller, on every lane at once; the tags the service sets name
+`auto:policy-<name>`. Entries of kind `automation` record the job, policy
+digest, route and submitter. The
 bundled `verify-custody.py` accepts them.
 
 ## Privacy, query and log

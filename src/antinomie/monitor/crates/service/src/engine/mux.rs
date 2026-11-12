@@ -229,4 +229,9 @@ impl<E: Engine> Engine for Handle<E> {
     fn shutdown(&mut self) -> Result<(), String> {
         Ok(())
     }
+
+    /// The actor is the shared engine's: only the lane's handle sets it.
+    fn set_custody_actor(&mut self, actor: Option<&str>) -> Result<(), String> {
+        lock(&self.mux().state).engine.set_custody_actor(actor)
+    }
 }

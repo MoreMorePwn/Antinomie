@@ -54,7 +54,10 @@ notes, and similar samples.
   family `malware` it is a `variant-of`), a `malware-analysis`, parent and
   child `file`s, `indicator`s with `indicates` relationships, `attack-pattern`s,
   a `note` per rule that names its author, licence and source, and a `note`
-  with the custody head.
+  with the custody head. Ids are made from content and shared with the run
+  report's bundles (the identity, the sample's `malware`, the techniques); every
+  object has the fixed `created` 2026-01-01 and the export's time as `modified`,
+  so a later export is a new version of the same objects.
 
 ## Options
 

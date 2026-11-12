@@ -4,9 +4,11 @@
 //! Every library entry a job causes names the caller that submitted it:
 //! `local:<uid>`, `web:<user>` or, for a watch folder, `auto:policy-<name>`
 //! (the job's `client_id`). The intake writes `added` under that name
-//! (`Library::add_bytes_as`); the lane sets the process's current actor for the
-//! length of the job ([`ActorScope`]) so that the run log and the push record,
-//! which the engine writes on its own threads, carry it too. One entry of kind
+//! (`Library::add_bytes_as`); the lane names it as its engine's custody actor
+//! for the job's launch (`Engine::set_custody_actor`) so that the push record
+//! and the run log, which the engine writes on its own thread, carry it too.
+//! Each lane has its own engine, so lanes running at once each name their own
+//! job (BH-29); there is no process-wide actor. One entry of kind
 //! `automation` per job records the job, the policy digest, the route and the
 //! submitter.
 
@@ -32,25 +34,6 @@ pub fn automation_actor(job: &Job) -> String {
         actor
     } else {
         actor_of(job)
-    }
-}
-
-/// Make `actor` the current actor of the process's own custody entries until
-/// the scope is dropped (then `app` again). One lane runs one job at a time
-/// (decided D4), so one slot is enough.
-pub struct ActorScope(());
-
-impl ActorScope {
-    /// `Err` for a name the log does not accept; nothing is changed then.
-    pub fn enter(actor: &str) -> Result<Self, String> {
-        actor::set_current(Some(actor))?;
-        Ok(Self(()))
-    }
-}
-
-impl Drop for ActorScope {
-    fn drop(&mut self) {
-        let _ = actor::set_current(None);
     }
 }
 

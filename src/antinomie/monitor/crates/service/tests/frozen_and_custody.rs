@@ -16,7 +16,7 @@ use antinomie_service::{
     },
     clock::ManualClock,
     config::{DEFAULT_POLICY, NoVms, SharedPolicies},
-    custody::{ActorScope, actor_of, record_automation},
+    custody::{actor_of, record_automation},
     store::{IntakeError, SampleAdmission, Store, SubmitContext, SubmitLimits},
 };
 use std::{fs, path::PathBuf, sync::Arc};
@@ -232,17 +232,4 @@ fn a_job_writes_one_automation_entry_under_its_caller() {
     let mut bare = job;
     bare.sample = None;
     assert!(record_automation(&data, &bare).is_err());
-}
-
-#[test]
-fn the_process_actor_is_set_for_a_scope_and_refused_when_invalid() {
-    assert!(ActorScope::enter("nobody").is_err());
-    {
-        let _scope = ActorScope::enter("auto:policy-ci").unwrap();
-        assert_eq!(
-            antinomie_monitor_core::samples::actor::current(),
-            "auto:policy-ci"
-        );
-    }
-    assert_eq!(antinomie_monitor_core::samples::actor::current(), "app");
 }

@@ -592,12 +592,13 @@ fn check_vm_facts(policy: &Policy, facts: &VmFacts, non_drop: bool, sink: &mut S
                 ),
             );
         }
-        RevertMode::SnapshotFull if facts.disk_snapshots.contains(&vm.revert_to) => sink.warn(
+        // ANT-T0465 (user decision 2026-11-12): refused, not a warning.
+        RevertMode::SnapshotFull if facts.disk_snapshots.contains(&vm.revert_to) => sink.error(
             "vm.revert",
             format!(
-                "snapshot `{}` of VM `{}` holds the disk only, so snapshot_full restores \
-                 its disk and boots the guest cold, as snapshot_disk does; take a full \
-                 snapshot (with memory) to resume a running guest",
+                "snapshot `{}` of VM `{}` holds the disk only, so snapshot_full cannot \
+                 resume a running guest from it; use snapshot_disk, or take a full \
+                 snapshot (with memory)",
                 vm.revert_to, facts.name
             ),
         ),

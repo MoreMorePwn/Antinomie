@@ -781,10 +781,10 @@ fn bh_08_a_recordings_cap_of_zero_is_refused() {
     );
 }
 
-/// BH-12: `snapshot_full` over a disk-only snapshot (what `auto init` takes)
-/// boots cold like `snapshot_disk`; `config validate` says so.
+/// BH-12, ANT-T0465: `snapshot_full` over a disk-only snapshot (what `auto
+/// init` takes) cannot resume a guest; `config validate` refuses it.
 #[test]
-fn snapshot_full_over_a_disk_snapshot_is_a_warning() {
+fn snapshot_full_over_a_disk_snapshot_is_refused() {
     let full = with(
         DEFAULT_POLICY,
         r#"revert       = "snapshot_disk""#,
@@ -796,12 +796,8 @@ fn snapshot_full_over_a_disk_snapshot_is_a_warning() {
     assert!(
         found
             .iter()
-            .any(|p| p.severity == Severity::Warning
+            .any(|p| p.severity == Severity::Error
                 && p.to_string().contains("holds the disk only")),
-        "{found:?}"
-    );
-    assert!(
-        !found.iter().any(|p| p.severity == Severity::Error),
         "{found:?}"
     );
     // Over a full snapshot, nothing to say.

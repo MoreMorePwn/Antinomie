@@ -644,7 +644,8 @@ impl Worker {
         run.summary.pid = pid;
         run.summary.state = RunState::Running;
         if let Some(sample) = request.sample.as_ref() {
-            session.custody_start(&self.options.data_dir, sample, &mut run);
+            let actor = self.custody_actor.get();
+            session.custody_start(&self.options.data_dir, sample, &mut run, &actor);
         }
         if request.core_dump_on_exit {
             arm_process_core(&run, &mut artifacts, reply, specimen_reply);

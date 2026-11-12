@@ -464,3 +464,93 @@ fn the_deadline_covers_the_item_limits_and_waits_for_a_running_item() {
     assert!(matches!(settle, Some(Task::Settle(..))), "{settle:?}");
     assert!(state.get(&id).unwrap().stop.is_some());
 }
+
+/// ANT-T0464 (user decision 2026-11-12, option B): inside one job, an item
+/// whose dependencies have ended starts while the job's first waiting item
+/// waits for its own; between jobs the order stays first come, first served.
+#[test]
+fn t0464_an_independent_item_of_the_head_job_starts_while_its_first_one_waits() {
+    let mut state = PoolState::new(3);
+    let older = add(
+        &mut state,
+        job(1, 100),
+        plan(&[AnalysisKind::Metadata, AnalysisKind::Strings], false),
+    );
+    let newer = add(
+        &mut state,
+        job(2, 200),
+        plan(&[AnalysisKind::Metadata], false),
+    );
+    // Make `static:metadata` wait for `triage`: the job's first waiting item
+    // then depends on a running one, and `static:strings` does not.
+    {
+        let pool_job = state.jobs.values_mut().find(|j| j.job.id == older).unwrap();
+        let names: Vec<String> = pool_job.items.iter().map(|i| i.kind.name()).collect();
+        assert_eq!(
+            names,
+            [
+                "triage",
+                "static:metadata",
+                "static:strings",
+                "assess",
+                "report"
+            ]
+        );
+        pool_job.items[1].after = vec![0];
+    }
+    let first = next(&mut state);
+    assert_eq!(item(&first), (older.clone(), "triage".into()));
+    // `static:metadata` waits for `triage`; `static:strings` goes in its place.
+    let second = next(&mut state);
+    assert_eq!(item(&second), (older.clone(), "static:strings".into()));
+    // A worker is free, but the older job still has an item that has not
+    // started: nothing of the newer job starts.
+    assert!(next(&mut state).is_none());
+    done(&mut state, &first);
+    // `triage` ended: the waiting item and `assess` start, in list order.
+    let third = next(&mut state);
+    assert_eq!(item(&third), (older.clone(), "static:metadata".into()));
+    done(&mut state, &second);
+    let fourth = next(&mut state);
+    assert_eq!(item(&fourth), (older.clone(), "assess".into()));
+    assert!(next(&mut state).is_none(), "the report waits for analyse");
+    done(&mut state, &third);
+    done(&mut state, &fourth);
+    assert!(matches!(next(&mut state), Some(Task::EndAnalyse(id)) if id == older));
+    state.analyse_ended(&older, Ok(PhaseEnd::Next));
+    let report = next(&mut state);
+    assert_eq!(item(&report), (older.clone(), "report".into()));
+    // Every item of the older job has started: the newer job's turn.
+    assert_eq!(item(&next(&mut state)), (newer, "triage".into()));
+}
+
+/// ANT-T0464: the memory floor holds for an item that starts in place of a
+/// waiting one, and nothing of a newer job starts meanwhile.
+#[test]
+fn t0464_an_item_that_goes_ahead_in_its_job_still_waits_for_memory() {
+    let mut state = PoolState::new(3);
+    let older = add(
+        &mut state,
+        job(1, 100),
+        plan(&[AnalysisKind::Metadata, AnalysisKind::Strings], false),
+    );
+    add(
+        &mut state,
+        job(2, 200),
+        plan(&[AnalysisKind::Metadata], false),
+    );
+    state
+        .jobs
+        .values_mut()
+        .find(|j| j.job.id == older)
+        .unwrap()
+        .items[1]
+        .after = vec![0];
+    let first = next(&mut state);
+    assert_eq!(item(&first), (older.clone(), "triage".into()));
+    let mut short = || Some("memory: 1000 MiB are available, an item needs 2048 MiB".to_owned());
+    assert!(state.next(1_000, &mut short, &no_deadline).is_none());
+    assert!(state.waiting_for.is_some());
+    let second = next(&mut state);
+    assert_eq!(item(&second), (older, "static:strings".into()));
+}

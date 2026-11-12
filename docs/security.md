@@ -221,7 +221,10 @@ confidential material.
   (`file-before/`, within the caps in **Settings › Advanced**). Do not type real
   credentials into a guest.
 * **Malware on disk.** Static analysis keeps the complete specimen, unencrypted,
-  in the recording's `analysis/` folder. Unpacked layers, disk dumps, memory
+  in the recording's `analysis/` folder, or for a library sample analysed on the
+  host (the sample window's **Analyze ›**, `antinomie-cli analyze`, an Auto mode
+  job) in `<data>/analyses/<report id>/`; the sample itself is decrypted in
+  memory for it, never into a file of its own. Unpacked layers, disk dumps, memory
   dumps, process cores and packet captures hold the sample, its files or its
   memory. Exports (Triage reports, IOC CSV/JSON, cores, disk images, Ghidra
   projects) are plain files wherever you save them, and so are saved File

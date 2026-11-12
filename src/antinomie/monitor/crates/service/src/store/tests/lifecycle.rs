@@ -537,6 +537,36 @@ fn artifacts_warnings_and_assessment_belong_to_a_running_job() {
         fx.store.artifact(&artifact.id).unwrap().1,
         "network/run.pcap"
     );
+    // BH-22: the same file written again (a job resumed at `analyse` writes
+    // its report again) replaces the row; the old hash is gone with it.
+    let report = |sha256| crate::store::artifacts::NewArtifact {
+        kind: ArtifactKind::ReportJson,
+        name: "report-0000.json".into(),
+        size: 20,
+        sha256,
+        media_type: MediaType::ApplicationJson,
+        raw_indicators: true,
+        location: "artifacts/report-0000.json".into(),
+    };
+    let first = fx.store.add_artifact(&job.id, report(sha(8))).unwrap();
+    fx.clock.advance(1);
+    let again = fx.store.add_artifact(&job.id, report(sha(9))).unwrap();
+    assert_ne!(first.id, again.id);
+    let reports: Vec<_> = fx
+        .store
+        .artifacts(&job.id)
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.kind == ArtifactKind::ReportJson)
+        .collect();
+    assert_eq!(reports, vec![again.clone()]);
+    assert_eq!(reports[0].sha256, sha(9));
+    assert!(fx.store.artifact(&first.id).is_err());
+    assert_eq!(
+        fx.store.artifacts(&job.id).unwrap().len(),
+        2,
+        "the pcap stays"
+    );
     let assessment = Assessment {
         assessment: AssessmentKind::ObservedOnly,
         highest_tier: Tier::None,

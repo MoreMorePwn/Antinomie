@@ -412,6 +412,12 @@ impl MonitorApp {
                     {
                         self.pending_launch_context = None;
                     }
+                    // Analyze ›'s answer is the report id.
+                    let message = if self.sample_analysis_answered(id) && success {
+                        format!("Static analysis of the sample queued (report {message})")
+                    } else {
+                        message
+                    };
                     self.status = if success {
                         message
                     } else {

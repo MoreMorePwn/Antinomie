@@ -42,7 +42,7 @@ use std::{
 
 /// The stored event types a subscription may ask for (`types`), plus the
 /// ephemeral ones.
-pub const EVENT_TYPES: [&str; 14] = [
+pub const EVENT_TYPES: [&str; 15] = [
     "job.created",
     "job.state",
     "job.stage",
@@ -50,6 +50,7 @@ pub const EVENT_TYPES: [&str; 14] = [
     "job.run",
     "job.warning",
     "job.artifact",
+    "job.trigger",
     "job.assessment",
     "job.requeued",
     "job.finished",
@@ -118,7 +119,10 @@ fn check(params: &EventsSubscribeParams) -> Result<Wanted, ApiError> {
         None => None,
         Some(list) => {
             if list.is_empty() || list.len() > EVENT_TYPES.len() {
-                return Err(ApiError::invalid_argument("types", "1 to 14 event types"));
+                return Err(ApiError::invalid_argument(
+                    "types",
+                    format!("1 to {} event types", EVENT_TYPES.len()),
+                ));
             }
             let mut set = BTreeSet::new();
             for name in list {
@@ -398,5 +402,41 @@ pub fn stream(
             }
         }
         subscription = store.subscribe_bounded(limits.subscription_backlog);
+    }
+}
+
+#[cfg(test)]
+mod type_tests {
+    use super::*;
+
+    /// BH-30: every event type the store keeps can be asked for by name.
+    #[test]
+    fn bh_30_a_subscription_may_ask_for_job_trigger() {
+        let params = EventsSubscribeParams {
+            types: Some(vec!["job.trigger".into()]),
+            ..Default::default()
+        };
+        let wanted = check(&params).unwrap();
+        let event = |body| Event {
+            seq: Some(1),
+            gseq: Some(1),
+            ts_ms: 0,
+            scope: EventScope::Job,
+            job_id: None,
+            body,
+        };
+        assert!(wanted.wants(&event(EventBody::JobTrigger {
+            trigger: None,
+            note: Some("the core dump was skipped".into()),
+        })));
+        assert!(!wanted.wants(&event(EventBody::JobWarning {
+            code: "x".into(),
+            text: "y".into(),
+        })));
+        let every = EventsSubscribeParams {
+            types: Some(EVENT_TYPES.iter().map(|name| (*name).to_owned()).collect()),
+            ..Default::default()
+        };
+        assert!(check(&every).is_ok());
     }
 }

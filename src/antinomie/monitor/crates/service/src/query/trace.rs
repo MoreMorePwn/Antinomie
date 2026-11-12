@@ -4,6 +4,7 @@
 //! raw-file byte offset, not a row number (5.12.5); the engine's rebuildable
 //! index lives outside the recording.
 
+use super::cursor::Generation;
 use super::{
     convert::{base64, find_event, group_of, invocation, parse_field_id, trace_row},
     cursor::Cursor,
@@ -15,12 +16,63 @@ use super::{
 };
 use crate::api::error::ApiError;
 use antinomie_monitor_core::{InvocationSummary, recording::Recording};
-use std::sync::atomic::AtomicBool;
+use std::{
+    cell::Cell,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
+    time::Instant,
+};
 
 /// The engine reads at most this many calls at once.
 const CHUNK: usize = 256;
 /// A sized-down request is tried this many times when a page is too large.
 const SHRINKS: usize = 6;
+/// Filtered totals kept, by run folder, generation and filter.
+const TOTALS_KEPT: usize = 16;
+/// The count of a filtered total looks at the clock every this many calls.
+const CLOCK_EVERY: u32 = 256;
+
+/// The totals of filtered trace walks (BH-28): counting the calls a filter
+/// keeps reads the whole trace, so it is done once per run generation and
+/// filter, on a first page and within a time budget, and later pages take
+/// the answer from here. A walk that did not finish leaves no entry; the
+/// pages then have no `total`.
+#[derive(Default)]
+pub struct TotalCache {
+    entries: Vec<(PathBuf, Generation, u64, u64)>,
+}
+
+impl TotalCache {
+    fn get(&mut self, dir: &Path, generation: Generation, filter: u64) -> Option<u64> {
+        let at = self
+            .entries
+            .iter()
+            .position(|(d, g, f, _)| d == dir && *g == generation && *f == filter)?;
+        let entry = self.entries.remove(at);
+        let total = entry.3;
+        self.entries.push(entry);
+        Some(total)
+    }
+
+    fn put(&mut self, dir: &Path, generation: Generation, filter: u64, total: u64) {
+        // A new generation of a run makes its older totals useless.
+        self.entries
+            .retain(|(d, g, f, _)| d != dir || (*g == generation && *f != filter));
+        self.entries
+            .push((dir.to_path_buf(), generation, filter, total));
+        if self.entries.len() > TOTALS_KEPT {
+            self.entries.remove(0);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
 
 /// The calls one read took from the engine, the cursor of the next one and
 /// the engine's issues.
@@ -90,21 +142,79 @@ impl QueryService {
                 continue;
             }
             let total = if hide.is_empty() && filter.keeps_everything() {
-                recording
-                    .invocation_count_cancellable(params.pid, cancel)
-                    .map_err(|e| self.engine_error(&e))?
+                Some(
+                    recording
+                        .invocation_count_cancellable(params.pid, cancel)
+                        .map_err(|e| self.engine_error(&e))?,
+                )
             } else {
-                recording
-                    .matching_totals_cancellable(params.pid, cancel, &keep)
-                    .map_err(|e| self.engine_error(&e))?
-                    .total
+                self.filtered_total(
+                    &recording,
+                    &opened,
+                    binding.filter_hash,
+                    request.cursor.is_none(),
+                    params.pid,
+                    &keep,
+                    cancel,
+                )?
             };
-            let mut page = opened.counted_page(rows, total, true);
+            let mut page = match total {
+                Some(total) => opened.counted_page(rows, total, true),
+                None => opened.page(rows, true),
+            };
             page.next_cursor = next.map(|offset| Cursor { offset, binding }.encode());
             if !issues.is_empty() {
                 page.partial = Some(true);
             }
             return Ok(page);
+        }
+    }
+
+    /// The number of calls a filtered walk keeps (BH-28): from the cache;
+    /// else, on a first page, counted within a quarter of the light deadline
+    /// and kept; else unknown (`None`), so that a page never reads the whole
+    /// trace twice and a cursor page never does.
+    #[allow(clippy::too_many_arguments)]
+    fn filtered_total(
+        &self,
+        recording: &Recording,
+        opened: &super::service::Opened,
+        filter: u64,
+        first_page: bool,
+        pid: Option<u32>,
+        keep: &dyn Fn(&InvocationSummary) -> bool,
+        cancel: &AtomicBool,
+    ) -> Result<Option<u64>, ApiError> {
+        let lock = || self.totals.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(total) = lock().get(&opened.dir, opened.generation, filter) {
+            return Ok(Some(total));
+        }
+        if !first_page {
+            return Ok(None);
+        }
+        let budget = self.settings.light_timeout / 4;
+        let began = Instant::now();
+        let over = AtomicBool::new(budget.is_zero());
+        let seen = Cell::new(0u32);
+        let counted = recording.matching_totals_cancellable(pid, &over, |call| {
+            seen.set(seen.get().wrapping_add(1));
+            if cancel.load(Ordering::Relaxed)
+                || (seen.get().is_multiple_of(CLOCK_EVERY) && began.elapsed() >= budget)
+            {
+                over.store(true, Ordering::Relaxed);
+            }
+            keep(call)
+        });
+        match counted {
+            Ok(totals) => {
+                lock().put(&opened.dir, opened.generation, filter, totals.total);
+                Ok(Some(totals.total))
+            }
+            // The request itself was cancelled: say so as before.
+            Err(error) if cancel.load(Ordering::Relaxed) => Err(self.engine_error(&error)),
+            // Out of budget: the page goes without a total.
+            Err(_) if over.load(Ordering::Relaxed) => Ok(None),
+            Err(error) => Err(self.engine_error(&error)),
         }
     }
 
