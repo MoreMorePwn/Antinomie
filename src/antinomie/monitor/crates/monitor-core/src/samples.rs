@@ -188,6 +188,27 @@ pub fn samples_dir(data_dir: &Path) -> PathBuf {
     crate::lanes::shared_root(data_dir).join("samples")
 }
 
+/// Where Samples > Analyze wrote a decrypted copy of the sample before it
+/// analysed library samples in memory (BH-23).
+const ANALYSIS_INPUT: &str = "analysis-input";
+
+/// Remove the plain copies Samples > Analyze left in
+/// `<samples>/analysis-input/` before it analysed library samples in memory.
+/// Nothing else writes there. `Ok(true)` when something was removed; a link
+/// in its place is removed, never followed.
+pub fn remove_analysis_inputs(data_dir: &Path) -> Result<bool, String> {
+    let folder = samples_dir(data_dir).join(ANALYSIS_INPUT);
+    let removed = match fs::symlink_metadata(&folder) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => Err(error),
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(&folder),
+        Ok(_) => fs::remove_file(&folder),
+    };
+    removed
+        .map(|()| true)
+        .map_err(|error| format!("{}: {error}", folder.display()))
+}
+
 /// A MalwareBazaar search.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Query {
@@ -1013,6 +1034,8 @@ pub const STARTERS: &[(&str, &str)] = &[
 
 #[cfg(test)]
 mod actor_tests;
+#[cfg(test)]
+mod analysis_input_tests;
 #[cfg(test)]
 mod bazaar_tests;
 #[cfg(test)]

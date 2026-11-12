@@ -164,6 +164,15 @@ impl Backend {
         for line in crate::data_move::repair(&options) {
             eprintln!("data folder: {line}");
         }
+        // Decrypted copies an earlier Samples > Analyze left in the library
+        // (BH-23); lane 1 owns the library.
+        if options.shared_root.is_none() {
+            match crate::samples::remove_analysis_inputs(&options.data_dir) {
+                Ok(true) => eprintln!("removed the plain sample copies of an earlier Analyze"),
+                Ok(false) => {}
+                Err(error) => eprintln!("could not remove the plain sample copies: {error}"),
+            }
+        }
         let vms = storage::load_vms(&options)?;
         let freed = crate::vm::remove_stale_guest_ram(
             &options,

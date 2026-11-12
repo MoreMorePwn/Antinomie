@@ -140,6 +140,18 @@ impl MonitorApp {
         {
             return None;
         }
+        // A library sample's analysis (Analyze ›) is kept apart from any VM.
+        if self
+            .snapshot
+            .analysis_reports
+            .iter()
+            .any(|report| report.id == report_id && report.source_path.starts_with("sample:"))
+        {
+            return Some(antinomie_monitor_core::sample_analysis_directory(
+                &self.options.data_dir,
+                report_id,
+            ));
+        }
         let vm_id = self
             .snapshot
             .active_vm
