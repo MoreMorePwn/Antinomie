@@ -423,3 +423,28 @@ fn the_geolocation_credit_closes_the_document_and_evidence_lists_recordings() {
         "{text}"
     );
 }
+
+/// BH-20: a guest path is sample-controlled and may hold `|`. MISP splits a
+/// composite `filename|sha256` value at `|`, so the value must have exactly two
+/// parts and the second must be the hash.
+#[test]
+fn bh_20_a_guest_path_with_a_pipe_keeps_the_misp_composite_in_two_parts() {
+    let sha = "cd".repeat(32);
+    let indicator = Indicator {
+        kind: "file".into(),
+        value: sha.clone(),
+        path: "/tmp/a|b/dropped".into(),
+        sha256: sha.clone(),
+        verdict: "No match".into(),
+        ..Indicator::default()
+    };
+    let attrs = misp::attributes(&indicator, "seed", 1_792_000_100_000);
+    let composite = attrs
+        .iter()
+        .find(|attr| attr["type"] == "filename|sha256")
+        .expect("a filename|sha256 attribute");
+    let value = composite["value"].as_str().unwrap();
+    let parts: Vec<&str> = value.split('|').collect();
+    assert_eq!(parts.len(), 2, "MISP reads {parts:?} from {value:?}");
+    assert_eq!(parts[1], sha);
+}
