@@ -553,3 +553,23 @@ fn every_data_folder_of_a_process_is_scanned_for_a_layer_left_behind() {
     let _ = fs::remove_dir_all(&one_root);
     let _ = fs::remove_dir_all(&two_root);
 }
+
+#[test]
+fn a_finalize_that_found_the_disk_full_is_tried_again_and_others_are_not() {
+    // ANT-T0475: a layer left pending by ENOSPC kept the lane out until the
+    // next start; only a full disk (or quota) is worth another try.
+    for why in [
+        "automatic layer cleanup: No space left on device (os error 28)",
+        "qemu-img commit: write failed: Disk quota exceeded (os error 122)",
+    ] {
+        assert!(out_of_space(why), "{why}");
+    }
+    for why in [
+        "the automatic layer's backing file is not the sealed layer; left as it is",
+        "the VM is running",
+        "Permission denied (os error 13)",
+        "Unknown error 280 (os error 280)",
+    ] {
+        assert!(!out_of_space(why), "{why}");
+    }
+}

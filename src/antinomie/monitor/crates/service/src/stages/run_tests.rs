@@ -337,6 +337,85 @@ fn a_vm_that_stops_under_the_program_is_guest_lost() {
     assert_eq!(code(&stop), FailureCode::GuestLost);
 }
 
+/// What the engine shows when the lane's QEMU is killed in the run stage
+/// (T7 qemu-kill, ANT-T0473): the VM is gone and the run `Finalized` by the
+/// engine, with no end of the program from the guest.
+pub(super) fn qemu_killed(execution_left: Option<RunExecution>) -> impl Fn(&mut Snapshot) {
+    move |s| {
+        s.state = VmState::Stopped;
+        s.active_vm = None;
+        s.last_error = Some("QEMU exited: signal 9".into());
+        s.runs[0].state = RunState::Finalized;
+        s.runs[0].execution = execution_left.clone();
+    }
+}
+
+#[test]
+fn a_qemu_killed_under_the_program_is_guest_lost_though_the_engine_finalized_the_run() {
+    // The PC saw both: no execution state left, and one with no live task
+    // and no exit status.
+    for (name, left) in [
+        ("run-qemu-killed", None),
+        ("run-qemu-killed-exec", Some(execution(0, None))),
+    ] {
+        let w = W::new(name);
+        let job = w.fx.running(1);
+        let mut waiter = w.engine(|fake| {
+            restore_ok(fake);
+            upload_ok(fake);
+            fake.on("Execute")
+                .after(SECOND)
+                .then(500 * MS, |s| s.runs.push(live_run()))
+                .then(5 * SECOND, qemu_killed(left.clone()))
+                .ok("launched");
+        });
+        let ready = launched(&w, &mut waiter, &job);
+        let stop = run_stage(&w, &mut waiter, &job, &ready).unwrap_err();
+        assert_eq!(code(&stop), FailureCode::GuestLost, "{name}");
+        let failure = stop.failure().unwrap();
+        assert_eq!(failure.stage, Stage::Run, "{name}");
+        assert!(
+            failure.message.contains("VM stopped"),
+            "{name}: {}",
+            failure.message
+        );
+        let stored = w.job(&job.id);
+        assert_eq!(
+            stored.run.unwrap().end_reason,
+            Some(EndReason::GuestLost),
+            "{name}"
+        );
+        assert_eq!(
+            stored.recording.unwrap().phase,
+            RecordingPhase::Interrupted,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_run_that_ended_before_the_vm_stopped_is_still_its_own_end() {
+    // The guest reported the exit and no task left, then the VM ended: the
+    // program's own end, not a lost guest.
+    let w = W::new("run-ended-then-vm");
+    let job = w.fx.running(1);
+    let mut waiter = w.engine(|fake| {
+        restore_ok(fake);
+        upload_ok(fake);
+        fake.on("Execute")
+            .after(SECOND)
+            .then(500 * MS, |s| s.runs.push(live_run()))
+            .then(
+                5 * SECOND,
+                qemu_killed(Some(execution(0, Some(WaitStatus::Exited { code: 0 })))),
+            )
+            .ok("launched");
+    });
+    let ready = launched(&w, &mut waiter, &job);
+    let end = run_stage(&w, &mut waiter, &job, &ready).unwrap();
+    assert_eq!((end.reason, end.exit), (EndReason::Exited, Some(0)));
+}
+
 #[test]
 fn sixty_seconds_without_the_engine_is_the_watchdogs_silence() {
     let w = W::new("run-silent");

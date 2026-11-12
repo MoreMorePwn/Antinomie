@@ -3,10 +3,12 @@
 use crate::{
     api::{
         event::EventBody,
+        failure::FailureCode,
         job::{EndReason, Job, JobState, Outcome, WaitingFor},
         status::PauseReason,
     },
     config::{Policy, service::Resources},
+    lane::tests::VM,
     resources::{Floors, Governor, LOW_MEMORY_ALERT_EVERY_MS, Probes, ResourceChecks, Shortage},
     stages::{
         Driven, HostChecks, HostProblem,
@@ -17,6 +19,10 @@ use crate::{
         Eligibility,
         tests::{Fx, lane, manager},
     },
+};
+use antinomie_monitor_core::{
+    VmState,
+    disk_layers::{DiskLayer, LayerPhase},
 };
 use std::{
     path::{Path, PathBuf},
@@ -528,4 +534,203 @@ fn a_disk_that_falls_below_the_floor_stops_the_run_pauses_the_queue_and_ends_the
     let file = w.lane_file();
     assert!(file.current.is_none() && file.quarantine.is_none());
     let _ = manager();
+}
+
+// ---- a full disk in the run stage (T7 disk-full (b), ANT-T0475) ---------
+
+/// The disk is full from `full_at` until `back_at`: the floor fails, the job
+/// store and the lane file cannot be written.
+fn full_disk(
+    w: &W,
+    fake: &mut crate::engine::FakeEngine,
+    low: &Arc<AtomicBool>,
+    full_at: u32,
+    back_at: Option<u32>,
+) {
+    let switches = (
+        low.clone(),
+        w.fx.store.disk_full_switch(),
+        w.lanes.no_space_switch(),
+    );
+    let set = move |on: bool| {
+        let (low, store, lanes) = switches.clone();
+        move || {
+            low.store(on, Ordering::SeqCst);
+            store.store(on, Ordering::SeqCst);
+            lanes.store(on, Ordering::SeqCst);
+        }
+    };
+    fake.call_after(SECOND * full_at, set(true));
+    if let Some(back_at) = back_at {
+        fake.call_after(SECOND * back_at, set(false));
+    }
+}
+
+#[test]
+fn a_full_disk_in_the_run_stage_pauses_the_queue_and_the_job_ends_partial_when_room_is_back() {
+    // Before ANT-T0475 the run's end could not be written: the job failed
+    // `internal`, the pause was lost with the write, and the lane waited.
+    let mut w = W::new("res-full");
+    let low = Arc::new(AtomicBool::new(false));
+    w.host = Box::new(Draining(low.clone()));
+    let job = w.fx.running(1);
+    let mut waiter = w.engine(|fake| {
+        restore_ok(fake);
+        upload_ok(fake);
+        execute_run(fake, None);
+        stop_run_ok(fake);
+        stop_ok(fake);
+    });
+    // Full at 100 s (the floor is seen at the next minute mark), room again
+    // at 300 s.
+    full_disk(&w, waiter.engine_mut(), &low, 100, Some(300));
+    let began = crate::clock::Clock::now_ms(&*w.fx.clock);
+    let driven = w.stages(&mut waiter).drive(&job);
+    let took = (crate::clock::Clock::now_ms(&*w.fx.clock) - began) / 1000;
+    let Driven::Collected(end) = driven else {
+        panic!("{driven:?}");
+    };
+    assert_eq!(end.outcome, Outcome::Partial);
+    assert!((300..400).contains(&took), "{took} s");
+    let stored = w.fx.store.get(&job.id).unwrap();
+    assert_eq!(stored.run.unwrap().end_reason, Some(EndReason::Stopped));
+    assert!(
+        stored.warnings.iter().any(|x| x.code == "low_disk"),
+        "{:?}",
+        stored.warnings
+    );
+    // The pause could not be written when the floor was hit; it held all
+    // the same, until the governor lifts it.
+    assert_eq!(
+        w.fx.store.pause_reason().unwrap(),
+        Some(PauseReason::LowDisk)
+    );
+    let file = w.lane_file();
+    assert!(file.quarantine.is_none());
+}
+
+#[test]
+fn a_recording_the_engine_cannot_finish_on_a_full_disk_does_not_hold_the_lane_for_the_layer_wait() {
+    // The engine cannot finish the disk layer while the disk is full: the
+    // settle wait used to run its whole 1800 s, twice, then quarantine the
+    // lane, with the job `running` all along (ANT-T0475).
+    let mut w = W::new("res-layer");
+    let low = Arc::new(AtomicBool::new(false));
+    w.host = Box::new(Draining(low.clone()));
+    let job = w.fx.running(1);
+    let flag = low.clone();
+    let mut waiter = w.engine(|fake| {
+        restore_ok(fake);
+        upload_ok(fake);
+        execute_run(fake, None);
+        stop_run_ok(fake);
+        fake.on("Stop")
+            .after(SECOND)
+            .then(2 * SECOND, |s| {
+                s.state = VmState::Stopped;
+                s.active_vm = None;
+                s.disk_layers.push(DiskLayer {
+                    vm_id: VM.into(),
+                    boot_id: "b1".into(),
+                    phase: LayerPhase::Finalizing,
+                    started_ms: 0,
+                    phase_ms: 0,
+                });
+            })
+            .ok("VM stopped");
+        fake.call_after(100 * SECOND, move || flag.store(true, Ordering::SeqCst));
+    });
+    let began = crate::clock::Clock::now_ms(&*w.fx.clock);
+    let driven = w.stages(&mut waiter).drive(&job);
+    let took = (crate::clock::Clock::now_ms(&*w.fx.clock) - began) / 1000;
+    assert!(took < 600, "{took} s");
+    // `recording_failed` is retried when the policy lists it (not by default).
+    let (Driven::Retried { failure, .. } | Driven::Failed(failure)) = driven else {
+        panic!("{driven:?}");
+    };
+    assert_eq!(failure.code, FailureCode::RecordingFailed);
+    assert!(failure.message.contains("below its floor"), "{failure:?}");
+    // Not quarantined: the lane waits for the layer (layer_pending), which
+    // the engine finishes when the disk has room again.
+    let file = w.lane_file();
+    assert!(file.quarantine.is_none(), "{:?}", file.quarantine);
+    assert!(file.current.is_none() && file.qemu.is_none());
+    assert!(matches!(
+        w.job(&job.id).state,
+        JobState::Queued | JobState::Failed
+    ));
+    assert_eq!(
+        crate::stages::prechecks::lane_eligibility(&file, waiter.snapshot()),
+        Eligibility::Wait(WaitingFor::LayerPending)
+    );
+}
+
+#[test]
+fn a_full_disk_at_the_end_of_a_job_waits_for_room_instead_of_leaving_it_running() {
+    // The job fails while the disk is full: its end and the lane file's end
+    // of work are written once there is room, not lost (the lane would stay
+    // busy and the job `running` for good).
+    let mut w = W::new("res-end");
+    let low = Arc::new(AtomicBool::new(false));
+    w.host = Box::new(Draining(low.clone()));
+    let job = w.fx.running(1);
+    let mut waiter = w.engine(|_| {});
+    // Full from the start (the lane file's begin of work fails), room again
+    // at 120 s.
+    full_disk(&w, waiter.engine_mut(), &low, 0, Some(120));
+    low.store(true, Ordering::SeqCst);
+    w.fx.store.inject_disk_full(true);
+    w.lanes.inject_no_space(true);
+    let driven = w.stages(&mut waiter).drive(&job);
+    assert!(
+        matches!(driven, Driven::Failed(_) | Driven::Retried { .. }),
+        "{driven:?}"
+    );
+    let stored = w.job(&job.id);
+    assert!(
+        matches!(stored.state, JobState::Failed | JobState::Queued),
+        "{:?}",
+        stored.state
+    );
+    assert_eq!(stored.failure.unwrap().code, FailureCode::Internal);
+    let file = w.lane_file();
+    assert!(file.current.is_none(), "{:?}", file.current);
+}
+
+#[test]
+fn a_pause_the_database_cannot_take_holds_in_memory_until_one_is_written() {
+    let fx = Fx::new("pause-held");
+    fx.store.inject_disk_full(true);
+    let refused = fx.store.set_pause(Some(PauseReason::LowDisk)).unwrap_err();
+    assert!(
+        crate::resources::disk_full(&refused.to_string()),
+        "{refused}"
+    );
+    assert_eq!(fx.store.pause_reason().unwrap(), Some(PauseReason::LowDisk));
+    // It holds when the database takes writes again, until a pause is
+    // written: the governor lifts it once the disk has room.
+    fx.store.inject_disk_full(false);
+    assert_eq!(fx.store.pause_reason().unwrap(), Some(PauseReason::LowDisk));
+    let machine = Machine::healthy();
+    let mut governor = Governor::new(checks(&machine, true), &fx.store);
+    governor.tick(0).unwrap();
+    assert_eq!(fx.store.pause_reason().unwrap(), None);
+}
+
+#[test]
+fn the_words_of_a_full_disk_are_known_and_others_are_not() {
+    for words in [
+        "job store: database or disk is full",
+        "/d/service/lanes/.lane-1.json.1.2.tmp: No space left on device (os error 28)",
+        "Disk quota exceeded (os error 122)",
+    ] {
+        assert!(crate::resources::disk_full(words), "{words}");
+    }
+    for words in [
+        "job store: database is locked",
+        "Permission denied (os error 13)",
+        "os error 280)",
+    ] {
+        assert!(!crate::resources::disk_full(words), "{words}");
+    }
 }

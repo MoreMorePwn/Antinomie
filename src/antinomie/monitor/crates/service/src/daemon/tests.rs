@@ -753,3 +753,33 @@ fn drain_lets_the_lane_stages_run_on_until_the_drain_timeout() {
         JobState::Cancelling
     );
 }
+
+#[test]
+fn a_lane_job_that_does_not_leave_after_its_shutdown_cancel_is_interrupted_after_the_grace() {
+    // ANT-T0475: a lane stuck in a wait (a recording the engine cannot finish
+    // on a full disk) held the daemon past its unit's 360 s.
+    let svc = svc("lane-grace", |_| {});
+    let job = submit_upload(&svc);
+    let service = &svc.service;
+    service
+        .store
+        .claim_next(&crate::store::tests::lane(), &mut |_| Eligibility::Ready)
+        .unwrap();
+    *service.slots[0].phase.lock().unwrap() = Phase::Lane(job.id.clone());
+    let grace = Duration::from_secs(120);
+    let start = Instant::now();
+    let mut state = Stopping::default();
+    let line = shutdown_step(service, &mut state, grace, start).unwrap();
+    assert!(line.contains("cancelled for shutdown"), "{line}");
+    assert!(!service.controls.interrupted());
+    // Still in its lane stages just before the grace: left alone.
+    let before = start + super::LANE_SHUTDOWN_GRACE - Duration::from_secs(1);
+    assert_eq!(shutdown_step(service, &mut state, grace, before), None);
+    assert!(!service.controls.interrupted());
+    let after = start + super::LANE_SHUTDOWN_GRACE;
+    let line = shutdown_step(service, &mut state, grace, after).unwrap();
+    assert!(line.contains("interrupted"), "{line}");
+    assert!(service.controls.interrupted());
+    // Once.
+    assert_eq!(shutdown_step(service, &mut state, grace, after), None);
+}

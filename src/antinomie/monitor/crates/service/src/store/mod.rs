@@ -113,6 +113,12 @@ pub struct Store {
     subscribers: Mutex<Vec<Subscriber>>,
     fault: Mutex<Option<(Fault, FaultAction)>>,
     read_only: bool,
+    /// The queue's pause when the database could not be written (a full
+    /// disk): it holds in this process until a write of the pause succeeds
+    /// ([`Store::set_pause`], ANT-T0475).
+    held_pause: Mutex<Option<Option<crate::api::status::PauseReason>>>,
+    /// Tests: every write fails as SQLite does on a full disk.
+    full: Arc<AtomicBool>,
 }
 
 /// A receiver of committed events. A bounded one that falls behind is
@@ -279,6 +285,8 @@ impl Store {
             subscribers: Mutex::new(Vec::new()),
             fault: Mutex::new(None),
             read_only,
+            held_pause: Mutex::new(None),
+            full: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -299,6 +307,27 @@ impl Store {
     /// Arm a fault: the next time the store reaches `at`, it acts.
     pub fn inject_fault(&self, at: Fault, action: FaultAction) {
         *lock(&self.fault) = Some((at, action));
+    }
+
+    /// Make every write fail as on a full disk (`SQLITE_FULL`) until it is
+    /// turned off: the T7 disk-full case without a full disk.
+    pub fn inject_disk_full(&self, on: bool) {
+        self.full.store(on, Ordering::SeqCst);
+    }
+
+    /// The switch of [`Self::inject_disk_full`], for a test that turns it
+    /// from another thread.
+    pub fn disk_full_switch(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.full)
+    }
+
+    /// The pause kept in memory because it could not be written, if any.
+    pub(crate) fn held_pause(&self) -> Option<Option<crate::api::status::PauseReason>> {
+        *lock(&self.held_pause)
+    }
+
+    pub(crate) fn hold_pause(&self, reason: Option<Option<crate::api::status::PauseReason>>) {
+        *lock(&self.held_pause) = reason;
     }
 
     fn hit(&self, at: Fault) -> R<()> {
@@ -330,6 +359,12 @@ impl Store {
     pub(crate) fn write<T>(&self, body: impl FnOnce(&mut Tx<'_>) -> R<T>) -> R<T> {
         if self.read_only {
             return Err(internal("this store is open for reading only"));
+        }
+        if self.full.load(Ordering::SeqCst) {
+            return Err(db(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+                None,
+            )));
         }
         let mut guard = lock(&self.conn);
         let (out, pending) = {

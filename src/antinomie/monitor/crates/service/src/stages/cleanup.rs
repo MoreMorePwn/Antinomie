@@ -8,7 +8,12 @@
 //! is killed, but only after its `/proc/<pid>/cmdline` and start time still
 //! match the record (the same test recovery uses), and the engine is given
 //! 30 s to notice. Then the recording and the disk layer are waited for
-//! (`layer_s`, 1800 s).
+//! (`layer_s`, 1800 s). While the disk is below its floor that wait ends after
+//! [`LOW_DISK_SETTLE`] with the VM stopped ([`Stopped::Deferred`]): the engine
+//! cannot finish a recording on a full disk, and a lane that waited the whole
+//! `layer_s` for it would hang the job and the daemon's stop (ANT-T0475). The
+//! layer stays pending, so the lane takes no job until the engine has finished
+//! it.
 use super::{LaneStages, StageStop};
 use crate::{
     api::job::Job,
@@ -29,7 +34,15 @@ pub enum Stopped {
     Killed(String),
     /// Stopped but not settled, or the engine refused: the reason.
     Unsettled(String),
+    /// Stopped, but the recording or its disk layer could not be finished
+    /// because the disk is below its floor: the words of the floor.
+    Deferred(String),
 }
+
+/// How long the settle wait goes on while the disk is below its floor.
+pub const LOW_DISK_SETTLE: Duration = Duration::from_secs(60);
+/// How often the floor is looked at during the settle wait.
+const SETTLE_LOOK: Duration = Duration::from_secs(5);
 
 impl<E: Engine> LaneStages<'_, E> {
     /// Stop the lane VM if the engine runs it and wait until the recording is
@@ -69,17 +82,41 @@ impl<E: Engine> LaneStages<'_, E> {
                 Err(other) => return Err(StageStop::Abort(other)),
             }
         }
-        let id = vm.to_owned();
-        match self.waiter.wait_until(
-            "the recording to settle after the stop",
-            Some(SETTLE_WAIT),
-            move |s| settled_after_stop(s, &id),
-        ) {
-            Ok(()) => Ok(Stopped::Settled),
-            Err(WaitError::TimedOut { what }) => {
-                Ok(Stopped::Unsettled(format!("timed out waiting for {what}")))
+        self.settle_recording(vm)
+    }
+
+    /// Wait until the VM is stopped and its recording final (`layer_s`), or
+    /// until the disk has been below its floor for [`LOW_DISK_SETTLE`].
+    fn settle_recording(&mut self, vm: &str) -> Result<Stopped, StageStop> {
+        let what = "the recording to settle after the stop";
+        let deadline = self.waiter.now_ms() + crate::waiter::millis(SETTLE_WAIT);
+        let mut low_since: Option<u64> = None;
+        loop {
+            let left = deadline.saturating_sub(self.waiter.now_ms());
+            let slice = Duration::from_millis(left).min(SETTLE_LOOK);
+            match self
+                .waiter
+                .wait_until(what, Some(slice), |s| settled_after_stop(s, vm))
+            {
+                Ok(()) => return Ok(Stopped::Settled),
+                Err(WaitError::TimedOut { what }) => {
+                    let now = self.waiter.now_ms();
+                    if now >= deadline {
+                        return Ok(Stopped::Unsettled(format!("timed out waiting for {what}")));
+                    }
+                    let Some(words) = self.env.host.low_disk() else {
+                        low_since = None;
+                        continue;
+                    };
+                    let since = *low_since.get_or_insert(now);
+                    if self.waiter.snapshot().state == VmState::Stopped
+                        && now.saturating_sub(since) >= crate::waiter::millis(LOW_DISK_SETTLE)
+                    {
+                        return Ok(Stopped::Deferred(words));
+                    }
+                }
+                Err(other) => return Err(StageStop::Abort(other)),
             }
-            Err(other) => Err(StageStop::Abort(other)),
         }
     }
 

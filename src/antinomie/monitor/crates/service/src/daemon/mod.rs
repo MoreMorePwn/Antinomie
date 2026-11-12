@@ -25,7 +25,7 @@
 //!
 //! | Signal | What happens |
 //! |---|---|
-//! | first `SIGTERM`/`SIGINT` | No new submissions (`unavailable`, reason `service_stopping`); queued jobs stay queued. A job in its lane stages is cancelled for shutdown and goes back to the queue with the attempt not counted (`shutdown = drain`: after `drain_timeout_s`). The host work pool goes on with the jobs it holds (their `analyse`, `report`, `cleanup` items) for up to `shutdown_host_grace_s` (120 s); past that its waits are interrupted and recovery hands those jobs back to the pool on the next start, their items queued in the same order. |
+//! | first `SIGTERM`/`SIGINT` | No new submissions (`unavailable`, reason `service_stopping`); queued jobs stay queued. A job in its lane stages is cancelled for shutdown and goes back to the queue with the attempt not counted (`shutdown = drain`: after `drain_timeout_s`); one still in its lane stages 240 s after that cancel has its waits interrupted, and recovery requeues it on the next start. The host work pool goes on with the jobs it holds (their `analyse`, `report`, `cleanup` items) for up to `shutdown_host_grace_s` (120 s); past that its waits are interrupted and recovery hands those jobs back to the pool on the next start, their items queued in the same order. |
 //! | a second one within 5 s | Every wait is interrupted now; the engine stops the VM; exit 130. Recovery finishes the rest. |
 //! | `SIGHUP` | `policies/` and `service.toml` are read again (the socket stays); a failing reload keeps the old set. Running and queued jobs keep the policy they were frozen with. |
 //! | `SIGUSR1` | The queue's state is written to the log. |
@@ -268,8 +268,18 @@ pub struct Daemon<E: Engine + Send + 'static> {
 pub struct Stopping {
     pub since: Option<Instant>,
     pub cancelled: HashSet<JobId>,
+    /// When the first job in its lane stages was cancelled for shutdown.
+    pub lanes_cancelled_at: Option<Instant>,
     pub interrupted: bool,
 }
+
+/// How long a job cancelled for shutdown may stay in its lane stages: the
+/// `StopRun` grace (120 s) and the VM stop (`stop_s`, 120 s). Past it the
+/// lanes' waits are interrupted, so a lane stuck in a wait (a recording the
+/// engine cannot finish on a full disk, ANT-T0475) cannot hold the daemon
+/// past its unit's `TimeoutStopSec` (360 s); recovery finishes the job on the
+/// next start.
+pub const LANE_SHUTDOWN_GRACE: Duration = Duration::from_secs(240);
 
 /// One step of the shutdown (see the module text). Returns a line for the
 /// log when it did something.
@@ -311,12 +321,27 @@ pub fn shutdown_step(
                     continue;
                 }
                 state.cancelled.insert(job.clone());
+                state.lanes_cancelled_at.get_or_insert(now);
                 lines.push(match service.store.cancel_for_shutdown(job) {
                     Ok(_) => format!(
                         "job={job} is in its lane stages: cancelled for shutdown, it goes back to the queue"
                     ),
                     Err(error) => format!("job={job}: cancel for shutdown: {error}"),
                 });
+            }
+            Phase::Lane(job)
+                if !state.interrupted
+                    && state
+                        .lanes_cancelled_at
+                        .is_some_and(|at| now.duration_since(at) >= LANE_SHUTDOWN_GRACE) =>
+            {
+                state.interrupted = true;
+                service.controls.interrupt();
+                lines.push(format!(
+                    "job={job} did not leave its lane stages within {} s of the stop; its waits are \
+                     interrupted and recovery puts it back in the queue on the next start",
+                    LANE_SHUTDOWN_GRACE.as_secs()
+                ));
             }
             Phase::Host(job) if !state.interrupted => {
                 if now.duration_since(since) < limit {

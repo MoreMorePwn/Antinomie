@@ -7,7 +7,9 @@
 //!   [`phase`](crate::waiter::phase): `Ended` is the end of the stage;
 //!   `FailedToStart` and `LaunchUnconfirmed` are `launch_failed`;
 //!   `Interrupted`, a run that vanished, and a VM that stopped or failed
-//!   under the program are `guest_lost`.
+//!   under the program are `guest_lost`. So is a run the engine `Finalized`
+//!   with the VM before the guest reported the program's end (QEMU killed),
+//!   unless the stage had sent `StopRun` itself.
 //! * At the limit (`run_s`, the spec's `timeout_s`) it sends `StopRun` once:
 //!   SIGTERM, then SIGKILL after the engine's grace. **That is not a failure**:
 //!   the run ends with `end_reason = time_limit`. A run that is still going
@@ -98,7 +100,7 @@ impl<E: Engine> LaneStages<'_, E> {
         let mut dog = Watchdog::new(Stage::Run, begun, None, Some(silence));
         let mut stop_sent_ms: Option<u64> = None;
         let mut limit_stop = false;
-        let mut floor_stop = false;
+        let mut floor_stop: Option<String> = None;
         let mut next_floor_ms = begun + FLOOR_EVERY_MS;
         let mut cancelled = false;
 
@@ -134,6 +136,25 @@ impl<E: Engine> LaneStages<'_, E> {
                         run.recording_error.as_deref(),
                     ));
                 }
+                // A run finalized with no task left after this stage sent
+                // `StopRun` (limit, cancel, disk floor) ended as asked, as
+                // before.
+                Phase::Lost
+                    if stop_sent_ms.is_some()
+                        && run.state == antinomie_monitor_core::RunState::Finalized
+                        && !run.held_open()
+                        && run
+                            .execution
+                            .as_ref()
+                            .is_none_or(|execution| execution.live_task_count == 0) =>
+                {
+                    break run;
+                }
+                Phase::Lost if self.vm_gone(&vm) => {
+                    // The engine finalized the run because QEMU ended (killed,
+                    // crashed): the guest is lost (P2, ANT-T0473).
+                    return Err(self.vm_lost(job));
+                }
                 Phase::Lost => {
                     self.mark_run_lost(job);
                     return Err(fail(
@@ -145,22 +166,8 @@ impl<E: Engine> LaneStages<'_, E> {
                 }
                 Phase::Live => {}
             }
-            let snapshot = self.waiter.snapshot();
-            let vm_gone = snapshot.active_vm.as_deref() != Some(vm.as_str())
-                || matches!(
-                    snapshot.state,
-                    antinomie_monitor_core::VmState::Failed
-                        | antinomie_monitor_core::VmState::Stopped
-                );
-            if vm_gone {
-                let detail = snapshot.last_error.clone();
-                self.mark_run_lost(job);
-                return Err(fail(
-                    FailureCode::GuestLost,
-                    Stage::Run,
-                    "the VM stopped while the program was running",
-                    detail.as_deref(),
-                ));
+            if self.vm_gone(&vm) {
+                return Err(self.vm_lost(job));
             }
             if !cancelled && self.waiter.cancel_requested() {
                 cancelled = true;
@@ -176,7 +183,7 @@ impl<E: Engine> LaneStages<'_, E> {
             if stop_sent_ms.is_none() && now >= next_floor_ms {
                 next_floor_ms = now + FLOOR_EVERY_MS;
                 if let Some(words) = self.env.host.low_disk() {
-                    floor_stop = true;
+                    floor_stop = Some(words.clone());
                     stop_sent_ms = Some(now);
                     self.progress(
                         job,
@@ -231,7 +238,7 @@ impl<E: Engine> LaneStages<'_, E> {
         self.waiter.drain()?;
         self.waiter.discard_results();
 
-        let (reason, exit, signal, core_dumped) = if cancelled || floor_stop {
+        let (reason, exit, signal, core_dumped) = if cancelled || floor_stop.is_some() {
             (EndReason::Stopped, None, None, false)
         } else if limit_stop {
             (EndReason::TimeLimit, None, None, false)
@@ -263,24 +270,62 @@ impl<E: Engine> LaneStages<'_, E> {
             core_dumped,
         };
         self.record_run_end(job, &end)?;
+        if let Some(words) = floor_stop {
+            // The warning made when the floor was hit is lost if the database
+            // was full then; the job's `partial` rests on it.
+            let stored = self
+                .env
+                .store
+                .get(&job.id)
+                .map_err(|e| self.store_error(Stage::Run, e))?;
+            if !stored.warnings.iter().any(|w| w.code == "low_disk") {
+                self.warn(job, "low_disk", &format!("the run was stopped: {words}"));
+            }
+        }
         if cancelled {
             return Err(StageStop::Cancelled);
         }
         Ok(end)
     }
 
-    /// `job.run` gets its end, and the recording leaves `live`.
-    fn record_run_end(&self, job: &Job, end: &RunEnd) -> Result<(), StageStop> {
+    /// The lane VM is no longer the engine's running VM.
+    fn vm_gone(&self, vm: &str) -> bool {
+        let snapshot = self.waiter.snapshot();
+        snapshot.active_vm.as_deref() != Some(vm)
+            || matches!(
+                snapshot.state,
+                antinomie_monitor_core::VmState::Failed | antinomie_monitor_core::VmState::Stopped
+            )
+    }
+
+    /// `guest_lost` for a VM that ended under the program.
+    fn vm_lost(&self, job: &Job) -> StageStop {
+        let detail = self.waiter.snapshot().last_error.clone();
+        self.mark_run_lost(job);
+        fail(
+            FailureCode::GuestLost,
+            Stage::Run,
+            "the VM stopped while the program was running",
+            detail.as_deref(),
+        )
+    }
+
+    /// `job.run` gets its end, and the recording leaves `live`. On a full
+    /// disk this waits for room (the run is over; the job's limit still
+    /// holds), so a run stopped for the disk floor keeps its end.
+    fn record_run_end(&mut self, job: &Job, end: &RunEnd) -> Result<(), StageStop> {
         let now = self.waiter.now_ms();
-        self.patch_run(job, |run| {
-            run.ended_ms = Some(now);
-            run.end_reason = Some(end.reason);
-            run.exit = end.exit;
-            run.signal = end.signal;
-            run.core_dumped = end.core_dumped;
-        })
-        .and_then(|()| self.set_recording_phase(job, RecordingPhase::Finalizing))
-        .map_err(|e| self.store_error(Stage::Run, e))
+        let written = self.until_written(job, "the run's end", |this| {
+            this.patch_run(job, |run| {
+                run.ended_ms = Some(now);
+                run.end_reason = Some(end.reason);
+                run.exit = end.exit;
+                run.signal = end.signal;
+                run.core_dumped = end.core_dumped;
+            })
+            .and_then(|()| this.set_recording_phase(job, RecordingPhase::Finalizing))
+        })?;
+        written.map_err(|e| self.store_error(Stage::Run, e))
     }
 
     /// The program is gone with the guest: say so in the job's run record

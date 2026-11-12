@@ -126,16 +126,24 @@ pub enum Phase {
     Ended,
     /// `FailedToStart` or `LaunchUnconfirmed`.
     LaunchFailed,
-    /// `Interrupted`: the recording ended while the program was going.
+    /// `Interrupted`: the recording ended while the program was going; or
+    /// `Finalized` before the guest reported the end of the program's tree.
     Lost,
 }
 
 /// The phase of a run. A run whose guest reports no execution state (an old
 /// guest) is over when its state says so.
+///
+/// `Finalized` is what the engine writes when the recording ends with the VM
+/// (a stop, or QEMU gone) while the run was still live: unless the guest had
+/// already reported the program's end and no task left, the VM ended under
+/// the program, and the run is `Lost` (design 4.5: a QEMU killed in the run
+/// stage is `guest_lost`, which is retried).
 pub fn phase(run: &RunSummary) -> Phase {
     match run.state {
         RunState::FailedToStart | RunState::LaunchUnconfirmed => Phase::LaunchFailed,
         RunState::Interrupted => Phase::Lost,
+        RunState::Finalized if !ended_before_the_vm(run) => Phase::Lost,
         RunState::Finished | RunState::Stopped | RunState::TerminalClosed | RunState::Finalized => {
             // A run held open for a copy of the program outside its tree
             // (`persisted`) goes on until the copy exits or `StopRun`.
@@ -152,6 +160,15 @@ pub fn phase(run: &RunSummary) -> Phase {
         }
         RunState::Unknown | RunState::Running | RunState::StopRequested => Phase::Live,
     }
+}
+
+/// The guest reported the end of the program and of its whole tree before
+/// the recording was finalized.
+fn ended_before_the_vm(run: &RunSummary) -> bool {
+    run.execution.as_ref().is_some_and(|execution| {
+        (execution.root_exit.is_some() || execution.root_wait_status.is_some())
+            && execution.live_task_count == 0
+    })
 }
 
 /// Which parts of the run's evidence are still being written: the rule of

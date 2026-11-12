@@ -385,6 +385,34 @@ fn a_failure_the_policy_does_not_list_is_final() {
 }
 
 #[test]
+fn a_qemu_killed_in_the_run_stage_is_guest_lost_and_retried() {
+    // T7 qemu-kill (ANT-T0473): the engine finalizes the run when QEMU dies;
+    // attempt 1 must be `guest_lost` and requeued, not a `partial` job.
+    let w = W::new("drive-qemu-killed");
+    let job = w.fx.running(1);
+    let mut waiter = w.engine(|fake| {
+        restore_ok(fake);
+        upload_ok(fake);
+        fake.on("Execute")
+            .after(SECOND)
+            .then(500 * MS, |s| s.runs.push(live_run()))
+            .then(5 * SECOND, super::run_tests::qemu_killed(None))
+            .ok("launched");
+        stop_ok(fake);
+    });
+    let first = drive(&w, &mut waiter, &job);
+    assert!(matches!(first, Driven::Retried { .. }), "{first:?}");
+    assert_eq!(failure_of(&first), FailureCode::GuestLost);
+    let stored = w.job(&job.id);
+    assert_eq!(stored.state, JobState::Queued);
+    assert!(
+        kinds(&w.fx, &job.id).contains(&"job.requeued".to_owned()),
+        "{:?}",
+        kinds(&w.fx, &job.id)
+    );
+}
+
+#[test]
 fn a_sample_that_ends_the_guest_twice_is_final_and_says_so() {
     let w = W::with("drive-crashes-guest", |p| p.retry.max_attempts = 3);
     let job = w.fx.running(1);

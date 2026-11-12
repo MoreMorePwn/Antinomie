@@ -26,9 +26,11 @@ harness started, and the lane's QEMU as service/lanes/lane-1.json records it
                   to below the floor, a job
                   waits queued (waiting_for resources, or queue_paused with
                   the queue paused low_disk) and runs when the space is back; (b) filled to
-                  ENOSPC in the run stage, the job ends partial or failed (it
-                  does not hang), the daemon stays up, and after the space is
-                  freed the next job ends succeeded or partial (host tools).
+                  ENOSPC in the run stage, the queue pauses low_disk (held in
+                  memory when the job store is full too), the job ends partial
+                  or failed once the space is freed (it does not hang), the
+                  daemon stays up, the next job ends succeeded or partial
+                  (host tools), and the daemon exits 0 on SIGTERM.
   guest-panic     A benign program run as root writes `c` to
                   /proc/sysrq-trigger. Expected: each attempt loses the guest
                   (guest_lost), one retry, the job ends failed with
@@ -89,8 +91,8 @@ EXPECTED = {
                  "lane not quarantined",
     "daemon-kill": "recovery ends the recorded QEMU, job.requeued (service_restart); ends succeeded/partial(host "
                    "tools); lane free",
-    "disk-full": "(a) below the floor: queued, waiting_for resources, then runs; (b) ENOSPC mid-run: partial or "
-                 "failed, daemon up; next job succeeded/partial(host tools)",
+    "disk-full": "(a) below the floor: queued, waiting_for resources, then runs; (b) ENOSPC mid-run: queue paused "
+                 "low_disk, then partial or failed, daemon up; next job succeeded/partial(host tools); SIGTERM exit 0",
     "guest-panic": "guest_lost on each attempt, one retry, ends failed guest_lost; lane not quarantined; next job ok",
     "revert-corrupt": "restore retried once, failed revert_failed, lane-1 quarantined revert_failed, the next job "
                       "waits lane_quarantined",
@@ -331,16 +333,37 @@ def disk_full_steps(case, filler):
     written = fill(filler, 0)
     print(f"     filled the quota with {written // av.MIB} MiB, {shutil.disk_usage(filler.parent).free} bytes free",
           flush=True)
-    job = case.wait(job)
-    paused = queue(case)
-    holds &= job.get("state") in ("partial", "failed") and case.daemon.alive()
-    observed.append(f"(b) {describe(job)} warnings {sorted(set(av.warning_codes(job)))}; queue paused "
-                    f"{paused.get('paused')} {paused.get('pause_reason')}")
+    # The floor stops the run within a minute and pauses the queue (low_disk).
+    # The job store may be unable to take the job's end while the disk is
+    # full: the job then waits for room with the queue paused, so the space is
+    # freed once the job is over or the pause is seen.
+    seen = {}
+
+    def over_or_paused(j):
+        if av.is_terminal(j):
+            return True
+        seen.update(queue(case))
+        return seen.get("pause_reason") == "low_disk"
+
+    job = case.wait(job, until=over_or_paused)
+    paused = queue(case) if av.is_terminal(job) else seen
+    holds &= paused.get("pause_reason") == "low_disk" and case.daemon.alive()
+    observed.append(f"(b) full: {job.get('state')} {job.get('stage') or ''}, queue paused {paused.get('paused')} "
+                    f"{paused.get('pause_reason')}")
     filler.unlink()
+    job = case.wait(job)
+    holds &= job.get("state") in ("partial", "failed") and case.daemon.alive()
+    observed.append(f"then {describe(job)} warnings {sorted(set(av.warning_codes(job)))}; end_reason "
+                    f"{(job.get('run') or {}).get('end_reason')}; requeued {[r.get('reason') for r in case.requeues(job)]}")
     job = case.submit(case.program("short-c", SHORT))
     job = case.wait(job)
     holds &= av.outcome_ok(job)[0]
     observed.append(f"after freeing: {describe(job)}")
+    began = time.monotonic()
+    code = case.daemon.stop()
+    took = time.monotonic() - began
+    holds &= code == 0
+    observed.append(f"SIGTERM: exit {code} in {took:.0f} s")
     return holds, "; ".join(observed)
 
 
