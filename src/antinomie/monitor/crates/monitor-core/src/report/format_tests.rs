@@ -472,8 +472,7 @@ fn bh_21_a_stix_id_keeps_its_created_time_in_a_later_export() {
             })
             .collect()
     };
-    let later: std::collections::BTreeMap<String, String> =
-        created(&second).into_iter().collect();
+    let later: std::collections::BTreeMap<String, String> = created(&second).into_iter().collect();
     let changed: Vec<String> = created(&first)
         .into_iter()
         .filter(|(id, at)| later.get(id).is_some_and(|again| again != at))
