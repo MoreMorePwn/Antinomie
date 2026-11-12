@@ -123,6 +123,24 @@ mod tests {
         Cli::try_parse_from(all).unwrap().global
     }
 
+    /// BH-04 (bug hunt 0.9.0): `settings.json`'s capture quota and shutdown
+    /// timeout (`config set quota_gib`, the window's Settings) reach the
+    /// engine options the CLI and the daemon start with.
+    #[test]
+    fn bh_04_the_settings_file_quota_and_shutdown_timeout_reach_the_engine() {
+        let dir = std::env::temp_dir().join(format!("ant-bh04-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut settings = antinomie_monitor_core::settings::EngineSettings::default();
+        settings.quota_gib = 12;
+        settings.shutdown_timeout_s = 45;
+        std::fs::write(dir.join("settings.json"), settings.to_value().to_string()).unwrap();
+        let options = backend_options(&global(&["--data-dir", dir.to_str().unwrap()]), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(options.capture_quota_size, 12 << 30);
+        assert_eq!(options.shutdown_timeout, std::time::Duration::from_secs(45));
+    }
+
     #[test]
     fn flags_select_engine_options_and_the_cli_is_headless_by_default() {
         let home = std::path::Path::new("/home/me");
