@@ -179,6 +179,17 @@ impl PoolState {
         ((ahead_s + own_s) as f64 * factor.max(1.0) * 1000.0).ceil() as u64
     }
 
+    /// [`Self::budget_ms`], but never less than the factor times the work
+    /// ahead plus the sum of the job's own item limits (`own_limits_s`): every
+    /// item may take at least [`crate::stages::timing::MIN_LIMIT`], so with
+    /// small expected times the job's whole budget could be shorter than the
+    /// limit of its first item.
+    pub fn budget_floor_ms(ahead_s: u64, own_s: u64, own_limits_s: u64, factor: f64) -> u64 {
+        let ahead_ms = (ahead_s as f64 * factor.max(1.0) * 1000.0).ceil() as u64;
+        Self::budget_ms(ahead_s, own_s, factor)
+            .max(ahead_ms.saturating_add(own_limits_s.saturating_mul(1000)))
+    }
+
     /// Items waiting to start, and items running.
     pub fn counts(&self) -> (u32, u32) {
         let queued = self
@@ -211,6 +222,14 @@ impl PoolState {
                 continue;
             }
             if job.stop.is_none() && now_ms >= job.deadline_ms {
+                if job.running > 0 {
+                    // Each running item is bounded by its own limit: the
+                    // deadline never cuts one short. The job fails once they
+                    // end, and starts nothing new meanwhile (it keeps its
+                    // place at the head, as a busy job does).
+                    head_seen |= has_queued;
+                    continue;
+                }
                 job.stop = Some(PoolStop::Failed(deadline(&job.job)));
             }
             if let Some(stop) = &job.stop {

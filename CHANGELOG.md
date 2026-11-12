@@ -1026,6 +1026,7 @@ x86 programs by their own table.
 ### Fixed
 
 - **YARA runs in Auto mode.** A job launches without the guest-side static analysis, and YARA waited for that analysis's specimen, so every job got `detection_skipped` ("hash check pending") and the default mapping's "high or critical YARA hit gives `malicious`" never applied. A job's YARA scan (and `antinomie-cli detect` on a saved run without that analysis) now reads the run's sample from the library in its place, with the files the run wrote and the dumps. Runs made in the window are scanned as before.
+- **Host work pool time limits no longer shrink after a few small jobs.** An item's expected time was its recent median once it ran three times, whatever the size of its input, so after three small jobs a large one got their time; and a job's deadline had no floor, so it could be shorter than its first item's 30 s minimum and the job failed `internal` (`watchdog`) during Triage. The expected time is now the larger of the median and the size estimate, a job's deadline is at least the factor times the work ahead plus its own items' limits, and the deadline never stops a job while one of its items is running within its limit. The pool order is unchanged.
 
 ### Guest
 

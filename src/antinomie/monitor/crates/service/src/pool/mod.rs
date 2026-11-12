@@ -199,6 +199,11 @@ impl HostPool {
             .filter(|v| v.state == HostItemState::Queued)
             .map(|v| v.expected_s)
             .sum();
+        let own_limits: u64 = views
+            .iter()
+            .filter(|v| v.state == HostItemState::Queued)
+            .map(|v| v.limit_s)
+            .sum();
         let now = self.env.clock.now_ms();
         let key = PoolState::key(&job);
         let view_copy = views.clone();
@@ -206,7 +211,7 @@ impl HostPool {
             let _order = lock(&self.persist);
             let mut state = lock(&self.state);
             let ahead = state.ahead_s(&key);
-            let budget = PoolState::budget_ms(ahead, own, self.env.timing.factor);
+            let budget = PoolState::budget_floor_ms(ahead, own, own_limits, self.env.timing.factor);
             let id = job.id.clone();
             state.jobs.insert(
                 key,

@@ -69,15 +69,19 @@ mapping therefore applies to jobs too.
   item never goes ahead of a heavy one.
 * **Memory.** An item starts only with at least 2048 MiB of `MemAvailable`;
   below it the head waits (`auto status` says so) and starts when there is room.
-* **Time limits.** Each item has an expected time: its median over the last runs
-  on this host (once it ran three times), else an estimate from the size of the
-  sample (static tools) or of the recording (the others), else the stage's fixed
-  limit. It may take `[daemon] host_time_factor` (2) times that. A policy that
+* **Time limits.** Each item has an expected time: an estimate from the size of
+  the sample (static tools) or of the recording (the others), or its median over
+  the last runs on this host (once it ran three times) when that is larger, else
+  the stage's fixed limit. A median never lowers the estimate, so a few small
+  jobs do not shrink the limits of a large one. It may take
+  `[daemon] host_time_factor` (2) times that, and at least 30 seconds. A policy that
   sets `analysis.static_time_limit_min` gives every static tool that fixed limit
   instead. Time spent waiting in the queue, for memory or for the engine to take
   a static analysis does not count. A job's host stages as a whole may take the
-  factor times the expected work ahead of it when it arrived plus its own; past
-  that the job fails `internal` (`watchdog`).
+  factor times the expected work ahead of it when it arrived plus its own, and
+  never less than the factor times the work ahead plus the sum of its own items'
+  limits; past that the job fails `internal` (`watchdog`). A running item is not
+  cut short by this deadline: the job fails when it ends.
 * **What you see.** `auto status <job>` lists each item with its state
   (`queued`, `running`, `done`, `failed`, `timed_out`, `skipped`), expected time
   and limit; the job's `host_work` member carries the same. `auto status` shows

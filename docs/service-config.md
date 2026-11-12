@@ -63,7 +63,7 @@ runs while a window or the daemon owns the data directory.
 |---|---|---|
 | `[daemon] socket` | `<data>/run/antinomie.sock` | The local socket (at most 107 bytes). Its folder must be the daemon user's own with mode 0700; the socket is 0600. Not changed by a reload |
 | `[daemon] host_workers` | 2 | How many host work items (a static tool, the Triage scan, the detection engines, the assessment, a report) run at once, across every job: the host work pool. 1 to 8 |
-| `[daemon] host_time_factor` | 2 | A host work item may take this many times its expected time (its recent median on this host, else an estimate from the sample or recording size, else the stage's fixed limit); a job's host stages may take this many times the expected work ahead of it plus its own. 1 to 20 |
+| `[daemon] host_time_factor` | 2 | A host work item may take this many times its expected time (the larger of its recent median on this host and an estimate from the sample or recording size, else the stage's fixed limit), at least 30 s; a job's host stages may take this many times the expected work ahead of it plus its own, and never less than this many times the work ahead plus its own items' limits. 1 to 20 |
 | `[daemon] lanes` | 1 | How many lanes (engines, each with its own lane VM) the daemon runs: 1 to 4. See [Several lanes](#several-lanes). Not changed by a reload |
 | `[daemon] shutdown` | `cancel` | On the first `SIGTERM`/`SIGINT`: `cancel` sends a job in its lane stages back to the queue (attempt not counted); `drain` lets it run on for up to `drain_timeout_s` first |
 | `[daemon] drain_timeout_s` | 600 | See `shutdown = drain` |

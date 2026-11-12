@@ -315,8 +315,8 @@ pub struct HostItem {
     /// Names of the items it waits for.
     #[serde(default)]
     pub after: Vec<String>,
-    /// The expected time (seconds): this host's recent median of the item,
-    /// else an estimate from the input size, else the fixed limit.
+    /// The expected time (seconds): the larger of this host's recent median
+    /// of the item and an estimate from the input size, else the fixed limit.
     pub expected_s: u64,
     /// Where `expected_s` came from: `median`, `estimate`, `fixed` or
     /// `policy` (a fixed limit the policy or the job set).
