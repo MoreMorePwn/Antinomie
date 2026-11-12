@@ -487,6 +487,56 @@ fn a_missing_lane_or_vm_fails_and_a_changed_snapshot_quarantines() {
     );
 }
 
+/// ANT-T0474 (P3): a daemon that just started took the requeued job before
+/// its engine had listed the lane VM's snapshots. `prechecks` asks for the
+/// list and checks against it; without a list the job waits, and the lane
+/// is not quarantined.
+#[test]
+fn prechecks_wait_for_the_engine_to_list_the_lane_vms_snapshots() {
+    let w = W::new("pre-tree");
+    let job = w.fx.running(1);
+    let unlisted = |s: &mut Snapshot| {
+        healthy(s);
+        s.vm_snapshot_trees.clear();
+    };
+    // The list comes with the refresh: the job goes on.
+    let mut waiter = w.engine(|fake| {
+        fake.start_with(unlisted);
+        fake.on("RefreshVmSnapshots")
+            .then(100 * MS, healthy)
+            .after(150 * MS)
+            .ok("Snapshots refreshed");
+    });
+    assert!(w.stages(&mut waiter).prechecks(&job).is_ok());
+    assert_eq!(waiter.engine_mut().sent_names(), ["RefreshVmSnapshots"]);
+    // No list at all: the job waits for the lane.
+    let mut waiter = w.engine(|fake| {
+        fake.start_with(unlisted);
+        fake.on("RefreshVmSnapshots").fail("the engine is busy");
+    });
+    match w.stages(&mut waiter).prechecks(&job).unwrap_err() {
+        StageStop::Wait {
+            waiting_for,
+            detail,
+        } => {
+            assert_eq!(waiting_for, WaitingFor::Lane);
+            assert!(detail.contains("has not listed the snapshots"), "{detail}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!w.lane_file().is_quarantined());
+    // A listed tree without the clean snapshot still fails at once.
+    let mut changed = w.engine(|fake| {
+        fake.start_with(|s| {
+            healthy(s);
+            s.vm_snapshot_trees.get_mut(VM).unwrap().nodes[0].id = "by-hand".into();
+        });
+    });
+    let stop = w.stages(&mut changed).prechecks(&job).unwrap_err();
+    assert_eq!(code(&stop), FailureCode::LaneChanged);
+    assert!(changed.engine_mut().sent_names().is_empty());
+}
+
 #[test]
 fn a_pending_layer_does_not_stop_prechecks_provision_waits_for_it() {
     let w = W::new("pre-layer");
