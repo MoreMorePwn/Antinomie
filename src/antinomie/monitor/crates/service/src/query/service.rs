@@ -112,6 +112,12 @@ impl QueryService {
         }
     }
 
+    /// The limits this service runs with (`service.toml [query]`), as
+    /// `capabilities.queries.limits` reports them (BH-31).
+    pub fn limits(&self) -> super::catalogue::QueryLimits {
+        self.settings.limits.clone()
+    }
+
     /// The engine's own `Snapshot.disk_layers`: it wins over the marker.
     pub fn with_layers(mut self, layers: Arc<dyn LayerSource>) -> Self {
         self.layers = Some(layers);

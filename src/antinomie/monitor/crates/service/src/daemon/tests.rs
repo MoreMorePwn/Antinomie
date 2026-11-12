@@ -374,6 +374,11 @@ fn the_queue_pauses_and_resumes_and_capabilities_follow_the_policies() {
 
     let caps = call(&svc, "capabilities", json!({})).unwrap();
     assert_eq!(caps["api_version"], 1);
+    // The limits the query service runs with (BH-31).
+    assert_eq!(
+        caps["queries"]["limits"],
+        serde_json::to_value(svc.service.query.limits()).unwrap()
+    );
     assert_eq!(caps["lanes"], 1);
     assert_eq!(caps["accept_types"], json!(["sh", "elf"]));
     assert_eq!(caps["routes"], json!(["drop", "inet_sim"]));

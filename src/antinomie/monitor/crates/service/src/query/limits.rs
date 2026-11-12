@@ -98,6 +98,14 @@ mod tests {
         // The pools take their sizes from it.
         let pool = crate::query::pool::ReadPool::new(&settings);
         assert_eq!(pool.in_flight(), (0, 0));
+        // BH-31: `capabilities.queries.limits` is the service's, not the
+        // defaults.
+        let service = crate::query::QueryService::with_settings(
+            antinomie_monitor_core::BackendOptions::default(),
+            settings.clone(),
+        );
+        assert_eq!(service.limits(), settings.limits);
+        assert_eq!(service.limits().light_concurrency, 3);
         // No file: the contract's defaults, and the lookup `off` of the design.
         let (config, _) = parse_service("service.toml", "");
         let settings = QuerySettings::from_config(&config.unwrap());

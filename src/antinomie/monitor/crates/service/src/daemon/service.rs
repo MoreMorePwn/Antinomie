@@ -436,7 +436,7 @@ impl Service {
                 })
                 .collect(),
             accelerator: self.accelerator,
-            queries: crate::query::ops::catalogue(Default::default()),
+            queries: crate::query::ops::catalogue(self.query.limits()),
             features: vec![
                 "upload.chunked".into(),
                 "events.resume".into(),

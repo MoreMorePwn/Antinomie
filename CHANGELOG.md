@@ -1046,6 +1046,7 @@ x86 programs by their own table.
 - **A job resumed at `analyse` lists each report file once.** A job resumed after a daemon stop or crash wrote its report again under the same names and added a second set of artifact rows; the first rows kept the old hash, so `artifact.get` of their ids served the new file under a hash it did not have. Writing an artifact at the same place now replaces its row.
 - **One failed copy of the program for sandboxed workers no longer stops every later analysis.** When the program file was replaced while it ran (an upgrade), the copy it makes for its workers was taken once and its failure (a full `/tmp`) kept, so every later static analysis, detection scan and property read failed until a restart. A failed copy is now tried again, and copies left by processes that have ended are removed at the first worker start of every process, not only by one whose own program was replaced.
 - **An event subscription may filter on `job.trigger`.** `{"op":"subscribe","types":["job.trigger"]}` was refused with `invalid_argument`; an unfiltered subscription received it.
+- **`capabilities.queries.limits` reports the `[query]` settings in force.** It reported the defaults, so a client sizing its read concurrency from it used the wrong numbers when `service.toml` set them.
 
 ### Guest
 
