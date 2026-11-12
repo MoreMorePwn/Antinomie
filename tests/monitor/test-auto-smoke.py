@@ -128,7 +128,8 @@ def main(argv=None):
             checks.check(info.get("snapshot_name") == "auto-clean" and info.get("base_identity") == base["id"],
                          f"auto init --lane {number}: {info.get('vm_name')} and its clean snapshot "
                          f"in {time.monotonic() - start:.0f} s (first boot {info.get('boot_ms')} ms)")
-        (work.data / "service.toml").write_text(av.service_toml(lanes=args.lanes, require_kvm=accel == "kvm"))
+        (work.data / "service.toml").write_text(av.service_toml(lanes=args.lanes, require_kvm=accel == "kvm",
+                                                                    socket=work.socket_override()))
         code, _, err = cli.run("config", "validate", timeout=300)
         checks.check(code == 0, "config validate exit 0" + ("" if code == 0 else f": {err.strip()[-300:]}"))
         status = daemon.start("smoke", args.mem_gate_mb)

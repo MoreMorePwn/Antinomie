@@ -153,6 +153,26 @@ class TomlTests(unittest.TestCase):
                                                retention={"recordings_days": 1, "max_recordings_gib": 2}))
         self.assertEqual(parsed, {"daemon": {"lanes": 2}, "resources": {"require_kvm": False, "min_free_disk_gib": 1},
                                   "retention": {"recordings_days": 1, "max_recordings_gib": 2}})
+        self.assertEqual(tomllib.loads(av.service_toml(socket=Path("/tmp/x/antinomie.sock")))["daemon"]["socket"],
+                         "/tmp/x/antinomie.sock")
+
+    def test_a_long_data_path_gets_a_short_private_socket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            short = av.Work(Path(tmp) / "w").prepare()
+            self.assertIsNone(short.socket_override())
+            self.assertEqual(short.socket_path(), short.data / "run" / "antinomie.sock")
+            deep = av.Work(Path(tmp) / ("d" * 120)).prepare()
+            socket = deep.socket_override()
+            try:
+                self.assertLessEqual(len(os.fsencode(str(socket))), av.SOCKET_PATH_MAX)
+                self.assertEqual(socket, deep.socket_override())
+                self.assertEqual(deep.socket_path(), socket)
+                self.assertEqual(os.stat(socket.parent).st_mode & 0o777, 0o700)
+                av.cleanup(deep, say=lambda _: None)
+                self.assertFalse(socket.parent.exists())
+            finally:
+                if socket.parent.is_dir():
+                    socket.parent.rmdir()
 
 
 class JobCheckTests(unittest.TestCase):

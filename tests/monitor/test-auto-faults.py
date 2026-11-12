@@ -190,7 +190,8 @@ class Case:
         av.install_base(self.cli, self.work.copy_base(self.args.base))
         self.lane = av.init_lane(self.cli, self.args, 1, factor=self.factor)
         (self.work.data / "service.toml").write_text(
-            av.service_toml(lanes=1, require_kvm=self.accel == "kvm", min_free_disk_gib=min_free_disk_gib))
+            av.service_toml(lanes=1, require_kvm=self.accel == "kvm", min_free_disk_gib=min_free_disk_gib,
+                            socket=self.work.socket_override()))
         av.edit_policy(self.work, "t7", POLICY)
         code, _, err = self.cli.run("config", "validate", timeout=300)
         if code != 0:

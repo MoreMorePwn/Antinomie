@@ -205,7 +205,8 @@ def main(argv=None):
     try:
         av.install_base(cli, base_copy)
         lane = av.init_lane(cli, args, 1, factor=factor)
-        (work.data / "service.toml").write_text(av.service_toml(lanes=1, require_kvm=accel == "kvm"))
+        (work.data / "service.toml").write_text(av.service_toml(lanes=1, require_kvm=accel == "kvm",
+                                                                    socket=work.socket_override()))
         for mode in args.revert:
             original = None
             try:
