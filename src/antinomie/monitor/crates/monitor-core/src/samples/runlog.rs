@@ -16,7 +16,7 @@
 //! queued.
 use super::{
     Library, Push, SampleRef, SeenRun,
-    actor::{self, ANALYST},
+    actor::{ANALYST, APP},
     chain::ChainedEvents,
     custody::{ActionKind, CustodyEvent, CustodySink},
     library::{DATABASE, now_ms},
@@ -150,13 +150,14 @@ fn retry(what: &str, mut attempt: impl FnMut() -> Result<(), String>) {
 
 /// Record that a sample was sent into a VM, now, without waiting for the
 /// database: written in order with the run entries that follow it, and
-/// retried like them when the database is busy.
-pub fn record_push_later(data_dir: &Path, sha256: &str, push: Push) {
+/// retried like them when the database is busy. `by` is the actor of the
+/// custody entry (the engine's, [`super::actor::ActorSlot`]).
+pub fn record_push_later(data_dir: &Path, sha256: &str, push: Push, by: &str) {
     let push = Push {
         at_ms: now_ms(),
         ..push
     };
-    let by = actor::current();
+    let by = by.to_owned();
     let Some(queue) = queue() else {
         write_push(data_dir, sha256, push, &by);
         return;
@@ -181,7 +182,7 @@ pub fn settle_custody() {
 }
 
 pub struct RunLog {
-    /// Who the program's own entries name ([`actor::current`] when the run
+    /// Who the program's own entries name (the engine's actor when the run
     /// started).
     app: String,
     data_dir: PathBuf,
@@ -194,8 +195,9 @@ pub struct RunLog {
 }
 
 impl RunLog {
+    /// A run log whose program entries name `app`.
     pub fn new(data_dir: &Path, sample: &SampleRef, run: &str, vm: &str) -> Self {
-        Self::with_actor(data_dir, sample, run, vm, &actor::current())
+        Self::with_actor(data_dir, sample, run, vm, APP)
     }
 
     /// A run log whose program entries (start, end) name `app` as their

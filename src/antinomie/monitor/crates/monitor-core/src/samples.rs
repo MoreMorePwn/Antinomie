@@ -1139,6 +1139,7 @@ mod tests {
                 path: "/tmp/later".into(),
                 at_ms: 0,
             },
+            "app",
         );
         settle_custody();
         let found = stored(&root);
@@ -1146,7 +1147,7 @@ mod tests {
         assert_eq!(found[0].pushes[0].path, "/tmp/later");
         assert!(found[0].pushes[0].at_ms >= before);
         // An unknown sample is dropped, like a custody entry the database refuses.
-        record_push_later(&root, &"0".repeat(64), Push::default());
+        record_push_later(&root, &"0".repeat(64), Push::default(), "app");
         settle_custody();
         assert_eq!(stored(&root)[0].pushes.len(), 1);
         fs::remove_dir_all(root).unwrap();

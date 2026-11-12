@@ -353,7 +353,9 @@ impl Worker {
         )
         .map_err(|e| format!("upload {}: {e}", source.display()))?;
         let note = arch_note(&self.snapshot, &bytes, executable);
-        let mut library = crate::samples::Library::open(&self.options.data_dir)?;
+        let actor = self.custody_actor.get();
+        let mut library =
+            crate::samples::Library::open(&self.options.data_dir)?.with_actor(&actor)?;
         let sha256 = library
             .add_bytes(
                 &bytes,
@@ -393,6 +395,7 @@ impl Worker {
                 path: destination.clone(),
                 at_ms: 0,
             },
+            &self.custody_actor.get(),
         );
         Ok(message)
     }
@@ -436,6 +439,7 @@ impl Worker {
                 path: destination.clone(),
                 at_ms: 0,
             },
+            &self.custody_actor.get(),
         );
         Ok(message)
     }

@@ -307,8 +307,11 @@ an attempt) and repairs the mirror files.
 ## Custody actors
 
 Every custody entry names who caused it: `app` and `analyst` in the window,
-`auto:policy-<name>`, `web:<user>` or `local:<uid>` in headless mode. Entries of
-kind `automation` record the job, policy digest, route and submitter. The
+`auto:policy-<name>`, `web:<user>` or `local:<uid>` in headless mode. A job's
+entries (`added`, `sent`, `run_started`, `run_ended`, `automation`) name its
+caller, on every lane at once; the tags the service sets name
+`auto:policy-<name>`. Entries of kind `automation` record the job, policy
+digest, route and submitter. The
 bundled `verify-custody.py` accepts them.
 
 ## Privacy, query and log

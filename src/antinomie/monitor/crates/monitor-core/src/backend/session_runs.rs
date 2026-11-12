@@ -6,14 +6,22 @@ const MAX_RETIRED_FLUSH_STEPS: usize = 64;
 
 impl Session {
     /// A run of a library sample starts its custody log entry: where it runs
-    /// and under what, taken from the environment saved with the run.
+    /// and under what, taken from the environment saved with the run. `actor`
+    /// is the engine's custody actor: the caller that caused the run.
     pub(super) fn custody_start(
         &self,
         data_dir: &std::path::Path,
         sample: &crate::samples::SampleRef,
         run: &mut ProgramRun,
+        actor: &str,
     ) {
-        let log = crate::samples::RunLog::new(data_dir, sample, &run.summary.id, &self.vm.name);
+        let log = crate::samples::RunLog::with_actor(
+            data_dir,
+            sample,
+            &run.summary.id,
+            &self.vm.name,
+            actor,
+        );
         let environment = run.summary.environment.clone().unwrap_or_default();
         log.started(format!(
             "base {}, device profile {}, network {}, {}",

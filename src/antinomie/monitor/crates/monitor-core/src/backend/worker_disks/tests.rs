@@ -227,6 +227,7 @@ fn blank_worker(root: PathBuf) -> Worker {
         debug: super::super::debug_service::DebugService::new().0,
         wake: None,
         boot_wait_state: Default::default(),
+        custody_actor: Default::default(),
     }
 }
 

@@ -63,6 +63,14 @@ pub enum Driven {
 impl<E: Engine> LaneStages<'_, E> {
     /// Run the job through the lane and end or requeue it.
     pub fn drive(&mut self, job: &Job) -> Driven {
+        let driven = self.drive_job(job);
+        // `launch_cycle` named the job's caller as the engine's custody
+        // actor; the lane's next work is not this job's.
+        let _ = self.waiter.engine_mut().set_custody_actor(None);
+        driven
+    }
+
+    fn drive_job(&mut self, job: &Job) -> Driven {
         match self.arm(job) {
             Ok(()) => {}
             Err(stop) => return self.settle(job, Err(stop)),

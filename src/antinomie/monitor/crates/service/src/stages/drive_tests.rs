@@ -167,6 +167,76 @@ fn a_job_runs_from_prechecks_to_collect_and_the_lane_is_free() {
     assert!(!waiter.cancel_requested(), "the hooks were taken off");
 }
 
+/// The custody actor the engine had for each command that writes custody.
+fn custody_actors(waiter: &mut Waiter<FakeEngine>) -> Vec<(String, Option<String>)> {
+    waiter
+        .engine_mut()
+        .sent()
+        .into_iter()
+        .filter(|sent| sent.name == "UploadSample" || sent.name == "Execute")
+        .map(|sent| (sent.name, sent.actor))
+        .collect()
+}
+
+#[test]
+fn bh_29_the_engine_names_the_jobs_caller_while_it_sends_and_launches() {
+    // Two lanes, one engine each, jobs of two callers: each engine writes
+    // its own job's caller into the push record and the run log, and lets it
+    // go when the job leaves the lane.
+    let first = W::new("custody-actor-a");
+    let second = W::new("custody-actor-b");
+    let job_a = first.fx.running(1);
+    let job_b = {
+        let submitted = second
+            .fx
+            .submit_as(
+                &crate::store::tests::caller(2000),
+                crate::store::tests::spec(1),
+            )
+            .unwrap();
+        let claimed = claim(&second).unwrap();
+        assert_eq!(claimed.id, submitted.job.id);
+        claimed
+    };
+    let mut lane_a = first.engine(|fake| attempt(fake, 6));
+    let mut lane_b = second.engine(|fake| attempt(fake, 6));
+    first.stages(&mut lane_a).run_to_launch(&job_a).unwrap();
+    second.stages(&mut lane_b).run_to_launch(&job_b).unwrap();
+    let a = Some("local:1000".to_owned());
+    let b = Some("local:2000".to_owned());
+    assert_eq!(
+        custody_actors(&mut lane_a),
+        [
+            ("UploadSample".to_owned(), a.clone()),
+            ("UploadSample".to_owned(), a.clone()),
+            ("Execute".to_owned(), a.clone()),
+        ]
+    );
+    assert_eq!(
+        custody_actors(&mut lane_b),
+        [
+            ("UploadSample".to_owned(), b.clone()),
+            ("UploadSample".to_owned(), b.clone()),
+            ("Execute".to_owned(), b),
+        ]
+    );
+    assert_eq!(lane_a.engine_mut().custody_actor(), a.as_deref());
+
+    // A whole job through `drive`: the actor is gone once the lane let go.
+    let w = W::new("custody-actor-drive");
+    let job = w.fx.running(1);
+    let mut waiter = w.engine(|fake| attempt(fake, 6));
+    let Driven::Collected(_) = drive(&w, &mut waiter, &job) else {
+        panic!("collected");
+    };
+    assert!(
+        custody_actors(&mut waiter)
+            .iter()
+            .all(|(_, actor)| actor.as_deref() == Some("local:1000"))
+    );
+    assert_eq!(waiter.engine_mut().custody_actor(), None);
+}
+
 #[test]
 fn the_run_limit_is_not_a_failure_for_the_job() {
     let w = W::with("drive-limit", |p| p.run.timeout_s = 20);

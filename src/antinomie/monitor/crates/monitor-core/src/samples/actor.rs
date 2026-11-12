@@ -8,10 +8,12 @@
 //! 4.11, card P3-7).
 //!
 //! Entries are written by library calls (which take the actor explicitly) and
-//! by the engine's own threads (the run log, the push record), which cannot be
-//! handed one per call. For those the process has one *current actor*. It is
-//! `app` until a front end sets another. One lane runs one job at a time
-//! (decided D4), so one slot is enough.
+//! by an engine's own thread (the run log, the push record), which cannot be
+//! handed one per call. For those each engine has its own [`ActorSlot`]
+//! (`Backend::set_custody_actor`): `app` until its front end sets another. A
+//! daemon runs one engine per lane and each lane one job at a time (decided
+//! D4), so the slot of a lane's engine names that lane's job, whatever the
+//! other lanes run. There is no process-wide actor.
 
 use std::sync::RwLock;
 
@@ -43,7 +45,7 @@ pub fn is_valid(actor: &str) -> bool {
     rest("auto:policy-").is_some() || rest("web:").is_some()
 }
 
-/// A slot holding the current actor.
+/// A slot holding the current actor of one engine.
 pub struct ActorSlot(RwLock<Option<String>>);
 
 impl ActorSlot {
@@ -63,6 +65,7 @@ impl ActorSlot {
         Ok(())
     }
 
+    /// The actor set, or `app`.
     pub fn get(&self) -> String {
         self.0
             .read()
@@ -76,19 +79,6 @@ impl Default for ActorSlot {
     fn default() -> Self {
         Self::new()
     }
-}
-
-static CURRENT: ActorSlot = ActorSlot::new();
-
-/// Set the actor of this process's own custody entries (the run log, the push
-/// record, library calls that take no actor). `None` restores `app`.
-pub fn set_current(actor: Option<&str>) -> Result<(), String> {
-    CURRENT.set(actor)
-}
-
-/// The actor of this process's own custody entries.
-pub fn current() -> String {
-    CURRENT.get()
 }
 
 #[cfg(test)]

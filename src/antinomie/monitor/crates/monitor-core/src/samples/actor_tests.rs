@@ -121,6 +121,33 @@ fn a_run_log_names_the_caller_for_the_program_and_the_analyst_for_the_person() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn a_push_record_names_the_actor_it_is_given() {
+    // BH-29: the engine hands its own actor to the push record; two engines
+    // (two lanes) write under their own jobs' actors, with no process slot.
+    let (root, mut library) = setup("push");
+    let sha = library.add_bytes(b"data", sample("d")).unwrap().sha256;
+    let push = |path: &str| Push {
+        vm_id: "v".into(),
+        vm_name: "vm".into(),
+        path: path.into(),
+        at_ms: 0,
+    };
+    record_push_later(&root, &sha, push("/tmp/a"), "local:1000");
+    record_push_later(&root, &sha, push("/tmp/b"), "auto:policy-ci");
+    let lanes = [actor::ActorSlot::new(), actor::ActorSlot::new()];
+    lanes[0].set(Some("web:alice")).unwrap();
+    record_push_later(&root, &sha, push("/tmp/c"), &lanes[0].get());
+    record_push_later(&root, &sha, push("/tmp/d"), &lanes[1].get());
+    let by: Vec<_> = entries(&library, &sha)
+        .into_iter()
+        .skip(1)
+        .map(|e| e.1)
+        .collect();
+    assert_eq!(by, ["local:1000", "auto:policy-ci", "web:alice", "app"]);
+    let _ = fs::remove_dir_all(root);
+}
+
 fn automation() -> CustodyEvent {
     CustodyEvent::Automation {
         job: "j_0123456789ABCDEFGHJKMNPQRS".into(),

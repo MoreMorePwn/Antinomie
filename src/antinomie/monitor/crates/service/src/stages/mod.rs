@@ -302,6 +302,11 @@ impl<E: Engine> LaneStages<'_, E> {
     /// [`run_to_launch`](Self::run_to_launch), keeping what `prechecks` settled
     /// for the stages after `launch`.
     pub(crate) fn launch_cycle(&mut self, job: &Job) -> Result<(Prepared, Launched), StageStop> {
+        // The engine names the job's caller in the custody entries it writes
+        // itself (sent into the guest, run started, run ended). It is the
+        // lane's own engine, so each lane names its own job (BH-29).
+        let actor = crate::custody::actor_of(job);
+        let _ = self.waiter.engine_mut().set_custody_actor(Some(&actor));
         let store = self.env.store;
         let now = self.waiter.now_ms();
         let prepared = self.stage(job, Stage::Prechecks, false, |this| this.prechecks(job))?;
