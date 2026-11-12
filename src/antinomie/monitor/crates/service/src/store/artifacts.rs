@@ -32,13 +32,22 @@ pub struct NewArtifact {
 }
 
 impl Store {
-    /// Record an artifact of a running job and send `job.artifact`.
+    /// Record an artifact of a running job and send `job.artifact`. A row of
+    /// the job at the same `location` is replaced: its file was written over
+    /// (a job resumed at `analyse` writes its report again under the same
+    /// names), so its hash and size no longer hold (BH-22).
     pub fn add_artifact(&self, id: &JobId, new: NewArtifact) -> R<Artifact> {
         self.write(|tx| {
             let cur = current(tx, id)?;
             if !matches!(cur.state, JobState::Running | JobState::Cancelling) {
                 return Err(conflict(id, cur.state, "take an artifact"));
             }
+            tx.tx
+                .execute(
+                    "DELETE FROM artifacts WHERE job_id = ?1 AND location = ?2",
+                    rusqlite::params![id.as_str(), new.location],
+                )
+                .map_err(db)?;
             let artifact_id = new_artifact_id(tx.now);
             tx.tx
                 .execute(
