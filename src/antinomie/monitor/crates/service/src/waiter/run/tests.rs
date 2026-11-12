@@ -744,9 +744,25 @@ fn an_interrupted_run_is_guest_lost() {
 fn a_run_with_live_tasks_is_not_over_even_when_its_state_says_finished() {
     assert_eq!(phase(&run_summary("r", "Finished", 2)), Phase::Live);
     assert_eq!(phase(&run_summary("r", "Finished", 0)), Phase::Ended);
-    for state in ["Finished", "Stopped", "TerminalClosed", "Finalized"] {
+    for state in ["Finished", "Stopped", "TerminalClosed"] {
         assert_eq!(phase(&run_summary("r", state, 0)), Phase::Ended, "{state}");
     }
+    // `Finalized` is the engine closing the recording with the VM: over only
+    // when the guest had reported the program's end and no task left
+    // (ANT-T0473, a killed QEMU).
+    assert_eq!(phase(&run_summary("r", "Finalized", 0)), Phase::Lost);
+    let mut finalized_gone = run_summary("r", "Finalized", 0);
+    finalized_gone.execution = None;
+    assert_eq!(phase(&finalized_gone), Phase::Lost);
+    let mut finalized_exited = run_summary("r", "Finalized", 0);
+    if let Some(execution) = finalized_exited.execution.as_mut() {
+        execution.root_exit = Some(antinomie_monitor_core::WaitStatus::Exited { code: 0 });
+    }
+    assert_eq!(phase(&finalized_exited), Phase::Ended);
+    if let Some(execution) = finalized_exited.execution.as_mut() {
+        execution.live_task_count = 1;
+    }
+    assert_eq!(phase(&finalized_exited), Phase::Lost);
     for state in ["Unknown", "Running", "StopRequested"] {
         assert_eq!(phase(&run_summary("r", state, 0)), Phase::Live, "{state}");
     }

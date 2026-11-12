@@ -7,7 +7,9 @@
 //!   [`phase`](crate::waiter::phase): `Ended` is the end of the stage;
 //!   `FailedToStart` and `LaunchUnconfirmed` are `launch_failed`;
 //!   `Interrupted`, a run that vanished, and a VM that stopped or failed
-//!   under the program are `guest_lost`.
+//!   under the program are `guest_lost`. So is a run the engine `Finalized`
+//!   with the VM before the guest reported the program's end (QEMU killed),
+//!   unless the stage had sent `StopRun` itself.
 //! * At the limit (`run_s`, the spec's `timeout_s`) it sends `StopRun` once:
 //!   SIGTERM, then SIGKILL after the engine's grace. **That is not a failure**:
 //!   the run ends with `end_reason = time_limit`. A run that is still going
@@ -134,6 +136,25 @@ impl<E: Engine> LaneStages<'_, E> {
                         run.recording_error.as_deref(),
                     ));
                 }
+                // A run finalized with no task left after this stage sent
+                // `StopRun` (limit, cancel, disk floor) ended as asked, as
+                // before.
+                Phase::Lost
+                    if stop_sent_ms.is_some()
+                        && run.state == antinomie_monitor_core::RunState::Finalized
+                        && !run.held_open()
+                        && run
+                            .execution
+                            .as_ref()
+                            .is_none_or(|execution| execution.live_task_count == 0) =>
+                {
+                    break run;
+                }
+                Phase::Lost if self.vm_gone(&vm) => {
+                    // The engine finalized the run because QEMU ended (killed,
+                    // crashed): the guest is lost (P2, ANT-T0473).
+                    return Err(self.vm_lost(job));
+                }
                 Phase::Lost => {
                     self.mark_run_lost(job);
                     return Err(fail(
@@ -145,22 +166,8 @@ impl<E: Engine> LaneStages<'_, E> {
                 }
                 Phase::Live => {}
             }
-            let snapshot = self.waiter.snapshot();
-            let vm_gone = snapshot.active_vm.as_deref() != Some(vm.as_str())
-                || matches!(
-                    snapshot.state,
-                    antinomie_monitor_core::VmState::Failed
-                        | antinomie_monitor_core::VmState::Stopped
-                );
-            if vm_gone {
-                let detail = snapshot.last_error.clone();
-                self.mark_run_lost(job);
-                return Err(fail(
-                    FailureCode::GuestLost,
-                    Stage::Run,
-                    "the VM stopped while the program was running",
-                    detail.as_deref(),
-                ));
+            if self.vm_gone(&vm) {
+                return Err(self.vm_lost(job));
             }
             if !cancelled && self.waiter.cancel_requested() {
                 cancelled = true;
@@ -267,6 +274,28 @@ impl<E: Engine> LaneStages<'_, E> {
             return Err(StageStop::Cancelled);
         }
         Ok(end)
+    }
+
+    /// The lane VM is no longer the engine's running VM.
+    fn vm_gone(&self, vm: &str) -> bool {
+        let snapshot = self.waiter.snapshot();
+        snapshot.active_vm.as_deref() != Some(vm)
+            || matches!(
+                snapshot.state,
+                antinomie_monitor_core::VmState::Failed | antinomie_monitor_core::VmState::Stopped
+            )
+    }
+
+    /// `guest_lost` for a VM that ended under the program.
+    fn vm_lost(&self, job: &Job) -> StageStop {
+        let detail = self.waiter.snapshot().last_error.clone();
+        self.mark_run_lost(job);
+        fail(
+            FailureCode::GuestLost,
+            Stage::Run,
+            "the VM stopped while the program was running",
+            detail.as_deref(),
+        )
     }
 
     /// `job.run` gets its end, and the recording leaves `live`.
