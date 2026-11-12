@@ -354,7 +354,7 @@ def disk_full_steps(case, filler):
     job = case.wait(job)
     holds &= job.get("state") in ("partial", "failed") and case.daemon.alive()
     observed.append(f"then {describe(job)} warnings {sorted(set(av.warning_codes(job)))}; end_reason "
-                    f"{(job.get('run') or {}).get('end_reason')}")
+                    f"{(job.get('run') or {}).get('end_reason')}; requeued {[r.get('reason') for r in case.requeues(job)]}")
     job = case.submit(case.program("short-c", SHORT))
     job = case.wait(job)
     holds &= av.outcome_ok(job)[0]
