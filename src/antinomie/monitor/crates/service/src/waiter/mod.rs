@@ -24,6 +24,7 @@ use std::{
     time::Duration,
 };
 
+pub mod console;
 mod run;
 #[cfg(test)]
 mod tests;
@@ -622,6 +623,28 @@ impl<E: Engine> Waiter<E> {
             |snapshot| settled_after_stop(snapshot, &vm),
         )?;
         Ok(message)
+    }
+
+    /// Wait until the running guest `vm_id` has finished booting
+    /// (`AwaitBoot`): its own root file system is mounted, so the initramfs
+    /// no longer grows it, and a systemd guest has finished start-up. A VM
+    /// stopped before that may keep a half-grown file system (ANT-T0476).
+    /// The engine bounds the wait with its boot wait; while it waits it says
+    /// so (`launch_wait`), which keeps the silence limit from running.
+    pub fn await_boot(&mut self, vm_id: &str) -> Result<String, WaitError> {
+        self.lane_command(Command::AwaitBoot {
+            vm_id: vm_id.to_owned(),
+        })
+    }
+
+    /// The first line of the running boot's console that says the guest
+    /// kernel crashed or the guest could not grow its file system; `None`
+    /// when there is none or the engine names no console log.
+    pub fn kernel_crash(&self) -> Option<String> {
+        self.snapshot
+            .serial_log
+            .as_deref()
+            .and_then(console::kernel_crash)
     }
 }
 

@@ -286,7 +286,8 @@ def setup(cli, work, args, accel, factor, soak):
     lane = av.init_lane(cli, args, 1, factor=factor)
     (work.data / "service.toml").write_text(av.service_toml(
         lanes=1, require_kvm=accel == "kvm",
-        retention={"recordings_days": 1, "max_recordings_gib": args.recordings_cap_gib}))
+        retention={"recordings_days": 1, "max_recordings_gib": args.recordings_cap_gib},
+        socket=work.socket_override()))
     av.edit_policy(work, "soak", {("sample", "accept_types"): '["elf", "sh"]',
                                   ("limits", "max_jobs_per_day"): "1000000"})
     code, _, err = cli.run("config", "validate", timeout=300)

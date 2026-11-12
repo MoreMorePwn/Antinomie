@@ -487,6 +487,56 @@ fn a_missing_lane_or_vm_fails_and_a_changed_snapshot_quarantines() {
     );
 }
 
+/// ANT-T0474 (P3): a daemon that just started took the requeued job before
+/// its engine had listed the lane VM's snapshots. `prechecks` asks for the
+/// list and checks against it; without a list the job waits, and the lane
+/// is not quarantined.
+#[test]
+fn prechecks_wait_for_the_engine_to_list_the_lane_vms_snapshots() {
+    let w = W::new("pre-tree");
+    let job = w.fx.running(1);
+    let unlisted = |s: &mut Snapshot| {
+        healthy(s);
+        s.vm_snapshot_trees.clear();
+    };
+    // The list comes with the refresh: the job goes on.
+    let mut waiter = w.engine(|fake| {
+        fake.start_with(unlisted);
+        fake.on("RefreshVmSnapshots")
+            .then(100 * MS, healthy)
+            .after(150 * MS)
+            .ok("Snapshots refreshed");
+    });
+    assert!(w.stages(&mut waiter).prechecks(&job).is_ok());
+    assert_eq!(waiter.engine_mut().sent_names(), ["RefreshVmSnapshots"]);
+    // No list at all: the job waits for the lane.
+    let mut waiter = w.engine(|fake| {
+        fake.start_with(unlisted);
+        fake.on("RefreshVmSnapshots").fail("the engine is busy");
+    });
+    match w.stages(&mut waiter).prechecks(&job).unwrap_err() {
+        StageStop::Wait {
+            waiting_for,
+            detail,
+        } => {
+            assert_eq!(waiting_for, WaitingFor::Lane);
+            assert!(detail.contains("has not listed the snapshots"), "{detail}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!w.lane_file().is_quarantined());
+    // A listed tree without the clean snapshot still fails at once.
+    let mut changed = w.engine(|fake| {
+        fake.start_with(|s| {
+            healthy(s);
+            s.vm_snapshot_trees.get_mut(VM).unwrap().nodes[0].id = "by-hand".into();
+        });
+    });
+    let stop = w.stages(&mut changed).prechecks(&job).unwrap_err();
+    assert_eq!(code(&stop), FailureCode::LaneChanged);
+    assert!(changed.engine_mut().sent_names().is_empty());
+}
+
 #[test]
 fn a_pending_layer_does_not_stop_prechecks_provision_waits_for_it() {
     let w = W::new("pre-layer");
@@ -1145,6 +1195,56 @@ fn launch_sends_the_exact_request_and_records_the_run() {
         (VM, "b2")
     );
     assert!(kinds(&w.fx, &job.id).contains(&"job.run".to_owned()));
+}
+
+/// ANT-T0476 (P5): a guest whose kernel crashed while it booted (a clean
+/// snapshot with a half-grown file system) still answers; the program is
+/// not started in it and the job says why.
+#[test]
+fn a_guest_kernel_that_crashed_while_booting_fails_the_launch() {
+    let w = W::new("launch-crash");
+    let job = w.fx.running(1);
+    let console = w.fx.dir.join("serial.log");
+    std::fs::write(
+        &console,
+        "[    3.665615] EXT4-fs (sda): resizing filesystem from 393217 to 4194304 blocks\n\
+         [    3.668595] kernel BUG at ../source/linux-6.12.94/fs/ext4/resize.c:547!\n\
+         Guest filesystem resize failed\nBusyBox guest ready\n",
+    )
+    .unwrap();
+    let path = console.clone();
+    let mut waiter = w.engine(move |fake| {
+        let path = path.clone();
+        fake.start_with(move |s| {
+            healthy(s);
+            s.serial_log = Some(path.clone());
+        });
+    });
+    let stop = launch(&w, &mut waiter, &job).unwrap_err();
+    let failure = stop.failure().unwrap();
+    assert_eq!(
+        (failure.code, failure.stage),
+        (FailureCode::GuestUnreachable, Stage::Launch)
+    );
+    assert!(failure.retryable);
+    assert!(failure.message.contains("guest kernel crashed"));
+    assert_eq!(
+        failure.detail.as_deref(),
+        Some("kernel BUG at ../source/linux-6.12.94/fs/ext4/resize.c:547!")
+    );
+    assert!(
+        waiter.engine_mut().sent().is_empty(),
+        "nothing was launched"
+    );
+    // A clean boot's console launches.
+    std::fs::write(&console, "BusyBox guest ready\n").unwrap();
+    let mut clean = w.engine(|fake| {
+        execute_ok(fake);
+        let path = console.clone();
+        fake.after(MS, move |s| s.serial_log = Some(path.clone()));
+    });
+    clean.pump(10 * MS).unwrap();
+    assert!(launch(&w, &mut clean, &job).is_ok());
 }
 
 #[test]

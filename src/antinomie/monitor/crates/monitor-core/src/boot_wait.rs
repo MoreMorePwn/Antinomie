@@ -94,6 +94,8 @@ pub struct LaunchWait {
 
 /// The status text of a launch waiting for the boot.
 pub const WAIT_TEXT: &str = "Starting run: waiting for the guest to finish booting";
+/// The text of an `AwaitBoot` wait (no program is waiting).
+pub const BOOT_TEXT: &str = "Waiting for the guest to finish booting";
 
 #[cfg(test)]
 mod tests {

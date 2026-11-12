@@ -22,7 +22,7 @@
 //! A probe that is unsure or absent keeps the wait going until the timeout.
 use super::*;
 use crate::boot_wait::{
-    BootWait, BootWaitOutcome, LaunchWait, NETWORK_WAIT_TEXT, NetworkWait, WAIT_TEXT,
+    BOOT_TEXT, BootWait, BootWaitOutcome, LaunchWait, NETWORK_WAIT_TEXT, NetworkWait, WAIT_TEXT,
 };
 
 /// Present on a system that was booted with systemd (`sd_booted()`).
@@ -31,6 +31,9 @@ const SYSTEMD_RUNTIME: &str = "/run/systemd/system";
 const BOOT_FINISHED: &str = "/run/systemd/boot-finished";
 /// Created by cron once it has started and run its `@reboot` entries.
 const CRON_STARTED: &str = "/run/crond.reboot";
+/// The guest's own init: there once the initramfs has switched to the root
+/// file system, and not in the initramfs (`/init`, no `/sbin`).
+const ROOT_INIT: &str = "/sbin/init";
 /// Pause between two looks at the guest.
 const POLL: Duration = Duration::from_millis(1000);
 /// Pause between two looks at the gateway (it answers at once).
@@ -111,6 +114,100 @@ impl Worker {
         matches!(self.probe_path(SYSTEMD_RUNTIME), Probe::Present)
             && (matches!(self.probe_path(BOOT_FINISHED), Probe::Present)
                 || matches!(self.probe_path(CRON_STARTED), Probe::Present))
+    }
+
+    /// `AwaitBoot`: wait until the running guest has finished booting
+    /// without starting anything in it, serving the app's commands meanwhile.
+    /// A guest without systemd must have its own root mounted
+    /// ([`ROOT_INIT`]): the in-kernel control channel answers from the
+    /// initramfs, which may still be growing the root file system, and a VM
+    /// stopped then keeps a half-grown one. A systemd guest must have
+    /// finished start-up, as for a launch (its markers are on its own root).
+    /// `Err` when the wait ran out or was given up.
+    pub(super) fn await_boot(&mut self, vm_id: &str) -> Result<String, String> {
+        if self.boot_wait_state.waiting {
+            return Err("another wait for the guest to finish booting is running".into());
+        }
+        let session = self.session.as_ref().ok_or("VM is stopped")?;
+        if session.vm.id != vm_id {
+            return Err(format!("the VM {vm_id} is not the running one"));
+        }
+        if session.boot_settled {
+            return Ok("the guest has finished booting".into());
+        }
+        let revision = self.snapshot.guest_kernel.as_ref().and_then(|k| k.revision);
+        if control::specimen_request(revision, session.vm.ram_mib).is_none() {
+            return Ok("not waited: this base cannot be asked about its boot".into());
+        }
+        let deadline = session.process.waits.scaled(Duration::from_secs(u64::from(
+            self.options.start.boot_wait_secs,
+        )));
+        let started = Instant::now();
+        let mut systemd = session.bundle.guest.is_some();
+        // A systemd guest's end-of-boot markers are in its own root only; a
+        // distribution may also boot systemd without a `/sbin/init`.
+        let mut root = systemd;
+        loop {
+            if !root {
+                root = matches!(self.probe_path(ROOT_INIT), Probe::Present);
+            }
+            if root && !systemd {
+                match self.probe_path(SYSTEMD_RUNTIME) {
+                    Probe::Absent => break,
+                    Probe::Present => systemd = true,
+                    Probe::Unsure => {}
+                }
+            }
+            if root && systemd && self.boot_finished() {
+                if let Some(session) = self.session.as_mut() {
+                    session.boot_settled = true;
+                }
+                break;
+            }
+            if started.elapsed() >= deadline {
+                self.finish_boot_wait();
+                return Err(format!(
+                    "the guest did not finish booting in {} s ({})",
+                    deadline.as_secs(),
+                    if root {
+                        "start-up is still running"
+                    } else {
+                        "its root file system is not mounted yet"
+                    }
+                ));
+            }
+            if !self.boot_wait_state.waiting {
+                self.boot_wait_state.waiting = true;
+                self.boot_wait_state.cancel = false;
+                self.snapshot.launch_wait = Some(LaunchWait {
+                    program: String::new(),
+                    started_ms: unix_ms(),
+                    text: BOOT_TEXT.into(),
+                });
+                self.publish();
+            }
+            let pause = Instant::now();
+            while pause.elapsed() < POLL {
+                if self.handle_commands() {
+                    self.closing.store(true, Ordering::Relaxed);
+                }
+                if self.closing.load(Ordering::Acquire) || self.session.is_none() {
+                    self.finish_boot_wait();
+                    return Err(
+                        "the VM stopped while waiting for the guest to finish booting".into(),
+                    );
+                }
+                if self.boot_wait_state.cancel {
+                    self.finish_boot_wait();
+                    return Err("the wait for the guest to finish booting was cancelled".into());
+                }
+            }
+        }
+        self.finish_boot_wait();
+        Ok(format!(
+            "the guest has finished booting ({} ms)",
+            started.elapsed().as_millis()
+        ))
     }
 
     /// Wait until the guest has finished booting, serving the app's commands

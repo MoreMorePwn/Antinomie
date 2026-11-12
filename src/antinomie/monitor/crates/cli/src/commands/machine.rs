@@ -7,7 +7,7 @@ use crate::{
     error::{CliError, ErrorCode},
 };
 use antinomie_monitor_core::{
-    BaseSummary, Snapshot, VmCheckpoint, VmConfig, VmNetwork, VmSnapshotConsistency,
+    BaseSummary, Command, Snapshot, VmCheckpoint, VmConfig, VmNetwork, VmSnapshotConsistency,
     VmSnapshotMode, VmState, stealth::StealthPreset,
 };
 use serde_json::{Value, json};
@@ -266,6 +266,21 @@ pub fn wait_guest(
                 && snapshot.state == VmState::Running
                 && snapshot.guest_kernel.is_some()
         },
+    )
+}
+
+/// Wait until the running guest `vm_id` has finished booting (`AwaitBoot`):
+/// its own root file system is mounted, so the initramfs no longer grows it
+/// to the VM's disk, and a systemd guest has finished start-up. The guest
+/// answers long before; a VM stopped or saved then keeps a half-grown file
+/// system that crashes the guest kernel at the next boot (ANT-T0476). The
+/// engine bounds the wait (`start.boot_wait_secs`, stretched under TCG).
+pub fn await_boot(engine: &mut DirectEngine, vm_id: &str) -> Result<String, CliError> {
+    engine.command(
+        Command::AwaitBoot {
+            vm_id: vm_id.to_owned(),
+        },
+        None,
     )
 }
 

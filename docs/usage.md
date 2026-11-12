@@ -2181,7 +2181,12 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   up for that many seconds, or until Ctrl-C (exit 130) when no number is given. `vm
   stop` stops a VM this process started, and says so when there is none. `snapshot
   create --mode full` boots the VM first, and `snapshot restore` shows the restored
-  guest answering and stops it. Keeping a VM up between commands is what the daemon
+  guest answering and stops it. None of them stops or saves the guest before it has
+  finished booting: the guest answers from its initramfs already, which may still be
+  growing the root file system to the VM's disk, and a VM stopped or saved then keeps
+  a half-grown file system that crashes the guest kernel at its next boot. The wait is
+  the boot wait (`--boot-wait`, stretched under TCG); a guest that does not finish
+  booting in it fails the command. Keeping a VM up between commands is what the daemon
   (the daemon, `auto daemon`; see [Auto mode](#auto-mode-090)) is for. Progress lines go to standard error, Ctrl-C
   stops the VM cleanly, and `--timeout SECONDS` limits the waits (exit 14).
 - `sample add FILE... [--name N] [--tag K=V] [--delete-original]` hashes and archives
@@ -2281,13 +2286,17 @@ antinomie-cli --data-dir ~/auto auto init --base busybox --cpus 2 --ram-mib 2048
 
 `auto init` creates the lane VM (`--name`, default `auto-1`) on a routed network
 (each job chooses where its traffic goes; between runs nothing leaves), boots it
-once and waits for the guest to answer, stops it, waits until its disk has settled,
+once and waits for the guest to answer and to finish booting (its root file system
+mounted, so the initramfs no longer grows it to the lane disk; a Debian guest's
+start-up finished), stops it, waits until its disk has settled,
 takes the Disk snapshot `auto-clean` (`--snapshot`) and writes
 `<data>/service/lanes/lane-1.json`. When the folder has no policy yet it writes
 `policies/default.toml`, pointed at the new VM; that policy accepts ELF x86-64
 programs only (add `"sh"` to `[sample] accept_types` for shell scripts). A Debian
 base needs a guest account: `--user NAME --password-stdin`, the password on
-standard input. `auto init` runs in the calling process, so stop the daemon first;
+standard input. A guest kernel that crashes in that first boot (the console shows
+a kernel `BUG` or oops, or the guest could not grow its file system) fails `auto
+init` without a clean snapshot. `auto init` runs in the calling process, so stop the daemon first;
 `--replace` makes a new lane VM for an existing lane (a new base) and keeps the old
 VM for you to delete. `auto lane list` shows the lane, whether it is quarantined and
 what would keep it from a job; `auto lane reset --yes` reverts the VM to its clean

@@ -150,6 +150,14 @@ impl<E: Engine> LaneStages<'_, E> {
                 ),
             );
         }
+        // A guest kernel that crashed and went on (an oops) still answers:
+        // the console says so, and the job does not pass for a clean one.
+        if let Some(line) = self.waiter.kernel_crash() {
+            warnings.push(Warning {
+                code: "guest_kernel_crashed".into(),
+                text: format!("the guest kernel crashed during the run: {line}"),
+            });
+        }
         self.progress(
             job,
             Stage::Collect,

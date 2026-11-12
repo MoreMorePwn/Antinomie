@@ -187,7 +187,9 @@ and exits 4 when there is an error. All keys are in
 
 A VM that ran a sample keeps what the sample did, so every job starts from a known
 state. The lane VM has a clean Disk snapshot, `auto-clean`, taken by `auto init`
-after the guest booted once. Before each job the daemon checks the snapshot is the
+after the guest booted once and finished booting (a guest stopped while its
+initramfs still grows the root file system would keep a half-grown one, and every
+job's boot from it would crash the guest kernel). Before each job the daemon checks the snapshot is the
 one it recorded, restores it and cold-boots (`vm.revert = "snapshot_disk"`, the
 default). `vm.revert = "reset"` is not available on Auto lanes, because every lane
 keeps its clean snapshot: `config validate` refuses it and points at
@@ -344,7 +346,7 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `policy_denied` | submit, prechecks | no | The policy forbids the request, or it changed or went away after the submit; `field` names the part |
 | `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The job waits `queued` for up to the policy's `wait_s` (3600), then fails |
 | `no_base`, `no_vm` | provision | no | The lane VM or its base is gone; `auto lane list` says which |
-| `vm_start_failed`, `guest_unreachable` | provision, launch | yes | The VM or its guest did not come up; three in a row quarantine the lane |
+| `vm_start_failed`, `guest_unreachable` | provision, launch | yes | The VM or its guest did not come up, or the guest kernel crashed while it booted (the crash line is the detail); three in a row quarantine the lane |
 | `revert_failed`, `lane_changed` | provision | no | The lane is quarantined (see above) |
 | `upload_failed` | upload | yes | The sample did not reach the guest |
 | `launch_failed` | launch | depends | The program did not start (not executable for the guest, no terminal) |

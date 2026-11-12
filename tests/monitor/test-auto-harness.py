@@ -3,14 +3,22 @@
 """The Auto mode VM tiers (test-auto-smoke/isolation/faults/soak.py and
 auto_vm.py) without a VM: argument handling, the policy and service.toml
 edits, the job, event and report checks, the recorded-PID rule, the probe
-codes, the quota namespace command, the soak's table and its resume files."""
+codes, the quota namespace command, the soak's table and its resume files.
+
+Needs Python 3.11 or later (`tomllib`): run it with /usr/bin/python3 where
+the default python3 is older, e.g. `/usr/bin/python3 -I tests/monitor/test-auto-harness.py`."""
+import sys
+
+if sys.version_info < (3, 11):
+    sys.exit(f"test-auto-harness.py needs Python 3.11 or later (tomllib); this is {sys.version.split()[0]}: "
+             "run it with /usr/bin/python3")
+
 import contextlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
-import sys
 import tempfile
 import tomllib
 import unittest
@@ -153,6 +161,26 @@ class TomlTests(unittest.TestCase):
                                                retention={"recordings_days": 1, "max_recordings_gib": 2}))
         self.assertEqual(parsed, {"daemon": {"lanes": 2}, "resources": {"require_kvm": False, "min_free_disk_gib": 1},
                                   "retention": {"recordings_days": 1, "max_recordings_gib": 2}})
+        self.assertEqual(tomllib.loads(av.service_toml(socket=Path("/tmp/x/antinomie.sock")))["daemon"]["socket"],
+                         "/tmp/x/antinomie.sock")
+
+    def test_a_long_data_path_gets_a_short_private_socket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            short = av.Work(Path(tmp) / "w").prepare()
+            self.assertIsNone(short.socket_override())
+            self.assertEqual(short.socket_path(), short.data / "run" / "antinomie.sock")
+            deep = av.Work(Path(tmp) / ("d" * 120)).prepare()
+            socket = deep.socket_override()
+            try:
+                self.assertLessEqual(len(os.fsencode(str(socket))), av.SOCKET_PATH_MAX)
+                self.assertEqual(socket, deep.socket_override())
+                self.assertEqual(deep.socket_path(), socket)
+                self.assertEqual(os.stat(socket.parent).st_mode & 0o777, 0o700)
+                av.cleanup(deep, say=lambda _: None)
+                self.assertFalse(socket.parent.exists())
+            finally:
+                if socket.parent.is_dir():
+                    socket.parent.rmdir()
 
 
 class JobCheckTests(unittest.TestCase):
@@ -204,8 +232,13 @@ class JobCheckTests(unittest.TestCase):
         job = finished_job()
         report = {"schema": "antinomie-triage-report", "schema_version": 2,
                   "run": {"run_id": "r1", "vm_id": "auto_1_x"}, "sample": {"sha256": "a" * 64},
-                  "summary": {"assessment": "observed_only"}, "processes": [{"pid": 1}]}
+                  "summary": {"assessment": "observed_only"},
+                  "processes": {"columns": ["Process"], "rows": [["demo (1 \u00b7 1)"]], "omitted": 0,
+                                "indicator_columns": [], "data": [{"id": "proc-1", "pid": 1}]}}
         self.assertTrue(all(ok for ok, _ in av.report_json_checks(report, job)))
+        self.assertFalse(all(ok for ok, _ in av.report_json_checks(dict(report, processes=[{"pid": 1}]), job)))
+        self.assertFalse(all(ok for ok, _ in av.report_json_checks(
+            dict(report, processes=dict(report["processes"], rows=[])), job)))
         report["run"]["run_id"] = "other"
         self.assertFalse(all(ok for ok, _ in av.report_json_checks(report, job)))
 
@@ -262,6 +295,36 @@ class ProcessTests(unittest.TestCase):
             missing = av.check_cli_surface(av.Cli(Path(tmp) / "none", work, "tcg"))
             self.assertFalse(missing[0][0])
 
+    def test_a_random_guest_password_goes_to_auto_init_on_stdin_only(self):
+        parser = av.common_parser("x")
+        base = ["--work", "w", "--base", "b"]
+        self.assertFalse(parser.parse_args(base).random_guest_password)
+        args = parser.parse_args(base + ["--random-guest-password", "--mem-gate-mb", "0"])
+        self.assertTrue(args.random_guest_password)
+        password = av.guest_password()
+        self.assertEqual(password, av.guest_password(), "one password per run")
+        self.assertTrue(8 <= len(password.encode()) <= 128)
+        self.assertFalse(set(password) & {"\0", "\r", "\n"})
+        with tempfile.TemporaryDirectory() as tmp:
+            work = av.Work(tmp).prepare()
+            fake = Path(tmp) / "cli"
+            # The fake CLI says what it read on stdin, as a careless one might.
+            fake.write_text("#!/bin/sh\nread line\necho \"{\\\"lane\\\": \\\"$line\\\"}\"\n"
+                            "echo \"read $line\" >&2\n")
+            fake.chmod(0o755)
+            cli = av.Cli(fake, work, "kvm")
+            with unittest.mock.patch.object(av, "mem_gate"):
+                lane = av.init_lane(cli, args, 1)
+            # The fake echoed exactly the password it read; the harness
+            # redacted it before it parsed or logged the reply.
+            self.assertEqual(lane, "<redacted>", "the password went to stdin")
+            log = (work.out / "cli.log").read_text()
+            self.assertIn("--password-stdin", log)
+            self.assertNotIn(password, log)
+            self.assertIn("<redacted>", log)
+            leftovers = [p for p in Path(tmp).rglob("*") if p.is_file() and password in p.read_text(errors="replace")]
+            self.assertEqual(leftovers, [])
+
     def test_engine_flags_go_only_to_engine_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
             cli = av.Cli("/bin/cli", av.Work(tmp).prepare(), "tcg", tcg_multiplier=12)
@@ -314,10 +377,10 @@ class IsolationAndFaultTests(unittest.TestCase):
 
     def test_the_quota_namespace_command(self):
         command = faults.quota_argv(Path("/r/test-auto-faults.py"), ["--work", "/w", "--case", "qemu-kill,disk-full"],
-                                    Path("/w/cases/disk-full/quota"), 1536, "/usr/bin/python3")
+                                    Path("/w/cases/disk-full/quota"), 2560, "/usr/bin/python3")
         self.assertEqual(command[:6], ["unshare", "--user", "--map-current-user", "--mount", "--keep-caps", "sh"])
         shell = command[-1]
-        self.assertTrue(shell.startswith("mount -t tmpfs -o size=1536m,mode=0700 antinomie-quota /w/cases/disk-full/quota && "))
+        self.assertTrue(shell.startswith("mount -t tmpfs -o size=2560m,mode=0700 antinomie-quota /w/cases/disk-full/quota && "))
         self.assertIn("exec setpriv --inh-caps=-all --ambient-caps=-all /usr/bin/python3 -I /r/test-auto-faults.py", shell)
         self.assertEqual(shell.count("--case"), 1)
         self.assertTrue(shell.endswith("--case disk-full --quota-inner /w/cases/disk-full/quota"))

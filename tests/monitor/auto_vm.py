@@ -51,6 +51,33 @@ LABELS = ("malicious", "suspicious", "clean_observed", "inconclusive")
 HOST_TOOL_WARNINGS = ("static_check_incomplete", "detection_skipped")
 GIB = 1 << 30
 MIB = 1 << 20
+# A Unix socket path holds at most 107 bytes (sun_path less its NUL); the
+# daemon refuses a longer one (exit 4).
+SOCKET_PATH_MAX = 107
+
+
+# The secrets of this run (the random guest password): never in a log, an
+# error message or a file. Kept in memory only.
+_SECRETS = set()
+_GUEST_PASSWORD = []
+
+
+def guest_password():
+    """The run's random throwaway guest password (--random-guest-password):
+    made once per run, 8 to 128 bytes as the engine wants, URL-safe so it
+    holds no NUL, CR or LF."""
+    if not _GUEST_PASSWORD:
+        password = secrets.token_urlsafe(24)
+        _SECRETS.add(password)
+        _GUEST_PASSWORD.append(password)
+    return _GUEST_PASSWORD[0]
+
+
+def redact(text):
+    """`text` with every secret of the run replaced."""
+    for secret in _SECRETS:
+        text = text.replace(secret, "<redacted>")
+    return text
 
 
 class Failure(Exception):
@@ -98,6 +125,10 @@ def common_parser(description, prog=None):
                    help="stop the daemon (its recorded PID) when MemAvailable drops below this [2500]")
     p.add_argument("--min-free-gb", type=float, default=20.0,
                    help="refuse to start with less free disk under --work [20]")
+    p.add_argument("--random-guest-password", action="store_true",
+                   help="for a base that needs a guest account (Debian minimal): give `auto init` a random "
+                        "throwaway password, new for each run, on standard input (--password-stdin); it lives "
+                        "only in this process's memory and is never written to a log or a file")
     p.add_argument("--keep", action="store_true", help="keep the VM data (data folders, base copy) at the end")
     p.add_argument("--dry-run", action="store_true",
                    help="prepare the folder, build the programs, check the CLI and print the plan; start no VM")
@@ -300,9 +331,14 @@ def toml_list(values):
     return "[" + ", ".join(json.dumps(v) for v in values) + "]"
 
 
-def service_toml(lanes=1, require_kvm=True, host_workers=None, min_free_disk_gib=None, retention=None):
-    """The service.toml the tiers write: only what they change."""
+def service_toml(lanes=1, require_kvm=True, host_workers=None, min_free_disk_gib=None, retention=None,
+                 socket=None):
+    """The service.toml the tiers write: only what they change. `socket`
+    (Work.socket_override) moves the daemon's socket out of a data folder
+    whose path is too long for one."""
     out = ["[daemon]", f"lanes = {int(lanes)}"]
+    if socket is not None:
+        out.append(f"socket = {json.dumps(str(socket))}")
     if host_workers is not None:
         out.append(f"host_workers = {int(host_workers)}")
     out += ["", "[resources]", f"require_kvm = {'true' if require_kvm else 'false'}"]
@@ -479,9 +515,18 @@ def report_json_checks(report, job):
     summary = report.get("summary") or {}
     want = (job.get("assessment") or {}).get("assessment")
     out.append((summary.get("assessment") == want, f"report.json assessment {summary.get('assessment')} = job's {want}"))
-    out.append((isinstance(report.get("processes"), list) and len(report["processes"]) >= 1,
-                f"report.json lists {len(report.get('processes') or [])} process(es)"))
+    rows = table_rows(report.get("processes"))
+    out.append((rows is not None and len(rows) >= 1,
+                f"report.json lists {len(rows or [])} process row(s)"))
     return out
+
+
+def table_rows(table):
+    """The rows of a report.json table section ({columns, rows, omitted,
+    indicator_columns, data}), or None when it is not one."""
+    if isinstance(table, dict) and isinstance(table.get("rows"), list):
+        return table["rows"]
+    return None
 
 
 # ---------------------------------------------------------------- the run folder
@@ -529,6 +574,38 @@ class Work:
 
     def lane_dir(self, lane):
         return self.data if int(lane) == 1 else self.data / "lanes" / str(int(lane))
+
+    def short_socket_dir(self, data=None):
+        """The private folder for the socket of a data folder whose default
+        socket path is too long: named after a hash of the data path (so a
+        resumed run finds it again), in /tmp (not $TMPDIR, which may itself
+        be long)."""
+        data = Path(data) if data else self.data
+        digest = hashlib.sha256(os.fsencode(os.path.abspath(data))).hexdigest()[:16]
+        return Path("/tmp") / f"antinomie-t-{digest}"
+
+    def socket_override(self, data=None):
+        """None when <data>/run/antinomie.sock fits a Unix socket path, else
+        antinomie.sock in short_socket_dir() (created 0700, ours, no link):
+        the path to write as `[daemon] socket` in service.toml, which the
+        daemon and its clients both read."""
+        data = Path(data) if data else self.data
+        if len(os.fsencode(os.path.abspath(data / "run" / "antinomie.sock"))) <= SOCKET_PATH_MAX:
+            return None
+        folder = self.short_socket_dir(data)
+        try:
+            folder.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        info = os.lstat(folder)
+        if not os.path.isdir(folder) or os.path.islink(folder) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise Failure(f"{folder} is not a private folder of this user; remove it or use a shorter --work")
+        return folder / "antinomie.sock"
+
+    def socket_path(self, data=None):
+        """Where the daemon of `data` listens (see socket_override)."""
+        data = Path(data) if data else self.data
+        return self.socket_override(data) or data / "run" / "antinomie.sock"
 
     def lane_file(self, lane):
         return self.data / "service" / "lanes" / f"lane-{int(lane)}.json"
@@ -594,6 +671,7 @@ class Cli:
             code = None
             out = expired.stdout.decode(errors="replace") if isinstance(expired.stdout, bytes) else (expired.stdout or "")
             err = expired.stderr.decode(errors="replace") if isinstance(expired.stderr, bytes) else (expired.stderr or "")
+        out, err = redact(out), redact(err)
         with open(self.log, "a") as log:
             log.write(f"$ {shlex.join(argv[3:])}\n# exit {code} in {time.monotonic() - started:.1f} s\n")
             if err.strip():
@@ -633,7 +711,7 @@ def missing_flags(help_text, flags):
 # The commands and flags the tiers call: a dry run checks them against --help.
 CLI_SURFACE = {
     ("base", "install"): (),
-    ("auto", "init"): ("--lane", "--ram-mib", "--cpus", "--disk-gib", "--name", "--snapshot"),
+    ("auto", "init"): ("--lane", "--ram-mib", "--cpus", "--disk-gib", "--name", "--snapshot", "--password-stdin"),
     ("auto", "daemon"): (),
     ("auto", "submit"): ("--policy", "--timeout-run", "--args", "--as", "--name"),
     ("auto", "status"): (),
@@ -644,6 +722,7 @@ CLI_SURFACE = {
     ("auto", "lane", "reset"): ("--yes", "--lane"),
     ("auto", "gc"): ("--dry-run",),
     ("config", "validate"): ("--policy",),
+    ("config", "set"): (),
     ("snapshot", "create"): ("--mode",),
     ("snapshot", "restore"): ("--yes", "--cold-boot"),
     ("run", "list"): ("--job",),
@@ -699,7 +778,7 @@ class Daemon:
                                         cwd=self.cli.work.root, stdout=log, stderr=subprocess.STDOUT,
                                         stdin=subprocess.DEVNULL, start_new_session=True)
         log.close()
-        socket = self.cli.data / "run" / "antinomie.sock"
+        socket = self.cli.work.socket_path(self.cli.data)
         deadline = time.monotonic() + 120 * self.factor
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
@@ -863,8 +942,13 @@ def init_lane(cli, args, lane=1, gate=True, name=None, factor=1.0):
     if gate:
         mem_gate(args.mem_gate_mb, 3600 * factor, f"auto init --lane {lane}")
     extra = ["--name", name] if name else []
+    stdin = None
+    if getattr(args, "random_guest_password", False):
+        # On standard input only: the argv goes to cli.log.
+        extra.append("--password-stdin")
+        stdin = guest_password() + "\n"
     result = cli.ok("auto", "init", "--lane", lane, "--ram-mib", args.ram_mib, "--cpus", args.cpus,
-                    "--disk-gib", args.disk_gib, *extra, engine=True, timeout=int(1800 * factor))
+                    "--disk-gib", args.disk_gib, *extra, engine=True, timeout=int(1800 * factor), stdin=stdin)
     return result.get("lane") or result
 
 
@@ -997,6 +1081,10 @@ def cleanup(work, daemons=(), keep=False, data_folders=None, say=print, data_roo
     for name in ("base-copy",):
         if (work.root / name).exists():
             safe_rmtree(work.root / name, work.root)
+    for data in folders:
+        short = work.short_socket_dir(data)
+        if short.is_dir() and not short.is_symlink() and os.lstat(short).st_uid == os.getuid():
+            shutil.rmtree(short)
     say(f"     cleanup: VM data deleted; logs stay in {work.out}")
     return stray
 

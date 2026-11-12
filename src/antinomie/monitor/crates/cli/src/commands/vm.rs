@@ -8,8 +8,8 @@
 use super::{
     auto::link,
     machine::{
-        BOOT_WAIT, confirm, find_base, find_vm, guest_value, network_name, parse_network,
-        parse_preset, preset_name, vm_state, vm_value, wait_bases, wait_guest,
+        BOOT_WAIT, await_boot, confirm, find_base, find_vm, guest_value, network_name,
+        parse_network, parse_preset, preset_name, vm_state, vm_value, wait_bases, wait_guest,
     },
 };
 use crate::{
@@ -351,7 +351,11 @@ fn start(
     let boot_id = engine.snapshot().boot_id.clone();
     let guest = guest_value(engine.snapshot());
     let state = vm_state(engine.snapshot(), &id);
-    if let Some(seconds) = arguments.hold {
+    // Not stopped while the initramfs may still grow the file system.
+    let booted = await_boot(engine, &id);
+    if booted.is_ok()
+        && let Some(seconds) = arguments.hold
+    {
         hold(engine, seconds)?;
     }
     let stop_limit = limit.or(Some(BOOT_WAIT * 3));
@@ -359,6 +363,7 @@ fn start(
         .waiter()
         .stop_vm(&id, stop_limit)
         .map_err(crate::engine::wait_error)?;
+    booted?;
     let held_s = began.elapsed().as_secs_f64() - booted_s;
     Ok(Reply::value(json!({
         "vm": id,
