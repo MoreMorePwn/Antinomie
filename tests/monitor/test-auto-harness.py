@@ -153,6 +153,26 @@ class TomlTests(unittest.TestCase):
                                                retention={"recordings_days": 1, "max_recordings_gib": 2}))
         self.assertEqual(parsed, {"daemon": {"lanes": 2}, "resources": {"require_kvm": False, "min_free_disk_gib": 1},
                                   "retention": {"recordings_days": 1, "max_recordings_gib": 2}})
+        self.assertEqual(tomllib.loads(av.service_toml(socket=Path("/tmp/x/antinomie.sock")))["daemon"]["socket"],
+                         "/tmp/x/antinomie.sock")
+
+    def test_a_long_data_path_gets_a_short_private_socket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            short = av.Work(Path(tmp) / "w").prepare()
+            self.assertIsNone(short.socket_override())
+            self.assertEqual(short.socket_path(), short.data / "run" / "antinomie.sock")
+            deep = av.Work(Path(tmp) / ("d" * 120)).prepare()
+            socket = deep.socket_override()
+            try:
+                self.assertLessEqual(len(os.fsencode(str(socket))), av.SOCKET_PATH_MAX)
+                self.assertEqual(socket, deep.socket_override())
+                self.assertEqual(deep.socket_path(), socket)
+                self.assertEqual(os.stat(socket.parent).st_mode & 0o777, 0o700)
+                av.cleanup(deep, say=lambda _: None)
+                self.assertFalse(socket.parent.exists())
+            finally:
+                if socket.parent.is_dir():
+                    socket.parent.rmdir()
 
 
 class JobCheckTests(unittest.TestCase):
@@ -204,8 +224,13 @@ class JobCheckTests(unittest.TestCase):
         job = finished_job()
         report = {"schema": "antinomie-triage-report", "schema_version": 2,
                   "run": {"run_id": "r1", "vm_id": "auto_1_x"}, "sample": {"sha256": "a" * 64},
-                  "summary": {"assessment": "observed_only"}, "processes": [{"pid": 1}]}
+                  "summary": {"assessment": "observed_only"},
+                  "processes": {"columns": ["Process"], "rows": [["demo (1 \u00b7 1)"]], "omitted": 0,
+                                "indicator_columns": [], "data": [{"id": "proc-1", "pid": 1}]}}
         self.assertTrue(all(ok for ok, _ in av.report_json_checks(report, job)))
+        self.assertFalse(all(ok for ok, _ in av.report_json_checks(dict(report, processes=[{"pid": 1}]), job)))
+        self.assertFalse(all(ok for ok, _ in av.report_json_checks(
+            dict(report, processes=dict(report["processes"], rows=[])), job)))
         report["run"]["run_id"] = "other"
         self.assertFalse(all(ok for ok, _ in av.report_json_checks(report, job)))
 
@@ -314,10 +339,10 @@ class IsolationAndFaultTests(unittest.TestCase):
 
     def test_the_quota_namespace_command(self):
         command = faults.quota_argv(Path("/r/test-auto-faults.py"), ["--work", "/w", "--case", "qemu-kill,disk-full"],
-                                    Path("/w/cases/disk-full/quota"), 1536, "/usr/bin/python3")
+                                    Path("/w/cases/disk-full/quota"), 2560, "/usr/bin/python3")
         self.assertEqual(command[:6], ["unshare", "--user", "--map-current-user", "--mount", "--keep-caps", "sh"])
         shell = command[-1]
-        self.assertTrue(shell.startswith("mount -t tmpfs -o size=1536m,mode=0700 antinomie-quota /w/cases/disk-full/quota && "))
+        self.assertTrue(shell.startswith("mount -t tmpfs -o size=2560m,mode=0700 antinomie-quota /w/cases/disk-full/quota && "))
         self.assertIn("exec setpriv --inh-caps=-all --ambient-caps=-all /usr/bin/python3 -I /r/test-auto-faults.py", shell)
         self.assertEqual(shell.count("--case"), 1)
         self.assertTrue(shell.endswith("--case disk-full --quota-inner /w/cases/disk-full/quota"))
