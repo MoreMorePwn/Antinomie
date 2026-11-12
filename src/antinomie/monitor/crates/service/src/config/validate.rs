@@ -211,6 +211,14 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     if config.retention.jobs_days == 0 || config.retention.recordings_days == 0 {
         sink.error("retention", "the retention periods must be at least 1 day");
     }
+    if config.retention.max_recordings_gib == 0 {
+        // A cap of 0 bytes would delete every finished job's recording at
+        // each pass; 0 is not "no cap".
+        sink.error(
+            "retention.max_recordings_gib",
+            "must be at least 1 (GiB); 0 would delete every recording at each pass",
+        );
+    }
     if config.inbox.processed_keep_days == 0 {
         sink.error("inbox.processed_keep_days", "must be at least 1 day");
     }

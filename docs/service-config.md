@@ -189,8 +189,8 @@ take it again; a rewritten file is a new file. `SIGHUP` re-reads the folder list
 |---|---|---|
 | `[retention] recordings_days` | 14 | The recording of a finished job older than this, through the engine's run deletion (the run's record is copied into the sample's record; captures and dumps that belong to the VM stay with it, as when the window deletes a run) |
 | `[retention] keep_failed` | true | A failed job's recording is kept until `jobs_days` |
-| `[retention] max_recordings_gib` | 200 | Above this the oldest recordings go first (those `keep_failed` protects last) |
-| `[retention] jobs_days` | 90 | A finished job's record, events, artifacts and folder; the job's recording goes with it, or the job stays |
+| `[retention] max_recordings_gib` | 200 | Above this the oldest recordings go first (those `keep_failed` protects last). At least 1: 0 is refused, it does not mean "no cap" |
+| `[retention] jobs_days` | 90 | A finished job's record, events, artifacts and folder; the job's recordings (one per attempt that launched) go with it, or the job stays; a job whose recording cannot be read stays |
 
 Staged uploads expire after 24 hours and files in `<inbox>/rejected/` after 7
 days. Files in `<inbox>/processed/` go after `[inbox] processed_keep_days` (7):
