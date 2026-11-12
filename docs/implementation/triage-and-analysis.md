@@ -795,6 +795,55 @@ start in an unlisted file, more starts than listed, or a stale entry fails CI;
 add a reviewed line when a new start is intended. `tests/monitor/test-command-new-gate.py`
 checks the gate itself, including that a new unlisted call is caught.
 
+## Statistics engine (0.9.0)
+
+`antinomie_triage::statistics` counts one recording for the Statistics window
+(ANT-T0477). It is part of the UI-free triage crate and depends on core only;
+in 0.9.0 only the desktop app calls it. `compute(request, cancel, progress)`
+makes one walk and returns a `RunStatistics` (schema `antinomie.statistics/1`).
+
+**The read.** The walk is `Recording::matching_totals_cancellable`, the same
+read the Syscall Trace makes for "page N of M", with a predicate that counts
+each call and accepts none. It opens a run with `open_recording_cancellable`
+and a Capture all recording with `open_capture_recording_cancellable`, and it
+builds the packet index first when there is none (`Progress::Indexing`).
+
+**What is counted**, per call that passes the window's filter and the run's scope:
+
+| Table | Content | Bound |
+|---|---|---|
+| Hierarchy | group, call name, result (`returned`, an errno name, `no result recorded`); failed calls | 1,024 names (the rest in `other_names`, still in their group), 64 results per name (the rest in `other_results`) |
+| Latency | per call name and blocking class: exact min, max, total; median, p95, p99 from a histogram of 16 steps per doubling (within 1/16); the 20 slowest calls and the 20 longest waits | 5 KiB per name and class |
+| Rate | calls per bin for `all`, `failed`, each group and up to 3 custom lines; the width starts at 1 ms and doubles when a call falls past 65,536 bins | 65,536 bins per series |
+| Processes | distinct process ids and thread ids | 262,144 each (`at_least` is set when full) |
+| Quality | `Quality::from_manifest`: telemetry loss, transport and storage drops, read gaps, send waits, reduced recording, accelerator | none |
+
+The counts together stay under 16 MiB whatever the number of calls
+(`Aggregator::heap_bytes`, test A8). A *blocking class* (`statistics/blocking.rs`)
+separates calls that wait by design (`poll`, `futex` with a wait operation,
+`flock` without `LOCK_NB`, ...) from calls that may block and ordinary ones, so a
+sleep does not hide a slow `openat`.
+
+**Scope and the Trace's count.** A call is in scope when the run's root cookie
+is 0 (a capture) or its representative event's (else its task end's) root
+equals the run's, as Triage decides (`archive_scan::stages::in_scope`). For any
+filter, `calls + out_of_scope` equals the number of calls
+`matching_totals_cancellable` accepts with `compile_note(filter).keep` (test
+A3): `out_of_scope` counts the calls of another launched program that pass the
+filter. The Trace does not scope, so its count can be higher by that number.
+
+**Cancel and progress.** The walk stops within 4,096 calls of `cancel` and then
+returns the counts so far with `complete == false` and no `stamp`; stopped
+before anything was read it is `StatsError::Cancelled`. `progress` is told
+`Indexing`, `Reading { read, total }` and, about every 2 s, `Partial` with the
+counts so far. A finished result carries the archive `stamp` (identity and
+length) it was read from: it is valid while the recording has the same.
+
+`statistics/export.rs` makes CSV (RFC 4180), tab-separated and JSON text of the
+tables as pure functions; `statistics/views.rs` makes the Failed only and By
+error readings from the same counts. `statistics/fixture.rs` writes synthetic
+recordings (behind the `test-support` feature too) for the window's tests.
+
 ## Detection scanned inputs (0.6.2)
 
 Every detection report records `inputs` (`analysis/detection/inputs.rs`):
