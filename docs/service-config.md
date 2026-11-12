@@ -49,8 +49,8 @@ runs while a window or the daemon owns the data directory.
 - The lane VM (`vm.lane_vm`, found in the data directory): its network must match
   `vm.network`; a policy that allows `inet_sim` needs a routed VM; `reset` is
   refused when the VM has snapshots; `snapshot_disk` and `snapshot_full` need the
-  snapshot named by `vm.revert_to` (a warning when `snapshot_full` names a
-  disk-only snapshot, which boots cold); `vm.stealth` is compared with the VM's
+  snapshot named by `vm.revert_to` (`snapshot_full` is refused over a
+  disk-only snapshot, from which it could only boot cold); `vm.stealth` is compared with the VM's
   profile and never applied.
 - `service.toml`: `daemon.lanes` 1 to 4 (default 1), no `safety.unsafe_routes_ack`
   (reserved), absolute watch folder paths, watch folders that name a policy that

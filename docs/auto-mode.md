@@ -180,8 +180,8 @@ after the guest booted once. Before each job the daemon checks the snapshot is t
 one it recorded, restores it and cold-boots (`vm.revert = "snapshot_disk"`, the
 default). A lane VM with no snapshot may use `reset` instead; `snapshot_full`
 resumes a booted guest and needs the VM to be created and snapshotted headless,
-with a full (memory) snapshot: over the disk-only `auto-clean` it boots cold like
-`snapshot_disk`, and `config validate` warns about it.
+with a full (memory) snapshot: over the disk-only `auto-clean` it could only boot
+cold, so `config validate` refuses it and the daemon does not load that policy.
 
 With `vm.revert_after = true` the lane also reverts right after the job, so no
 used disk sits idle; the cost is one more restore per job.
