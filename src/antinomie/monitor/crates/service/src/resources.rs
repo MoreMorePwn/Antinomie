@@ -13,7 +13,9 @@
 //! Every probe is injected ([`Probes`]), so the tests move the numbers. The
 //! real ones read `/proc/meminfo`, `statvfs` and `access(2)`.
 //!
-//! [`Governor::tick`] is what the daemon calls every few seconds: it turns the
+//! [`Governor::tick`] is what the daemon calls every few seconds, on every
+//! lane's loop between its jobs (so a lane that is free looks before it
+//! starts one, whatever the other lanes are running): it turns the
 //! conditions into the queue's pause (`pause_reason`: `file` for the operator's
 //! `run/PAUSE` file, `low_disk`, `no_kvm`) with an `engine.alert`, and lifts a
 //! pause it set when the condition is gone. A pause the operator set
@@ -236,7 +238,13 @@ pub struct Governor<'a> {
     pub checks: ResourceChecks<'a>,
     pub store: &'a Store,
     low_memory_alert_ms: Option<u64>,
+    /// With several lanes every lane has a governor: they tick one at a time
+    /// through this, which keeps the time of the last `low_memory` alert.
+    shared: Option<std::sync::Arc<std::sync::Mutex<Option<u64>>>>,
 }
+
+/// What the governors of several lanes share ([`Governor::shared`]).
+pub type GovernorShare = std::sync::Arc<std::sync::Mutex<Option<u64>>>;
 
 /// `low_memory` is raised at most once an hour.
 pub const LOW_MEMORY_ALERT_EVERY_MS: u64 = 3_600_000;
@@ -247,7 +255,15 @@ impl<'a> Governor<'a> {
             checks,
             store,
             low_memory_alert_ms: None,
+            shared: None,
         }
+    }
+
+    /// One of several governors (one per lane): their ticks take turns and
+    /// the hourly `low_memory` alert is raised once for all of them.
+    pub fn shared(mut self, share: GovernorShare) -> Self {
+        self.shared = Some(share);
+        self
     }
 
     fn alert(&self, code: &str, text: &str) -> Result<(), crate::api::error::ApiError> {
@@ -275,6 +291,17 @@ impl<'a> Governor<'a> {
 
     /// Look at the machine once. `now_ms` is the clock of the caller.
     pub fn tick(&mut self, now_ms: u64) -> Result<(), crate::api::error::ApiError> {
+        let Some(share) = self.shared.clone() else {
+            return self.look(now_ms);
+        };
+        let mut last_alert = crate::store::lock(&share);
+        self.low_memory_alert_ms = *last_alert;
+        let result = self.look(now_ms);
+        *last_alert = self.low_memory_alert_ms;
+        result
+    }
+
+    fn look(&mut self, now_ms: u64) -> Result<(), crate::api::error::ApiError> {
         let current = self.store.pause_reason()?;
         match (current, self.wanted()) {
             // The operator's pause and a quarantined lane stand.

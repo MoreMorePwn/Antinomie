@@ -68,7 +68,7 @@ use crate::{
     },
     pool::{HostPool, ITEM_FLOOR_MIB, PoolEnv},
     query::{QueryService, phase::LayerSource},
-    resources::{Floors, Governor, ResourceChecks, SystemProbes},
+    resources::{Floors, Governor, GovernorShare, ResourceChecks, SystemProbes},
     server::{Handler, Server, StopHandle, limits::Limits},
     stages::{
         host::{LibraryTags, RealTriage},
@@ -595,8 +595,10 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             slot.view = Arc::clone(&lane.view);
             slots.push(slot);
         }
-        // The governor pauses the whole queue (disk, KVM, the PAUSE file):
-        // one, on lane 1's loop, watching every lane's disks.
+        // The governor pauses the whole queue (disk, KVM, the PAUSE file),
+        // watching every lane's disks. Every lane's loop runs one before it
+        // claims a job, so a busy lane 1 does not keep the other lanes from
+        // seeing a pause or its end; they take turns through one share.
         let all_disks: Vec<PathBuf> = {
             let mut all: Vec<PathBuf> = Vec::new();
             for (_, _, floors) in &receivers {
@@ -649,18 +651,19 @@ impl<E: Engine + Send + 'static> Daemon<E> {
 
         let mut lane_threads = Vec::new();
         let mut first_mux = None;
+        let governor_share = GovernorShare::default();
         let mut resume = Some(resume);
         for (index, (lane, (wake_rx, command_rx, floors))) in
             starting.into_iter().zip(receivers).enumerate()
         {
             let first = index == 0;
-            let mut governor_floors = None;
+            let mut whole = floors.clone();
+            whole.disk_paths = all_disks.clone();
+            let governor_floors = Some(whole);
             if first {
-                let mut whole = floors.clone();
-                whole.disk_paths = all_disks.clone();
-                governor_floors = Some(whole);
                 first_mux = Some(Arc::clone(&lane.mux));
             }
+            let governor_share = Arc::clone(&governor_share);
             let service = Arc::clone(&service);
             let log = Arc::clone(&log);
             let jobs = if first {
@@ -685,6 +688,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
                         options,
                         floors,
                         governor: governor_floors,
+                        governor_share,
                         upkeep: first,
                         several,
                     };
@@ -944,8 +948,10 @@ struct LaneRun {
     data_dir: PathBuf,
     options: BackendOptions,
     floors: Floors,
-    /// The governor's floors (every lane's disks), on the first lane only.
+    /// The governor's floors (every lane's disks).
     governor: Option<Floors>,
+    /// What the lanes' governors share (their turns, the last alert).
+    governor_share: GovernorShare,
     /// The wait expiry and the janitor run here (the first lane).
     upkeep: bool,
     /// The daemon runs more than one lane: the lanes choose on the board.
@@ -967,6 +973,7 @@ fn lane_main<E: Engine>(
         options,
         floors,
         governor,
+        governor_share,
         upkeep,
         several,
     } = run;
@@ -988,6 +995,7 @@ fn lane_main<E: Engine>(
             },
             &service.store,
         )
+        .shared(governor_share)
     });
     let address_lookup = service
         .config

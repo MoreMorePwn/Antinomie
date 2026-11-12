@@ -353,8 +353,10 @@ with `dependency_missing` instead of running unsandboxed.
 `resources` (below `min_free_disk_gib` or the RAM floor, the queue pauses),
 `dependency`, `quota`, `queue_paused`, `layer_pending` (the previous run's disk is
 still being saved, which can take minutes after a run that changed many files),
-`backoff` or `lane_quarantined`. A file `<data>/run/PAUSE` pauses admission within
-five seconds; `auto queue resume` or removing the file continues.
+`backoff` or `lane_quarantined`. A file `<data>/run/PAUSE` pauses admission on
+every lane within five seconds, also while other lanes run jobs (a lane running a
+job starts no other until it ends); `auto queue resume` or removing the file
+continues. Low disk and a missing KVM pause every lane the same way.
 
 **No KVM.** With `require_kvm = true` (the default) jobs wait until `/dev/kvm` is
 usable; the daemon user must be in the `kvm` group. Set `[resources] require_kvm =

@@ -1277,3 +1277,60 @@ fn a_daemon_with_two_lanes_reads_the_runs_of_both_in_their_own_folders() {
 fn a_daemon_with_three_lanes_reads_the_runs_of_all_three_in_their_own_folders() {
     reads_across(3);
 }
+
+/// BH-05: with lane 1 busy (here: a `lane reset` waiting for a guest that
+/// never answers), the `run/PAUSE` file still pauses the queue for the other
+/// lanes within seconds, and removing it resumes them.
+#[test]
+fn the_pause_file_reaches_every_lane_while_lane_1_is_busy() {
+    let rig = Rig::new("lanes-pause-busy");
+    let lanes = LaneDir::new(&rig.fx.dir.join("service"));
+    for lane in 1..=2 {
+        lanes.save(&lane_file(lane, X86_BASE)).unwrap();
+    }
+    let mut setup = rig.setup(2);
+    setup.config.queue.paused_on_start = false;
+    // Only the PAUSE file: the test folder may be on a small disk (tmpfs),
+    // and this machine may have no KVM.
+    setup.config.resources.min_free_disk_gib = 0;
+    setup.config.resources.min_free_ram_mib = Some(0);
+    setup.config.resources.require_kvm = false;
+    let (engines, _) = rig.engines(2);
+    let daemon = Daemon::start_lanes(setup, engines, Vec::new()).unwrap();
+    let service = Arc::clone(daemon.service());
+    let busy = {
+        let service = Arc::clone(&service);
+        std::thread::spawn(move || {
+            let ctx = CallContext {
+                caller: local_caller(rustix::process::geteuid().as_raw()),
+                cancel: Default::default(),
+                transport: Transport::Socket,
+            };
+            let _ = service.call("lane.reset", json!({"lane": "lane-1"}), &ctx);
+        })
+    };
+    until("lane 1 is busy with the reset", || {
+        matches!(
+            &*crate::store::lock(&service.slots[0].phase),
+            Phase::Command(_)
+        )
+    });
+    assert_eq!(service.store.pause_reason().unwrap(), None);
+    let pause = rig.fx.dir.join("run").join("PAUSE");
+    std::fs::create_dir_all(pause.parent().unwrap()).unwrap();
+    std::fs::write(&pause, b"").unwrap();
+    until("the PAUSE file pauses the queue", || {
+        service.store.pause_reason().unwrap() == Some(crate::api::status::PauseReason::File)
+    });
+    assert!(matches!(
+        &*crate::store::lock(&service.slots[0].phase),
+        Phase::Command(_)
+    ));
+    std::fs::remove_file(&pause).unwrap();
+    until("removing it resumes the queue", || {
+        service.store.pause_reason().unwrap().is_none()
+    });
+    service.controls.interrupt();
+    let _ = stop(daemon);
+    busy.join().unwrap();
+}

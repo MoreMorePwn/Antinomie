@@ -16,8 +16,9 @@
 //! With several lanes (ANT-T0455 card C) every lane has a loop of its own on
 //! its own engine; they share the store and the [`LaneBoard`], which spreads
 //! the jobs over the free lanes (design 4.6.1). Only the first lane's loop
-//! does the daemon's upkeep (the wait expiry, the janitor and the resource
-//! governor).
+//! does the daemon's upkeep (the wait expiry and the janitor). Every lane's
+//! loop runs the resource governor, so the `run/PAUSE` file, low disk and a
+//! missing KVM stop every free lane within seconds while lane 1 runs a job.
 
 use super::{
     Controls, Phase,
