@@ -55,6 +55,7 @@ mod shortcuts;
 mod start_error;
 mod start_warning;
 mod startup;
+mod statistics;
 mod stealth;
 mod stealth_shots;
 mod stop_run_shots;
@@ -149,6 +150,7 @@ pub(crate) fn app() -> MonitorApp {
         disk_view: Default::default(),
         core_view: Default::default(),
         triage: Default::default(),
+        statistics: Default::default(),
         cpu_history: Default::default(),
         triage_pcap: Default::default(),
         run_labels: Default::default(),

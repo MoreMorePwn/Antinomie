@@ -141,6 +141,14 @@ impl MonitorApp {
                         self.menu_item(ui, Action::ToggleBottomPane, None);
                         self.menu_item(ui, Action::ResetLayout, None);
                     });
+                    ui.menu_button("Statistics", |ui| {
+                        ui.set_min_width(ui.spacing().menu_width);
+                        self.menu_item(ui, Action::Statistics(None), None);
+                        ui.separator();
+                        for tab in crate::statistics::Tab::ALL {
+                            self.menu_item(ui, Action::Statistics(Some(tab)), None);
+                        }
+                    });
                     ui.menu_button("Tools", |ui| {
                         // Room for the longest label with its icon, and between
                         // an item and its shortcut.

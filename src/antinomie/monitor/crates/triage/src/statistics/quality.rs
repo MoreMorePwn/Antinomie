@@ -67,6 +67,9 @@ pub struct Quality {
     pub bytes: Option<u64>,
     /// `kvm`, `tcg`, `tcg (KVM unavailable)`; `None` when not recorded.
     pub accelerator: Option<String>,
+    /// Host Unix milliseconds the run started and ended, from the manifest.
+    pub started_ms: Option<u64>,
+    pub ended_ms: Option<u64>,
     pub notes: Vec<String>,
 }
 
@@ -107,6 +110,8 @@ impl Quality {
             quality.send_wait_us = Some(health.send_wait_us);
             quality.read_gaps = Some(health.read_gaps);
         }
+        quality.started_ms = manifest.get("started_ms").and_then(Value::as_u64);
+        quality.ended_ms = manifest.get("ended_ms").and_then(Value::as_u64);
         quality.packets = manifest.get("packets").and_then(Value::as_u64);
         quality.bytes = manifest.get("bytes").and_then(Value::as_u64);
         // The run summary the manifest embeds.
