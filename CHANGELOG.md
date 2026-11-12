@@ -1034,6 +1034,7 @@ x86 programs by their own table.
 - **Retention and `auto delete --with-recording` delete every attempt's run.** A job retried after its launch (a lost guest, a stop, a daemon restart) recorded a run per attempt, but only the last was known to the job, so the earlier runs were never deleted and the size cap did not count them. Each run is now remembered with its attempt (a new `job_recordings` table, created when missing) and all of them are deleted; the job record waits until they are gone.
 - **Retention keeps a job record whose recording it cannot read.** A run in a VM's recordings folder outside the data folder (`recording_root`) was refused as "outside the data folder", and after `jobs_days` the job record was deleted anyway, leaving the run on disk with nothing naming it. Such runs are now read and deleted like the others, and a job whose recording cannot be read keeps its record.
 - **A decrypted sample left by a killed launch is removed.** The plain host copy staged under `<data>/host-copy/` during a launch was removed only when the launch ended, so a daemon or CLI killed meanwhile (SIGKILL, the OOM killer, a power loss) left it there. The daemon's start and every later staging now remove copies whose process is gone.
+- **With several lanes, a job only a quarantined lane can run shows `waiting_for: lane_quarantined`.** It showed `lane` (a busy lane) for as long as the quarantine lasted, a wait that never expires. The free lane that cannot run it now passes on the wait of the lanes that can.
 
 ### Guest
 

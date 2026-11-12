@@ -1334,3 +1334,45 @@ fn the_pause_file_reaches_every_lane_while_lane_1_is_busy() {
     let _ = stop(daemon);
     busy.join().unwrap();
 }
+
+/// BH-10: a job only a quarantined lane can run says `lane_quarantined`, not
+/// `lane` (a busy lane), so its wait can expire and a client can tell.
+#[test]
+fn a_job_only_a_quarantined_lane_can_run_waits_for_the_quarantine() {
+    let fx = Fx::new("lanes-board-quarantined");
+    let elf = fx.queued(1);
+    let board = LaneBoard::default();
+    let (tx, _rx) = mpsc::channel();
+    let (x86, arm) = (LaneId::new(1), LaneId::new(2));
+    board.join(&x86, tx.clone());
+    board.join(&arm, tx);
+    board.post(
+        &x86,
+        Eligibility::Wait(WaitingFor::LaneQuarantined),
+        Some(profile(1, X86_BASE, GuestArch::X86_64)),
+        10,
+    );
+    board.post(
+        &arm,
+        Eligibility::Ready,
+        Some(profile(2, ARM_BASE, GuestArch::AARCH64)),
+        10,
+    );
+    assert_eq!(
+        board.decide(&arm, &elf, None, 10),
+        Eligibility::Wait(WaitingFor::LaneQuarantined)
+    );
+    // Once the x86 lane is back and busy, the job waits for a lane again.
+    board.post(
+        &x86,
+        Eligibility::Ready,
+        Some(profile(1, X86_BASE, GuestArch::X86_64)),
+        20,
+    );
+    board.claimed(&x86, 21);
+    assert_eq!(
+        board.decide(&arm, &elf, None, 22),
+        Eligibility::Wait(WaitingFor::Lane)
+    );
+    let _ = std::fs::remove_dir_all(&fx.dir);
+}
