@@ -291,6 +291,8 @@ pub enum WriteFault {
 pub struct LaneDir {
     dir: PathBuf,
     fault: Mutex<Option<WriteFault>>,
+    /// Tests: every save fails with `ENOSPC` until turned off.
+    no_space: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 static TEMP: AtomicU64 = AtomicU64::new(0);
@@ -310,6 +312,7 @@ impl LaneDir {
         Self {
             dir: service_dir.join("lanes"),
             fault: Mutex::new(None),
+            no_space: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -325,6 +328,17 @@ impl LaneDir {
     /// killed process would leave things.
     pub fn inject_fault(&self, fault: WriteFault) {
         *self.fault.lock().unwrap() = Some(fault);
+    }
+
+    /// Make every save fail with "No space left on device" until it is
+    /// turned off (the T7 disk-full case without a full disk).
+    pub fn inject_no_space(&self, on: bool) {
+        self.no_space.store(on, Ordering::SeqCst);
+    }
+
+    /// The switch of [`Self::inject_no_space`], for another thread.
+    pub fn no_space_switch(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        std::sync::Arc::clone(&self.no_space)
     }
 
     /// The lanes that have a file, in order.
@@ -412,6 +426,9 @@ impl LaneDir {
             message: e.to_string(),
         })?;
         bytes.push(b'\n');
+        if self.no_space.load(Ordering::SeqCst) {
+            return Err(io(&temp, std::io::Error::from_raw_os_error(28)));
+        }
         let fault = self.fault.lock().unwrap().take();
         let killed = |at: &str| LaneStateError::Io {
             path: path.clone(),

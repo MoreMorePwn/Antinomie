@@ -12,7 +12,9 @@
 //!    path (see [`super::cleanup`]) and the job `recording_failed`.
 //! 3. Wait until the VM is stopped, the recording flush is over and the VM has
 //!    no pending disk layer (`layer_s`, 1800 s). **Only then is the lane
-//!    free**, because Triage reads the earlier bytes the layer copies.
+//!    free**, because Triage reads the earlier bytes the layer copies. With
+//!    the disk below its floor the wait ends after a minute and the job is
+//!    `recording_failed` (see [`super::cleanup`]).
 //!
 //! A cancel during step 1 skips the rest of the evidence wait; steps 2 and 3
 //! always run, so the recording is kept. The caller labels the job
@@ -169,6 +171,13 @@ impl<E: Engine> LaneStages<'_, E> {
                     FailureCode::RecordingFailed,
                     "the recording did not settle",
                     Some(&why),
+                ));
+            }
+            Stopped::Deferred(words) => {
+                return Err(fail(
+                    FailureCode::RecordingFailed,
+                    "the recording could not be finished: the disk is below its floor",
+                    Some(&words),
                 ));
             }
         }

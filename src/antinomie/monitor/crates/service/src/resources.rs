@@ -340,6 +340,21 @@ impl<'a> Governor<'a> {
     }
 }
 
+/// Whether an error's words say the disk is full: SQLite's `SQLITE_FULL`,
+/// `ENOSPC` or `EDQUOT` from a file write.
+pub fn disk_full(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    [
+        "database or disk is full",
+        "no space left on device",
+        "os error 28)",
+        "disk quota exceeded",
+        "os error 122)",
+    ]
+    .iter()
+    .any(|words| text.contains(words))
+}
+
 /// Pause the queue for a floor that failed while a job was running.
 pub fn pause_for_low_disk(store: &Store, words: &str) {
     if store.pause_reason().ok().flatten().is_none() {

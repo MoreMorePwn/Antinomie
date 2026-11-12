@@ -627,8 +627,17 @@ impl Store {
     }
 
     /// Pause or resume starting new jobs (`queue.pause`, the `PAUSE` file, a
-    /// low-disk rule). The flag is stored, so a restart keeps it.
+    /// low-disk rule). The flag is stored, so a restart keeps it. When it
+    /// cannot be written (a full disk) it holds in this process all the same
+    /// and the error is returned: the queue pauses even when the database is
+    /// full (ANT-T0475).
     pub fn set_pause(&self, reason: Option<crate::api::status::PauseReason>) -> R<()> {
+        let written = self.write_pause(reason);
+        self.hold_pause(written.is_err().then_some(reason));
+        written
+    }
+
+    fn write_pause(&self, reason: Option<crate::api::status::PauseReason>) -> R<()> {
         self.write(|tx| {
             match reason {
                 Some(reason) => tx.tx.execute(
@@ -646,6 +655,9 @@ impl Store {
     }
 
     pub fn pause_reason(&self) -> R<Option<crate::api::status::PauseReason>> {
+        if let Some(held) = self.held_pause() {
+            return Ok(held);
+        }
         let text: Option<String> = self
             .conn()
             .query_row(

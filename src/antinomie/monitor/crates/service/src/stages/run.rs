@@ -100,7 +100,7 @@ impl<E: Engine> LaneStages<'_, E> {
         let mut dog = Watchdog::new(Stage::Run, begun, None, Some(silence));
         let mut stop_sent_ms: Option<u64> = None;
         let mut limit_stop = false;
-        let mut floor_stop = false;
+        let mut floor_stop: Option<String> = None;
         let mut next_floor_ms = begun + FLOOR_EVERY_MS;
         let mut cancelled = false;
 
@@ -183,7 +183,7 @@ impl<E: Engine> LaneStages<'_, E> {
             if stop_sent_ms.is_none() && now >= next_floor_ms {
                 next_floor_ms = now + FLOOR_EVERY_MS;
                 if let Some(words) = self.env.host.low_disk() {
-                    floor_stop = true;
+                    floor_stop = Some(words.clone());
                     stop_sent_ms = Some(now);
                     self.progress(
                         job,
@@ -238,7 +238,7 @@ impl<E: Engine> LaneStages<'_, E> {
         self.waiter.drain()?;
         self.waiter.discard_results();
 
-        let (reason, exit, signal, core_dumped) = if cancelled || floor_stop {
+        let (reason, exit, signal, core_dumped) = if cancelled || floor_stop.is_some() {
             (EndReason::Stopped, None, None, false)
         } else if limit_stop {
             (EndReason::TimeLimit, None, None, false)
@@ -270,6 +270,18 @@ impl<E: Engine> LaneStages<'_, E> {
             core_dumped,
         };
         self.record_run_end(job, &end)?;
+        if let Some(words) = floor_stop {
+            // The warning made when the floor was hit is lost if the database
+            // was full then; the job's `partial` rests on it.
+            let stored = self
+                .env
+                .store
+                .get(&job.id)
+                .map_err(|e| self.store_error(Stage::Run, e))?;
+            if !stored.warnings.iter().any(|w| w.code == "low_disk") {
+                self.warn(job, "low_disk", &format!("the run was stopped: {words}"));
+            }
+        }
         if cancelled {
             return Err(StageStop::Cancelled);
         }
@@ -298,18 +310,22 @@ impl<E: Engine> LaneStages<'_, E> {
         )
     }
 
-    /// `job.run` gets its end, and the recording leaves `live`.
-    fn record_run_end(&self, job: &Job, end: &RunEnd) -> Result<(), StageStop> {
+    /// `job.run` gets its end, and the recording leaves `live`. On a full
+    /// disk this waits for room (the run is over; the job's limit still
+    /// holds), so a run stopped for the disk floor keeps its end.
+    fn record_run_end(&mut self, job: &Job, end: &RunEnd) -> Result<(), StageStop> {
         let now = self.waiter.now_ms();
-        self.patch_run(job, |run| {
-            run.ended_ms = Some(now);
-            run.end_reason = Some(end.reason);
-            run.exit = end.exit;
-            run.signal = end.signal;
-            run.core_dumped = end.core_dumped;
-        })
-        .and_then(|()| self.set_recording_phase(job, RecordingPhase::Finalizing))
-        .map_err(|e| self.store_error(Stage::Run, e))
+        let written = self.until_written(job, "the run's end", |this| {
+            this.patch_run(job, |run| {
+                run.ended_ms = Some(now);
+                run.end_reason = Some(end.reason);
+                run.exit = end.exit;
+                run.signal = end.signal;
+                run.core_dumped = end.core_dumped;
+            })
+            .and_then(|()| this.set_recording_phase(job, RecordingPhase::Finalizing))
+        })?;
+        written.map_err(|e| self.store_error(Stage::Run, e))
     }
 
     /// The program is gone with the guest: say so in the job's run record

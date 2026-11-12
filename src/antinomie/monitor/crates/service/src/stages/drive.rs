@@ -38,6 +38,9 @@ use crate::{
     watchdog::job_hard,
 };
 
+/// How often a write the disk was too full for is tried again.
+pub(crate) const FULL_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// What became of the job.
 #[derive(Debug)]
 pub enum Driven {
@@ -248,7 +251,18 @@ impl<E: Engine> LaneStages<'_, E> {
         // A launch given up as silent may have started the program: the stop
         // ended it, and the job names its run.
         self.link_late_launch(job);
-        if settled != Stopped::Settled {
+        if let Stopped::Deferred(words) = &settled {
+            // Stopped, but the disk is too full to finish the recording: no
+            // second stop and no quarantine. The layer stays pending, which
+            // keeps the lane from the next job until the engine finishes it.
+            self.warn(
+                job,
+                "low_disk",
+                &format!(
+                    "the VM is stopped; its recording is finished when the disk has room again: {words}"
+                ),
+            );
+        } else if settled != Stopped::Settled {
             // The forced kill leaves the engine in `Failed`: it is asked to
             // stop once more, and that answer is the last one.
             self.warn(
@@ -264,6 +278,7 @@ impl<E: Engine> LaneStages<'_, E> {
         }
         let now = self.waiter.now_ms();
         let clean = settled == Stopped::Settled;
+        let stopped = clean || matches!(settled, Stopped::Deferred(_));
         if clean
             && let Ok(stored) = self.env.store.get(&job.id)
             && stored.recording.as_ref().map(|r| r.phase) == Some(RecordingPhase::Finalizing)
@@ -271,30 +286,70 @@ impl<E: Engine> LaneStages<'_, E> {
             // The VM is stopped and the recording settled: it is complete.
             let _ = self.set_recording_phase(job, RecordingPhase::Complete);
         }
-        let quarantined = self.update_lane(|file| {
-            file.end_work(now);
-            if clean {
-                file.clear_qemu(now);
-                None
-            } else {
-                // A VM that will not stop cannot be reverted: the next job
-                // would start on a machine the engine still holds. The
-                // closest reason of 4.5.3 is `revert_failed`, which also
-                // keeps the lane out of service until `auto lane reset`.
-                file.quarantine(
-                    FailureCode::RevertFailed,
-                    &format!(
-                        "the lane VM did not stop and settle after a forced stop: {settled:?}"
-                    ),
-                    now,
-                );
-                Some(file.clone())
-            }
-        });
+        // The lane's end of work must be written, or the lane stays busy for
+        // good: on a full disk it is tried again until it is.
+        let quarantined = self.until_written(job, "the lane file", |this| {
+            this.env.lanes.update(&this.lane, |file| {
+                file.end_work(now);
+                if stopped {
+                    file.clear_qemu(now);
+                    None
+                } else {
+                    // A VM that will not stop cannot be reverted: the next
+                    // job would start on a machine the engine still holds.
+                    // The closest reason of 4.5.3 is `revert_failed`, which
+                    // also keeps the lane out of service until `auto lane
+                    // reset`.
+                    file.quarantine(
+                        FailureCode::RevertFailed,
+                        &format!(
+                            "the lane VM did not stop and settle after a forced stop: {settled:?}"
+                        ),
+                        now,
+                    );
+                    Some(file.clone())
+                }
+            })
+        })?;
         if let Ok(Some(file)) = quarantined {
             let _ = announce_quarantine(self.env.store, &file, Some(job.id.clone()));
         }
         Ok(())
+    }
+
+    /// A write the lane cannot leave out (the lane file's end of work, the
+    /// job's end or requeue, the run's end). While it fails because the disk
+    /// is full it is tried again every [`FULL_RETRY`], with the queue paused
+    /// `low_disk` (held in memory when the database cannot take it either);
+    /// any other result is the caller's. Only a signal, the job's limit or a
+    /// dead engine end the wait (ANT-T0475: a job must not hang on a full
+    /// disk, nor fail without a record of it).
+    pub(crate) fn until_written<T, X: std::fmt::Display>(
+        &mut self,
+        job: &Job,
+        what: &str,
+        mut write: impl FnMut(&Self) -> Result<T, X>,
+    ) -> Result<Result<T, X>, WaitError> {
+        let mut noted = false;
+        loop {
+            match write(self) {
+                Err(error) if crate::resources::disk_full(&error.to_string()) => {
+                    if !noted {
+                        noted = true;
+                        let words = format!("{what} could not be written: {error}");
+                        crate::resources::pause_for_low_disk(self.env.store, &words);
+                        let stage = self.job_stage(job);
+                        self.progress(
+                            job,
+                            stage,
+                            &format!("{words}; trying again until the disk has room"),
+                        );
+                    }
+                    self.waiter.pause(FULL_RETRY)?;
+                }
+                other => return Ok(other),
+            }
+        }
     }
 
     fn end_failed(&mut self, job: &Job, failure: Failure) -> Driven {
@@ -310,16 +365,20 @@ impl<E: Engine> LaneStages<'_, E> {
         match retry::decide(&failure, &policy, &history, &job.id) {
             Decision::Retry { backoff_s } => {
                 let reason = format!("{:?}", failure.code).to_ascii_lowercase();
-                match store.requeue(
-                    &job.id,
-                    RequeueKind::Retry,
-                    &reason,
-                    Some(&failure),
-                    Some(backoff_s),
-                ) {
-                    Ok(_) => Driven::Retried { failure, backoff_s },
+                let requeued = self.until_written(job, "the job's retry", |this| {
+                    this.env.store.requeue(
+                        &job.id,
+                        RequeueKind::Retry,
+                        &reason,
+                        Some(&failure),
+                        Some(backoff_s),
+                    )
+                });
+                match requeued {
+                    Ok(Ok(_)) => Driven::Retried { failure, backoff_s },
                     // No attempt left.
-                    Err(_) => self.finish_failed(job, failure, None),
+                    Ok(Err(_)) => self.finish_failed(job, failure, None),
+                    Err(error) => Driven::Aborted(error),
                 }
             }
             Decision::Final(reason) => self.finish_failed(job, failure, Some(reason)),
@@ -348,9 +407,15 @@ impl<E: Engine> LaneStages<'_, E> {
                 }
             }
         }
-        match store.finish(&job.id, Outcome::Failed, Some(failure.clone())) {
-            Ok(_) => Driven::Failed(failure),
-            Err(error) => Driven::Aborted(WaitError::Failed(error.to_string())),
+        let finished = self.until_written(job, "the job's end", |this| {
+            this.env
+                .store
+                .finish(&job.id, Outcome::Failed, Some(failure.clone()))
+        });
+        match finished {
+            Ok(Ok(_)) => Driven::Failed(failure),
+            Ok(Err(error)) => Driven::Aborted(WaitError::Failed(error.to_string())),
+            Err(error) => Driven::Aborted(error),
         }
     }
 
@@ -360,20 +425,28 @@ impl<E: Engine> LaneStages<'_, E> {
         }
         let store = self.env.store;
         if store.cancel_is_shutdown(&job.id).unwrap_or(false) {
-            return match store.requeue(
-                &job.id,
-                RequeueKind::Shutdown,
-                "service_shutdown",
-                None,
-                None,
-            ) {
-                Ok(_) => Driven::Requeued,
-                Err(error) => Driven::Aborted(WaitError::Failed(error.to_string())),
+            let requeued = self.until_written(job, "the job's requeue", |this| {
+                this.env.store.requeue(
+                    &job.id,
+                    RequeueKind::Shutdown,
+                    "service_shutdown",
+                    None,
+                    None,
+                )
+            });
+            return match requeued {
+                Ok(Ok(_)) => Driven::Requeued,
+                Ok(Err(error)) => Driven::Aborted(WaitError::Failed(error.to_string())),
+                Err(error) => Driven::Aborted(error),
             };
         }
-        match store.finish(&job.id, Outcome::Cancelled, None) {
-            Ok(_) => Driven::Cancelled,
-            Err(error) => Driven::Aborted(WaitError::Failed(error.to_string())),
+        let finished = self.until_written(job, "the job's end", |this| {
+            this.env.store.finish(&job.id, Outcome::Cancelled, None)
+        });
+        match finished {
+            Ok(Ok(_)) => Driven::Cancelled,
+            Ok(Err(error)) => Driven::Aborted(WaitError::Failed(error.to_string())),
+            Err(error) => Driven::Aborted(error),
         }
     }
 
@@ -395,16 +468,18 @@ impl<E: Engine> LaneStages<'_, E> {
         if let Err(error) = self.leave_lane(job) {
             return Driven::Aborted(error);
         }
-        match self
-            .env
-            .store
-            .requeue_waiting(&job.id, waiting_for, &detail)
-        {
-            Ok(_) => Driven::Waiting {
+        let requeued = self.until_written(job, "the job's wait", |this| {
+            this.env
+                .store
+                .requeue_waiting(&job.id, waiting_for, &detail)
+        });
+        match requeued {
+            Ok(Ok(_)) => Driven::Waiting {
                 waiting_for,
                 detail,
             },
-            Err(error) => Driven::Aborted(WaitError::Failed(error.to_string())),
+            Ok(Err(error)) => Driven::Aborted(WaitError::Failed(error.to_string())),
+            Err(error) => Driven::Aborted(error),
         }
     }
 }

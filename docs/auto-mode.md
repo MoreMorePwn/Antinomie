@@ -379,12 +379,22 @@ every lane within five seconds, also while other lanes run jobs (a lane running 
 job starts no other until it ends); `auto queue resume` or removing the file
 continues. Low disk and a missing KVM pause every lane the same way.
 
+**The disk filled up during a job.** The running program is stopped within a
+minute and the queue pauses (`low_disk`), also when the job database itself is
+too full to record the pause. A job whose end cannot be written yet waits for room
+(it shows its last stage meanwhile) and ends as soon as there is; if the recording
+could not be finished it ends `recording_failed`, and the lane waits
+(`layer_pending`) until the engine has finished the recording, which it tries again
+every 30 seconds. Free space under the data folder: the pause lifts by itself.
+
 **No KVM.** With `require_kvm = true` (the default) jobs wait until `/dev/kvm` is
 usable; the daemon user must be in the `kvm` group. Set `[resources] require_kvm =
 false` to run with TCG, which is slow.
 
 **The daemon does not stop.** On `SIGTERM` it stops the running job through the
-engine and finishes in a few minutes at most (`TimeoutStopSec=360` in the unit). A
+engine and finishes in a few minutes at most (`TimeoutStopSec=360` in the unit); a
+job that has not left the VM 240 seconds after the stop (a recording that cannot be
+saved on a full disk, say) is left for the next start. A
 second `SIGTERM` or Ctrl-C within five seconds stops at once with exit 130; the next
 start finishes what was left: it removes stale guest RAM files, finishes a pending
 disk layer (up to 30 minutes), and puts a job that was running back in the queue
