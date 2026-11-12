@@ -1023,6 +1023,10 @@ x86 programs by their own table.
   at the corner of the screen over the main window's toolbar. It now opens inside
   the main window's panes.
 
+### Fixed
+
+- **YARA runs in Auto mode.** A job launches without the guest-side static analysis, and YARA waited for that analysis's specimen, so every job got `detection_skipped` ("hash check pending") and the default mapping's "high or critical YARA hit gives `malicious`" never applied. A job's YARA scan (and `antinomie-cli detect` on a saved run without that analysis) now reads the run's sample from the library in its place, with the files the run wrote and the dumps. Runs made in the window are scanned as before.
+
 ### Guest
 
 - Patches 31-41 (shared ones compile out of x86-64, whose objects are

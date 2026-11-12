@@ -166,24 +166,9 @@ pub fn evidence_key(
             let Some(analysis) = input.analysis else {
                 return "wait:sample".into();
             };
-            let archive = match input.archive {
-                Some(archive) => {
-                    let artifacts = files.digest(&archive.join("artifacts.json"));
-                    let journal = files.digest(&archive.join(engine::JOURNAL_FILE));
-                    // The programs the run wrote, once Triage has kept them.
-                    let written = files.digest(
-                        &archive
-                            .join(engine::written::FOLDER)
-                            .join(engine::written::INDEX),
-                    );
-                    match (artifacts, journal, written) {
-                        (Some(artifacts), Some(journal), Some(written)) => {
-                            format!("{artifacts}:{journal}:{written}")
-                        }
-                        _ => return "wait:digest".into(),
-                    }
-                }
-                None => "no-archive".into(),
+            let archive = match yara_archive(input, files) {
+                Ok(archive) => archive,
+                Err(wait) => return wait,
             };
             format!(
                 "ready:yara:{}:{}:{archive}:mem={}:recovered={}",
@@ -236,6 +221,62 @@ pub fn evidence_key(
             format!("ready:journal:{}:{digest}", input.run_id.unwrap_or(""))
         }
     }
+}
+
+/// The part of the YARA evidence key that names the run's own files: the
+/// artifact list, the event journal and the written-programs index, by digest
+/// (`Err` with the wait key while a digest is being computed).
+fn yara_archive(input: &TriageInput<'_>, files: &mut dyn EvidenceFiles) -> Result<String, String> {
+    let Some(archive) = input.archive else {
+        return Ok("no-archive".into());
+    };
+    let artifacts = files.digest(&archive.join("artifacts.json"));
+    let journal = files.digest(&archive.join(engine::JOURNAL_FILE));
+    // The programs the run wrote, once Triage has kept them.
+    let written = files.digest(
+        &archive
+            .join(engine::written::FOLDER)
+            .join(engine::written::INDEX),
+    );
+    match (artifacts, journal, written) {
+        (Some(artifacts), Some(journal), Some(written)) => {
+            Ok(format!("{artifacts}:{journal}:{written}"))
+        }
+        _ => Err("wait:digest".into()),
+    }
+}
+
+/// The evidence key of `engine` for a saved, finished run ([`detect_saved`]:
+/// the daemon's jobs and `antinomie-cli detect`). It is [`evidence_key`],
+/// except for YARA over a run whose launch selected no guest static analysis
+/// (every Auto-mode job): no analysis record will ever come, so instead of
+/// waiting for one the key names the library sample the run executed, and the
+/// scan reads that sample from the library in place of a guest specimen,
+/// with what the run left (written programs, dumps, recovered files).
+pub fn saved_evidence_key(
+    engine: Engine,
+    saved: &crate::SavedRun,
+    settings: &Settings,
+    files: &mut dyn EvidenceFiles,
+) -> String {
+    let input = saved.input();
+    if engine != Engine::Yara || input.analysis.is_some() {
+        return evidence_key(engine, &input, settings, (&IndexState::Ready, false), files);
+    }
+    let archive = match yara_archive(&input, files) {
+        Ok(archive) => archive,
+        Err(wait) => return wait,
+    };
+    let sample = saved
+        .run
+        .request
+        .sample
+        .as_ref()
+        .map_or("none", |sample| sample.sha256.as_str());
+    format!(
+        "ready:yara:library:{sample}:{archive}:mem={}:recovered={}",
+        settings.scan_memory, settings.scan_recovered
+    )
 }
 
 /// The managed rule registry under `rules_root` (the data directory), its
@@ -386,13 +427,7 @@ pub fn detect_saved(
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
-        let key = evidence_key(
-            *engine,
-            &input,
-            settings,
-            (&IndexState::Ready, false),
-            &mut DiskFiles,
-        );
+        let key = saved_evidence_key(*engine, saved, settings, &mut DiskFiles);
         if !key.starts_with("ready:") {
             let words = evidence_note(&key);
             note(&format!("{}: not scanned: {words}", name(*engine)));
@@ -436,4 +471,85 @@ pub fn save_digest(
             },
         );
     crate::digest::Update::of(scan, crate::digest::detections(&results)).write(&saved.run.directory)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Digests answered at once, with no file read.
+    struct Fixed;
+
+    impl EvidenceFiles for Fixed {
+        fn digest(&mut self, _: &Path) -> Option<String> {
+            Some("d".into())
+        }
+
+        fn present(&mut self, _: &Path) -> bool {
+            true
+        }
+    }
+
+    fn saved(analysis: bool) -> crate::SavedRun {
+        let request = antinomie_monitor_core::ExecRequest {
+            sample: Some(antinomie_monitor_core::samples::SampleRef {
+                sha256: "ab".repeat(32),
+                name: "dropper".into(),
+            }),
+            ..Default::default()
+        };
+        let mut run: antinomie_monitor_core::RunSummary =
+            serde_json::from_value(serde_json::json!({
+                "id": "r", "vm_id": "v", "boot_id": "b", "session_id": 1,
+                "root_task_cookie": 7, "pid": 700, "request": request,
+                "directory": "/runs/r", "terminal_eof": true,
+                "state": "Finished", "recording_error": null, "started_ms": 1_000,
+            }))
+            .unwrap();
+        if analysis {
+            run.analysis = Some(
+                serde_json::from_value(serde_json::json!({
+                    "id": "a", "state": "complete", "source_path": "/tmp/x",
+                    "specimen_sha256": "cd".repeat(32), "specimen_len": 1,
+                    "reason": null, "sections": [],
+                }))
+                .unwrap(),
+            );
+        }
+        crate::SavedRun::new(run, crate::TriageSettings::default())
+    }
+
+    #[test]
+    fn a_saved_run_without_guest_analysis_is_ready_for_yara_by_its_library_sample() {
+        let settings = Settings::default();
+        let key = saved_evidence_key(Engine::Yara, &saved(false), &settings, &mut Fixed);
+        assert!(
+            key.starts_with(&format!("ready:yara:library:{}:", "ab".repeat(32))),
+            "{key}"
+        );
+        // The window's key is unchanged: with no analysis record it waits.
+        let run = saved(false);
+        let input = run.input();
+        let window = evidence_key(
+            Engine::Yara,
+            &input,
+            &settings,
+            (&IndexState::Ready, false),
+            &mut Fixed,
+        );
+        assert_eq!(window, "wait:sample");
+        // A run with a guest analysis keeps the key the window uses.
+        let run = saved(true);
+        let input = run.input();
+        assert_eq!(
+            saved_evidence_key(Engine::Yara, &run, &settings, &mut Fixed),
+            evidence_key(
+                Engine::Yara,
+                &input,
+                &settings,
+                (&IndexState::Ready, false),
+                &mut Fixed
+            )
+        );
+    }
 }

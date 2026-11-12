@@ -490,6 +490,57 @@ fn note_no_artifacts(report: &mut Report, request: &Request) {
     }
 }
 
+/// The run's library sample in place of a guest specimen ([`Staged::sample`]):
+/// one `Executable` row, scanned from the copy staging made, and checked
+/// against the hash the run recorded.
+fn library_sample(
+    scanner: &mut yara_x::Scanner<'_>,
+    sample: &super::runner::StagedSample,
+    shared: &mut extra::Shared<'_>,
+    report: &mut Report,
+) {
+    let mut input = ScannedInput::new(InputKind::Executable, &sample.path);
+    input.name = sample.sample.name.clone();
+    let Some(file) = &sample.file else {
+        report
+            .warnings
+            .push(format!("Executable: {}", sample.reason));
+        report.input(input.skipped(sample.reason.clone()));
+        return;
+    };
+    report.source_digest = Some(sample.sample.sha256.clone());
+    match scan_file(
+        scanner,
+        file,
+        shared.sources,
+        shared.budget,
+        report,
+        shared.total,
+        InputKind::Executable,
+    ) {
+        Ok((size, sha256)) if sha256.eq_ignore_ascii_case(&sample.sample.sha256) => report.input(
+            input
+                .size(size)
+                .sha256(sha256)
+                .note("the library's copy (the run kept no guest static analysis)"),
+        ),
+        Ok(_) => {
+            report
+                .warnings
+                .push("Executable: the staged copy does not match the run's sample hash".into());
+            report.input(input.failed("the staged copy does not match the run's sample hash"));
+        }
+        Err(error) if error.contains("budget") => {
+            report.warnings.push(format!("Executable: {error}"));
+            report.input(input.skipped(error));
+        }
+        Err(error) => {
+            report.warnings.push(format!("Executable: {error}"));
+            report.input(input.failed(format!("YARA failed: {error}")));
+        }
+    }
+}
+
 pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     let request = &staged.request;
     let mut report = Report::empty(Engine::Yara, request.identity.clone());
@@ -541,47 +592,63 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     scanner.set_timeout(Duration::from_secs((total * 15 / 100).max(5)));
     let deadline = Instant::now() + Duration::from_secs(total);
     let mut total = 0;
-    let analysis = request.directory.join("analysis");
-    let mut executable = ScannedInput::new(InputKind::Executable, &analysis);
-    // Whether the engine got as far as scanning: a specimen that could not be
-    // read is skipped, one the engine failed on is failed.
-    let mut reached_engine = false;
-    let specimen = (|| {
-        let directory = &analysis;
-        let saved = super::super::jobs::open_report(directory)?;
-        let (saved, data) = super::super::specimen::read_all(directory, &saved.id)?;
-        report.source_digest = saved.specimen_sha256.clone();
-        executable.name = Path::new(&saved.source_path)
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        total += data.len() as u64;
-        reached_engine = true;
-        let sha256 = record(
+    if let Some(sample) = &staged.sample {
+        // No guest static analysis kept a specimen (an Auto-mode job): the
+        // sample the run executed, read from the library by staging.
+        library_sample(
             &mut scanner,
-            &data,
-            Target {
-                path: &directory.join("specimen"),
-                offset: 0,
-                address: None,
-                report_id: Some(&saved.id),
-                input: InputKind::Executable,
+            sample,
+            &mut extra::Shared {
+                sources: &sources,
+                budget: &mut budget,
+                total: &mut total,
+                deadline,
             },
-            &sources,
-            &mut budget,
             &mut report,
-        )?;
-        Ok::<_, String>((data.len() as u64, saved.specimen_sha256.unwrap_or(sha256)))
-    })();
-    match specimen {
-        Ok((size, sha256)) => report.input(executable.size(size).sha256(sha256)),
-        Err(error) => {
-            report.warnings.push(format!("Executable: {error}"));
-            report.input(if reached_engine {
-                executable.failed(format!("YARA failed: {error}"))
-            } else {
-                executable.skipped(error)
-            });
+        );
+    } else {
+        let analysis = request.directory.join("analysis");
+        let mut executable = ScannedInput::new(InputKind::Executable, &analysis);
+        // Whether the engine got as far as scanning: a specimen that could not be
+        // read is skipped, one the engine failed on is failed.
+        let mut reached_engine = false;
+        let specimen = (|| {
+            let directory = &analysis;
+            let saved = super::super::jobs::open_report(directory)?;
+            let (saved, data) = super::super::specimen::read_all(directory, &saved.id)?;
+            report.source_digest = saved.specimen_sha256.clone();
+            executable.name = Path::new(&saved.source_path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            total += data.len() as u64;
+            reached_engine = true;
+            let sha256 = record(
+                &mut scanner,
+                &data,
+                Target {
+                    path: &directory.join("specimen"),
+                    offset: 0,
+                    address: None,
+                    report_id: Some(&saved.id),
+                    input: InputKind::Executable,
+                },
+                &sources,
+                &mut budget,
+                &mut report,
+            )?;
+            Ok::<_, String>((data.len() as u64, saved.specimen_sha256.unwrap_or(sha256)))
+        })();
+        match specimen {
+            Ok((size, sha256)) => report.input(executable.size(size).sha256(sha256)),
+            Err(error) => {
+                report.warnings.push(format!("Executable: {error}"));
+                report.input(if reached_engine {
+                    executable.failed(format!("YARA failed: {error}"))
+                } else {
+                    executable.skipped(error)
+                });
+            }
         }
     }
     // The library the run loaded into another program, the executables and
@@ -839,6 +906,7 @@ mod tests {
             include_dir: None,
             skipped_inputs: vec![],
             libraries: vec![],
+            sample: None,
             unstaged: vec![],
             network_off: false,
         };

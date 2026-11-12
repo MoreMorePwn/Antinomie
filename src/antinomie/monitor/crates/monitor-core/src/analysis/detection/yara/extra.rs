@@ -288,6 +288,7 @@ mod tests {
             include_dir: None,
             skipped_inputs: vec![],
             libraries: vec![],
+            sample: None,
             unstaged: vec![],
             network_off: false,
         }
@@ -403,6 +404,71 @@ mod tests {
         assert_eq!(inputs[1].outcome, InputOutcome::Skipped);
         assert!(inputs[1].reason.contains("no longer matches"), "{inputs:?}");
         assert!(report.findings.is_empty());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_run_without_guest_analysis_scans_its_library_sample_as_the_executable() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-yara-nosample-{}", crate::storage::unique_id()));
+        let data = directory.join("data");
+        crate::storage::private_dir(&directory.join("work")).unwrap();
+        crate::storage::private_dir(&data).unwrap();
+        fs::write(
+            directory.join("fixture.yar"),
+            "rule fixture { strings: $a = \"LIBRARY_MARKER\" condition: $a }",
+        )
+        .unwrap();
+        let bytes = b"\x7fELF.. sample LIBRARY_MARKER";
+        let sha = crate::samples::Library::open(&data)
+            .unwrap()
+            .add_bytes(bytes, crate::samples::NewSample::default())
+            .unwrap()
+            .sha256;
+        // As an Auto-mode job saves its run: the library sample, no analysis.
+        crate::storage::atomic_json(
+            &directory.join("run.json"),
+            &serde_json::json!({"analysis":null,"request":{"path":"/tmp/abcd1234-dropper",
+                "sample":{"sha256":sha,"name":"dropper"}}}),
+        )
+        .unwrap();
+        let mut staged = staged(&directory, &data, directory.join("fixture.yar"));
+        staged.sample =
+            super::super::super::runner::stage_sample(&staged.request, &directory.join("work"));
+        let report = super::super::scan(&staged, &directory.join("work")).unwrap();
+        let inputs = report.inputs.clone().unwrap();
+        assert_eq!(inputs[0].kind, InputKind::Executable, "{inputs:?}");
+        assert_eq!(inputs[0].outcome, InputOutcome::Succeeded, "{inputs:?}");
+        assert_eq!(inputs[0].name, "dropper");
+        assert_eq!(inputs[0].path, Path::new("/tmp/abcd1234-dropper"));
+        assert_eq!(inputs[0].sha256.as_deref(), Some(sha.as_str()));
+        assert_eq!(report.source_digest.as_deref(), Some(sha.as_str()));
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].count, 1);
+        // A run that kept a guest analysis is scanned from its specimen, as
+        // before: nothing is staged from the library.
+        crate::storage::atomic_json(
+            &directory.join("run.json"),
+            &serde_json::json!({"analysis":{"id":"x"},"request":{"path":"/tmp/abcd1234-dropper",
+                "sample":{"sha256":sha,"name":"dropper"}}}),
+        )
+        .unwrap();
+        assert!(
+            super::super::super::runner::stage_sample(&staged.request, &directory.join("work"))
+                .is_none()
+        );
+        // A sample the library no longer has is a skipped row with the reason.
+        crate::storage::atomic_json(
+            &directory.join("run.json"),
+            &serde_json::json!({"request":{"path":"/tmp/x","sample":{"sha256":"0".repeat(64),"name":"gone"}}}),
+        )
+        .unwrap();
+        staged.sample =
+            super::super::super::runner::stage_sample(&staged.request, &directory.join("work"));
+        let report = super::super::scan(&staged, &directory.join("work")).unwrap();
+        let inputs = report.inputs.clone().unwrap();
+        assert_eq!(inputs[0].outcome, InputOutcome::Skipped, "{inputs:?}");
+        assert!(inputs[0].reason.contains("cannot be read"), "{inputs:?}");
         fs::remove_dir_all(directory).unwrap();
     }
 }

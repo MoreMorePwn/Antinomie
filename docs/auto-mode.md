@@ -56,6 +56,12 @@ run's digest and the label, after `triage` and `detection`) and `report` (after
 all of them). At most `[daemon] host_workers` items run at once (2 by default),
 across every job.
 
+A job launches without the guest-side static analysis, so YARA does not wait for
+the specimen that analysis keeps (as the window's Detection tab does): it scans
+the sample the job ran, read from the library, with the files the run wrote and
+the core and memory dumps. The high or critical YARA hit of the default verdict
+mapping therefore applies to jobs too.
+
 * **Order: first come, first served by job arrival.** Every item of an older job
   starts before any item of a newer one; a job's items start in the order above.
   The first item waiting is the head of the queue: while it waits for a worker,
