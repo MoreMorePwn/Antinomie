@@ -2,8 +2,8 @@
 # from the public bucket boots under KVM; a heavy launched program and the
 # same load under Capture All must lose nothing in never-drop mode and parse
 # without errors, Capture All allowed to drop may lose telemetry only while
-# it sheds load, and a network capture must record packets. See
-# tests/ci/nightly-vm.py.
+# it sheds load, a network capture must record packets, and one Auto job
+# must go from a sample to a report. See tests/ci/nightly-vm.py.
 name: Nightly VM
 
 on:
@@ -32,20 +32,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             musl-tools pkg-config libsqlite3-dev libxkbcommon-dev libwayland-dev \
-            qemu-system-x86 qemu-utils
+            qemu-system-x86 qemu-utils bubblewrap
+      - name: Unprivileged user namespaces for bubblewrap (the Auto job's static checks)
+        run: |
+          restriction=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [[ -r "$restriction" ]] && [[ "$(cat "$restriction")" -ne 0 ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch
         with:
           toolchain: 1.98.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: src/antinomie/monitor
-      - name: Build guest-run
+      - name: Build guest-run and the CLI
         working-directory: src/antinomie/monitor
-        run: cargo build --release --locked --example guest-run
+        run: |
+          cargo build --release --locked --example guest-run
+          cargo build --release --locked -p antinomie-cli
       - name: VM checks
         run: >-
           python3 tests/ci/nightly-vm.py
           src/antinomie/monitor/target/release/examples/guest-run "$RUNNER_TEMP/vm"
+          src/antinomie/monitor/target/release/antinomie-cli
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -53,6 +62,7 @@ jobs:
           name: nightly-vm-logs
           path: |
             ${{ runner.temp }}/vm/*.stderr
+            ${{ runner.temp }}/vm/data-auto/service/jobs/*/job.log
             ${{ runner.temp }}/vm/*.result.json
             ${{ runner.temp }}/vm/**/serial.log
           if-no-files-found: ignore

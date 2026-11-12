@@ -94,6 +94,7 @@ jobs:
           python3 tests/monitor/test-sinkhole.py
           python3 tests/monitor/test-evasive-sample.py
           python3 tests/monitor/test-vm-regress.py
+          python3 tests/monitor/test-auto-harness.py
           python3 tests/monitor/test-sync-quilt-view.py
           python3 scripts/sync-quilt-view.py --check
           python3 tests/monitor/test-publish-base-sources.py
