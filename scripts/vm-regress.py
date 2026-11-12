@@ -785,10 +785,12 @@ def command_for(check, ctx, args):
             "ANTINOMIE_TRACER_DATA": writes.group(1),
             "ANTINOMIE_DISK_READER": str(MONITOR / "target/release/antinomie-monitor"),
         }
-        argv = ["cargo", "test", "--release", "--locked", "-j", "2", "-p", "antinomie-monitor-ui", "--bin",
-                "antinomie-monitor", "recorded_tracer_triage", "--", "--ignored", "--nocapture"]
+        # The test lives in the antinomie-triage crate (triage/src/tracer_qa.rs, a
+        # cfg(test) module of its library) since 0.9.0's Triage extraction.
+        argv = ["cargo", "test", "--release", "--locked", "-j", "2", "-p", "antinomie-triage", "--lib",
+                "recorded_tracer_triage", "--", "--ignored", "--nocapture"]
         return argv, env
-    plans = {"screen": screen_plan, "nic-routed": nic_plan}
+    plans ={"screen": screen_plan, "nic-routed": nic_plan}
     if check.name in plans:
         path = Path(check.argv[-1])
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -979,7 +981,17 @@ def run_check(check, ctx, args, attempt):
         result.update(measure(check.name, out, log, code))
     elif check.name in MEASURED_GROUPS and code is not None:
         result.update(measure_rate(check.name, out))
+    if check.cargo and result["status"] == "PASS" and not tests_ran(log):
+        result["status"] = "FAIL"
+        result["detail"] = "the test filter matched no test (cargo ran 0 tests)"
     return result
+
+
+def tests_ran(log):
+    """Whether a cargo test log ran at least one test: a filter that matches
+    nothing (a test moved to another crate) exits 0 and must not pass."""
+    text = log.read_text(errors="replace") if log.exists() else ""
+    return any(int(n) > 0 for n in re.findall(r"^running (\d+) tests?$", text, re.M))
 
 
 def covers(gap, lo, hi, wait_ns, shift=0):
