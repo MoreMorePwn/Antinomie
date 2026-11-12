@@ -7,7 +7,7 @@
 use super::{
     R, Store, Tx, db, internal, machine,
     model::{from_name, load_job, name_of, queue_position, to_json},
-    submit::queued_rows,
+    submit::{QueueKey, queued_rows},
 };
 use crate::api::{
     error::{ApiError, ErrorCode},
@@ -282,11 +282,56 @@ fn set_waiting(tx: &mut Tx<'_>, id: &JobId, cur: &Cur, wait: Option<WaitingFor>)
     )
 }
 
+/// Rows the scheduler reads at a time.
+const CLAIM_PAGE: u32 = 64;
+
+/// One page of [`Store::claim_next`]: the first job of `candidates` the lane
+/// may start, started; the others get their `waiting_for`.
+fn claim_in(
+    tx: &mut Tx<'_>,
+    lane: &LaneId,
+    paused: bool,
+    now: u64,
+    candidates: Vec<Job>,
+    eligible: &mut dyn FnMut(&Job) -> Eligibility,
+) -> R<Option<Job>> {
+    for job in candidates {
+        let cur = current(tx, &job.id)?;
+        let backoff_until: Option<u64> = tx
+            .tx
+            .query_row(
+                "SELECT not_before_ms FROM jobs WHERE id = ?1",
+                [job.id.as_str()],
+                |r| r.get(0),
+            )
+            .map_err(db)?;
+        if paused {
+            set_waiting(tx, &job.id, &cur, Some(WaitingFor::QueuePaused))?;
+            continue;
+        }
+        if backoff_until.is_some_and(|until| until > now) {
+            set_waiting(tx, &job.id, &cur, Some(WaitingFor::Backoff))?;
+            continue;
+        }
+        match eligible(&job) {
+            Eligibility::Skip => {}
+            Eligibility::Wait(why) => set_waiting(tx, &job.id, &cur, Some(why))?,
+            Eligibility::Ready => {
+                start(tx, &job.id, &cur, lane)?;
+                return Ok(Some(load_job(&tx.tx, job.id.as_str())?));
+            }
+        }
+    }
+    Ok(None)
+}
+
 impl Store {
     /// A lane looks for work: the first queued job (priority, then age) the
     /// scheduler calls [`Eligibility::Ready`] becomes `running` at stage
     /// `prechecks`, attempt counted up. Jobs it cannot start yet keep
     /// `queued` and get their `waiting_for`. A paused queue starts nothing.
+    /// The whole queue is read, a page at a time, so a job this lane can run
+    /// is found behind any number it cannot.
     pub fn claim_next(
         &self,
         lane: &LaneId,
@@ -294,36 +339,26 @@ impl Store {
     ) -> R<Option<Job>> {
         let paused = self.pause_reason()?.is_some();
         self.write(|tx| {
-            let candidates = queued_rows(&tx.tx, 64)?;
             let now = tx.now;
-            for job in candidates {
-                let cur = current(tx, &job.id)?;
-                let backoff_until: Option<u64> = tx
-                    .tx
-                    .query_row(
-                        "SELECT not_before_ms FROM jobs WHERE id = ?1",
-                        [job.id.as_str()],
-                        |r| r.get(0),
-                    )
-                    .map_err(db)?;
-                if paused {
-                    set_waiting(tx, &job.id, &cur, Some(WaitingFor::QueuePaused))?;
-                    continue;
-                }
-                if backoff_until.is_some_and(|until| until > now) {
-                    set_waiting(tx, &job.id, &cur, Some(WaitingFor::Backoff))?;
-                    continue;
-                }
-                match eligible(&job) {
-                    Eligibility::Skip => {}
-                    Eligibility::Wait(why) => set_waiting(tx, &job.id, &cur, Some(why))?,
-                    Eligibility::Ready => {
-                        start(tx, &job.id, &cur, lane)?;
-                        return Ok(Some(load_job(&tx.tx, job.id.as_str())?));
-                    }
+            let mut after: Option<QueueKey> = None;
+            loop {
+                let candidates = queued_rows(&tx.tx, after.as_ref(), CLAIM_PAGE)?;
+                let Some(last) = candidates.last() else {
+                    return Ok(None);
+                };
+                after = Some(
+                    tx.tx
+                        .query_row(
+                            "SELECT priority, created_ms, id FROM jobs WHERE id = ?1",
+                            [last.id.as_str()],
+                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                        )
+                        .map_err(db)?,
+                );
+                if let Some(job) = claim_in(tx, lane, paused, now, candidates, eligible)? {
+                    return Ok(Some(job));
                 }
             }
-            Ok(None)
         })
     }
 
