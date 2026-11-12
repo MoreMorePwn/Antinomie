@@ -908,3 +908,27 @@ fn a_label_filter_pages_past_non_matching_jobs() {
     assert_eq!(rest.jobs.len(), 1);
     assert_eq!(rest.jobs[0].id, labelled[0]);
 }
+
+/// BH-01 (bug hunt 0.9.0): a lane that can run a job must find it even when
+/// 64 or more older jobs ahead of it are ones it cannot take now (another
+/// lane's architecture, a backoff). `claim_next` looks at 64 rows only.
+#[test]
+fn bh_01_a_job_the_lane_can_run_behind_64_it_cannot_is_still_claimed() {
+    let fx = Fx::with_policy("bh01", |p| p.limits.max_queued_per_client = 100);
+    for _ in 0..64 {
+        fx.queued(1);
+        fx.clock.advance(1);
+    }
+    let wanted = fx.queued(2);
+    let claimed = fx
+        .store
+        .claim_next(&lane(), &mut |job| {
+            if job.sample.as_ref().is_some_and(|s| s.sha256 == sha(2)) {
+                Eligibility::Ready
+            } else {
+                Eligibility::Wait(WaitingFor::Lane)
+            }
+        })
+        .unwrap();
+    assert_eq!(claimed.map(|job| job.id), Some(wanted.id));
+}
