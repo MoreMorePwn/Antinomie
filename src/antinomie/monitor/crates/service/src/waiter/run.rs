@@ -9,7 +9,7 @@
 //! | Stage | Does | Ends when | Deadline |
 //! |---|---|---|---|
 //! | `provision` | boots the VM if allowed and needed | `Running` and the guest kernel answered | `boot_limit` |
-//! | `upload` | `UploadSample` from the library | the result; "read-only file system" is retried | 60 s |
+//! | `upload` | `UploadSample` from the library | the result; "read-only file system" and "no such file or directory" are retried | 60 s |
 //! | `launch` | `Execute` with the sample linked | a new run in the snapshot | 30 s |
 //!
 //! The upload, launch and guest-answer waits are KVM times: under TCG they
@@ -240,11 +240,14 @@ pub fn incomplete_parts(run: &RunSummary, artifacts: Option<&RunArtifacts>) -> V
 }
 
 /// The error text of an upload that only means the guest is not ready yet:
-/// the first upload after boot fails for about a second (spike T0345).
+/// the first upload after boot fails for about a second (spike T0345) with a
+/// read-only root, and a guest resumed from a Full snapshot taken early in
+/// its boot is still in its initramfs, where the destination's folder does
+/// not exist yet (ANT-T0472). The engine itself asks again after a "no such
+/// file" only for a guest it booted, not for a resumed one.
 fn guest_not_ready(message: &str) -> bool {
-    message
-        .to_ascii_lowercase()
-        .contains("read-only file system")
+    let message = message.to_ascii_lowercase();
+    message.contains("read-only file system") || message.contains("no such file or directory")
 }
 
 /// The progress line of an upload the guest was not ready for, `tries` times
@@ -488,7 +491,15 @@ impl<E: Engine> Waiter<E> {
         // launch
         let began = self.now_ms();
         self.stage(Stage::Launch, StageStatus::Started, began, sink);
-        let launched = self.launch(plan);
+        let launched = match self.kernel_crash() {
+            Some(line) => Err(fail(
+                FailureCode::GuestUnreachable,
+                Stage::Launch,
+                super::console::BOOT_CRASH,
+                Some(&line),
+            )),
+            None => self.launch(plan),
+        };
         report.timings.launch_ms = Some(self.stage(
             Stage::Launch,
             if launched.is_ok() {

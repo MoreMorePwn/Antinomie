@@ -174,6 +174,7 @@ pub(super) fn guest_scoped_command(command: &Command) -> bool {
             | Command::TypeClipboard { .. }
             | Command::UploadSample { .. }
             | Command::Execute(_)
+            | Command::AwaitBoot { .. }
             | Command::CancelProcessCore { .. }
             | Command::DumpProcessCore { .. }
             | Command::CancelCoreCapture { .. }

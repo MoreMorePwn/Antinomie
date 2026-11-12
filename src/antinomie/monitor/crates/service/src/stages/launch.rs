@@ -35,6 +35,18 @@ impl<E: Engine> LaneStages<'_, E> {
     ) -> Result<Launched, StageStop> {
         let guest_path = self.sample_path(job, prepared)?;
         let sample = job.sample.as_ref().expect("sample_path checked it");
+        // A guest kernel that crashed while the VM booted (a clean snapshot
+        // with a half-grown file system, ANT-T0476) still answers; the
+        // program is not started in it.
+        self.waiter.drain()?;
+        if let Some(line) = self.waiter.kernel_crash() {
+            return Err(StageStop::Failed(Failure::new(
+                FailureCode::GuestUnreachable,
+                Stage::Launch,
+                crate::waiter::console::BOOT_CRASH,
+                Some(&line),
+            )));
+        }
         let mut request = prepared.effective.request.clone();
         request.path = guest_path.clone();
         request.sample = Some(SampleRef {

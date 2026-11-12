@@ -5,8 +5,10 @@
 //!
 //! `auto init` (4.5.3 step 1): create the lane VM with the `VmConfig` the
 //! caller built (routed, not NAT, not isolated), boot it once, wait for the
-//! guest to answer the INFO probe, stop it and wait for the run layer to
-//! settle, take the Disk snapshot (`auto-clean`), and write
+//! guest to answer the INFO probe and to finish booting (`AwaitBoot`: its
+//! root file system mounted, so the initramfs no longer grows it; a guest
+//! kernel that crashed on the way fails the command), stop it and wait for
+//! the run layer to settle, take the Disk snapshot (`auto-clean`), and write
 //! `lanes/lane-N.json` with the VM, the snapshot id and the base identity.
 //! A lane that exists is refused unless `replace` is asked; a replaced lane
 //! that still has work is refused too. Nothing is left half made: a failure
@@ -220,6 +222,23 @@ pub fn init_lane<E: Engine>(
         return Err(left(ApiError::new(
             ErrorCode::PreconditionFailed,
             format!("the guest is revision {have}; a policy needs {need} (core dumps)"),
+        )));
+    }
+    // The control channel answers from the initramfs, which may still be
+    // growing the root file system to the lane disk: a stop now would keep a
+    // half-grown one in the clean snapshot, and every job's boot from it
+    // would crash the guest kernel (ANT-T0476).
+    progress("waiting for the guest to finish booting");
+    waiter
+        .await_boot(&vm_id)
+        .map_err(|e| left(engine_error(e, "the guest did not finish booting")))?;
+    if let Some(line) = waiter.kernel_crash() {
+        let _ = waiter.stop_vm(&vm_id, Some(SETTLE_WAIT));
+        return Err(left(ApiError::new(
+            ErrorCode::PreconditionFailed,
+            format!(
+                "the guest kernel crashed during the first boot; no clean snapshot was taken: {line}"
+            ),
         )));
     }
     progress("stopping the VM and waiting for its disk to settle");
@@ -460,6 +479,19 @@ pub fn reset_lane<E: Engine>(
                 && s.guest_kernel.is_some()
         })
         .map_err(|e| engine_error(e, "the reverted guest did not answer"))?;
+    progress("waiting for the guest to finish booting");
+    waiter
+        .await_boot(&file.vm_id)
+        .map_err(|e| engine_error(e, "the reverted guest did not finish booting"))?;
+    if let Some(line) = waiter.kernel_crash() {
+        let _ = waiter.stop_vm(&file.vm_id, Some(SETTLE_WAIT));
+        return Err(ApiError::new(
+            ErrorCode::PreconditionFailed,
+            format!(
+                "the guest kernel crashed while the reverted VM booted; the lane stays as it was: {line}"
+            ),
+        ));
+    }
     progress("stopping the VM and waiting for its disk to settle");
     waiter
         .stop_vm(&file.vm_id, Some(SETTLE_WAIT))

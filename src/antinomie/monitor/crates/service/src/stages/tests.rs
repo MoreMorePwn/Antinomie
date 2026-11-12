@@ -1147,6 +1147,56 @@ fn launch_sends_the_exact_request_and_records_the_run() {
     assert!(kinds(&w.fx, &job.id).contains(&"job.run".to_owned()));
 }
 
+/// ANT-T0476 (P5): a guest whose kernel crashed while it booted (a clean
+/// snapshot with a half-grown file system) still answers; the program is
+/// not started in it and the job says why.
+#[test]
+fn a_guest_kernel_that_crashed_while_booting_fails_the_launch() {
+    let w = W::new("launch-crash");
+    let job = w.fx.running(1);
+    let console = w.fx.dir.join("serial.log");
+    std::fs::write(
+        &console,
+        "[    3.665615] EXT4-fs (sda): resizing filesystem from 393217 to 4194304 blocks\n\
+         [    3.668595] kernel BUG at ../source/linux-6.12.94/fs/ext4/resize.c:547!\n\
+         Guest filesystem resize failed\nBusyBox guest ready\n",
+    )
+    .unwrap();
+    let path = console.clone();
+    let mut waiter = w.engine(move |fake| {
+        let path = path.clone();
+        fake.start_with(move |s| {
+            healthy(s);
+            s.serial_log = Some(path.clone());
+        });
+    });
+    let stop = launch(&w, &mut waiter, &job).unwrap_err();
+    let failure = stop.failure().unwrap();
+    assert_eq!(
+        (failure.code, failure.stage),
+        (FailureCode::GuestUnreachable, Stage::Launch)
+    );
+    assert!(failure.retryable);
+    assert!(failure.message.contains("guest kernel crashed"));
+    assert_eq!(
+        failure.detail.as_deref(),
+        Some("kernel BUG at ../source/linux-6.12.94/fs/ext4/resize.c:547!")
+    );
+    assert!(
+        waiter.engine_mut().sent().is_empty(),
+        "nothing was launched"
+    );
+    // A clean boot's console launches.
+    std::fs::write(&console, "BusyBox guest ready\n").unwrap();
+    let mut clean = w.engine(|fake| {
+        execute_ok(fake);
+        let path = console.clone();
+        fake.after(MS, move |s| s.serial_log = Some(path.clone()));
+    });
+    clean.pump(10 * MS).unwrap();
+    assert!(launch(&w, &mut clean, &job).is_ok());
+}
+
 #[test]
 fn a_refused_unanswered_or_vanished_launch_fails_with_launch_failed() {
     let w = W::new("launch-bad");

@@ -86,11 +86,17 @@ fn creating_engine(revision: u32) -> Waiter<FakeEngine> {
             s.guest_kernel = Some(kernel(revision))
         })
         .ok("starting");
+    // The initramfs grows the root file system for a while after the guest
+    // answers; the engine says when it has finished.
+    fake.on("AwaitBoot")
+        .after(Duration::from_secs(4))
+        .ok("the guest has finished booting (4000 ms)");
     fake.on("Stop")
         .then(100 * MS, |s| {
             s.state = VmState::Stopped;
             s.active_vm = None;
             s.guest_kernel = None;
+            s.serial_log = None;
         })
         .ok("stopped");
     fake.on("CreateVmSnapshot")
@@ -127,7 +133,13 @@ fn init_creates_boots_stops_snapshots_and_writes_the_lane_file() {
     assert!(made.boot_ms >= 9_000, "{}", made.boot_ms);
     assert_eq!(
         waiter.engine_mut().sent_names(),
-        ["Create", "Start", "Stop", "CreateVmSnapshot"]
+        ["Create", "Start", "AwaitBoot", "Stop", "CreateVmSnapshot"]
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "waiting for the guest to finish booting"),
+        "{lines:?}"
     );
     let saved = lanes.load(&lane()).unwrap().unwrap();
     assert_eq!(
@@ -139,7 +151,7 @@ fn init_creates_boots_stops_snapshots_and_writes_the_lane_file() {
         ("vm-new", "snap-new", "busybox-r21")
     );
     assert!(saved.current.is_none() && saved.quarantine.is_none());
-    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert_eq!(lines.len(), 5, "{lines:?}");
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -177,6 +189,75 @@ fn an_existing_lane_or_vm_name_is_refused_and_nothing_is_sent() {
     assert_eq!(error.code, ErrorCode::Conflict);
     assert!(named.engine_mut().sent_names().is_empty());
     assert!(waiter.engine_mut().sent_names().is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// ANT-T0476 (P5): the clean snapshot is not taken of a guest whose
+/// kernel crashed in its first boot, nor before the guest has finished
+/// booting.
+#[test]
+fn init_takes_no_snapshot_when_the_first_boot_did_not_finish_or_crashed() {
+    let (root, lanes) = dir("crash");
+    let console = root.join("serial.log");
+    std::fs::write(
+        &console,
+        "[    3.66] EXT4-fs (sda): resizing filesystem from 393217 to 4194304 blocks\n\
+         [    3.67] kernel BUG at fs/ext4/resize.c:547!\n\
+         Guest filesystem resize failed\nBusyBox guest ready\n",
+    )
+    .unwrap();
+    let mut waiter = creating_engine(21);
+    let path = console.clone();
+    waiter.engine_mut().after(Duration::from_secs(1), move |s| {
+        s.serial_log = Some(path.clone())
+    });
+    let error = init_lane(&mut waiter, &lanes, &plan(false), &mut |_| {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::PreconditionFailed);
+    assert!(
+        error
+            .message
+            .contains("kernel BUG at fs/ext4/resize.c:547!")
+            && error.message.contains("vm delete vm-new"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        waiter.engine_mut().sent_names(),
+        ["Create", "Start", "AwaitBoot", "Stop"]
+    );
+    assert!(lanes.load(&lane()).unwrap().is_none());
+
+    // The boot wait ran out: no stop mid-resize, no snapshot.
+    let clock = Arc::new(ManualClock::new(T0));
+    let mut fake = FakeEngine::new(Arc::clone(&clock));
+    fake.on("Create")
+        .then(MS, |s| {
+            let mut vm = vm_config("vm-new");
+            vm.name = VM.into();
+            s.vms.push(vm);
+        })
+        .ok("created");
+    fake.on("Start")
+        .then(MS, |s| {
+            s.state = VmState::Running;
+            s.active_vm = Some("vm-new".into());
+            s.guest_kernel = Some(kernel(21));
+        })
+        .ok("starting");
+    fake.on("AwaitBoot")
+        .fail("the guest did not finish booting in 60 s (its root file system is not mounted yet)");
+    let mut waiter = Waiter::new(fake, clock);
+    let error = init_lane(&mut waiter, &lanes, &plan(false), &mut |_| {}).unwrap_err();
+    assert!(
+        error.message.contains("did not finish booting") && error.message.contains("left as it is"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        waiter.engine_mut().sent_names(),
+        ["Create", "Start", "AwaitBoot"]
+    );
+    assert!(lanes.load(&lane()).unwrap().is_none());
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -304,6 +385,11 @@ fn reset_reverts_answers_stops_settles_and_lifts_the_quarantine() {
         .ok("restored");
     waiter
         .engine_mut()
+        .on("AwaitBoot")
+        .after(Duration::from_secs(2))
+        .ok("the guest has finished booting (2000 ms)");
+    waiter
+        .engine_mut()
         .on("Stop")
         .then(MS, |s| {
             s.state = VmState::Stopped;
@@ -316,6 +402,8 @@ fn reset_reverts_answers_stops_settles_and_lifts_the_quarantine() {
         "{summary:?}"
     );
     let sent = waiter.engine_mut().sent();
+    let names: Vec<&str> = sent.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["RestoreVmSnapshot", "AwaitBoot", "Stop"]);
     let restore = sent
         .iter()
         .find(|s| s.name == "RestoreVmSnapshot")

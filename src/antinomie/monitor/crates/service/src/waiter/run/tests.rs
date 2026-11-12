@@ -380,6 +380,38 @@ fn the_first_upload_after_boot_is_retried_while_the_disk_is_read_only() {
     assert_eq!(upload_notes(&events).len(), 1);
 }
 
+/// ANT-T0472 (P1): a guest resumed from a Full snapshot taken while it was
+/// still in its initramfs has no destination folder yet; the engine does not
+/// ask again for a resumed guest, so the upload is retried here.
+#[test]
+fn an_upload_into_a_guest_still_in_its_initramfs_is_retried() {
+    let clock = Arc::new(ManualClock::new(0));
+    let mut fake = happy(&clock, 10_000);
+    let mut react = fake.react.take().unwrap();
+    let attempts = Arc::new(Mutex::new(0u32));
+    let seen = attempts.clone();
+    fake.react = Some(Box::new(move |command, id, queue| {
+        if matches!(command, Command::UploadSample { .. }) {
+            let mut n = seen.lock().unwrap();
+            *n += 1;
+            if *n < 3 {
+                queue.push_back(result(
+                    id,
+                    false,
+                    "guest command 0x1001: No such file or directory (os error 2)",
+                ));
+                return;
+            }
+        }
+        react(command, id, queue);
+    }));
+    let (mut waiter, _) = make(fake);
+    let (report, events) = exec(&mut waiter, &plan(), |_| Ok(Some(complete())));
+    assert_eq!(report.unwrap().outcome, Outcome::Succeeded);
+    assert_eq!(*attempts.lock().unwrap(), 3);
+    assert_eq!(upload_notes(&events).len(), 1);
+}
+
 fn upload_notes(events: &[EventBody]) -> Vec<String> {
     events
         .iter()

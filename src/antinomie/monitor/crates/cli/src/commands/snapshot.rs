@@ -4,11 +4,13 @@
 //! disk, a Full one also the memory of the running guest.
 //!
 //! In direct mode a running VM ends with the command, so `create --mode full`
-//! boots the VM first, and `restore` shows the restored guest answering and
-//! then stops it.
+//! boots the VM first and saves it once the guest has finished booting, and
+//! `restore` shows the restored guest answering and then stops it once it has
+//! finished booting (a guest stopped or saved earlier may be growing its file
+//! system in the initramfs, ANT-T0472, T0476).
 use super::machine::{
-    checkpoint_value, confirm, find_checkpoint, find_vm, guest_value, live_checkpoints, wait_bases,
-    wait_guest,
+    await_boot, checkpoint_value, confirm, find_checkpoint, find_vm, guest_value, live_checkpoints,
+    wait_bases, wait_guest,
 };
 use crate::{
     context::Context,
@@ -44,7 +46,8 @@ pub enum Snapshot {
 pub enum Mode {
     /// The disk of the stopped VM; restoring boots the guest afresh.
     Disk,
-    /// Disk and memory of the running guest; restoring resumes it.
+    /// Disk and memory of the running guest, saved once it has finished
+    /// booting; restoring resumes it.
     Full,
 }
 
@@ -181,6 +184,10 @@ fn create(
             limit,
         )?;
         wait_guest(engine, &vm_id, limit)?;
+        if let Err(error) = await_boot(engine, &vm_id) {
+            let _ = engine.waiter().stop_vm(&vm_id, limit);
+            return Err(error);
+        }
         refresh(&vm_id, limit, engine)?;
         if let Err(error) = check_capability(engine, &vm_id, mode) {
             let _ = engine.waiter().stop_vm(&vm_id, limit);
@@ -298,7 +305,9 @@ fn restore(
     wait_guest(engine, &vm_id, limit)?;
     let restored_s = began.elapsed().as_secs_f64();
     let guest = guest_value(engine.snapshot());
+    let booted = await_boot(engine, &vm_id);
     engine.waiter().stop_vm(&vm_id, limit).map_err(wait_error)?;
+    booted?;
     let resumed = mode == VmSnapshotMode::Full && !arguments.cold_boot;
     Ok(Reply::value(json!({
         "vm": vm_id,

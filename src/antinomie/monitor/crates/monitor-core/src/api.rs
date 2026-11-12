@@ -2447,6 +2447,17 @@ pub enum Command {
         executable: bool,
     },
     Execute(ExecRequest),
+    /// Wait until the running guest `vm_id` has finished booting, without
+    /// starting anything in it: its own root file system is mounted (the
+    /// initramfs's work, such as growing the root file system to the disk,
+    /// is done) and, on a systemd guest, start-up has finished. The control
+    /// channel answers from the initramfs already, so a guest that answers
+    /// may still be changing its disk. Succeeds at once for a base that
+    /// cannot be asked; fails when the boot wait (`start.boot_wait_secs`,
+    /// stretched under TCG) runs out or the VM stops.
+    AwaitBoot {
+        vm_id: String,
+    },
     /// Cancel acquisition for a run without stopping the specimen.
     CancelProcessCore {
         run_id: String,
@@ -2654,6 +2665,7 @@ impl Command {
                 | Command::CancelCoreCapture { .. }
                 | Command::Upload { .. }
                 | Command::UploadSample { .. }
+                | Command::AwaitBoot { .. }
                 | Command::AnalyzeOnly { .. }
                 | Command::TerminalInput { .. }
                 | Command::TerminalResize { .. }
