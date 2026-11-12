@@ -298,7 +298,9 @@ fn the_revert_mode_is_checked_against_the_lane_snapshots() {
     );
     let found = problems(&reset, &lane(VmNet::Routed, &["auto-clean"]));
     assert!(
-        found.iter().any(|f| f.contains("reset is refused")),
+        found
+            .iter()
+            .any(|f| f.contains("reset is refused") && f.contains("snapshot_disk")),
         "{found:?}"
     );
     assert_eq!(

@@ -48,7 +48,7 @@ runs while a window or the daemon owns the data directory.
 - `analysis.required_stages` must not name a stage the policy skips.
 - The lane VM (`vm.lane_vm`, found in the data directory): its network must match
   `vm.network`; a policy that allows `inet_sim` needs a routed VM; `reset` is
-  refused when the VM has snapshots; `snapshot_disk` and `snapshot_full` need the
+  refused when the VM has snapshots, which every Auto lane has (use `snapshot_disk`); `snapshot_disk` and `snapshot_full` need the
   snapshot named by `vm.revert_to` (a warning when `snapshot_full` names a
   disk-only snapshot, which boots cold); `vm.stealth` is compared with the VM's
   profile and never applied.

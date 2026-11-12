@@ -19,12 +19,11 @@ see another's leftovers by accident.
                  snapshot is pointed at it while the daemon is stopped: `auto
                  init` takes Disk snapshots only, so this is the harness's own
                  setup (see the task record). The lane file is put back after.
-  reset          a policy with `vm.revert = "reset"` is checked with
-                 `config validate --policy` first. The engine refuses `Reset`
-                 on a VM with snapshots and every auto lane has its clean
-                 snapshot, so on the current code this is expected to be
-                 refused there; the strategy is then reported BLOCKED with the
-                 validator's words and no job is run.
+  (reset)        not run: `vm.revert = "reset"` is not available on Auto
+                 lanes in 0.9.0 (every lane keeps its clean snapshot, and the
+                 engine refuses Reset on a VM with snapshots; user decision
+                 2026-11-12, option A). `snapshot_disk` gives the same clean
+                 disk.
 
     test-auto-isolation.py --work DIR --base BASE [--revert snapshot_disk,...]
 
@@ -43,7 +42,7 @@ av = importlib.util.module_from_spec(spec)
 sys.modules["auto_vm"] = av
 spec.loader.exec_module(av)
 
-STRATEGIES = ("snapshot_disk", "snapshot_full", "reset")
+STRATEGIES = ("snapshot_disk", "snapshot_full")
 FULL_SNAPSHOT = "auto-clean-full"
 JOB_TIMEOUT_S = 600
 SEED = r"""

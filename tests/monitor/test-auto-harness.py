@@ -101,9 +101,9 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(command[-2:], ["--work", "w x"])
 
     def test_isolation_strategies_and_fault_cases(self):
-        self.assertEqual(isolation.strategies("reset, snapshot_disk"), ["reset", "snapshot_disk"])
+        self.assertEqual(isolation.strategies("snapshot_full, snapshot_disk"), ["snapshot_full", "snapshot_disk"])
         self.assertEqual(faults.cases("disk-full"), ["disk-full"])
-        for parse, text in ((isolation.strategies, "clone"), (faults.cases, "oom")):
+        for parse, text in ((isolation.strategies, "clone"), (isolation.strategies, "reset"), (faults.cases, "oom")):
             with self.subTest(text=text), self.assertRaises(SystemExit):
                 parse(text)
 
