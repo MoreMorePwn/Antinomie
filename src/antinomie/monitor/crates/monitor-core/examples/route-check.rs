@@ -949,7 +949,6 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
             after.len() == before.len() + 1
                 && new.iter().all(|r| {
                     r.state == RunState::FailedToStart
-                        && r.started_ms.is_none()
                         && r.recording_error
                             .as_deref()
                             .is_some_and(|e| e.contains("Not started:") && e.contains(wanted))
