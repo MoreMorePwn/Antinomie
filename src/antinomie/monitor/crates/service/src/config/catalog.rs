@@ -36,6 +36,9 @@ pub struct VmFacts {
     /// The device profile as the engine spells it, when it is a plain name.
     pub stealth: Option<String>,
     pub snapshots: Vec<String>,
+    /// The snapshots of `snapshots` that hold the disk only (no memory): a
+    /// `snapshot_full` revert to one of them boots the guest cold.
+    pub disk_snapshots: Vec<String>,
 }
 
 /// The VMs of a data directory, read without starting the engine.
@@ -84,22 +87,30 @@ impl DiskVms {
     }
 }
 
-fn snapshot_names(dir: &Path) -> Vec<String> {
+/// The names of the VM's snapshots, and of those that hold the disk only.
+fn snapshot_names(dir: &Path) -> (Vec<String>, Vec<String>) {
     let Ok(text) = std::fs::read_to_string(dir.join("snapshots.json")) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
-    value["nodes"]
-        .as_array()
-        .map(|nodes| {
-            nodes
-                .iter()
-                .filter_map(|node| node["checkpoint"]["name"].as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
+    let mut names = Vec::new();
+    let mut disk = Vec::new();
+    for node in value["nodes"].as_array().into_iter().flatten() {
+        let checkpoint = &node["checkpoint"];
+        let Some(name) = checkpoint["name"].as_str() else {
+            continue;
+        };
+        names.push(name.to_owned());
+        if checkpoint["mode"]
+            .as_str()
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("disk"))
+        {
+            disk.push(name.to_owned());
+        }
+    }
+    (names, disk)
 }
 
 impl VmCatalog for DiskVms {
@@ -117,6 +128,7 @@ impl VmCatalog for DiskVms {
             let stealth = serde_json::to_value(&vm.stealth)
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_owned));
+            let (snapshots, disk_snapshots) = snapshot_names(dir);
             return Some(VmFacts {
                 id: vm.id.clone(),
                 name: vm.name.clone(),
@@ -129,7 +141,8 @@ impl VmCatalog for DiskVms {
                 ram_mib: vm.ram_mib,
                 base_identity: vm.base_identity.clone(),
                 stealth,
-                snapshots: snapshot_names(dir),
+                snapshots,
+                disk_snapshots,
             });
         }
         None

@@ -2223,8 +2223,10 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   takes the engine lock, so it refuses while the window owns the data directory.
   `settings.json` is the file the window itself now uses for its engine settings,
   including the VM start waits (`start.boot_wait_secs`, `start.tcg_multiplier`,
-  `start.network_wait_secs`, `start.guest_connect_secs`, `start.kvm_fallback`), which the CLI and the daemon start
-  their engine with.
+  `start.network_wait_secs`, `start.guest_connect_secs`, `start.kvm_fallback`), the
+  capture quota (`quota_gib`), the VM shutdown timeout (`shutdown_timeout_s`) and the
+  caps on earlier file bytes (`file_before_file_mib`, `file_before_run_mib`), which the
+  CLI and the daemon start their engine with.
   `config validate [--policy NAME]` checks `service.toml` and `policies/*.toml`
   without starting anything (see [service configuration](service-config.md)); it
   prints each problem as `file:line:column` and exits 4 when there is an error.
@@ -2322,7 +2324,7 @@ list`, `run show`, `run export`, `triage`, `detect`, `report`, `sample show
 | `auto retry JOB [--override KEY=VALUE]` | A new job from a finished one, with `repeat_of` set |
 | `auto queue status\|pause\|resume` | The queue; a paused queue starts no job (running jobs finish) |
 | `auto policy list` | The policies you may submit to |
-| `auto delete JOB [--with-recording]` | Removes a finished job: its record, events and artifacts (the sample stays in the library). `--with-recording` also deletes the job's recording through the run deletion the window uses; a recording a client is reading, or still being written, is refused |
+| `auto delete JOB [--with-recording]` | Removes a finished job: its record, events and artifacts (the sample stays in the library). `--with-recording` also deletes the job's recording, and the run of each earlier attempt that launched, through the run deletion the window uses; a recording a client is reading, or still being written, is refused |
 | `auto gc [--dry-run]` | Applies retention now (below) and prints what was deleted and what was skipped and why; `--dry-run` deletes nothing. Works with a daemon, or on its own when none runs |
 | `auto watch list` | The watch folders: state, files taken, files rejected, entries refused and why. Without a daemon, the folders `service.toml` names |
 | `auto watch scan` | Scans every watch folder now (a file still has to be steady for 3 seconds). Needs the daemon |

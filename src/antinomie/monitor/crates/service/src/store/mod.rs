@@ -21,6 +21,7 @@ pub(crate) mod mirror;
 mod model;
 mod patch;
 mod query;
+pub mod recordings;
 pub mod recover;
 pub mod remove;
 mod retry;
@@ -34,6 +35,7 @@ pub use artifacts::NewArtifact;
 pub use lifecycle::{Eligibility, RequeueKind};
 pub use patch::JobPatch;
 pub use query::QueueCounts;
+pub use recordings::EarlierRecording;
 pub use recover::RecoveryReport;
 pub use submit::{
     IDEMPOTENCY_WINDOW_MS, IntakeError, SampleAdmission, SubmitContext, SubmitLimits, redact_remote,

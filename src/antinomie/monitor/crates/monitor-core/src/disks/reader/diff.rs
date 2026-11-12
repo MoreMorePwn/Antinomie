@@ -118,7 +118,8 @@ fn join(directory: &ext4_view::PathBuf, name: &[u8]) -> Option<ext4_view::PathBu
 
 fn text(path: &ext4_view::PathBuf) -> String {
     let mut text = String::from_utf8_lossy(path.as_ref()).into_owned();
-    text.truncate(PATH_LIMIT);
+    // The guest names the path: cut it on a character boundary.
+    text.truncate(text.floor_char_boundary(PATH_LIMIT));
     text
 }
 
@@ -357,4 +358,30 @@ pub(super) fn diff(before: &Ext4, after: &Ext4, limits: Limits) -> DiffResults {
         }
     }
     walk.results
+}
+
+#[cfg(test)]
+mod bh_27_tests {
+    use super::*;
+
+    /// BH-27: a guest path is cut to `PATH_LIMIT` bytes with
+    /// `String::truncate`, which panics inside a multi-byte character. The
+    /// walk goes 64 directories deep, so a sample can make such a path (17
+    /// nested names of 84 euro signs) and the reader worker dies on it.
+    #[test]
+    fn bh_27_a_long_multibyte_guest_path_is_cut_on_a_character_boundary() {
+        let mut bytes = b"/".to_vec();
+        for _ in 0..17 {
+            bytes.extend("\u{20ac}".repeat(84).as_bytes());
+            bytes.push(b'/');
+        }
+        bytes.pop();
+        let text_form = String::from_utf8(bytes.clone()).unwrap();
+        assert!(text_form.len() > PATH_LIMIT);
+        assert!(!text_form.is_char_boundary(PATH_LIMIT));
+        let path = ext4_view::PathBuf::try_from(bytes.as_slice()).unwrap();
+        let shown = std::panic::catch_unwind(|| text(&path));
+        assert!(shown.is_ok(), "the path cut panicked");
+        assert!(shown.unwrap().len() <= PATH_LIMIT);
+    }
 }

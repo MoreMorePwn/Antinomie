@@ -3,9 +3,9 @@
 //!
 //! | Item | Rule |
 //! |---|---|
-//! | Recordings of auto jobs | After `recordings_days` (14), through the engine's own deletion (`samples::delete_run` with a plan, as the window does); a failed job keeps its recording until `jobs_days` while `keep_failed` is set |
+//! | Recordings of auto jobs | Each run a job's attempts recorded (an attempt retried after its launch leaves one too). After `recordings_days` (14), through the engine's own deletion (`samples::delete_run` with a plan, as the window does); a failed job keeps its recording until `jobs_days` while `keep_failed` is set |
 //! | Size cap | Above `max_recordings_gib` (200) the oldest recordings go first (those `keep_failed` protects last) |
-//! | Job records and artifacts | After `jobs_days` (90): the rows, the events and the job's folder; a job whose recording is still there loses the recording first, or stays |
+//! | Job records and artifacts | After `jobs_days` (90): the rows, the events and the job's folder; a job whose recording is still there loses the recording first, or stays; so does a job whose recording cannot be read |
 //! | Staged uploads | 24 hours (the staging store's own expiry) |
 //! | Rejected inbox files | 7 days |
 //! | Processed inbox files | `[inbox] processed_keep_days` (7): plain files of `inbox/processed/` older than that |
@@ -159,32 +159,41 @@ impl Retention<'_> {
             .now_ms
             .saturating_sub(u64::from(self.config.jobs_days) * DAY_MS);
 
-        // Recordings that are still there, oldest first.
+        // Recordings that are still there, oldest first: each job's run and
+        // the runs its earlier attempts recorded.
         let mut held: Vec<Held> = Vec::new();
         let mut by_age: Vec<usize> = Vec::new();
+        // Jobs with a recording that could not be read: their records stay
+        // (rule 3), or the recording would be left with nothing naming it.
+        let mut unreadable: Vec<JobId> = Vec::new();
         for (id, finished_ms) in &finished {
             let Ok(job) = self.store.get(id) else {
                 continue;
             };
             // A job that has not ended is never touched.
-            if !job.state.is_terminal() || job.recording.is_none() {
+            if !job.state.is_terminal() {
                 continue;
             }
-            match self.runs.inspect(&job) {
-                Ok(RunState::Gone) => {}
-                Ok(RunState::Present { bytes, .. }) => {
-                    let kept = self.config.keep_failed && job.outcome == Some(Outcome::Failed);
-                    held.push(Held {
-                        job,
-                        bytes,
-                        kept,
-                        finished_ms: *finished_ms,
-                    });
-                    if *finished_ms <= recordings_cut {
-                        by_age.push(held.len() - 1);
+            for run in self.recordings_of(&job, &mut report) {
+                match self.runs.inspect(&run) {
+                    Ok(RunState::Gone) => {}
+                    Ok(RunState::Present { bytes, .. }) => {
+                        let kept = self.config.keep_failed && run.outcome == Some(Outcome::Failed);
+                        held.push(Held {
+                            job: run,
+                            bytes,
+                            kept,
+                            finished_ms: *finished_ms,
+                        });
+                        if *finished_ms <= recordings_cut {
+                            by_age.push(held.len() - 1);
+                        }
+                    }
+                    Err(why) => {
+                        report.skip("recording", id, format!("not readable: {why}"));
+                        unreadable.push(id.clone());
                     }
                 }
-                Err(why) => report.skip("recording", id, format!("not readable: {why}")),
             }
         }
         let mut gone = vec![false; held.len()];
@@ -245,15 +254,29 @@ impl Retention<'_> {
             if !job.state.is_terminal() {
                 continue;
             }
-            if let Some(index) = held.iter().position(|h| h.job.id == *id)
-                && !gone[index]
-            {
-                let why = "with its job record".to_owned();
-                if !self.remove_recording(&held[index], &why, &mut report) {
-                    report.skip("job", id, "its recording is still there");
+            if unreadable.contains(id) {
+                report.skip(
+                    "job",
+                    id,
+                    "its recording could not be read, so the record stays with it",
+                );
+                continue;
+            }
+            let mut stays = false;
+            for index in 0..held.len() {
+                if held[index].job.id != *id || gone[index] {
                     continue;
                 }
-                gone[index] = true;
+                let why = "with its job record".to_owned();
+                if self.remove_recording(&held[index], &why, &mut report) {
+                    gone[index] = true;
+                } else {
+                    stays = true;
+                }
+            }
+            if stays {
+                report.skip("job", id, "its recording is still there");
+                continue;
             }
             self.remove_job(&job, &mut report);
         }
@@ -294,6 +317,24 @@ impl Retention<'_> {
             &mut report,
         );
         report
+    }
+
+    /// The recordings of `job` as jobs [`Runs`] can read: the job itself
+    /// for the run it names, and one copy for each run an earlier attempt
+    /// recorded ([`earlier_runs`]).
+    fn recordings_of(&self, job: &Job, report: &mut GcReport) -> Vec<Job> {
+        let mut runs = Vec::new();
+        if job.recording.is_some() {
+            runs.push(job.clone());
+        }
+        match earlier_runs(self.store, job) {
+            Ok(earlier) => runs.extend(earlier),
+            Err(error) => report.errors.push(format!(
+                "the earlier runs of job {}: {}",
+                job.id, error.message
+            )),
+        }
+        runs
     }
 
     fn remove_recording(&self, held: &Held, why: &str, report: &mut GcReport) -> bool {
@@ -455,6 +496,26 @@ impl Retention<'_> {
     }
 }
 
+/// `job` once for each run an earlier attempt recorded (BH-02): the copy
+/// names that run as its recording, and the lane it ran on, so [`Runs`]
+/// inspects and deletes it like the job's own.
+pub fn earlier_runs(store: &Store, job: &Job) -> Result<Vec<Job>, ApiError> {
+    Ok(store
+        .earlier_recordings(&job.id)?
+        .into_iter()
+        .map(|earlier| {
+            let mut run = job.clone();
+            if earlier.lane.is_some() && earlier.lane != job.lane {
+                // Another lane's VM: its name is not the job's.
+                run.vm = None;
+                run.lane = earlier.lane;
+            }
+            run.recording = Some(earlier.recording);
+            run
+        })
+        .collect())
+}
+
 /// A name for the log: control characters become spaces.
 fn clean(text: &str) -> String {
     text.chars()
@@ -480,29 +541,38 @@ pub fn delete_job(
         )
         .with_detail("reason", serde_json::json!("invalid_transition")));
     }
-    if with_recording && job.recording.is_some() {
-        match runs.inspect(&job).map_err(|e| {
-            ApiError::new(
-                ErrorCode::Internal,
-                format!("the recording is not readable: {e}"),
-            )
-        })? {
-            RunState::Gone => {}
-            RunState::Present { in_progress, .. } => {
-                if runs.is_open(&job) || in_progress {
-                    return Err(ApiError::recording_open("open"));
+    if with_recording {
+        // The job's run and every run an earlier attempt recorded: all are
+        // checked first, so an open or unfinished one removes nothing.
+        let mut all = Vec::new();
+        if job.recording.is_some() {
+            all.push(job.clone());
+        }
+        all.extend(earlier_runs(store, &job)?);
+        let mut present = Vec::new();
+        for run in all {
+            match runs.inspect(&run).map_err(|e| {
+                ApiError::new(
+                    ErrorCode::Internal,
+                    format!("the recording is not readable: {e}"),
+                )
+            })? {
+                RunState::Gone => {}
+                RunState::Present { in_progress, bytes } => {
+                    if runs.is_open(&run) || in_progress {
+                        return Err(ApiError::recording_open("open"));
+                    }
+                    present.push((run, bytes));
                 }
-                let freed = match runs.inspect(&job) {
-                    Ok(RunState::Present { bytes, .. }) => bytes,
-                    _ => 0,
-                };
-                runs.delete(&job, &actor_for(&job))
-                    .map_err(|e| ApiError::new(ErrorCode::Internal, format!("recording: {e}")))?;
-                log(&format!(
-                    "delete: deleted the recording of job={id} run={}, freed {freed} bytes",
-                    job.recording.as_ref().map_or("?", |r| r.run_id.as_str())
-                ));
             }
+        }
+        for (run, freed) in present {
+            runs.delete(&run, &actor_for(&run))
+                .map_err(|e| ApiError::new(ErrorCode::Internal, format!("recording: {e}")))?;
+            log(&format!(
+                "delete: deleted the recording of job={id} run={}, freed {freed} bytes",
+                run.recording.as_ref().map_or("?", |r| r.run_id.as_str())
+            ));
         }
     }
     let removed = store.delete_job(id)?;

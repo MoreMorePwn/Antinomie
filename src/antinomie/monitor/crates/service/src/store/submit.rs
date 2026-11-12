@@ -558,16 +558,34 @@ fn insert_rejected(
     )
 }
 
-/// The `count` newest queued jobs, for the scheduler.
-pub(crate) fn queued_rows(conn: &rusqlite::Connection, limit: u32) -> R<Vec<Job>> {
+/// Where a page of the queue ends: a job's priority, creation time and id.
+pub(crate) type QueueKey = (i64, u64, String);
+
+/// Up to `limit` queued jobs in the scheduler's order (priority, then age,
+/// then id), those after `after` when it is given: the scheduler pages
+/// through the whole queue with it.
+pub(crate) fn queued_rows(
+    conn: &rusqlite::Connection,
+    after: Option<&QueueKey>,
+    limit: u32,
+) -> R<Vec<Job>> {
     let mut statement = conn
         .prepare(&format!(
             "SELECT {JOB_COLUMNS} FROM jobs WHERE state = 'queued'
-             ORDER BY priority DESC, created_ms, id LIMIT ?1"
+             AND (?1 IS NULL OR priority < ?1
+                  OR (priority = ?1 AND (created_ms > ?2 OR (created_ms = ?2 AND id > ?3))))
+             ORDER BY priority DESC, created_ms, id LIMIT ?4"
         ))
         .map_err(db)?;
+    let (priority, created, id) = match after {
+        Some((priority, created, id)) => (Some(*priority), Some(*created), Some(id.as_str())),
+        None => (None, None, None),
+    };
     let rows: Vec<JobRow> = statement
-        .query_map([limit], JobRow::read)
+        .query_map(
+            rusqlite::params![priority, created, id, limit],
+            JobRow::read,
+        )
         .map_err(db)?
         .collect::<Result<_, _>>()
         .map_err(db)?;

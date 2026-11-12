@@ -1449,7 +1449,7 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0,
-          "description": "The expected time (seconds): this host's recent median of the item,\nelse an estimate from the input size, else the fixed limit."
+          "description": "The expected time (seconds): the larger of this host's recent median\nof the item and an estimate from the input size, else the fixed limit."
         },
         "basis": {
           "type": "string",

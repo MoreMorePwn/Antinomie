@@ -49,7 +49,8 @@ runs while a window or the daemon owns the data directory.
 - The lane VM (`vm.lane_vm`, found in the data directory): its network must match
   `vm.network`; a policy that allows `inet_sim` needs a routed VM; `reset` is
   refused when the VM has snapshots; `snapshot_disk` and `snapshot_full` need the
-  snapshot named by `vm.revert_to`; `vm.stealth` is compared with the VM's
+  snapshot named by `vm.revert_to` (a warning when `snapshot_full` names a
+  disk-only snapshot, which boots cold); `vm.stealth` is compared with the VM's
   profile and never applied.
 - `service.toml`: `daemon.lanes` 1 to 4 (default 1), no `safety.unsafe_routes_ack`
   (reserved), absolute watch folder paths, watch folders that name a policy that
@@ -63,7 +64,7 @@ runs while a window or the daemon owns the data directory.
 |---|---|---|
 | `[daemon] socket` | `<data>/run/antinomie.sock` | The local socket (at most 107 bytes). Its folder must be the daemon user's own with mode 0700; the socket is 0600. Not changed by a reload |
 | `[daemon] host_workers` | 2 | How many host work items (a static tool, the Triage scan, the detection engines, the assessment, a report) run at once, across every job: the host work pool. 1 to 8 |
-| `[daemon] host_time_factor` | 2 | A host work item may take this many times its expected time (its recent median on this host, else an estimate from the sample or recording size, else the stage's fixed limit); a job's host stages may take this many times the expected work ahead of it plus its own. 1 to 20 |
+| `[daemon] host_time_factor` | 2 | A host work item may take this many times its expected time (the larger of its recent median on this host and an estimate from the sample or recording size, else the stage's fixed limit), at least 30 s; a job's host stages may take this many times the expected work ahead of it plus its own, and never less than this many times the work ahead plus its own items' limits. 1 to 20 |
 | `[daemon] lanes` | 1 | How many lanes (engines, each with its own lane VM) the daemon runs: 1 to 4. See [Several lanes](#several-lanes). Not changed by a reload |
 | `[daemon] shutdown` | `cancel` | On the first `SIGTERM`/`SIGINT`: `cancel` sends a job in its lane stages back to the queue (attempt not counted); `drain` lets it run on for up to `drain_timeout_s` first |
 | `[daemon] drain_timeout_s` | 600 | See `shutdown = drain` |
@@ -187,10 +188,10 @@ take it again; a rewritten file is a new file. `SIGHUP` re-reads the folder list
 
 | Key | Default | What is removed |
 |---|---|---|
-| `[retention] recordings_days` | 14 | The recording of a finished job older than this, through the engine's run deletion (the run's record is copied into the sample's record; captures and dumps that belong to the VM stay with it, as when the window deletes a run) |
+| `[retention] recordings_days` | 14 | The recordings of a finished job older than this (the run of each attempt that launched, in the data folder or a VM's recordings folder), through the engine's run deletion (the run's record is copied into the sample's record; captures and dumps that belong to the VM stay with it, as when the window deletes a run) |
 | `[retention] keep_failed` | true | A failed job's recording is kept until `jobs_days` |
-| `[retention] max_recordings_gib` | 200 | Above this the oldest recordings go first (those `keep_failed` protects last) |
-| `[retention] jobs_days` | 90 | A finished job's record, events, artifacts and folder; the job's recording goes with it, or the job stays |
+| `[retention] max_recordings_gib` | 200 | Above this the oldest recordings go first (those `keep_failed` protects last). At least 1: 0 is refused, it does not mean "no cap" |
+| `[retention] jobs_days` | 90 | A finished job's record, events, artifacts and folder; the job's recordings (one per attempt that launched) go with it, or the job stays; a job whose recording cannot be read stays |
 
 Staged uploads expire after 24 hours and files in `<inbox>/rejected/` after 7
 days. Files in `<inbox>/processed/` go after `[inbox] processed_keep_days` (7):

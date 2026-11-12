@@ -16,7 +16,7 @@ use std::{
 mod libraries;
 mod progress;
 mod sigma;
-pub(super) use libraries::{StagedLibrary, stage_libraries};
+pub(super) use libraries::{StagedLibrary, StagedSample, stage_libraries, stage_sample};
 pub(super) use progress::ProgressWriter;
 use progress::watch_progress;
 #[cfg(test)]
@@ -108,6 +108,10 @@ pub(super) struct Staged {
     /// sample library for the sandboxed YARA scan (which cannot read it).
     #[serde(default)]
     pub libraries: Vec<StagedLibrary>,
+    /// The run's own library sample, for a run with no guest static
+    /// analysis (an Auto-mode job): YARA scans it in place of the specimen.
+    #[serde(default)]
+    pub sample: Option<StagedSample>,
     /// Selected rule files that could not be staged. Their rules did not run,
     /// so the result is incomplete; this is not a coverage limit.
     #[serde(default)]
@@ -382,6 +386,7 @@ fn stage(
         journal: None,
         skipped_inputs: vec![],
         libraries: vec![],
+        sample: None,
         unstaged: vec![],
         network_off: false,
         warnings: vec![],
@@ -410,6 +415,7 @@ fn stage(
             staged.yara_sources = managed;
             staged.yara_sources.extend(extra);
             staged.libraries = stage_libraries(&request, work);
+            staged.sample = stage_sample(&request, work);
             if let Some(artifacts) = owned_artifacts(&request)?
                 && (request.settings.scan_memory || request.settings.scan_recovered)
             {
@@ -1377,6 +1383,7 @@ mod tests {
             journal: None,
             skipped_inputs: vec![],
             libraries: vec![],
+            sample: None,
             unstaged: vec![],
             network_off: false,
             warnings: vec!["pack x was not evaluated".into()],
@@ -1624,6 +1631,7 @@ mod tests {
             journal: None,
             skipped_inputs: vec![],
             libraries: vec![],
+            sample: None,
             unstaged: vec![],
             network_off: false,
             warnings: vec![],

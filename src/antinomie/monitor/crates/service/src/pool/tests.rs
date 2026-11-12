@@ -315,7 +315,7 @@ fn the_limit_is_twice_the_estimate_and_a_policy_limit_overrides_it() {
 }
 
 #[test]
-fn a_recent_median_on_this_host_replaces_the_estimate() {
+fn a_recent_median_on_this_host_replaces_a_lower_estimate() {
     let dir = std::env::temp_dir().join(format!(
         "ant-pool-median-{}",
         crate::clock::random_bytes()
@@ -343,15 +343,25 @@ fn a_recent_median_on_this_host_replaces_the_estimate() {
         "estimate",
         "two runs are not enough"
     );
-    timing.medians.record("static:floss", 50);
+    timing.medians.record("static:floss", 500);
     let time = timing.of(&floss, &plain, &inputs);
     assert_eq!(
         (time.basis, time.expected_s, time.limit_s),
-        ("median", 50, 100)
+        ("median", 400, 800)
     );
     // The history is kept for the next start.
     let again = crate::stages::timing::Medians::load(&file);
-    assert_eq!(again.median("static:floss"), Some(50));
+    assert_eq!(again.median("static:floss"), Some(400));
+    // A median below the size estimate (earlier, smaller samples) does not
+    // lower it: 90 s and 30 s a MiB.
+    for _ in 0..9 {
+        timing.medians.record("static:floss", 5);
+    }
+    let time = timing.of(&floss, &plain, &inputs);
+    assert_eq!(
+        (time.basis, time.expected_s, time.limit_s),
+        ("estimate", 120, 240)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -373,4 +383,84 @@ fn a_job_behind_a_long_queue_gets_the_time_of_the_work_ahead_too() {
     );
     // Nothing is ahead of the oldest job.
     assert_eq!(state.ahead_s(&(0, job(3, 0).id)), 0);
+}
+
+/// BH-07 (bug hunt 0.9.0): the job's host-stage deadline is the factor times
+/// the expected times, with no floor, while each item may take at least
+/// `MIN_LIMIT` (30 s). Once the medians are small (three quick jobs), a job
+/// is failed by its deadline while its running item is well inside its own
+/// limit.
+#[test]
+fn bh_07_a_job_is_not_failed_by_its_deadline_while_an_item_is_within_its_limit() {
+    let plan = plan(&[AnalysisKind::Metadata], false);
+    let items = items_for(&plan);
+    let timing = Timing::default();
+    // Three earlier jobs on this host: every item took one second.
+    for spec in &items {
+        for _ in 0..3 {
+            timing.medians.record(&spec.kind.name(), 1);
+        }
+    }
+    let inputs = Inputs {
+        sample_bytes: Some(1 << 20),
+        recording_bytes: Some(512 << 20),
+        load: 1.0,
+    };
+    let views: Vec<_> = items
+        .iter()
+        .map(|spec| host_item(spec, &items, &timing.of(&spec.kind, &plan, &inputs)))
+        .collect();
+    let own: u64 = views.iter().map(|v| v.expected_s).sum();
+    let budget = PoolState::budget_ms(0, own, timing.factor);
+    let job = job(1, 1);
+    let id = job.id.clone();
+    let key = PoolState::key(&job);
+    let mut pooled = pool_job(job, plan, budget);
+    pooled.views = views;
+    let mut state = PoolState::new(2);
+    state.jobs.insert(key, pooled);
+    // The first item (Triage) starts at 0 ms ...
+    let first = state.next(0, &mut || None, &no_deadline);
+    let (_, name) = item(&first);
+    let Some(Task::Item { limit, .. }) = first else {
+        unreachable!()
+    };
+    // ... and is still running 20 s later, inside its own limit.
+    let at_ms = 20_000;
+    assert!(std::time::Duration::from_millis(at_ms) < limit);
+    let _ = state.next(at_ms, &mut || None, &no_deadline);
+    assert!(
+        state.get(&id).unwrap().stop.is_none(),
+        "the job was failed by its {budget} ms deadline while {name} was {at_ms} ms into its {limit:?} limit"
+    );
+}
+
+/// BH-07: the budget is never shorter than the work ahead plus the job's own
+/// item limits, and the deadline never ends a job while an item runs.
+#[test]
+fn the_deadline_covers_the_item_limits_and_waits_for_a_running_item() {
+    // Four items of 1 s expected each and a 30 s limit each.
+    assert_eq!(PoolState::budget_ms(10, 4, 2.0), 28_000);
+    assert_eq!(PoolState::budget_floor_ms(10, 4, 120, 2.0), 140_000);
+    // Where the factor gives more, it stays.
+    assert_eq!(PoolState::budget_floor_ms(100, 400, 60, 2.0), 1_000_000);
+    let plan = plan(&[AnalysisKind::Metadata], false);
+    let job = job(1, 1);
+    let id = job.id.clone();
+    let key = PoolState::key(&job);
+    let mut state = PoolState::new(2);
+    state.jobs.insert(key, pool_job(job, plan, 5_000));
+    let first = state.next(0, &mut || None, &no_deadline);
+    let Some(Task::Item { index, .. }) = first else {
+        panic!("not an item: {first:?}")
+    };
+    // Past the deadline with the item still running: not failed yet, and
+    // nothing else of the job starts.
+    assert!(state.next(6_000, &mut || None, &no_deadline).is_none());
+    assert!(state.get(&id).unwrap().stop.is_none());
+    // Once the item ended, the deadline fails the job.
+    state.item_ended(&id, index, 7_000, Ok((HostItemState::Done, None)));
+    let settle = state.next(7_000, &mut || None, &no_deadline);
+    assert!(matches!(settle, Some(Task::Settle(..))), "{settle:?}");
+    assert!(state.get(&id).unwrap().stop.is_some());
 }

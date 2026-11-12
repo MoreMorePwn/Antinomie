@@ -46,7 +46,9 @@ fn adopt(
 fn note(section: &mut AnalysisSection, text: String) {
     section.summary = format!("{}; {text}", section.summary);
     if section.summary.len() > 4096 {
-        section.summary.truncate(4000);
+        // On a character boundary: the summary is the worker's text.
+        let cut = section.summary.floor_char_boundary(4000);
+        section.summary.truncate(cut);
     }
 }
 
@@ -199,4 +201,52 @@ pub(in super::super) fn adopt_listings(
         }
     }
     let _ = fs::remove_dir_all(&output);
+}
+
+#[cfg(test)]
+mod bh_26_tests {
+    use super::*;
+
+    /// BH-26: a worker report may hold a section summary of up to 4096 bytes
+    /// (`validation.rs`), in any UTF-8. When its listing is refused, `note`
+    /// appends to the summary and cuts it at byte 4000 with
+    /// `String::truncate`, which panics inside a multi-byte character. The
+    /// worker's output is untrusted, and the panic is on the engine's thread.
+    #[test]
+    fn bh_26_a_refused_listing_with_a_long_multibyte_summary_does_not_panic() {
+        let selection = AnalysisSelection {
+            enabled: true,
+            checks: vec![AnalysisKind::Strings],
+            time_limit_minutes: 0,
+            limits: Default::default(),
+        };
+        let mut report = new_report("/tmp/sample", &selection);
+        report.specimen_len = Some(16);
+        let summary = "\u{20ac}".repeat(1365);
+        assert_eq!(summary.len(), 4095);
+        report.sections[0].state = AnalysisSectionState::Complete;
+        report.sections[0].summary = summary;
+        report.sections[0].listing = Some(AnalysisListing {
+            rows: 1,
+            bytes: 10,
+            truncated: false,
+        });
+        assert!(
+            super::super::super::validation::validate_report(&report).is_ok(),
+            "the worker report passes the host's bounds"
+        );
+        let directory =
+            std::env::temp_dir().join(format!("ant-bh26-{}", crate::storage::unique_id()));
+        fs::create_dir_all(directory.join("output/listings")).unwrap();
+        // No listing file: validation of the listing fails and `note` runs.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            adopt_listings(&directory, &mut report, &[]);
+        }));
+        let _ = fs::remove_dir_all(&directory);
+        assert!(
+            outcome.is_ok(),
+            "adopt_listings panicked on a worker summary"
+        );
+        assert!(report.sections[0].summary.len() <= 4096);
+    }
 }

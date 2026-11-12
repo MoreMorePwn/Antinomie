@@ -29,6 +29,7 @@ fn lane(network: VmNet, snapshots: &[&str]) -> Vms {
         base_identity: None,
         stealth: None,
         snapshots: snapshots.iter().map(|s| s.to_string()).collect(),
+        disk_snapshots: Vec::new(),
     }])
 }
 
@@ -762,4 +763,56 @@ fn core_nonresident_needs_a_core_trigger_and_is_a_warning_otherwise() {
     );
     let policy: antinomie_service::config::Policy = toml::from_str(&armed).unwrap();
     assert!(policy.evidence.core_nonresident);
+}
+
+/// BH-08 (bug hunt 0.9.0): `max_recordings_gib = 0` is a cap of 0 bytes, so
+/// every pass deletes every finished job's recording; it must be refused
+/// like the other zero sizes and periods.
+#[test]
+fn bh_08_a_recordings_cap_of_zero_is_refused() {
+    let (_, found) = parse_service("service.toml", "[retention]\nmax_recordings_gib = 0\n");
+    assert!(
+        found
+            .iter()
+            .any(|p| p.severity == antinomie_service::config::Severity::Error),
+        "{found:?}"
+    );
+}
+
+/// BH-12: `snapshot_full` over a disk-only snapshot (what `auto init` takes)
+/// boots cold like `snapshot_disk`; `config validate` says so.
+#[test]
+fn snapshot_full_over_a_disk_snapshot_is_a_warning() {
+    let full = with(
+        DEFAULT_POLICY,
+        r#"revert       = "snapshot_disk""#,
+        r#"revert       = "snapshot_full""#,
+    );
+    let mut vms = lane(VmNet::Routed, &["auto-clean"]);
+    vms.0[0].disk_snapshots = vec!["auto-clean".into()];
+    let (_, found) = parse_policy("p", "policies/p.toml", &full, &vms);
+    assert!(
+        found
+            .iter()
+            .any(|p| p.severity == Severity::Warning
+                && p.to_string().contains("holds the disk only")),
+        "{found:?}"
+    );
+    assert!(
+        !found.iter().any(|p| p.severity == Severity::Error),
+        "{found:?}"
+    );
+    // Over a full snapshot, nothing to say.
+    let (_, found) = parse_policy(
+        "p",
+        "policies/p.toml",
+        &full,
+        &lane(VmNet::Routed, &["auto-clean"]),
+    );
+    assert!(
+        !found
+            .iter()
+            .any(|p| p.to_string().contains("holds the disk only")),
+        "{found:?}"
+    );
 }

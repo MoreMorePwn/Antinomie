@@ -211,6 +211,14 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     if config.retention.jobs_days == 0 || config.retention.recordings_days == 0 {
         sink.error("retention", "the retention periods must be at least 1 day");
     }
+    if config.retention.max_recordings_gib == 0 {
+        // A cap of 0 bytes would delete every finished job's recording at
+        // each pass; 0 is not "no cap".
+        sink.error(
+            "retention.max_recordings_gib",
+            "must be at least 1 (GiB); 0 would delete every recording at each pass",
+        );
+    }
     if config.inbox.processed_keep_days == 0 {
         sink.error("inbox.processed_keep_days", "must be at least 1 day");
     }
@@ -582,6 +590,15 @@ fn check_vm_facts(policy: &Policy, facts: &VmFacts, non_drop: bool, sink: &mut S
                 ),
             );
         }
+        RevertMode::SnapshotFull if facts.disk_snapshots.contains(&vm.revert_to) => sink.warn(
+            "vm.revert",
+            format!(
+                "snapshot `{}` of VM `{}` holds the disk only, so snapshot_full restores \
+                 its disk and boots the guest cold, as snapshot_disk does; take a full \
+                 snapshot (with memory) to resume a running guest",
+                vm.revert_to, facts.name
+            ),
+        ),
         _ => {}
     }
     if let (Some(want), Some(have)) = (&vm.stealth, &facts.stealth)

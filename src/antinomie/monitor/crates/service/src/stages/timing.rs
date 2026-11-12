@@ -5,7 +5,7 @@
 //!
 //! | Expected time, in this order | From |
 //! |---|---|
-//! | `median` | the median of the item's last runs on this host (at least [`MEDIAN_MIN`] of the last [`MEDIAN_KEEP`], kept in `<data>/service/host-times.json`) |
+//! | `median` | the median of the item's last runs on this host (at least [`MEDIAN_MIN`] of the last [`MEDIAN_KEEP`], kept in `<data>/service/host-times.json`), when it is not below the estimate |
 //! | `estimate` | a base plus a rate per MiB of its input (the sample for a static tool, the recording for the others), times the host's load factor |
 //! | `fixed` | the stage's fixed limit of design 4.1, when the input size is not known |
 //!
@@ -177,15 +177,18 @@ impl Timing {
 
     /// The expected time and the limit of `kind` for a job.
     pub fn of(&self, kind: &ItemKind, plan: &HostPlan, inputs: &Inputs) -> ItemTime {
-        let (expected, basis) = match self.medians.median(&kind.name()) {
-            Some(median) => (median, "median"),
-            None => match Self::estimate(kind, plan, inputs) {
-                Some(seconds) => (seconds.ceil() as u64, "estimate"),
-                None => (
-                    (Self::fixed(kind) as f64 * inputs.load.max(1.0)).ceil() as u64,
-                    "fixed",
-                ),
-            },
+        // The median takes no account of the input's size: after a few small
+        // jobs it would give a large one the time of a small one. It may
+        // raise the estimate (a slow host), never lower it.
+        let estimate = Self::estimate(kind, plan, inputs).map(|seconds| seconds.ceil() as u64);
+        let (expected, basis) = match (self.medians.median(&kind.name()), estimate) {
+            (Some(median), Some(estimate)) if estimate > median => (estimate, "estimate"),
+            (Some(median), _) => (median, "median"),
+            (None, Some(estimate)) => (estimate, "estimate"),
+            (None, None) => (
+                (Self::fixed(kind) as f64 * inputs.load.max(1.0)).ceil() as u64,
+                "fixed",
+            ),
         };
         let expected = expected.max(1);
         let limit = ((expected as f64) * self.factor.max(1.0)).ceil() as u64;

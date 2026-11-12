@@ -7,7 +7,8 @@
 //! guest's digest vouches for it (ANT-T0344), and a refused launch is analysed
 //! from it. A [`StagedCopy`] decrypts the archive (read-only) into a private
 //! file for that moment and removes the file when it is dropped, so no copy is
-//! left behind.
+//! left behind; a copy a killed process left is removed by the next staging
+//! ([`sweep`]).
 use antinomie_monitor_core::samples::{archive_path, open_sample};
 use std::{
     fs::{self, OpenOptions},
@@ -41,6 +42,7 @@ impl StagedCopy {
             .mode(0o700)
             .create(&dir)
             .ok()?;
+        sweep(&dir);
         let name = format!(
             "{}-{}-{}",
             std::process::id(),
@@ -66,6 +68,38 @@ impl StagedCopy {
     }
 }
 
+/// Remove the copies in `dir` that a process which is gone left behind (one
+/// killed during a launch: SIGKILL, the OOM killer, a power loss), so a
+/// decrypted sample does not stay on the host's disk. A copy is named
+/// `<pid>-<n>-<sha16>`; one whose process still runs (or whose name is not of
+/// that form) is left alone. Returns how many were removed.
+pub fn sweep(dir: &Path) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|name| name.split('-').next())
+            .and_then(|pid| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == std::process::id() || Path::new("/proc").join(pid.to_string()).exists() {
+            continue;
+        }
+        // Plain files only, never through a link.
+        if entry.file_type().is_ok_and(|kind| kind.is_file())
+            && fs::remove_file(entry.path()).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 impl Drop for StagedCopy {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
@@ -75,6 +109,24 @@ impl Drop for StagedCopy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_copy_left_by_a_process_that_is_gone_is_swept() {
+        let dir = std::env::temp_dir().join(format!("ant-hostcopy-sweep-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // Above any pid_max: no such process.
+        let stale = dir.join(format!("4294967295-0-{}", "a".repeat(16)));
+        let mine = dir.join(format!("{}-7-{}", std::process::id(), "b".repeat(16)));
+        let other = dir.join("notes.txt");
+        for path in [&stale, &mine, &other] {
+            fs::write(path, b"x").unwrap();
+        }
+        assert_eq!(sweep(&dir), 1);
+        assert!(!stale.exists());
+        assert!(mine.exists() && other.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_sample_the_library_lacks_stages_nothing() {

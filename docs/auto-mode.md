@@ -56,6 +56,12 @@ run's digest and the label, after `triage` and `detection`) and `report` (after
 all of them). At most `[daemon] host_workers` items run at once (2 by default),
 across every job.
 
+A job launches without the guest-side static analysis, so YARA does not wait for
+the specimen that analysis keeps (as the window's Detection tab does): it scans
+the sample the job ran, read from the library, with the files the run wrote and
+the core and memory dumps. The high or critical YARA hit of the default verdict
+mapping therefore applies to jobs too.
+
 * **Order: first come, first served by job arrival.** Every item of an older job
   starts before any item of a newer one; a job's items start in the order above.
   The first item waiting is the head of the queue: while it waits for a worker,
@@ -63,15 +69,19 @@ across every job.
   item never goes ahead of a heavy one.
 * **Memory.** An item starts only with at least 2048 MiB of `MemAvailable`;
   below it the head waits (`auto status` says so) and starts when there is room.
-* **Time limits.** Each item has an expected time: its median over the last runs
-  on this host (once it ran three times), else an estimate from the size of the
-  sample (static tools) or of the recording (the others), else the stage's fixed
-  limit. It may take `[daemon] host_time_factor` (2) times that. A policy that
+* **Time limits.** Each item has an expected time: an estimate from the size of
+  the sample (static tools) or of the recording (the others), or its median over
+  the last runs on this host (once it ran three times) when that is larger, else
+  the stage's fixed limit. A median never lowers the estimate, so a few small
+  jobs do not shrink the limits of a large one. It may take
+  `[daemon] host_time_factor` (2) times that, and at least 30 seconds. A policy that
   sets `analysis.static_time_limit_min` gives every static tool that fixed limit
   instead. Time spent waiting in the queue, for memory or for the engine to take
   a static analysis does not count. A job's host stages as a whole may take the
-  factor times the expected work ahead of it when it arrived plus its own; past
-  that the job fails `internal` (`watchdog`).
+  factor times the expected work ahead of it when it arrived plus its own, and
+  never less than the factor times the work ahead plus the sum of its own items'
+  limits; past that the job fails `internal` (`watchdog`). A running item is not
+  cut short by this deadline: the job fails when it ends.
 * **What you see.** `auto status <job>` lists each item with its state
   (`queued`, `running`, `done`, `failed`, `timed_out`, `skipped`), expected time
   and limit; the job's `host_work` member carries the same. `auto status` shows
@@ -169,7 +179,9 @@ state. The lane VM has a clean Disk snapshot, `auto-clean`, taken by `auto init`
 after the guest booted once. Before each job the daemon checks the snapshot is the
 one it recorded, restores it and cold-boots (`vm.revert = "snapshot_disk"`, the
 default). A lane VM with no snapshot may use `reset` instead; `snapshot_full`
-resumes a booted guest and needs the VM to be created and snapshotted headless.
+resumes a booted guest and needs the VM to be created and snapshotted headless,
+with a full (memory) snapshot: over the disk-only `auto-clean` it boots cold like
+`snapshot_disk`, and `config validate` warns about it.
 
 With `vm.revert_after = true` the lane also reverts right after the job, so no
 used disk sits idle; the cost is one more restore per job.
@@ -298,7 +310,12 @@ The daemon runs a pass an hour (the first one minute after it starts). It never
 touches the library, never deletes a sample and never removes a job that has not
 ended; a recording that is being read, or whose evidence is still being written,
 is skipped and taken in a later pass. A recording goes through the app's own
-deletion, which keeps its kept files. `auto gc --dry-run` prints what a pass would
+deletion, which keeps its kept files. A job retried after its launch (a lost
+guest, a stop or a restart of the daemon) recorded a run for each such attempt:
+retention and `--with-recording` delete all of them, and the job record stays
+until they are gone. A recording kept in a VM's recordings folder outside the
+data folder is handled the same way; a recording that cannot be read keeps its
+job record, so it is never left with nothing naming it. `auto gc --dry-run` prints what a pass would
 delete; `auto gc` runs one; `auto delete JOB [--with-recording]` removes one ended
 job. Without a daemon these take the data folder for the command.
 
@@ -343,8 +360,10 @@ with `dependency_missing` instead of running unsandboxed.
 `resources` (below `min_free_disk_gib` or the RAM floor, the queue pauses),
 `dependency`, `quota`, `queue_paused`, `layer_pending` (the previous run's disk is
 still being saved, which can take minutes after a run that changed many files),
-`backoff` or `lane_quarantined`. A file `<data>/run/PAUSE` pauses admission within
-five seconds; `auto queue resume` or removing the file continues.
+`backoff` or `lane_quarantined`. A file `<data>/run/PAUSE` pauses admission on
+every lane within five seconds, also while other lanes run jobs (a lane running a
+job starts no other until it ends); `auto queue resume` or removing the file
+continues. Low disk and a missing KVM pause every lane the same way.
 
 **No KVM.** With `require_kvm = true` (the default) jobs wait until `/dev/kvm` is
 usable; the daemon user must be in the `kvm` group. Set `[resources] require_kvm =

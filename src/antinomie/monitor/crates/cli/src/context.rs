@@ -87,20 +87,30 @@ pub fn backend_options(global: &Global, home: Option<&std::path::Path>) -> Backe
     }
     options.force_tcg = global.tcg;
     options.headless = !global.no_headless;
-    options.start = start_settings(global, &options.data_dir);
+    // `settings.json` (the window's Tools > Settings, `config set`): the
+    // capture quota, the shutdown timeout, the start waits and the caps on
+    // earlier file bytes, as the window starts its engine with them. A file
+    // that cannot be read gives the defaults here; the commands that read
+    // the file report it.
+    let stored = antinomie_monitor_core::settings::load(&options.data_dir)
+        .ok()
+        .flatten();
+    if let Some(settings) = &stored {
+        settings.apply_to(&mut options);
+        antinomie_monitor_core::file_before_store::set_limits(settings.before_limits());
+    }
+    options.start = start_settings(global, stored.as_ref());
     options
 }
 
 /// The waits of a VM start and a launch: `settings.json`'s `start` section
 /// (the one the window's Tools > Settings > Advanced edits), with
-/// `--boot-wait` and `--tcg-multiplier` over it. A file that cannot be read
-/// gives the defaults here; the commands that read the file report it.
-fn start_settings(global: &Global, data_dir: &std::path::Path) -> StartSettings {
-    let mut start = antinomie_monitor_core::settings::load(data_dir)
-        .ok()
-        .flatten()
-        .map(|settings| settings.start())
-        .unwrap_or_default();
+/// `--boot-wait` and `--tcg-multiplier` over it.
+fn start_settings(
+    global: &Global,
+    stored: Option<&antinomie_monitor_core::settings::EngineSettings>,
+) -> StartSettings {
+    let mut start = stored.map(|settings| settings.start()).unwrap_or_default();
     if let Some(seconds) = global.boot_wait {
         start.boot_wait_secs = seconds;
     }
@@ -121,6 +131,26 @@ mod tests {
         all.extend_from_slice(args);
         all.push("doctor");
         Cli::try_parse_from(all).unwrap().global
+    }
+
+    /// BH-04 (bug hunt 0.9.0): `settings.json`'s capture quota and shutdown
+    /// timeout (`config set quota_gib`, the window's Settings) reach the
+    /// engine options the CLI and the daemon start with.
+    #[test]
+    fn bh_04_the_settings_file_quota_and_shutdown_timeout_reach_the_engine() {
+        let dir = std::env::temp_dir().join(format!("ant-bh04-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = antinomie_monitor_core::settings::EngineSettings {
+            quota_gib: 12,
+            shutdown_timeout_s: 45,
+            ..Default::default()
+        };
+        std::fs::write(dir.join("settings.json"), settings.to_value().to_string()).unwrap();
+        let options = backend_options(&global(&["--data-dir", dir.to_str().unwrap()]), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(options.capture_quota_size, 12 << 30);
+        assert_eq!(options.shutdown_timeout, std::time::Duration::from_secs(45));
     }
 
     #[test]

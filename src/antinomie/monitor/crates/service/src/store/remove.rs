@@ -85,7 +85,14 @@ impl Store {
                 )
                 .with_detail("reason", serde_json::json!("invalid_transition")));
             }
-            for table in ["attempts", "stages", "artifacts", "events", "host_work"] {
+            for table in [
+                "attempts",
+                "stages",
+                "artifacts",
+                "events",
+                "host_work",
+                "job_recordings",
+            ] {
                 tx.tx
                     .execute(
                         &format!("DELETE FROM {table} WHERE job_id = ?1"),

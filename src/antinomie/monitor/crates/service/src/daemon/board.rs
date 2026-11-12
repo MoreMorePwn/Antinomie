@@ -211,7 +211,19 @@ impl LaneBoard {
             let any_fits = posts.values().any(fits);
             let able = |post: &Post| !any_fits || fits(post);
             if !able(mine) {
-                return Eligibility::Wait(WaitingFor::Lane);
+                // The job waits for the lanes that can run it: the least
+                // lasting of their waits (`lane` for a busy or free one), so
+                // a job only a quarantined lane can run says so.
+                let theirs = posts
+                    .iter()
+                    .filter(|&(lane, post)| lane != me && fits(post))
+                    .map(|(_, post)| match post.state {
+                        Eligibility::Wait(why) => why,
+                        _ => WaitingFor::Lane,
+                    })
+                    .min_by_key(|why| rank(*why))
+                    .unwrap_or(WaitingFor::Lane);
+                return Eligibility::Wait(theirs);
             }
             let order = |lane: &LaneId, post: &Post| (post.last_claim_ms, lane.clone());
             let my_order = order(me, mine);
