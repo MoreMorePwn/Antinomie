@@ -220,13 +220,26 @@ pub fn host_item(spec: &ItemSpec, all: &[ItemSpec], time: &super::timing::ItemTi
 }
 
 impl<E: Engine> LaneStages<'_, E> {
-    /// Run one item; what it found goes into `work`.
+    /// Run one item with no job deadline; what it found goes into `work`.
     pub fn run_item(
         &mut self,
         job: &Job,
         work: &Mutex<JobWork>,
         kind: &ItemKind,
         limit: Duration,
+    ) -> Result<ItemEnd, StageStop> {
+        self.run_item_until(job, work, kind, limit, Duration::MAX)
+    }
+
+    /// Run one item; `until` is the time left before the job's deadline,
+    /// which also bounds the wait for the engine to take a static item.
+    pub fn run_item_until(
+        &mut self,
+        job: &Job,
+        work: &Mutex<JobWork>,
+        kind: &ItemKind,
+        limit: Duration,
+        until: Duration,
     ) -> Result<ItemEnd, StageStop> {
         let (plan, scan, outcomes) = {
             let w = lock(work);
@@ -251,7 +264,8 @@ impl<E: Engine> LaneStages<'_, E> {
                 }
             },
             ItemKind::Static(group) => {
-                let (outcome, timed_out, waited_ms) = self.static_item(job, &plan, group, limit)?;
+                let (outcome, timed_out, waited_ms) =
+                    self.static_item(job, &plan, group, limit, until)?;
                 let words: Vec<String> =
                     outcome.hard.iter().chain(&outcome.soft).cloned().collect();
                 let state = if timed_out {

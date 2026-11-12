@@ -15,7 +15,8 @@
 //! | Order | First come, first served by job arrival; within a job, list (dependency) order, but an item whose dependencies have ended starts while an earlier one waits for its own (ANT-T0464); no item of a newer job starts before every item of the older one has ([`state`]) |
 //! | Memory | Before an item starts, `MemAvailable` must be at least [`ITEM_FLOOR_MIB`]; below it the head waits (`status` names the wait) |
 //! | Limits | Each item has an expected time and a limit of `daemon.host_time_factor` x that ([`crate::stages::timing`]); time in the queue does not count |
-//! | Job deadline | `host_time_factor` x (the expected time of the items ahead of it when it arrived + its own); past it the job fails `internal` (`watchdog`) |
+//! | Job deadline | `host_time_factor` x (the expected time of the items ahead of it when it arrived + its own), at least the work ahead plus its own items' limits. A running item's limit ends at the deadline at the latest; at the deadline running items are stopped (SIGTERM, `stop_grace_s`, SIGKILL) and end `timed_out`, queued ones are `skipped`, and the job fails `deadline_exceeded` (ANT-T0471) |
+//! | Stops | An item past its limit is stopped gracefully: its cancel flag, SIGTERM to a sandboxed tool, SIGKILL after `daemon.stop_grace_s` (30 s) |
 //! | Engine | Each worker has its own waiter on the shared engine ([`crate::engine::mux`]): `AnalyzeSample` results come back to the worker that asked |
 //! | Cancel | A cancelled job's queued items are skipped, its running ones stop at their next wait; the job ends `cancelled` (or back in the queue at a shutdown cancel) |
 //! | Shutdown (2.7) | The pool goes on with its queue for `shutdown_host_grace_s`; then the waits are interrupted and the jobs stay `running` with their `collected` entry |
@@ -111,6 +112,33 @@ fn stage_stop(stop: PoolStop) -> StageStop {
         PoolStop::Failed(failure) => StageStop::Failed(failure),
         PoolStop::Aborted(error) => StageStop::Abort(error),
     }
+}
+
+/// The failure of a job past its host-stage deadline (ANT-T0471): the
+/// detail names the items the deadline stopped and those that never started.
+pub(crate) fn deadline_failure(job: &Job, items: &[HostItem]) -> Failure {
+    let names = |state: HostItemState| {
+        items
+            .iter()
+            .filter(|item| item.state == state)
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let (stopped, queued) = (names(HostItemState::TimedOut), names(HostItemState::Queued));
+    let mut detail = Vec::new();
+    if !stopped.is_empty() {
+        detail.push(format!("timed out: {stopped}"));
+    }
+    if !queued.is_empty() {
+        detail.push(format!("not started: {queued}"));
+    }
+    Failure::new(
+        FailureCode::DeadlineExceeded,
+        job.stage.unwrap_or(Stage::Analyse),
+        "the job passed its host-stage deadline: its running items were stopped and the rest did not start",
+        (!detail.is_empty()).then(|| detail.join("; ")).as_deref(),
+    )
 }
 
 impl HostPool {
@@ -357,14 +385,7 @@ impl HostPool {
                 format!("memory: {available} MiB are available, an item needs {floor} MiB")
             })
         };
-        let deadline = |job: &Job| {
-            Failure::new(
-                FailureCode::Internal,
-                job.stage.unwrap_or(Stage::Analyse),
-                "the job passed its host-stage deadline and was stopped",
-                Some("watchdog"),
-            )
-        };
+        let deadline = |job: &Job, items: &[HostItem]| deadline_failure(job, items);
         let task = state.next(self.env.clock.now_ms(), &mut memory, &deadline)?;
         let id = match &task {
             Task::Item { job, .. }
@@ -439,6 +460,7 @@ impl HostPool {
                 index,
                 kind,
                 limit,
+                until,
                 begin_analyse,
                 ..
             } => {
@@ -458,7 +480,7 @@ impl HostPool {
                 } else {
                     Ok(())
                 }
-                .and_then(|()| stages.run_item(&job, &work, &kind, limit));
+                .and_then(|()| stages.run_item_until(&job, &work, &kind, limit, until));
                 stages.waiter.clear_cancel();
                 let seconds = waiter.now_ms().saturating_sub(began) / 1000;
                 if let Ok(end) = &result

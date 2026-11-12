@@ -169,6 +169,15 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
             ),
         );
     }
+    if config.daemon.stop_grace_s > super::service::MAX_STOP_GRACE_S {
+        sink.error(
+            "daemon.stop_grace_s",
+            format!(
+                "must be 0 to {} (seconds between SIGTERM and SIGKILL)",
+                super::service::MAX_STOP_GRACE_S
+            ),
+        );
+    }
     if config.daemon.drain_timeout_s == 0 {
         sink.error("daemon.drain_timeout_s", "must be at least 1");
     }

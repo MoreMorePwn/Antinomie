@@ -29,6 +29,10 @@ pub enum FailureCode {
     GuestLost,
     RecordingFailed,
     AnalysisFailed,
+    // The job's host stages passed their deadline (ANT-T0471): the running
+    // items were stopped (`timed_out`), the queued ones never started. (A
+    // plain comment: a doc comment would make the schema's enum a `oneOf`.)
+    DeadlineExceeded,
     Cancelled,
     Internal,
 }
@@ -45,7 +49,7 @@ pub enum RetryHint {
 }
 
 impl FailureCode {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::SampleMissing,
         Self::SampleTooLarge,
         Self::SampleTypeDenied,
@@ -66,6 +70,7 @@ impl FailureCode {
         Self::GuestLost,
         Self::RecordingFailed,
         Self::AnalysisFailed,
+        Self::DeadlineExceeded,
         Self::Cancelled,
         Self::Internal,
     ];
@@ -91,7 +96,7 @@ impl FailureCode {
             Self::LaunchFailed => &[Launch],
             Self::GuestLost => &[Run, Collect],
             Self::RecordingFailed => &[Collect],
-            Self::AnalysisFailed => &[Analyse, Report],
+            Self::AnalysisFailed | Self::DeadlineExceeded => &[Analyse, Report],
             Self::Cancelled | Self::Internal => &[],
         }
     }
@@ -108,7 +113,7 @@ impl FailureCode {
             | Self::RecordingFailed
             | Self::AnalysisFailed => RetryHint::Yes,
             Self::LaunchFailed => RetryHint::Depends,
-            Self::Internal => RetryHint::Maybe,
+            Self::Internal | Self::DeadlineExceeded => RetryHint::Maybe,
             Self::SampleMissing
             | Self::SampleTooLarge
             | Self::SampleTypeDenied
@@ -189,7 +194,7 @@ mod tests {
                     .to_owned()
             })
             .collect();
-        assert_eq!(names.len(), 22);
+        assert_eq!(names.len(), 23);
         assert!(names.contains("sample_arch_denied") && names.contains("no_base"));
     }
 

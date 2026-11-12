@@ -16,6 +16,10 @@ pub const MAX_HOST_WORKERS: u32 = 8;
 pub const DEFAULT_HOST_TIME_FACTOR: f64 = 2.0;
 /// The largest `daemon.host_time_factor`.
 pub const MAX_HOST_TIME_FACTOR: f64 = 20.0;
+/// `daemon.stop_grace_s` when it is not set (ANT-T0471).
+pub const DEFAULT_STOP_GRACE_S: u32 = 30;
+/// The largest `daemon.stop_grace_s`.
+pub const MAX_STOP_GRACE_S: u32 = 600;
 
 /// What the daemon does on SIGTERM.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +50,12 @@ pub struct Daemon {
     /// the job's host-stage deadline is this many times the expected work
     /// ahead of it plus its own. Default 2, at least 1.
     pub host_time_factor: Option<f64>,
+    /// A host work item stopped by its time limit or by its job's
+    /// host-stage deadline gets a graceful stop (SIGTERM to its sandboxed
+    /// tool, the cancel flag of in-process work), then SIGKILL after this
+    /// many seconds (ANT-T0471). Default 30; 0 to [`MAX_STOP_GRACE_S`], 0
+    /// kills at once.
+    pub stop_grace_s: u32,
     pub shutdown: Shutdown,
     pub drain_timeout_s: u32,
     /// At shutdown, how long a job already in its host stages (`analyse`,
@@ -61,6 +71,7 @@ impl Default for Daemon {
             lanes: 1,
             host_workers: None,
             host_time_factor: None,
+            stop_grace_s: DEFAULT_STOP_GRACE_S,
             shutdown: Shutdown::Cancel,
             drain_timeout_s: 600,
             shutdown_host_grace_s: 120,

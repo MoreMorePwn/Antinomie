@@ -541,6 +541,15 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             .iter()
             .map(|s| (s.lane.clone(), s.options.clone()))
             .collect();
+        // The graceful stop of every sandboxed host tool this daemon runs
+        // (ANT-T0471): SIGTERM, this grace, then SIGKILL.
+        antinomie_monitor_core::set_host_stop_grace(std::time::Duration::from_secs(u64::from(
+            setup
+                .config
+                .daemon
+                .stop_grace_s
+                .min(crate::config::service::MAX_STOP_GRACE_S),
+        )));
         let pool = HostPool::new(PoolEnv {
             store: Arc::clone(&store),
             lanes: LaneDir::new(&service_dir),

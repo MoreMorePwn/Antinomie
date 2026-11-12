@@ -106,6 +106,26 @@ pub(crate) struct Jobs {
     carried: Vec<Jobs>,
     /// This queue's entry in the registry of analyses the process owns.
     owner: live::Owner,
+    /// The graceful stop of the active job's worker, while it runs.
+    stopping: Option<Stopping>,
+    /// The grace of a worker stop; `None` is the process's
+    /// [`crate::host_stop_grace`].
+    stop_grace: Option<Duration>,
+}
+
+/// Why the active worker is being stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StopWhy {
+    Deadline,
+    Cancelled,
+}
+
+/// A worker that got SIGTERM (ANT-T0471): it ends on its own, or at
+/// `hard_at` the cleanup kills it (SIGSTOP, SIGKILL).
+#[derive(Clone, Copy, Debug)]
+struct Stopping {
+    hard_at: Instant,
+    why: StopWhy,
 }
 pub(crate) enum Action {
     Read {
@@ -427,6 +447,19 @@ impl Jobs {
             .saturating_add(directory_len(&job.directory.join("output/listings")).unwrap_or(0))
             .saturating_add(directory_len(&job.directory.join("output/artifacts")).unwrap_or(0))
             .saturating_add(directory_len(&job.directory.join("output/progress")).unwrap_or(0));
+        if let Some(stopping) = self.stopping {
+            let ended = job
+                .child
+                .as_mut()
+                .is_none_or(|child| !matches!(child.poll_status(), Ok(None)));
+            if ended || Instant::now() >= stopping.hard_at {
+                self.stopping = None;
+                self.end_stopped(job, stopping.why);
+            } else {
+                self.active = Some(job);
+            }
+            return;
+        }
         if matches!(
             job.report.state,
             AnalysisState::Cancelled | AnalysisState::Partial | AnalysisState::Unavailable
@@ -436,15 +469,11 @@ impl Jobs {
             return;
         }
         if job.child.is_some() && Instant::now() >= job.deadline {
-            job.keep_finished_sections();
-            let overall = worker_deadline(&job.report);
-            super::limits::stop_running(&mut job.report, overall);
-            fail(
-                &mut job.report,
-                AnalysisState::Partial,
-                "analysis deadline exceeded; worker stopped and incomplete evidence retained",
-            );
-            self.finish(job);
+            if self.soft_stop(&mut job, StopWhy::Deadline) {
+                self.active = Some(job);
+                return;
+            }
+            self.end_stopped(job, StopWhy::Deadline);
             return;
         }
         if let Some(child) = job.child.as_mut() {
@@ -593,12 +622,11 @@ impl Jobs {
         }
         if self.active.as_ref().is_some_and(|j| j.report.id == id) {
             if let Some(mut job) = self.active.take() {
-                fail(
-                    &mut job.report,
-                    AnalysisState::Cancelled,
-                    "analysis cancelled; program execution continues",
-                );
-                self.finish(job);
+                if self.stopping.is_some() || self.soft_stop(&mut job, StopWhy::Cancelled) {
+                    self.active = Some(job);
+                } else {
+                    self.end_stopped(job, StopWhy::Cancelled);
+                }
             }
             return Ok(());
         }
@@ -615,7 +643,53 @@ impl Jobs {
         }
         Err("analysis job is unknown or already completed".into())
     }
+    /// Start the graceful stop of `job`'s worker (ANT-T0471): SIGTERM now,
+    /// the end at once when it exits, SIGKILL when the grace has passed.
+    /// False when there is no grace or nothing could be signalled: the
+    /// caller stops it at once, as before.
+    fn soft_stop(&mut self, job: &mut Job, why: StopWhy) -> bool {
+        let grace = self.stop_grace.unwrap_or_else(crate::host_stop_grace);
+        if grace.is_zero() {
+            return false;
+        }
+        let Some(child) = job.child.as_mut() else {
+            return false;
+        };
+        if !matches!(child.terminate(), Ok(true)) {
+            return false;
+        }
+        self.stopping = Some(Stopping {
+            hard_at: Instant::now() + grace,
+            why,
+        });
+        true
+    }
+
+    /// End a worker that was stopped: what it finished is kept; the cleanup
+    /// in [`Self::finish`] kills what is still running.
+    fn end_stopped(&mut self, mut job: Job, why: StopWhy) {
+        match why {
+            StopWhy::Deadline => {
+                job.keep_finished_sections();
+                let overall = worker_deadline(&job.report);
+                super::limits::stop_running(&mut job.report, overall);
+                fail(
+                    &mut job.report,
+                    AnalysisState::Partial,
+                    "analysis deadline exceeded; worker stopped and incomplete evidence retained",
+                );
+            }
+            StopWhy::Cancelled => fail(
+                &mut job.report,
+                AnalysisState::Cancelled,
+                "analysis cancelled; program execution continues",
+            ),
+        }
+        self.finish(job);
+    }
+
     pub fn shutdown(&mut self) {
+        self.stopping = None;
         if let Some(mut job) = self.acquiring.take() {
             fail(
                 &mut job.report,
@@ -885,6 +959,8 @@ pub fn open_report(directory: &Path) -> Result<AnalysisReport, String> {
 #[cfg(test)]
 mod progress_tests;
 #[cfg(test)]
+mod stop_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     fn sandbox_test_dir() -> PathBuf {
@@ -1008,6 +1084,8 @@ mod tests {
                 detached: Vec::new(),
                 carried: Vec::new(),
                 owner: Default::default(),
+                stopping: None,
+                stop_grace: None,
             };
             let launcher = jobs.active.as_ref().unwrap().child.as_ref().unwrap().id();
             let children = PathBuf::from(format!("/proc/{launcher}/task/{launcher}/children"));

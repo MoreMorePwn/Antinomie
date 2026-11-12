@@ -60,6 +60,19 @@ const POLL: Duration = Duration::from_millis(20);
 /// queue may be busy with the lane): not counted against the item's limit.
 pub const ENGINE_QUEUE_WAIT: Duration = Duration::from_secs(4 * 3600);
 
+/// Beyond the grace of a stop (`daemon.stop_grace_s`), how long a static item
+/// waits for the engine to report its stopped analysis ended (the cleanup
+/// and the engine's own tick).
+const STOP_MARGIN: Duration = Duration::from_secs(10);
+
+/// A standalone analysis that has ended.
+fn analysis_finished(report: &AnalysisReport) -> bool {
+    !matches!(
+        report.state,
+        AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
+    )
+}
+
 /// A Triage scan, or the problem in words with whether the limit ended it.
 pub(super) type TriageDone = Result<(SavedRun, ArchiveScan), (String, bool)>;
 /// The detection engines' outcomes, the problems, and whether the limit ended
@@ -218,14 +231,18 @@ impl<E: Engine> LaneStages<'_, E> {
     /// One static item: the library copy through `AnalyzeSample` for the
     /// checks of `group`. The engine runs one standalone analysis at a time,
     /// so the time it sits in the engine's queue is not counted: `limit`
-    /// starts when the engine reports it running. Past it the analysis is
-    /// cancelled (`CancelAnalysis`) and the item has timed out.
+    /// starts when the engine reports it running. `until`, the time left
+    /// before the job's deadline, bounds the two waits together. Past either
+    /// the analysis is cancelled (`CancelAnalysis`: the engine stops its
+    /// worker with SIGTERM, then SIGKILL after the grace), the item waits for
+    /// it to end, and the item has timed out.
     pub(super) fn static_item(
         &mut self,
         job: &Job,
         plan: &HostPlan,
         group: &[AnalysisKind],
         limit: Duration,
+        until: Duration,
     ) -> Result<(StaticOutcome, bool, u64), StageStop> {
         let Some(sample) = job.sample.as_ref() else {
             return Ok((
@@ -289,16 +306,10 @@ impl<E: Engine> LaneStages<'_, E> {
         let waiting = |r: &AnalysisReport| {
             matches!(r.state, AnalysisState::Acquiring | AnalysisState::Queued)
         };
-        let finished = |r: &AnalysisReport| {
-            !matches!(
-                r.state,
-                AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
-            )
-        };
         let watched = id.clone();
         match self.waiter.wait_until_report(
             "the static analysis to start",
-            ENGINE_QUEUE_WAIT,
+            ENGINE_QUEUE_WAIT.min(until),
             &watched,
             move |r| !waiting(r),
         ) {
@@ -318,17 +329,19 @@ impl<E: Engine> LaneStages<'_, E> {
         // The time it waited for the engine is not its own (the run-time
         // history records only the time it ran).
         let waited = self.waiter.now_ms().saturating_sub(asked);
+        let limit = limit.min(until.saturating_sub(Duration::from_millis(waited)));
         match self.waiter.wait_until_report(
             "the static analysis to finish",
             limit,
             &watched,
-            finished,
+            analysis_finished,
         ) {
             Ok(()) => {}
             Err(WaitError::TimedOut { .. }) => {
                 let _ = self.waiter.send(Command::CancelAnalysis {
                     analysis_id: id.clone(),
                 });
+                self.wait_stopped(&watched)?;
                 return Ok((
                     StaticOutcome::unfinished(
                         plan,
@@ -358,6 +371,23 @@ impl<E: Engine> LaneStages<'_, E> {
             false,
             waited,
         ))
+    }
+
+    /// After `CancelAnalysis` the engine stops the analysis worker
+    /// gracefully (SIGTERM, `daemon.stop_grace_s`, SIGKILL): wait until the
+    /// analysis has ended, so the item ends when its process has. A wait that
+    /// runs out or a cancel of the job ends the item all the same.
+    fn wait_stopped(&mut self, id: &str) -> Result<(), StageStop> {
+        let wait = antinomie_monitor_core::host_stop_grace() + STOP_MARGIN;
+        match self.waiter.wait_until_report(
+            "the stopped static analysis to end",
+            wait,
+            id,
+            analysis_finished,
+        ) {
+            Ok(()) | Err(WaitError::TimedOut { .. } | WaitError::Cancelled) => Ok(()),
+            Err(other) => Err(StageStop::Abort(other)),
+        }
     }
 
     /// The Triage item: open the saved run and index it. `Err` in the inner

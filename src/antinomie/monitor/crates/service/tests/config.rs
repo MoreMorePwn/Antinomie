@@ -814,3 +814,23 @@ fn snapshot_full_over_a_disk_snapshot_is_refused() {
         "{found:?}"
     );
 }
+
+/// ANT-T0471: the grace between SIGTERM and SIGKILL of a stopped host work
+/// item: 30 s by default, 0 to 600.
+#[test]
+fn t0471_the_stop_grace_defaults_to_30_s_and_is_bounded() {
+    let (config, found) = parse_service("service.toml", "");
+    assert!(found.is_empty(), "{found:?}");
+    assert_eq!(config.unwrap().daemon.stop_grace_s, 30);
+    for (text, ok) in [
+        ("[daemon]\nstop_grace_s = 0\n", true),
+        ("[daemon]\nstop_grace_s = 600\n", true),
+        ("[daemon]\nstop_grace_s = 601\n", false),
+    ] {
+        let (_, found) = parse_service("service.toml", text);
+        let refused = found.iter().any(|p| {
+            p.severity == Severity::Error && p.to_string().contains("daemon.stop_grace_s")
+        });
+        assert_eq!(refused, !ok, "{text}: {found:?}");
+    }
+}

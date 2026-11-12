@@ -43,6 +43,14 @@ x86 programs by their own table.
     longer set in the default policy.
   - `auto status <job>` and the job's `host_work` list every item with its state, expected
     time and limit; `auto status` and `queue.status` (`host_pool`) show the pool's queue.
+  - **A deadline stops the work gracefully (ANT-T0471).** When a job's host stages pass
+    their deadline, its running items are stopped: SIGTERM to each sandboxed tool's process
+    group, `[daemon] stop_grace_s` (new, default 30 s, 0 to 600) to end, then SIGKILL, by
+    the recorded process group only; in-process steps get their cancel flag. Its queued
+    items never start, the job fails `deadline_exceeded` (a new failure code), what had
+    finished is kept, and the stopped items are `timed_out` in `host_work`, `auto status`
+    and the job's `job.json`. An item past its own time limit gets the same SIGTERM, grace,
+    SIGKILL instead of an immediate kill. The desktop app keeps its immediate stop.
     The lane and the workers share the one engine through a connection that routes each
     command's result to the thread that sent it.
   - A stop lets the pool work on for `shutdown_host_grace_s`; what is left resumes in the
@@ -1029,7 +1037,7 @@ x86 programs by their own table.
 
 - **`vm.revert = "reset"` is not offered for Auto lanes.** Every lane keeps its clean snapshot, so the engine would refuse a reset; `config validate` now says so and points at `snapshot_disk`, which gives the same clean disk. The Auto docs and the T6 isolation tier no longer list `reset`.
 - **YARA runs in Auto mode.** A job launches without the guest-side static analysis, and YARA waited for that analysis's specimen, so every job got `detection_skipped` ("hash check pending") and the default mapping's "high or critical YARA hit gives `malicious`" never applied. A job's YARA scan (and `antinomie-cli detect` on a saved run without that analysis) now reads the run's sample from the library in its place, with the files the run wrote and the dumps. Runs made in the window are scanned as before.
-- **Host work pool time limits no longer shrink after a few small jobs.** An item's expected time was its recent median once it ran three times, whatever the size of its input, so after three small jobs a large one got their time; and a job's deadline had no floor, so it could be shorter than its first item's 30 s minimum and the job failed `internal` (`watchdog`) during Triage. The expected time is now the larger of the median and the size estimate, a job's deadline is at least the factor times the work ahead plus its own items' limits, and the deadline never stops a job while one of its items is running within its limit. The pool order is unchanged.
+- **Host work pool time limits no longer shrink after a few small jobs.** An item's expected time was its recent median once it ran three times, whatever the size of its input, so after three small jobs a large one got their time; and a job's deadline had no floor, so it could be shorter than its first item's 30 s minimum and the job failed `internal` (`watchdog`) during Triage. The expected time is now the larger of the median and the size estimate, and a job's deadline is at least the factor times the work ahead plus its own items' limits. The pool order is unchanged.
 - **A free lane finds a job it can run behind any number it cannot.** The queue claim read only the first 64 queued jobs, so with several lanes (an arm64 lane and an x86-64 lane, say) a free lane stayed idle while a job it could run waited behind 64 for another lane, or behind 64 in `backoff`. It now reads the whole queue, a page at a time, in the same order.
 - **`run/PAUSE`, low disk and a missing KVM stop every lane.** With several lanes only lane 1's loop looked at them, between its own jobs: while lane 1 ran a job, lanes 2 to 4 went on starting jobs after the PAUSE file appeared, and stayed paused after it was removed. Every lane now looks before it claims a job, so the pause and its end reach every free lane within five seconds. One lane is unchanged.
 - **`[retention] max_recordings_gib = 0` is refused.** It was accepted as a cap of 0 bytes, so every retention pass deleted every finished job's recording, `keep_failed` ones included. `config validate` and the daemon's start now refuse it (at least 1); it does not mean "no cap".

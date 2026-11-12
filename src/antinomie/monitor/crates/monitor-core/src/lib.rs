@@ -126,4 +126,5 @@ pub use core_limits::*;
 pub use observation::*;
 pub use pre_ack::PreAckLimits;
 pub use recording_flush::RecordingFlushStatus;
+pub use sandbox_process::{host_stop_grace, set_host_stop_grace};
 pub use telemetry_loss::{TELEMETRY_LOSS_NOTE_PREFIX, TelemetryLoss};

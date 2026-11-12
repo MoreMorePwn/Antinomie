@@ -579,3 +579,72 @@ fn time_in_the_engine_queue_does_not_count_against_a_static_item() {
         .unwrap();
     assert_eq!(end.state, HostItemState::Done, "{:?}", end.note);
 }
+
+/// ANT-T0471: a static item whose job deadline (`until`) comes before its own
+/// limit is stopped at the deadline: it asks the engine to stop the analysis
+/// (the engine sends its worker SIGTERM, then SIGKILL after the grace) and
+/// ends only once the analysis has ended, `timed_out`.
+#[test]
+fn t0471_a_static_item_is_stopped_at_the_deadline_and_waits_for_the_stop() {
+    let w = world_with("pool-static-deadline", |p| {
+        p.analysis.static_checks =
+            crate::api::spec::StaticChecks::Names(vec![crate::api::spec::StaticCheck::Metadata]);
+        p.analysis.required_stages = Vec::new();
+    });
+    let job = arrived(&w, 1);
+    let entry = |state: &str| -> antinomie_monitor_core::analysis::AnalysisReport {
+        serde_json::from_value(serde_json::json!({
+            "id": "rep-d", "state": state, "source_path": "sample:x", "sections": [],
+        }))
+        .unwrap()
+    };
+    let (running, cancelled) = (entry("running"), entry("cancelled"));
+    let log = Arc::new(Mutex::new(None));
+    let keep = Arc::clone(&log);
+    let mut waiter = w.engine(move |fake| {
+        fake.on("AnalyzeSample")
+            .then(SECOND, move |s| s.analysis_reports = vec![running.clone()])
+            .ok("rep-d");
+        // The worker takes 3 s to end after its SIGTERM.
+        fake.on("CancelAnalysis")
+            .then(3 * SECOND, move |s| {
+                s.analysis_reports = vec![cancelled.clone()]
+            })
+            .ok("");
+        *keep.lock().unwrap() = Some(fake.sent_log());
+    });
+    let fresh = w.job(&job.id);
+    let frozen = w.fx.store.frozen_policy(&job.id).unwrap();
+    let plan = super::plan::hosted(&fresh, &frozen.policy);
+    let work = Mutex::new(JobWork::new(plan, Outcome::Succeeded));
+    let kind = ItemKind::Static(vec![
+        antinomie_monitor_core::analysis::AnalysisKind::Metadata,
+    ]);
+    let began = w.fx.clock.now_ms();
+    let end = w
+        .stages(&mut waiter)
+        .run_item_until(
+            &fresh,
+            &work,
+            &kind,
+            Duration::from_secs(600),
+            Duration::from_secs(30),
+        )
+        .unwrap();
+    assert_eq!(end.state, HostItemState::TimedOut, "{:?}", end.note);
+    let sent = log.lock().unwrap().clone().unwrap();
+    let sent = sent.lock().unwrap().clone();
+    let cancel = sent
+        .iter()
+        .find(|s| s.name == "CancelAnalysis")
+        .expect("the analysis is stopped");
+    // Asked at the deadline, not at the item's own 600 s limit ...
+    assert!(
+        (30_000..32_000).contains(&(cancel.at_ms - began)),
+        "{}",
+        cancel.at_ms - began
+    );
+    // ... and the item ended once the stopped analysis had ended.
+    let ended = w.fx.clock.now_ms() - began;
+    assert!((33_000..40_000).contains(&ended), "{ended}");
+}
