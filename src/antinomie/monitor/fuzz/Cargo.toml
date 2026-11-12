@@ -18,6 +18,12 @@ features = ["fuzzing"]
 [dependencies.antinomie-service]
 path = "../crates/service"
 
+[dependencies.antinomie-triage]
+path = "../crates/triage"
+
+[dependencies.serde_json]
+version = "1"
+
 # Not a member of the monitor workspace: built with nightly by cargo-fuzz only.
 [workspace]
 
@@ -136,6 +142,13 @@ bench = false
 [[bin]]
 name = "label_expr"
 path = "fuzz_targets/label_expr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "query_params"
+path = "fuzz_targets/query_params.rs"
 test = false
 doc = false
 bench = false
