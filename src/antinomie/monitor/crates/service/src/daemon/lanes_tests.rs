@@ -941,6 +941,51 @@ fn a_daemon_with_three_engines_runs_and_shows_three_lanes() {
     several_engines(3);
 }
 
+/// B-H16: a `settings.json` with every automatic lookup on still gives a
+/// daemon with them off; the rest of the file (the quota) is kept, and the
+/// address lookup is `service.toml`'s (`off` by default), never `whois`.
+#[test]
+fn the_daemon_runs_with_no_automatic_lookup_whatever_settings_json_says() {
+    use antinomie_monitor_core::settings::AddressLookup;
+    let rig = Rig::new("lanes-for-daemon");
+    LaneDir::new(&rig.fx.dir.join("service"))
+        .save(&lane_file(1, X86_BASE))
+        .unwrap();
+    let data = first_options(&rig.fx.dir).data_dir;
+    std::fs::write(
+        data.join("settings.json"),
+        r#"{"memory_online_symbols": true, "sample_hash_lookup": true,
+            "address_lookup": "tshark_then_whois", "quota_gib": 9}"#,
+    )
+    .unwrap();
+    let file = antinomie_monitor_core::settings::load(&data)
+        .unwrap()
+        .unwrap();
+    assert!(file.memory_online_symbols && file.sample_hash_lookup);
+    let (engines, _) = rig.engines(1);
+    let daemon = Daemon::start_lanes(rig.setup(1), engines, Vec::new()).unwrap();
+    let settings = daemon.service().settings.clone();
+    assert!(!settings.memory_online_symbols, "online symbols are off");
+    assert!(!settings.sample_hash_lookup, "the hash lookup is off");
+    assert_eq!(settings.address_lookup, AddressLookup::Off);
+    assert_eq!(settings.quota_gib, 9);
+    stop(daemon);
+    // With `[privacy] address_lookup = "tshark"` the daemon keeps TShark's
+    // installed GeoIP fields and still asks no other machine.
+    let mut config = ServiceConfig::default();
+    config.privacy.address_lookup = crate::config::service::AddressLookup::Tshark;
+    let (settings, problem) = super::service::node_settings(&data, &config);
+    assert!(problem.is_none());
+    assert_eq!(settings.address_lookup, AddressLookup::Tshark);
+    assert!(!settings.memory_online_symbols && !settings.sample_hash_lookup);
+    // A file that cannot be read gives the defaults, with the reason.
+    std::fs::write(data.join("settings.json"), "{ broken").unwrap();
+    let (settings, problem) = super::service::node_settings(&data, &config);
+    assert!(problem.unwrap().contains("settings.json cannot be read"));
+    assert!(!settings.memory_online_symbols && !settings.sample_hash_lookup);
+    let _ = std::fs::remove_dir_all(&rig.fx.dir);
+}
+
 #[test]
 fn lanes_left_out_at_start_are_shown_with_their_reason() {
     let rig = Rig::new("lanes-daemon-left");

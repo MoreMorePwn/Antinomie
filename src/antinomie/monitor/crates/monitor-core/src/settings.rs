@@ -236,10 +236,21 @@ impl EngineSettings {
     }
 
     /// The settings a daemon or container runs with: no automatic outbound
-    /// traffic, whatever the file says (decided B-H16).
+    /// traffic, whatever the file says (decided B-H16). The online symbol
+    /// lookup and the MalwareBazaar hash lookup are off, and an address
+    /// lookup that asks another machine (`dig`, `whois`) falls back to the
+    /// installed TShark GeoIP fields. The manual downloads a person asks for
+    /// (`outbound_catalog`) and a preset's Check online are not automatic and
+    /// keep their own switches.
     pub fn for_daemon(mut self) -> Self {
         self.memory_online_symbols = false;
         self.sample_hash_lookup = false;
+        if matches!(
+            self.address_lookup,
+            AddressLookup::Whois | AddressLookup::TsharkThenWhois
+        ) {
+            self.address_lookup = AddressLookup::Tshark;
+        }
         self
     }
 

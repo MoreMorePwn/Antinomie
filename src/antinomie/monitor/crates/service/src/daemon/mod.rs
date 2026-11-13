@@ -570,7 +570,11 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK,
         )
         .is_ok();
-        let address_lookup = setup.config.privacy.address_lookup.triage_mode();
+        let (settings, problem) = service::node_settings(&data_dir, &setup.config);
+        if let Some(problem) = problem {
+            log(&problem);
+        }
+        let address_lookup = settings.address_lookup;
         let lane_options: Vec<(LaneId, BackendOptions)> = starting
             .iter()
             .map(|s| (s.lane.clone(), s.options.clone()))
@@ -656,6 +660,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         let service = Arc::new(Service {
             data_dir: data_dir.clone(),
             options: setup.options.clone(),
+            settings,
             config: RwLock::new(setup.config.clone()),
             store: Arc::clone(&store),
             presets,
@@ -1050,13 +1055,10 @@ fn lane_main<E: Engine>(
         )
         .shared(governor_share)
     });
-    let address_lookup = service
-        .config
-        .read()
-        .map(|config| config.privacy.address_lookup.triage_mode())
-        .unwrap_or_default();
+    // `service.toml [privacy]` through the daemon's settings (no lookup
+    // that asks another machine, B-H16).
     let triage = RealTriage::new(service.options.clone())
-        .with_address_lookup(address_lookup)
+        .with_address_lookup(service.settings.address_lookup)
         .with_lanes(vec![(lane.clone(), options)]);
     let tags = LibraryTags {
         data_dir: service.data_dir.clone(),

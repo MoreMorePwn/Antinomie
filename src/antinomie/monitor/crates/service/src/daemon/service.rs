@@ -27,11 +27,11 @@ use crate::{
     server::{CallContext, Handler, Transport, b64},
     store::{Store, SubmitContext, SubmitLimits},
 };
-use antinomie_monitor_core::BackendOptions;
+use antinomie_monitor_core::{BackendOptions, settings::EngineSettings};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock, mpsc},
     time::Duration,
 };
@@ -71,6 +71,9 @@ impl LaneSlot {
 pub struct Service {
     pub data_dir: PathBuf,
     pub options: BackendOptions,
+    /// `settings.json` as the daemon runs with it ([`node_settings`]): no
+    /// automatic outbound lookup, whatever the file says.
+    pub settings: EngineSettings,
     pub config: RwLock<ServiceConfig>,
     pub store: Arc<Store>,
     pub presets: Arc<SharedPresets>,
@@ -93,6 +96,27 @@ pub struct Service {
     pub log: Arc<dyn Fn(&str) + Send + Sync>,
     /// The host work pool (ANT-T0454); `None` in tests that run no lane.
     pub pool: Option<Arc<crate::pool::HostPool>>,
+}
+
+/// The engine settings a daemon runs with (decided B-H16): the data
+/// directory's `settings.json` (its defaults when there is none or it cannot
+/// be read, with the reason as the second value), the address lookup of
+/// `service.toml [privacy]`, and then [`EngineSettings::for_daemon`], so no
+/// switch in the file can turn on an automatic outbound lookup (the online
+/// symbol tables, the MalwareBazaar hash lookup, `dig`/`whois`). Check
+/// online is a preset's choice and has its own permission and key.
+pub fn node_settings(data_dir: &Path, config: &ServiceConfig) -> (EngineSettings, Option<String>) {
+    let (mut settings, problem) = match antinomie_monitor_core::settings::load(data_dir) {
+        Ok(stored) => (stored.unwrap_or_default(), None),
+        Err(error) => (
+            EngineSettings::default(),
+            Some(format!(
+                "settings.json cannot be read, the defaults apply: {error}"
+            )),
+        ),
+    };
+    settings.address_lookup = config.privacy.address_lookup.triage_mode();
+    (settings.for_daemon(), problem)
 }
 
 /// Parse the parameters of an op; an unknown member is named in `field`.

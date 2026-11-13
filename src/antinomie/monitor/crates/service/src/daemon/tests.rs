@@ -91,6 +91,7 @@ pub(super) fn svc_logged(
             )))
             .with_audit(Arc::clone(&log)),
         options,
+        settings: antinomie_monitor_core::settings::EngineSettings::default().for_daemon(),
         config: RwLock::new(ServiceConfig::default()),
         store,
         presets,

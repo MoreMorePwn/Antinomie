@@ -111,6 +111,28 @@ fn a_daemon_never_looks_symbols_up_online() {
 }
 
 #[test]
+fn a_daemon_never_asks_another_machine_about_an_address() {
+    for (file, daemon) in [
+        (AddressLookup::Off, AddressLookup::Off),
+        (AddressLookup::Tshark, AddressLookup::Tshark),
+        (AddressLookup::Whois, AddressLookup::Tshark),
+        (AddressLookup::TsharkThenWhois, AddressLookup::Tshark),
+    ] {
+        let settings = EngineSettings {
+            address_lookup: file,
+            outbound_catalog: true,
+            quota_gib: 9,
+            ..EngineSettings::default()
+        };
+        let forced = settings.for_daemon();
+        assert_eq!(forced.address_lookup, daemon, "{file:?}");
+        // The rest is the file's: the manual catalog switch and the limits.
+        assert!(forced.outbound_catalog);
+        assert_eq!(forced.quota_gib, 9);
+    }
+}
+
+#[test]
 fn the_file_caps_and_options_follow_the_settings() {
     let settings = EngineSettings {
         file_write_file_mib: 2,
