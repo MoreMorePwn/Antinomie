@@ -19,6 +19,16 @@ per_client_queued = 100
 paused_on_start = false
 wait_s = 3600                # how long a run may wait for resources before it fails
 
+# What the owner on the local socket may do; every key is optional and none
+# is set by default. A run above priority_max is refused (limit_exceeded),
+# max_runs_per_day is counted only when it is set.
+# [limits.local]
+# priority_max = 9           # 0 to 9
+# max_run_s = 1800
+# max_queued = 100           # default: per_client_queued above
+# max_running = 1            # runs of this caller running at once
+# max_runs_per_day = 200     # unset: no daily limit
+
 # The lanes of this node (one lane group in 0.9.0). Presets name the group in
 # vm.lane_group; `auto init` makes the VM and its clean snapshot.
 [lanes]
@@ -46,6 +56,7 @@ keep_failed = true
 # path = "/srv/drop/default"
 # preset = "standard"        # runs it unchanged; preset_by_dir = true picks it by subfolder
 # permissions = []           # beside runs.submit, e.g. ["evidence.core_dump"]
+# priority_max = 5           # the highest priority its runs may ask for
 # delete_after = "move"      # or "delete", "keep"
 
 # A copy of job.json and the reports for every finished job.

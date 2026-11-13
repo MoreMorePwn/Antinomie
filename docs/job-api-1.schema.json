@@ -3569,7 +3569,7 @@
           "description": "Runs running at once."
         }
       },
-      "description": "The limits a caller brings (the access specification's \"Limits per role,\nchangeable per person\"). Unset means the caller adds no limit of its own;\nthe node's ceilings still apply. Admission reads `priority_max`,\n`max_run_s` and `max_queued` when they are set; nothing sets them before\nlimits per caller arrive (card P-A5)."
+      "description": "The limits a caller brings (the access specification's \"Limits per role,\nchangeable per person\"). Unset means the caller adds no limit of its own;\nthe node's ceilings still apply. `service.toml` sets them: `[limits.local]`\nfor the owner on the local socket and `priority_max` per watch folder.\nAdmission refuses a run above `priority_max` or `max_run_s`\n(`limit_exceeded`) and a submit past `max_runs_per_day` (counted only when\nset); `max_queued` is counted per caller at submit and `max_running` when\na lane takes the next run."
     },
     "UploadBeginParams": {
       "type": "object",

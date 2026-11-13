@@ -77,6 +77,11 @@ pub trait LaneRunner {
     fn lane_vm(&self, _job: &Job) -> Option<String> {
         None
     }
+    /// How many runs the job's client may have running at once
+    /// (`max_running`), as the service reads it now.
+    fn running_cap(&self, _job: &Job) -> Option<u32> {
+        None
+    }
 }
 
 /// How often the loop does its periodic work.
@@ -179,24 +184,36 @@ impl LaneLoop<'_> {
                 let _ = command.reply.send(answer);
             }
             let eligibility = runner.eligibility();
-            let claimed = match self.board {
-                None => self.store.claim_next(&self.lane, &mut |_| eligibility),
-                Some(board) => {
-                    let now = self.clock.now_ms();
-                    board.post(&self.lane, eligibility, runner.profile(), now);
-                    match eligibility {
-                        Eligibility::Wait(mine) => match board.report(&self.lane, mine, now) {
-                            Some(why) => self
-                                .store
-                                .claim_next(&self.lane, &mut |_| Eligibility::Wait(why)),
-                            None => Ok(None),
-                        },
-                        _ => {
-                            let lane = &self.lane;
-                            let runner = &*runner;
-                            self.store.claim_next(lane, &mut |job| {
-                                board.decide(lane, job, runner.lane_vm(job).as_deref(), now)
-                            })
+            let profile = if self.board.is_some() {
+                runner.profile()
+            } else {
+                None
+            };
+            let claimed = {
+                let runner = &*runner;
+                let cap = |job: &Job| runner.running_cap(job);
+                match self.board {
+                    None => self
+                        .store
+                        .claim_next_within(&self.lane, &cap, &mut |_| eligibility),
+                    Some(board) => {
+                        let now = self.clock.now_ms();
+                        board.post(&self.lane, eligibility, profile, now);
+                        match eligibility {
+                            Eligibility::Wait(mine) => match board.report(&self.lane, mine, now) {
+                                Some(why) => {
+                                    self.store.claim_next_within(&self.lane, &cap, &mut |_| {
+                                        Eligibility::Wait(why)
+                                    })
+                                }
+                                None => Ok(None),
+                            },
+                            _ => {
+                                let lane = &self.lane;
+                                self.store.claim_next_within(lane, &cap, &mut |job| {
+                                    board.decide(lane, job, runner.lane_vm(job).as_deref(), now)
+                                })
+                            }
                         }
                     }
                 }

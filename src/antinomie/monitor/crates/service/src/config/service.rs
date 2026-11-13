@@ -205,6 +205,11 @@ pub struct Watch {
     /// `permission_denied`.
     #[serde(default)]
     pub permissions: Vec<Permission>,
+    /// The highest priority (0 to 9) a run from this folder may ask for; a
+    /// folder's runs ask for the default 5 (lower when this is lower). Unset:
+    /// the node's ceiling only.
+    #[serde(default)]
+    pub priority_max: Option<u8>,
     /// The 0.9.0 key, renamed `preset`: refused by `config validate` with
     /// that word.
     #[serde(default, skip_serializing)]
@@ -439,6 +444,18 @@ pub enum LogFormat {
     Json,
 }
 
+/// `[limits]`: what a caller may do, per caller. 0.9.0 has one configurable
+/// caller on this page, the owner on the local socket; a watch folder has its
+/// own `priority_max`. Every key is unset by default, which adds no limit of
+/// the caller's own (the node's ceilings still apply and `max_runs_per_day`
+/// is not counted).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Limits {
+    /// The owner on the local socket (`local:<uid>`).
+    pub local: crate::api::ops::Limits,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Log {
@@ -454,6 +471,7 @@ pub struct Log {
 pub struct ServiceConfig {
     pub daemon: Daemon,
     pub queue: Queue,
+    pub limits: Limits,
     pub lanes: Lanes,
     pub inbox: Inbox,
     pub resources: Resources,

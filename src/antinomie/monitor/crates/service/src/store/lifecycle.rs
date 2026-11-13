@@ -293,6 +293,7 @@ fn claim_in(
     paused: bool,
     now: u64,
     candidates: Vec<Job>,
+    running_cap: &dyn Fn(&Job) -> Option<u32>,
     eligible: &mut dyn FnMut(&Job) -> Eligibility,
 ) -> R<Option<Job>> {
     for job in candidates {
@@ -312,6 +313,23 @@ fn claim_in(
         if backoff_until.is_some_and(|until| until > now) {
             set_waiting(tx, &job.id, &cur, Some(WaitingFor::Backoff))?;
             continue;
+        }
+        // A caller's `max_running`: its job waits while the caller has that
+        // many running (the other callers' jobs go on).
+        if let Some(cap) = running_cap(&job) {
+            let running: u32 = tx
+                .tx
+                .query_row(
+                    "SELECT COUNT(*) FROM jobs WHERE client_id = ?1
+                     AND state IN ('running', 'cancelling')",
+                    [&job.client_id],
+                    |r| r.get(0),
+                )
+                .map_err(db)?;
+            if running >= cap {
+                set_waiting(tx, &job.id, &cur, Some(WaitingFor::Quota))?;
+                continue;
+            }
         }
         match eligible(&job) {
             Eligibility::Skip => {}
@@ -337,6 +355,18 @@ impl Store {
         lane: &LaneId,
         eligible: &mut dyn FnMut(&Job) -> Eligibility,
     ) -> R<Option<Job>> {
+        self.claim_next_within(lane, &|_| None, eligible)
+    }
+
+    /// [`Store::claim_next`] where `running_cap` names a job's client's
+    /// `max_running`: a job whose client already has that many running waits
+    /// `quota` and the next caller's job is looked at.
+    pub fn claim_next_within(
+        &self,
+        lane: &LaneId,
+        running_cap: &dyn Fn(&Job) -> Option<u32>,
+        eligible: &mut dyn FnMut(&Job) -> Eligibility,
+    ) -> R<Option<Job>> {
         let paused = self.pause_reason()?.is_some();
         self.write(|tx| {
             let now = tx.now;
@@ -355,7 +385,9 @@ impl Store {
                         )
                         .map_err(db)?,
                 );
-                if let Some(job) = claim_in(tx, lane, paused, now, candidates, eligible)? {
+                if let Some(job) =
+                    claim_in(tx, lane, paused, now, candidates, running_cap, eligible)?
+                {
                     return Ok(Some(job));
                 }
             }

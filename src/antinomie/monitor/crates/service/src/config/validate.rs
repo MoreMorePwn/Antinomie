@@ -237,6 +237,7 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     if config.inbox.processed_keep_days == 0 {
         sink.error("inbox.processed_keep_days", "must be at least 1 day");
     }
+    check_limits(&config.limits.local, "limits.local", sink);
     let mut watched = Vec::new();
     for (index, watch) in config.inbox.watch.iter().enumerate() {
         let key = |name: &str| format!("inbox.watch.{index}.{name}");
@@ -249,6 +250,14 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
         watched.push(&watch.path);
         if watch.watch_rate == 0 {
             sink.error(&key("watch_rate"), "must be at least 1");
+        }
+        if let Some(most) = watch.priority_max
+            && most > MAX_PRIORITY
+        {
+            sink.error(
+                &key("priority_max"),
+                format!("0 to {MAX_PRIORITY} (a run's priority)"),
+            );
         }
         if watch.policy.is_some() {
             sink.error(
@@ -291,6 +300,42 @@ pub const WEBHOOKS_UNSUPPORTED: &str =
 
 /// The name a preset file stands for: `[a-z0-9._-]`, 1 to 64 bytes, not
 /// starting with a dot, and not `custom` (the name of a Custom run).
+/// The highest priority a run can have.
+pub const MAX_PRIORITY: u8 = 9;
+
+/// A caller's limits (`[limits.local]`): each is checked only when set;
+/// `max_runs_per_day` unset is no daily limit.
+fn check_limits(limits: &crate::api::ops::Limits, table: &str, sink: &mut Sink<'_>) {
+    if let Some(most) = limits.priority_max
+        && most > MAX_PRIORITY
+    {
+        sink.error(
+            &format!("{table}.priority_max"),
+            format!("0 to {MAX_PRIORITY} (a run's priority)"),
+        );
+    }
+    if let Some(longest) = limits.max_run_s
+        && !(MIN_RUN_S..=MAX_RUN_S).contains(&longest)
+    {
+        sink.error(
+            &format!("{table}.max_run_s"),
+            format!("{MIN_RUN_S} to {MAX_RUN_S} seconds (the node ceiling)"),
+        );
+    }
+    for (name, value) in [
+        ("max_queued", limits.max_queued),
+        ("max_running", limits.max_running),
+        ("max_runs_per_day", limits.max_runs_per_day),
+    ] {
+        if value == Some(0) {
+            sink.error(
+                &format!("{table}.{name}"),
+                "must be at least 1; leave it out for no limit",
+            );
+        }
+    }
+}
+
 pub fn valid_preset_name(name: &str) -> bool {
     (1..=64).contains(&name.len())
         && !name.starts_with('.')

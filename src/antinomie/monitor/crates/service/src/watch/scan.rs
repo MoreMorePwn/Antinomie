@@ -410,6 +410,7 @@ impl FolderRun {
             preset: candidate.preset.clone(),
             on_duplicate: self.cfg.on_duplicate,
             permissions: self.cfg.permissions.clone(),
+            priority_max: self.cfg.priority_max,
         });
         match admitted {
             Ok(Admission::Submitted { job }) => {

@@ -36,6 +36,11 @@ impl crate::config::callers::CallerLookup for Service {
         let config = self.config.read().unwrap_or_else(|p| p.into_inner());
         crate::config::callers::permissions_now(&config, client_id, labels)
     }
+
+    fn max_running_now(&self, client_id: &str) -> Option<u32> {
+        let config = self.config.read().unwrap_or_else(|p| p.into_inner());
+        crate::config::callers::max_running_now(&config, client_id)
+    }
 }
 
 impl WatchEnv for ServiceEnv {
@@ -71,7 +76,7 @@ impl WatchEnv for ServiceEnv {
         let loaded = presets
             .get(&request.preset)
             .ok_or_else(|| Defer(format!("preset {} does not exist", request.preset)))?;
-        let caller = watch_caller(&request.preset, &request.permissions);
+        let caller = watch_caller(&request.preset, &request.permissions, request.priority_max);
         let name = (!request.file_name.is_empty()).then_some(request.file_name.as_str());
         let sample = match service.intake.sample_from_file(
             request.file,

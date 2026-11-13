@@ -93,6 +93,7 @@ runs while a window or the daemon owns the data directory.
 | `[queue] max_queued`, `per_client_queued` | 1000, 100 | `job.submit` fails `quota_exceeded` above them (the smaller of `per_client_queued` and the caller's `max_queued` limit applies) |
 | `[queue] paused_on_start` | false | Start with the queue paused (`queue.resume` starts it) |
 | `[queue] wait_s` | 3600 | How long a run may wait `queued` for resources, a dependency or a pending disk layer before it ends `failed` (was a policy's `limits.wait_s`) |
+| `[limits.local]` | none set | The limits of the owner on the local socket (`local:<uid>`), every key optional: `priority_max` (0 to 9; a run asking for more is refused `limit_exceeded`, no run is lowered silently), `max_run_s` (5 to 1800), `max_queued` (queued runs of this caller; the smaller of it and `per_client_queued` applies), `max_running` (runs of this caller running at once; its next run waits `queued` with `waiting_for` `quota` while the caller is at the limit, the other callers' runs go on), `max_runs_per_day` (runs accepted in the last 24 hours, refused `limit_exceeded` past it; **not counted unless set**). A key set to 0 fails the load: leave it out for no limit. A reload changes them for the next submit |
 | `[lanes] group` | `x86_64` | The lane group of this node: every lane belongs to it, and a preset names it in `vm.lane_group` |
 | `[lanes] vm` | `auto-1` | Lane 1's VM: what `config validate` checks, and the base the lane choice compares |
 | `[lanes] revert`, `revert_to` | `snapshot_disk`, `auto-clean` | How a lane is made clean when the next run starts (`snapshot_disk`, `snapshot_full` or `reset`) and the clean snapshot |
@@ -182,6 +183,7 @@ on_duplicate = "run"            # optional: replaces the preset's rule for this 
 allow_group_write = false       # see below
 watch_rate = 10                 # new jobs a minute before the folder pauses
 permissions = []                # held beside runs.submit, e.g. ["evidence.core_dump"]
+priority_max = 5                # optional: the highest priority (0 to 9) its runs may ask for
 ```
 
 A folder submits as the client `auto:policy-<preset>` holding `runs.submit` and
@@ -191,7 +193,10 @@ is rejected `permission_denied` and the file is counted as rejected: a preset
 with `core_dump_on_exit = true` or a trigger core needs `"evidence.core_dump"`
 (Deep needs it), a memory dump `"evidence.memory_dump"`, `check_online = true`
 `"lookup.online"`. A reload that takes a permission away also refuses the
-folder's jobs still waiting (`permission_denied` at prechecks).
+folder's jobs still waiting (`permission_denied` at prechecks). A folder's runs
+ask for the default priority 5, or the folder's `priority_max` when that is
+lower (a run is never refused for the default). The folder's client is named
+for the preset, so folders of one preset share its queue and daily counts.
 
 The daemon scans each folder every 2 seconds. A file is taken once its size,
 modification time and change time have been the same for 3 seconds (so a file

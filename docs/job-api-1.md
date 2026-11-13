@@ -77,7 +77,7 @@ is set. Every other field is optional. The preset gives every run option;
 |---|---|
 | `name` | File name hint, 1 to 128 bytes, no `/`, no NUL |
 | `policy` | The preset's name, default `standard` (the member keeps this name until the run API). Five presets are built in: `standard`, `quick-look`, `deep`, `interactive`, `live-network`; more are `<data>/presets/<name>.toml` |
-| `priority` | 0 to 9, default 5; higher starts first; the caller's limit, when it has one, is a ceiling |
+| `priority` | 0 to 9, default 5 (the app's levels: Low 2, Normal 5, Urgent 8); higher starts first, with no ageing; the caller's `priority_max`, when it has one, is a ceiling: a higher value is refused `limit_exceeded`, never lowered (an unset priority becomes the default or the ceiling when that is lower) |
 | `labels` | At most 16 pairs; key 1 to 32 bytes of `[a-z0-9._-]`, value up to 128 bytes |
 | `idempotency_key` | See conventions |
 | `overrides` | A partial preset: the same tables and keys as a preset file, `{"program": {"run_time_s": 600}, "report": {"formats": ["html", "json", "pdf"]}}`. `title`, `description` and `offered_to` are not run options. See below |
@@ -200,7 +200,7 @@ Every failed operation returns `{"error": {"code", "message", "field?", "retryab
 | `forbidden` | 403 | Added by the HTTP layer only |
 | `permission_denied` | 403 | The caller lacks a permission; `details.needs` lists it (also inside a rejected job's `failure`) |
 | `preset_denied` | 403 | There is no such preset (or, from 0.9.1, it is retired or not offered to the caller's role); `details.preset`. Nothing is stored |
-| `limit_exceeded` | 403 | A value above a limit (priority, run time); `details.field`, `details.limit`, `details.source` |
+| `limit_exceeded` | 403 | A value above a limit (priority, run time, runs per day); `details.field`, `details.limit`, `details.source` |
 | `unavailable_on_node` | 409 | The node does not have what the request needs (a live route, a kept VM); `details.what` |
 | `not_found` | 404 | Job, artifact, sample, upload, run or recording missing |
 | `conflict` | 409 | Idempotency key reused with another spec; the job is not in a state that allows the op; `details.reason = "cursor_stale"` |
@@ -273,8 +273,12 @@ The four scopes of earlier drafts map to permissions as follows: `read` is
 6. the node has it (a live route, a kept VM, the lane group), else a rejected
    job with `unavailable_on_node`;
 7. the caller's limits, when it has any: `priority` up to `priority_max`,
-   `program.run_time_s` up to `max_run_s`, else a rejected job with
-   `limit_exceeded` (`details.source: "caller"`);
+   `program.run_time_s` up to `max_run_s`, the runs of the last 24 hours up to
+   `max_runs_per_day` (counted only when the caller has that limit, per client,
+   a rejected run not counted), else a rejected job with `limit_exceeded`
+   (`details.source: "caller"`). `max_queued` is checked first, at submit
+   (`quota_exceeded`); `max_running` holds a queued run back (`waiting_for`
+   `quota`) while the caller has that many running;
 8. the sample (intake: size, type, architecture against `[accepts]`), else a
    rejected job with the `sample_*` code. Intake comes last because it archives
    the sample: a refused job adds nothing to the library.

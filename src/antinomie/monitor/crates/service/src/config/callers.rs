@@ -23,10 +23,21 @@ pub const LOCAL_PREFIX: &str = "local:";
 pub const WATCH_PREFIX: &str = "auto:policy-";
 
 /// The caller a watch folder acts as: a client named for the preset, with
-/// `runs.submit` and the folder's own `permissions`.
-pub fn watch_caller(policy: &str, permissions: &[Permission]) -> Caller {
+/// `runs.submit`, the folder's own `permissions` and its `priority_max`.
+pub fn watch_caller(policy: &str, permissions: &[Permission], priority_max: Option<u8>) -> Caller {
     let mut caller = Caller::new(format!("{WATCH_PREFIX}{policy}"), &[Permission::RunsSubmit]);
     caller.permissions.extend(permissions.iter().copied());
+    caller.limits.priority_max = priority_max;
+    caller
+}
+
+/// `caller` with the limits `service.toml` gives it now: the owner on the
+/// local socket takes `[limits.local]`; any other caller keeps the limits it
+/// came with (a watch folder's are set by [`watch_caller`]).
+pub fn with_limits(config: &ServiceConfig, mut caller: Caller) -> Caller {
+    if caller.client_id.starts_with(LOCAL_PREFIX) {
+        caller.limits = config.limits.local.clone();
+    }
     caller
 }
 
@@ -37,6 +48,12 @@ pub trait CallerLookup: Send + Sync {
     /// (its permissions came with the call only), and the run keeps what it
     /// was admitted with.
     fn permissions_now(&self, client_id: &str, labels: &Labels) -> Option<BTreeSet<Permission>>;
+
+    /// How many runs `client_id` may have running at once (`max_running`);
+    /// `None`: no limit of its own.
+    fn max_running_now(&self, _client_id: &str) -> Option<u32> {
+        None
+    }
 }
 
 /// The owner only: `local:*` holds every permission, any other client is not
@@ -49,6 +66,15 @@ impl CallerLookup for LocalOnly {
             .starts_with(LOCAL_PREFIX)
             .then(|| Permission::ALL.into_iter().collect())
     }
+}
+
+/// The `max_running` limit `client_id` has under `config`: only the owner on
+/// the local socket has one to set in 0.9.0 (`[limits.local]`).
+pub fn max_running_now(config: &ServiceConfig, client_id: &str) -> Option<u32> {
+    client_id
+        .starts_with(LOCAL_PREFIX)
+        .then_some(config.limits.local.max_running)
+        .flatten()
 }
 
 /// The permissions `client_id` holds under `config`: every one for the
@@ -112,12 +138,33 @@ mod tests {
 
     #[test]
     fn a_watch_caller_holds_submit_and_its_folder_permissions() {
-        let caller = watch_caller("strict", &[Permission::EvidenceCoreDump]);
+        let caller = watch_caller("strict", &[Permission::EvidenceCoreDump], Some(3));
         assert_eq!(caller.client_id, "auto:policy-strict");
         assert!(caller.has(Permission::RunsSubmit));
         assert!(caller.has(Permission::EvidenceCoreDump));
         assert!(!caller.has(Permission::SamplesAdd));
         assert!(!caller.has(Permission::RunsSeeAll));
+        assert_eq!(caller.limits.priority_max, Some(3));
+    }
+
+    #[test]
+    fn the_local_owner_takes_its_limits_from_the_config_and_others_keep_theirs() {
+        let mut config = ServiceConfig::default();
+        config.limits.local.priority_max = Some(7);
+        config.limits.local.max_running = Some(2);
+        let owner = with_limits(&config, Caller::with_every_permission("local:1000"));
+        assert_eq!(owner.limits.priority_max, Some(7));
+        assert_eq!(max_running_now(&config, "local:1000"), Some(2));
+        let watch = watch_caller("strict", &[], Some(3));
+        let kept = with_limits(&config, watch.clone());
+        assert_eq!(kept, watch);
+        assert_eq!(max_running_now(&config, "auto:policy-strict"), None);
+        // Nothing set: no limit of its own.
+        let plain = with_limits(
+            &ServiceConfig::default(),
+            Caller::with_every_permission("local:1000"),
+        );
+        assert!(plain.limits.is_empty());
     }
 
     #[test]

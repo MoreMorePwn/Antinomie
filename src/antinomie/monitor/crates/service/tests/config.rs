@@ -972,3 +972,45 @@ fn t0471_the_stop_grace_defaults_to_30_s_and_is_bounded() {
         assert_eq!(refused, !ok, "{text}: {found:?}");
     }
 }
+
+#[test]
+fn limits_per_caller_are_unset_by_default_and_checked_when_set() {
+    let (config, found) = parse_service("service.toml", "");
+    assert!(found.is_empty());
+    let config = config.unwrap();
+    // No limit of the owner's own, and no daily limit.
+    assert!(config.limits.local.is_empty());
+    assert_eq!(config.limits.local.max_runs_per_day, None);
+
+    let text = "[limits.local]\npriority_max = 8\nmax_queued = 20\nmax_running = 1\n\
+                max_runs_per_day = 50\nmax_run_s = 900\n\
+                [[inbox.watch]]\npath = \"/srv/a\"\npriority_max = 2\n";
+    let (config, found) = parse_service("service.toml", text);
+    assert!(found.is_empty(), "{found:?}");
+    let config = config.unwrap();
+    assert_eq!(config.limits.local.priority_max, Some(8));
+    assert_eq!(config.limits.local.max_runs_per_day, Some(50));
+    assert_eq!(config.inbox.watch[0].priority_max, Some(2));
+
+    let text = "[limits.local]\npriority_max = 10\nmax_queued = 0\nmax_running = 0\n\
+                max_runs_per_day = 0\nmax_run_s = 4\n\
+                [[inbox.watch]]\npath = \"/srv/a\"\npriority_max = 12\n";
+    let (_, found) = parse_service("service.toml", text);
+    let messages: Vec<String> = found.iter().map(|p| p.to_string()).collect();
+    for key in [
+        "limits.local.priority_max",
+        "limits.local.max_queued",
+        "limits.local.max_running",
+        "limits.local.max_runs_per_day",
+        "limits.local.max_run_s",
+        "inbox.watch.0.priority_max",
+    ] {
+        assert!(
+            messages.iter().any(|m| m.contains(key)),
+            "{key}: {messages:?}"
+        );
+    }
+    // An unknown key of the table is an error.
+    let (_, found) = parse_service("service.toml", "[limits.local]\nmax_jobs_per_day = 5\n");
+    assert!(!found.is_empty());
+}

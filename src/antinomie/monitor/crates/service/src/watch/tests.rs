@@ -162,6 +162,7 @@ impl Rig {
             allow_group_write: false,
             watch_rate: 10,
             permissions: Vec::new(),
+            priority_max: None,
             policy: None,
             policy_by_dir: None,
         };

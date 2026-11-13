@@ -194,6 +194,12 @@ impl Service {
         }
     }
 
+    /// The caller with the limits `service.toml` gives it as it reads now.
+    fn caller_with_limits(&self, caller: &Caller) -> Caller {
+        let config = self.config.read().unwrap_or_else(|p| p.into_inner());
+        crate::config::callers::with_limits(&config, caller.clone())
+    }
+
     fn submit(&self, value: Value, ctx: &CallContext) -> Result<Value, ApiError> {
         let spec: JobSpec = params(value)?;
         if spec.sample.path.is_some() && ctx.transport == Transport::Socket {
@@ -203,9 +209,10 @@ impl Service {
             ));
         }
         let presets = self.presets.snapshot();
+        let caller = self.caller_with_limits(&ctx.caller);
         let submitted = self
             .store
-            .submit(&ctx.caller, spec, &self.submit_context(&presets))?;
+            .submit(&caller, spec, &self.submit_context(&presets))?;
         self.wake_lane();
         to_value(&submitted)
     }
@@ -213,8 +220,9 @@ impl Service {
     fn retry(&self, value: Value, ctx: &CallContext) -> Result<Value, ApiError> {
         let request: JobRetryParams = params(value)?;
         let presets = self.presets.snapshot();
+        let caller = self.caller_with_limits(&ctx.caller);
         let submitted = self.store.retry(
-            &ctx.caller,
+            &caller,
             &request.job_id,
             request.overrides.as_ref(),
             &self.submit_context(&presets),

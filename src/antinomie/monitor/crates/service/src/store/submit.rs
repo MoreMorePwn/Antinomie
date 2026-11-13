@@ -180,8 +180,9 @@ impl Store {
         // The checks of the access specification, then intake (which may
         // archive the sample). An invalid value stores nothing.
         let resolved = admission::settle(&spec, caller, &base)?;
-        let admitted =
-            admission::check(&resolved, caller, ctx.presets.lane_group()).and_then(|()| {
+        let admitted = admission::check(&resolved, caller, ctx.presets.lane_group())
+            .and_then(|()| self.check_daily(caller))
+            .and_then(|()| {
                 ctx.intake
                     .admit(
                         &spec.sample,
@@ -269,6 +270,27 @@ impl Store {
                 self.write_spec_file(&submitted.job);
             }
         })
+    }
+
+    /// The caller's `max_runs_per_day`, when it has one: the runs it had
+    /// accepted in the last 24 hours (a rejected one is not counted). No
+    /// limit set, nothing counted.
+    fn check_daily(&self, caller: &Caller) -> Result<(), Reject> {
+        let Some(most) = caller.limits.max_runs_per_day else {
+            return Ok(());
+        };
+        let since = self.now_ms().saturating_sub(24 * 3_600_000);
+        let used = self
+            .count_caller_runs_since(&caller.client_id, since)
+            .map_err(|e| Reject::new(FailureCode::Internal, None, e.message))?;
+        if used >= most {
+            return Err(admission::limit(
+                "max_runs_per_day",
+                u64::from(most),
+                format!("{used} runs in the last 24 hours; the limit is {most}"),
+            ));
+        }
+        Ok(())
     }
 
     /// Queue depth and per-client caps (design 2.4.2): the smaller of the

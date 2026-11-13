@@ -180,7 +180,8 @@ its default is Standard's. The full list is in
   `lookup.online`, keeping the VM `run.keep_vm`; the node has it (a live route,
   a kept VM or another lane group is `unavailable_on_node`); the priority and
   the run time are within the caller's limits when it has any (else
-  `limit_exceeded`). Each of the last three is stored as a `rejected` job (exit
+  `limit_exceeded`), and so is the number of runs of the last 24 hours when
+  the caller has a daily limit (none by default). Each of the last three is stored as a `rejected` job (exit
   13) with the code, the field (a preset key, `network.route`) and the details.
 
 * **Who holds which permission.** The owner on the local socket (the CLI and
@@ -428,7 +429,7 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `sample_missing`, `sample_too_large`, `sample_type_denied`, `sample_arch_denied`, `duplicate_denied` | submit | no | The intake refused the file; the size limit is the smallest of 256 MiB, the preset's `accepts.max_sample_mib` and a quarter of the lane VM's RAM |
 | `permission_denied` | submit, prechecks | no | The caller lacks a permission the run uses (`details.needs`), or lost it while the job waited; `field` names the option |
 | `preset_denied` | submit | no | There is no such preset (`details.preset`); nothing is stored |
-| `limit_exceeded` | submit | no | The priority or the run time is above the caller's limit (`details.field`, `details.limit`) |
+| `limit_exceeded` | submit | no | The priority, the run time or the runs of the last 24 hours are above the caller's limit (`details.field`, `details.limit`); set in `service.toml` `[limits.local]` and per watch folder `priority_max` |
 | `unavailable_on_node` | submit | no | The node does not have it: a live route, keeping the VM after a failure (both arrive with 0.9.1), or another lane group; `details.what` |
 | `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The job waits `queued` for up to `[queue] wait_s` (3600), then fails |
 | `no_base`, `no_vm` | provision | no | The lane VM or its base is gone; `auto lane list` says which |

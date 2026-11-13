@@ -46,6 +46,22 @@ x86 programs by their own table.
     old key and the daemon does not start until the folder is gone.
     `config validate --preset NAME`, `auto policy list` (the presets with what
     they need) and `auto retry --override program.run_time_s=60` follow.
+- **Limits per caller (ANT-T0491).**
+  - `service.toml` sets a caller's limits: `[limits.local]` for the owner on the
+    local socket (`priority_max`, `max_run_s`, `max_queued`, `max_running`,
+    `max_runs_per_day`, each optional) and `priority_max` per watch folder. A
+    value of 0 is an error; a key left out is no limit of its own.
+  - A run asking for a priority above the caller's `priority_max` is refused
+    `limit_exceeded` naming the limit; it is never lowered silently and waiting
+    never raises a priority. The app's levels are Low 2, Normal 5, Urgent 8,
+    and any value 0 to 9 is allowed up to the ceiling.
+  - `max_queued` and `max_running` count per caller (client id), not per
+    preset: a caller at `max_running` waits `queued` with `waiting_for`
+    `quota` while other callers' runs start.
+  - `max_runs_per_day` is optional and counted only when set (the 0.9.0 policy
+    key `max_jobs_per_day` was never counted); runs past it are refused
+    `limit_exceeded`, counted per caller over the last 24 hours.
+
 - **Auto mode checks permissions, not scopes (ANT-T0489).**
   - The engine checks a list of permissions (`runs.submit`, `route.tor`,
     `run.as_root`, `evidence.core_dump`, `evidence.view` and 30 more) instead of the

@@ -5,6 +5,7 @@
 mod crash;
 mod events;
 mod lifecycle;
+mod limits;
 mod permissions;
 mod property;
 mod submit;

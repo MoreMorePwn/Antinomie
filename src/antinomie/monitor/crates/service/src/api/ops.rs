@@ -335,9 +335,12 @@ impl std::fmt::Display for Permission {
 
 /// The limits a caller brings (the access specification's "Limits per role,
 /// changeable per person"). Unset means the caller adds no limit of its own;
-/// the node's ceilings still apply. Admission reads `priority_max`,
-/// `max_run_s` and `max_queued` when they are set; nothing sets them before
-/// limits per caller arrive (card P-A5).
+/// the node's ceilings still apply. `service.toml` sets them: `[limits.local]`
+/// for the owner on the local socket and `priority_max` per watch folder.
+/// Admission refuses a run above `priority_max` or `max_run_s`
+/// (`limit_exceeded`) and a submit past `max_runs_per_day` (counted only when
+/// set); `max_queued` is counted per caller at submit and `max_running` when
+/// a lane takes the next run.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {

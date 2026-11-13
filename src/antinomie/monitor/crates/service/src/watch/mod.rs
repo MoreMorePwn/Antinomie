@@ -55,6 +55,8 @@ pub struct Admit {
     pub on_duplicate: Option<OnDuplicate>,
     /// The folder's `permissions`, held beside `runs.submit`.
     pub permissions: Vec<crate::api::ops::Permission>,
+    /// The folder's `priority_max`.
+    pub priority_max: Option<u8>,
 }
 
 /// What came of a file.

@@ -143,14 +143,14 @@ impl Store {
         })
     }
 
-    /// Jobs a policy accepted since `since_ms`, rejected ones not counted
-    /// (the daily quota of `limits.max_jobs_per_day`).
-    pub fn count_policy_jobs_since(&self, policy: &str, since_ms: u64) -> R<u32> {
+    /// Runs `client_id` had accepted since `since_ms` (rejected ones not
+    /// counted): the daily count of `max_runs_per_day`.
+    pub fn count_caller_runs_since(&self, client_id: &str, since_ms: u64) -> R<u32> {
         self.conn()
             .query_row(
-                "SELECT COUNT(*) FROM jobs WHERE policy_name = ?1 AND created_ms >= ?2
+                "SELECT COUNT(*) FROM jobs WHERE client_id = ?1 AND created_ms >= ?2
                  AND state != 'rejected'",
-                rusqlite::params![policy, since_ms],
+                rusqlite::params![client_id, since_ms],
                 |r| r.get(0),
             )
             .map_err(db)

@@ -202,6 +202,7 @@ fn drop_folder(svc: &super::tests::Svc, name: &str) -> (std::path::PathBuf, Watc
         allow_group_write: false,
         watch_rate: 50,
         permissions: Vec::new(),
+        priority_max: None,
         policy: None,
         policy_by_dir: None,
     };

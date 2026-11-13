@@ -34,6 +34,7 @@ fn drop_folder(svc: &super::tests::Svc, name: &str) -> (PathBuf, Watch) {
         allow_group_write: false,
         watch_rate: 10,
         permissions: Vec::new(),
+        priority_max: None,
         policy: None,
         policy_by_dir: None,
     };
@@ -197,13 +198,17 @@ fn a_full_queue_holds_the_watched_files() {
 
 #[test]
 fn the_watch_caller_holds_runs_submit_and_its_folder_permissions() {
-    let caller = watch_caller("strict", &[]);
+    let caller = watch_caller("strict", &[], None);
     assert_eq!(caller.client_id, "auto:policy-strict");
     assert_eq!(
         caller.permissions,
         [crate::api::ops::Permission::RunsSubmit].into()
     );
-    let cores = watch_caller("strict", &[crate::api::ops::Permission::EvidenceCoreDump]);
+    let cores = watch_caller(
+        "strict",
+        &[crate::api::ops::Permission::EvidenceCoreDump],
+        None,
+    );
     assert!(cores.has(crate::api::ops::Permission::EvidenceCoreDump));
 }
 
@@ -279,4 +284,62 @@ fn watch_list_shows_the_folders_after_a_scan() {
             .unwrap()
             .contains("symbolic link")
     );
+}
+
+#[test]
+fn the_owner_takes_its_limits_from_service_toml_as_it_reads_now() {
+    let svc = svc("limits-local", |_| {});
+    let sample = |svc: &super::tests::Svc, priority: u8| {
+        let id = super::tests::upload(svc, SCRIPT);
+        call(
+            svc,
+            "job.submit",
+            json!({"sample": {"upload_id": id}, "priority": priority}),
+        )
+        .unwrap()
+    };
+    // Nothing set: Urgent passes.
+    assert_eq!(sample(&svc, 8)["state"], "queued");
+    // `[limits.local] priority_max = 5` (a reload): Urgent is refused, Normal passes.
+    svc.service
+        .config
+        .write()
+        .unwrap()
+        .limits
+        .local
+        .priority_max = Some(5);
+    let refused = sample(&svc, 8);
+    assert_eq!(refused["state"], "rejected");
+    assert_eq!(refused["failure"]["code"], "limit_exceeded");
+    assert_eq!(refused["failure"]["field"], "priority");
+    assert_eq!(sample(&svc, 5)["state"], "queued");
+    // The daily limit counts only once it is set: two runs are already in.
+    svc.service
+        .config
+        .write()
+        .unwrap()
+        .limits
+        .local
+        .max_runs_per_day = Some(2);
+    let refused = sample(&svc, 5);
+    assert_eq!(refused["failure"]["code"], "limit_exceeded");
+    assert_eq!(refused["failure"]["field"], "max_runs_per_day");
+}
+
+#[test]
+fn a_watch_folders_priority_max_caps_the_priority_of_its_runs() {
+    let svc = svc("limits-watch", |_| {});
+    let (folder, mut watch) = drop_folder(&svc, "drop");
+    watch.priority_max = Some(2);
+    fs::write(folder.join("hello.sh"), SCRIPT).unwrap();
+    let env = ServiceEnv(svc.service.clone());
+    let mut watcher = Watcher::new(&svc.dir.join("data").join("inbox"));
+    watcher.configure(&[watch]);
+    settle(&mut watcher, &env);
+    let listed = call(&svc, "job.list", json!({})).unwrap();
+    let jobs = listed["jobs"].as_array().unwrap();
+    assert_eq!(jobs.len(), 1, "{listed}");
+    assert_eq!(jobs[0]["state"], "queued");
+    // The default priority (5) is lowered to the folder's ceiling.
+    assert_eq!(jobs[0]["spec"]["priority"], 2);
 }

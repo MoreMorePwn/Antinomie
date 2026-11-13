@@ -156,6 +156,10 @@ impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
         Some(self.env.lane_setup.vm.clone())
     }
 
+    fn running_cap(&self, job: &Job) -> Option<u32> {
+        self.env.callers.max_running_now(&job.client_id)
+    }
+
     fn command(&mut self, op: &str, params: Value) -> Result<Value, ApiError> {
         let request: super::lane_ops::LaneParams = super::service::params(params)?;
         let lane = request.lane.unwrap_or_else(|| self.lane.clone());

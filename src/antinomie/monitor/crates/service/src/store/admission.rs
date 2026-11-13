@@ -213,7 +213,7 @@ pub fn node_refusals(preset: &Preset, lane_group: &str) -> Vec<NodeRefusal> {
     out
 }
 
-fn limit(field: &str, limit: u64, message: String) -> Reject {
+pub(super) fn limit(field: &str, limit: u64, message: String) -> Reject {
     Reject::new(FailureCode::LimitExceeded, Some(field), message)
         .detail("field", json!(field))
         .detail("limit", json!(limit))
