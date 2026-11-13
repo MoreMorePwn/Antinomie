@@ -28,9 +28,11 @@ harness started, and the lane's QEMU as service/lanes/lane-1.json records it
                   the queue paused low_disk) and runs when the space is back; (b) filled to
                   ENOSPC in the run stage, the queue pauses low_disk (held in
                   memory when the job store is full too), the job ends partial
-                  or failed once the space is freed (it does not hang), the
-                  daemon stays up, the next job ends succeeded or partial
-                  (host tools), and the daemon exits 0 on SIGTERM.
+                  with the warning low_disk and the run's end_reason stopped
+                  once the space is freed (design 4.6.3; failed does not hold,
+                  user 2026-11-13; it does not hang), the daemon stays up,
+                  the next job ends succeeded or partial (host tools), and
+                  the daemon exits 0 on SIGTERM.
   guest-panic     A benign program run as root writes `c` to
                   /proc/sysrq-trigger. Expected: each attempt loses the guest
                   (guest_lost), one retry, the job ends failed with
@@ -92,7 +94,8 @@ EXPECTED = {
     "daemon-kill": "recovery ends the recorded QEMU, job.requeued (service_restart); ends succeeded/partial(host "
                    "tools); lane free",
     "disk-full": "(a) below the floor: queued, waiting_for resources, then runs; (b) ENOSPC mid-run: queue paused "
-                 "low_disk, then partial or failed, daemon up; next job succeeded/partial(host tools); SIGTERM exit 0",
+                 "low_disk, then partial with low_disk and end_reason stopped, daemon up; next job "
+                 "succeeded/partial(host tools); SIGTERM exit 0",
     "guest-panic": "guest_lost on each attempt, one retry, ends failed guest_lost; lane not quarantined; next job ok",
     "revert-corrupt": "restore retried once, failed revert_failed, lane-1 quarantined revert_failed, the next job "
                       "waits lane_quarantined",
@@ -303,6 +306,22 @@ def floor_wait(job):
     return av.is_terminal(job) or job.get("waiting_for") in ("resources", "queue_paused")
 
 
+def disk_full_outcome(job):
+    """(holds, why) for the job of disk-full (b) once the space is back. The
+    floor check stopped the run, so the job ends partial with the warning
+    low_disk and the run's end_reason stopped (design 4.6.3); failed does not
+    hold (user, 2026-11-13)."""
+    missing = []
+    if job.get("state") != "partial":
+        missing.append(f"state {job.get('state')}, not partial")
+    if "low_disk" not in av.warning_codes(job):
+        missing.append("no low_disk warning")
+    end_reason = (job.get("run") or {}).get("end_reason")
+    if end_reason != "stopped":
+        missing.append(f"end_reason {end_reason}, not stopped")
+    return not missing, "; ".join(missing) or "partial, low_disk, stopped"
+
+
 def disk_full_steps(case, filler):
     free = shutil.disk_usage(filler.parent).free
     needed = (DISK_FLOOR_GIB + DISK_QUOTA_GIB) * av.GIB + 256 * av.MIB
@@ -352,9 +371,11 @@ def disk_full_steps(case, filler):
                     f"{paused.get('pause_reason')}")
     filler.unlink()
     job = case.wait(job)
-    holds &= job.get("state") in ("partial", "failed") and case.daemon.alive()
+    ended, why = disk_full_outcome(job)
+    holds &= ended and case.daemon.alive()
     observed.append(f"then {describe(job)} warnings {sorted(set(av.warning_codes(job)))}; end_reason "
-                    f"{(job.get('run') or {}).get('end_reason')}; requeued {[r.get('reason') for r in case.requeues(job)]}")
+                    f"{(job.get('run') or {}).get('end_reason')}; requeued {[r.get('reason') for r in case.requeues(job)]}"
+                    f"{'' if ended else ' (' + why + ')'}")
     job = case.submit(case.program("short-c", SHORT))
     job = case.wait(job)
     holds &= av.outcome_ok(job)[0]
