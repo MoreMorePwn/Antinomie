@@ -67,6 +67,9 @@ pub const MIN_CORE_MIB: u32 = 64;
 pub const MAX_CORE_MIB: u32 = 1024;
 pub const MAX_STATIC_MINUTES: u32 = 480;
 pub const MAX_SAMPLE_MIB: u32 = 256;
+/// `[retry]`: attempts of a run and the longest wait between two.
+pub const MAX_ATTEMPTS: u32 = 10;
+pub const MAX_BACKOFF_S: u32 = 3600;
 
 /// The values of `samples::detect_type`.
 pub const SAMPLE_TYPES: [&str; 11] = [
@@ -664,11 +667,20 @@ fn check_preset(preset: &Preset, sink: &mut Sink<'_>) {
     if preset.report.formats.is_empty() && !preset.report.bundle {
         sink.warn("report.formats", "no report is produced");
     }
-    if preset.retry.max_attempts == 0 {
-        sink.error("retry.max_attempts", "must be at least 1");
+    let retry = &preset.retry;
+    if !(1..=MAX_ATTEMPTS).contains(&retry.max_attempts) {
+        sink.error("retry.max_attempts", format!("1 to {MAX_ATTEMPTS}"));
     }
-    if preset.retry.max_attempts > 1 && preset.retry.backoff_s.is_empty() {
+    if retry.max_attempts > 1 && retry.backoff_s.is_empty() {
         sink.error("retry.backoff_s", "needs at least one delay when retrying");
+    }
+    if retry.backoff_s.len() > MAX_ATTEMPTS as usize
+        || retry.backoff_s.iter().any(|&s| s > MAX_BACKOFF_S)
+    {
+        sink.error(
+            "retry.backoff_s",
+            format!("at most {MAX_ATTEMPTS} delays of 0 to {MAX_BACKOFF_S} seconds"),
+        );
     }
 }
 

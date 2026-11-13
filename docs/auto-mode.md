@@ -262,6 +262,8 @@ the recording is saved without it and the run succeeds; `run.pending` lists
   `arch` applies to ELF files only.
 * **Duplicates.** `[duplicates] on_duplicate` is `run` (analyse again; the new run has
   `repeat_of`), `reuse` (return the earlier run) or `reject` (`duplicate_denied`).
+  `reuse` returns only a run the caller may see (its own, or any with
+  `runs.see_all`); otherwise a new run starts.
 * **The label.** A succeeded run has the raw Triage assessment, a label
   (`malicious`, `suspicious`, `clean_observed`, `inconclusive`), an optional score
   and the `basis` sentence that says why. `clean_observed` means nothing was seen
@@ -459,7 +461,8 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `internal` | any | maybe | A bug, or the watchdog: the whole run ran past `run` plus 30 minutes. `details.log` names the run log |
 
 A retry starts with a full revert. `backoff_s` (30 s, then 120 s) spaces the
-attempts and `max_attempts` bounds them.
+attempts and `max_attempts` bounds them: 1 to 10 attempts, at most 10 delays
+of 0 to 3600 s each.
 
 ## Troubleshooting
 

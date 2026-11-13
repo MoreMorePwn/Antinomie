@@ -97,6 +97,10 @@ x86 programs by their own table.
     `limit_exceeded` with `details.source: "node"`, like a caller's limit; the
     smaller of the two answers. Below the lowest value it stays
     `invalid_argument`.
+  - `[retry]` of a preset or of a run's overrides is bounded: `max_attempts` 1
+    to 10, at most 10 `backoff_s` delays of 0 to 3600 s. `on_duplicate =
+    "reuse"` returns only a run the caller may see (its own, or any with
+    `runs.see_all`); otherwise a new run starts.
   - `run.rerun` and `auto rerun` take `priority`; without it the old run's
     priority is kept, lowered to the rerunning caller's `priority_max` when
     above it.

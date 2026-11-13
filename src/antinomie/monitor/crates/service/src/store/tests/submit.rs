@@ -479,6 +479,67 @@ fn duplicates_follow_the_preset() {
 }
 
 #[test]
+fn a_custom_retry_is_bounded() {
+    let fx = Fx::new("retry-bounds");
+    for (overrides, field) in [
+        (
+            json!({"retry": {"max_attempts": 4_000_000_000_u32, "backoff_s": [0]}}),
+            "overrides.retry.max_attempts",
+        ),
+        (
+            json!({"retry": {"max_attempts": 11, "backoff_s": [0]}}),
+            "overrides.retry.max_attempts",
+        ),
+        (
+            json!({"retry": {"backoff_s": [30, 3601]}}),
+            "overrides.retry.backoff_s",
+        ),
+    ] {
+        let error = fx.submit_as(&caller(1000), with(overrides)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert_eq!(error.field.as_deref(), Some(field));
+    }
+    let job = fx
+        .submit_as(
+            &caller(1000),
+            with(json!({"retry": {"max_attempts": 10, "backoff_s": [0, 3600]}})),
+        )
+        .unwrap()
+        .run;
+    assert_eq!(job.state, RunState::Queued, "{:?}", job.failure);
+    assert_eq!(job.max_attempts, 10);
+    assert_eq!(fx.store.counts().unwrap().queued, 1);
+}
+
+#[test]
+fn reuse_returns_only_a_run_the_caller_may_see() {
+    let fx = Fx::with_policy("dup-reuse-seen", |p| {
+        on_dup(p, OnDuplicate::Reuse);
+        p.duplicates.reuse_across_presets = true;
+    });
+    let first = fx.running(1);
+    fx.store
+        .finish(&first.id, Outcome::Succeeded, None)
+        .unwrap();
+    // Another client without runs.see_all: a new run, not the owner's.
+    let blind = Caller::new("local:2000", &[Permission::RunsSubmit]);
+    let own = fx.submit_as(&blind, spec(1)).unwrap();
+    assert!(!own.replayed);
+    assert_ne!(own.run.id, first.id);
+    assert_eq!(own.run.client_id, "local:2000");
+    assert_eq!(own.run.state, RunState::Queued);
+    // The same client without runs.see_all sees its own run: reused.
+    let same = Caller::new("local:1000", &[Permission::RunsSubmit]);
+    let reused = fx.submit_as(&same, spec(1)).unwrap();
+    assert!(reused.replayed);
+    assert_eq!(reused.run.id, first.id);
+    // Another client with runs.see_all may be given it.
+    let reused = fx.submit_as(&caller(3000), spec(1)).unwrap();
+    assert!(reused.replayed);
+    assert_eq!(reused.run.id, first.id);
+}
+
+#[test]
 fn remote_replies_carry_no_host_path() {
     let fx = Fx::new("redact");
     let job = fx.running(1);

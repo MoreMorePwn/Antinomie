@@ -107,7 +107,7 @@ ranges are in [service configuration](service-config.md)):
 | `static_analysis` | `enabled`, `triage_checks`, `deep_checks`, `time_limit_per_tool_min` (0: each tool's own, up to 480), `ghidra_disassembly`, `required_checks`, `limits.*`, the reserved `rebuilt_file_mib`, `rebuilt_run_mib` |
 | `triage`, `detection`, `report` | `triage.enabled`; `detection.yara`, `sigma`, `ids`, `check_online`; `report.formats` (`html`, `pdf`, `json`, `misp`, `stix`, `md`), `bundle`, `defang`; the reserved `triage.written_*`, `earlier_*`, `detection.scan_every_min`, `report.sections` |
 | `vm` | `lane_group`, `keep_on_failure` (refused `unavailable_on_node`), `allow_control` |
-| `accepts`, `duplicates`, `record`, `verdict`, `retry`, `required_stages` | As in the file |
+| `accepts`, `duplicates`, `record`, `verdict`, `retry`, `required_stages` | As in the file (`retry.max_attempts` 1 to 10, each `retry.backoff_s` 0 to 3600, at most 10; `duplicates.on_duplicate = "reuse"` returns only a run the caller may see, else a new run starts) |
 
 **The Custom rule.** An override that changes a value makes the run Custom; an
 override equal to the preset's value changes nothing. A Custom run's `preset`

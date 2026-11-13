@@ -246,12 +246,15 @@ impl Store {
                                     replayed: false,
                                 });
                             }
+                            // Only a run the caller may see is returned.
                             OnDuplicate::Reuse
                                 if matches!(
                                     earlier.state,
                                     RunState::Succeeded | RunState::Partial
                                 ) && (earlier.digest == preset.digest
-                                    || preset.preset.duplicates.reuse_across_presets) =>
+                                    || preset.preset.duplicates.reuse_across_presets)
+                                    && (earlier.client_id == caller.client_id
+                                        || caller.has(Permission::RunsSeeAll)) =>
                             {
                                 return Ok(Submitted {
                                     run: load_job(&tx.tx, &earlier.id)?,
@@ -420,12 +423,13 @@ struct Earlier {
     id: String,
     state: RunState,
     digest: String,
+    client_id: String,
 }
 
 /// The newest job of this sample that ran to an end (design 4.2.2).
 fn latest_finished(tx: &rusqlite::Transaction<'_>, sha256: &str) -> R<Option<Earlier>> {
     tx.query_row(
-        "SELECT id, state, policy_digest FROM jobs
+        "SELECT id, state, policy_digest, client_id FROM jobs
          WHERE sha256 = ?1 AND state IN ('succeeded', 'partial', 'failed')
          ORDER BY created_ms DESC, id DESC LIMIT 1",
         [sha256],
@@ -434,16 +438,18 @@ fn latest_finished(tx: &rusqlite::Transaction<'_>, sha256: &str) -> R<Option<Ear
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
             ))
         },
     )
     .optional()
     .map_err(db)?
-    .map(|(id, state, digest)| {
+    .map(|(id, state, digest, client_id)| {
         Ok(Earlier {
             id,
             state: super::model::from_name(&state)?,
             digest,
+            client_id,
         })
     })
     .transpose()

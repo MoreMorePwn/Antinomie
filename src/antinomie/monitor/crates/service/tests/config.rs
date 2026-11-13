@@ -329,6 +329,12 @@ fn the_node_ceilings_and_ranges_are_enforced() {
         ("[vm]\nlane_group = \"a b\"\n", "vm.lane_group"),
         ("offered_to = [\"Lead\"]\n", "offered_to"),
         ("[retry]\nmax_attempts = 0\n", "retry.max_attempts"),
+        ("[retry]\nmax_attempts = 11\n", "retry.max_attempts"),
+        ("[retry]\nbackoff_s = [30, 3601]\n", "retry.backoff_s"),
+        (
+            "[retry]\nbackoff_s = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n",
+            "retry.backoff_s",
+        ),
     ] {
         let found = problems(text);
         assert_eq!(found.len(), 1, "{text}: {found:?}");
@@ -342,6 +348,7 @@ fn the_node_ceilings_and_ranges_are_enforced() {
         "[dumps]\ncore_budget_mib = 1024\nmax_dumps = 8\ndumps_apart_s = 0\n",
         "[static_analysis]\ntime_limit_per_tool_min = 480\nghidra_disassembly = true\n",
         "[accepts]\ntypes = [\"any\"]\narch = [\"any\"]\nmax_sample_mib = 256\n",
+        "[retry]\nmax_attempts = 10\nbackoff_s = [0, 3600]\n",
     ] {
         assert_eq!(problems(text), Vec::<String>::new(), "{text}");
     }
