@@ -62,7 +62,7 @@ fn dump_of(dump: &TriggerDump) -> RunDump {
     }
 }
 
-/// A trigger record as the job API words it.
+/// A trigger record as the run API words it.
 pub fn job_trigger(record: &TriggerRecord) -> RunTrigger {
     RunTrigger {
         rule: record.finding.rule.clone(),

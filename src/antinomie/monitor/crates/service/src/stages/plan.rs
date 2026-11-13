@@ -183,7 +183,7 @@ impl HostPlan {
     }
 }
 
-/// The report format of the job API as the report builder names it.
+/// The report format of the run API as the report builder names it.
 pub fn format_of(format: ReportFormat) -> ReportEngineFormat {
     match format {
         ReportFormat::Html => ReportEngineFormat::Html,

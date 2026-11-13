@@ -299,10 +299,8 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
 
 /// Why `[[notify.webhooks]]` is refused.
 pub const WEBHOOKS_UNSUPPORTED: &str =
-    "not supported in 0.9.0: webhooks are not delivered; use notify.on_finish or poll the job API";
+    "not supported in 0.9.0: webhooks are not delivered; use notify.on_finish or poll the run API";
 
-/// The name a preset file stands for: `[a-z0-9._-]`, 1 to 64 bytes, not
-/// starting with a dot, and not `custom` (the name of a Custom run).
 /// The highest priority a run can have.
 pub const MAX_PRIORITY: u8 = 9;
 
@@ -339,6 +337,8 @@ fn check_limits(limits: &crate::api::ops::Limits, table: &str, sink: &mut Sink<'
     }
 }
 
+/// The name a preset file stands for: `[a-z0-9._-]`, 1 to 64 bytes, not
+/// starting with a dot, and not `custom` (the name of a Custom run).
 pub fn valid_preset_name(name: &str) -> bool {
     (1..=64).contains(&name.len())
         && !name.starts_with('.')

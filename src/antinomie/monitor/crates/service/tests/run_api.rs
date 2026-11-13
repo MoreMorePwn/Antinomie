@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The wire forms of the job API (design section 5): every object and event
+//! The wire forms of the run API (design section 5): every object and event
 //! round-trips, and the spellings the contract names are the ones sent.
 
 use antinomie_service::api::{
