@@ -418,6 +418,9 @@ impl Worker {
                 self.snapshot.last_error = Some(error);
             }
         }
+        // Layers an earlier version or a crash left unreferenced go in
+        // bounded passes from the loop, so the first command is not held up.
+        self.layer_sweep = self.snapshot.vms.iter().map(|vm| vm.id.clone()).collect();
         self.publish();
         loop {
             if self.closing.load(Ordering::Relaxed) {
@@ -815,6 +818,34 @@ impl Worker {
     }
 
     /// Poll the background jobs and publish the snapshot when it is due.
+    /// One bounded pass of the startup sweep for the first VM still to go
+    /// over. Snapshot changes happen on this thread and a run layer finalizer
+    /// holds the folder's lock, which the pass takes too, so nothing it judges
+    /// changes under it.
+    fn sweep_snapshot_layers(&mut self) {
+        use crate::snapshots::orphans::{SWEEP_LIMIT, Sweep, sweep};
+        let Some(vm_id) = self.layer_sweep.first().cloned() else {
+            return;
+        };
+        let result = sweep(&self.options, &vm_id, SWEEP_LIMIT);
+        if let Ok(Sweep::More { removed } | Sweep::Done { removed }) = result
+            && removed > 0
+        {
+            eprintln!("snapshot layer sweep of VM {vm_id}: {removed} unreferenced layers removed");
+        }
+        match result {
+            Ok(Sweep::More { .. } | Sweep::Busy) => {}
+            Ok(Sweep::Done { .. }) => {
+                self.layer_sweep.remove(0);
+            }
+            Err(error) => {
+                // Nothing was removed that was not proved unreferenced; the
+                // next start tries again.
+                eprintln!("snapshot layer sweep of VM {vm_id}: {error}");
+                self.layer_sweep.remove(0);
+            }
+        }
+    }
     fn poll_background(&mut self) {
         self.poll_remote();
         self.poll_build();
@@ -832,6 +863,7 @@ impl Worker {
         self.check_triggers();
         self.poll_flush();
         self.poll_evidence_deletes();
+        self.sweep_snapshot_layers();
         if self.last_publish.elapsed() >= Duration::from_millis(250)
             && (self.session.is_some()
                 || self.refresh.is_some()

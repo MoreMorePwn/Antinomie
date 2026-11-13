@@ -12,6 +12,9 @@ and a short shell script, one at a time, until --duration has passed (or
   fds, rss        the daemon's open file descriptors and resident memory
   threads         the daemon's threads
   snap_nodes      nodes in the lane VM's snapshots.json (the snapshot tree)
+  snap_files      files in the lane VM's snapshots/ folder (disk layers and
+                  checkpoint artifacts; stays flat when no layer leaks)
+  snap_mib        their size
   vm_mib          the lane VM folder without its recordings (disk layers)
   service_mib     <data>/service (job store, events, artifacts)
   runs, runs_mib  the recordings kept
@@ -55,7 +58,7 @@ spec.loader.exec_module(av)
 
 STATE_VERSION = 1
 JOB_TIMEOUT_S = 900
-METRICS = ("fds", "rss_mib", "threads", "snap_nodes", "vm_mib", "service_mib", "runs", "runs_mib",
+METRICS = ("fds", "rss_mib", "threads", "snap_nodes", "snap_files", "snap_mib", "vm_mib", "service_mib", "runs", "runs_mib",
            "over_cap_mib", "gc_recordings")
 SHELL = r"""
 # T8 soak program (benign).
@@ -188,8 +191,8 @@ def flat_line(state, samples, jobs, warmup):
     run = p95s.get("run", (None, None))
     return (f"soak: {len(jobs)} jobs in {hours:.1f} h ({', '.join(f'{k} {v}' for k, v in sorted(counts.items()))}; "
             f"partial for host tools only {host_only}; not succeeded/partial {failed}); "
-            + "; ".join(move(m) for m in ("fds", "rss_mib", "threads", "snap_nodes", "vm_mib", "service_mib",
-                                         "runs_mib", "over_cap_mib", "gc_recordings"))
+            + "; ".join(move(m) for m in ("fds", "rss_mib", "threads", "snap_nodes", "snap_files", "vm_mib",
+                                         "service_mib", "runs_mib", "over_cap_mib", "gc_recordings"))
             + f"; p95 run {number(run[0], 2)}->{number(run[1], 2)} s; ended: {state.get('stop_reason') or state.get('phase')}")
 
 
@@ -257,13 +260,19 @@ def sample(work, cli, daemon, vm_id, cap_gib, jobs):
         nodes = len(json.loads((vm_dir / "snapshots.json").read_text()).get("nodes") or [])
     except (OSError, ValueError):
         nodes = None
+    try:
+        snap_files = sum(1 for entry in (vm_dir / "snapshots").iterdir())
+    except OSError:
+        snap_files = None
     run_dirs = [d for d in work.data.glob("*/runs/*") if d.is_dir()]
     runs_bytes = sum(av.tree_bytes(d) for d in run_dirs)
     return {"t": round(time.time(), 1), "jobs": jobs, "mem_available_mb": av.mem_available_mb(),
             "fds": av.open_fds(pid) if pid else None,
             "rss_mib": round(av.status_kib(pid, "VmRSS") / 1024, 1) if pid else None,
             "threads": av.status_kib(pid, "Threads") if pid else None,
-            "snap_nodes": nodes, "vm_mib": round(av.tree_bytes(vm_dir, skip=("runs",)) / av.MIB, 1),
+            "snap_nodes": nodes, "snap_files": snap_files,
+            "snap_mib": round(av.tree_bytes(vm_dir / "snapshots") / av.MIB, 1),
+            "vm_mib": round(av.tree_bytes(vm_dir, skip=("runs",)) / av.MIB, 1),
             "service_mib": round(av.tree_bytes(work.data / "service") / av.MIB, 1),
             "runs": len(run_dirs), "runs_mib": round(runs_bytes / av.MIB, 1),
             "over_cap_mib": round(max(0, runs_bytes - cap_gib * av.GIB) / av.MIB, 1),

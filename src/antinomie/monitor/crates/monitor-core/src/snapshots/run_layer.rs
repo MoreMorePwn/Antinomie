@@ -24,7 +24,8 @@
 //!   ordinary lower layer) exactly as it froze the overlay before. When the
 //!   boot ended with a snapshot taken or restored, `B` belongs to the user's
 //!   chain and nothing is merged: the record is dropped and the chain keeps
-//!   its one extra layer.
+//!   its one extra layer. After a restore no checkpoint's chain may reach `B`
+//!   or `A` any more; then they are removed ([`super::orphans`]).
 //! * `run-layer.json` in the VM folder says what is pending, and the folder's
 //!   `run-layer.lock` serialises the finalizers. A crash or kill leaves the
 //!   record: the next start or the next launch of the app finishes the job
@@ -35,7 +36,7 @@ use super::*;
 use crate::disk_layers::{DiskLayer, LayerPhase, Marker, Owner};
 use std::{os::unix::fs::OpenOptionsExt, sync::Mutex};
 
-const RECORD: &str = "run-layer.json";
+pub(super) const RECORD: &str = "run-layer.json";
 const LOCK: &str = "run-layer.lock";
 
 /// VMs whose boot in this process has not ended.
@@ -112,7 +113,7 @@ pub(crate) fn live(vm_id: &str) -> bool {
     LIVE.lock().is_ok_and(|live| live.contains(vm_id))
 }
 
-fn lock(directory: &Path) -> Result<File, String> {
+pub(super) fn lock(directory: &Path) -> Result<File, String> {
     let file = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -444,6 +445,20 @@ fn settle(options: &BackendOptions, directory: &Path, record: &Record) -> Result
     };
     fs::remove_file(Record::path(directory)).map_err(|e| format!("run layer record: {e}"))?;
     sync_directory(directory)?;
+    if outcome == Outcome::KeptInChain {
+        // A boot that ended with a restore left both files behind the new
+        // working disk; they stay only while a checkpoint's chain reaches
+        // them (a snapshot taken during the boot froze `B` over `A`). The
+        // layer is settled either way: a file kept now goes at the next
+        // start's sweep.
+        if let Err(error) = super::orphans::remove_unreferenced(
+            directory,
+            &record.vm_id,
+            &[record.top.clone(), record.sealed.clone()],
+        ) {
+            eprintln!("run layer: the files of a settled layer were kept: {error}");
+        }
+    }
     Ok(outcome)
 }
 
