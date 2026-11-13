@@ -219,6 +219,33 @@ fn notes(
     open
 }
 
+/// The run's timed screenshots as a strip, with the run-relative time under
+/// each; the path of a clicked one. Nothing when the run took none.
+fn timed_shots(
+    ui: &mut egui::Ui,
+    shots: &[antinomie_monitor_core::timed_shots::RunShot],
+    strip: &mut super::strip::Strip,
+) -> Option<std::path::PathBuf> {
+    if shots.is_empty() {
+        return None;
+    }
+    ui.add_space(10.0);
+    let mut clicked = None;
+    presentation::frame().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        presentation::heading(ui, "Timed screenshots", &shots.len().to_string());
+        ui.label(
+            RichText::new(
+                "Click a picture to open it; the viewer steps through the run with the arrow keys.",
+            )
+            .small()
+            .color(theme::muted()),
+        );
+        clicked = strip.show(ui, shots);
+    });
+    clicked
+}
+
 /// What the run saved: its cores, memory dumps, capture segments and trigger
 /// log, in the rows of the sample page's Artifacts. Nothing when it saved none.
 fn run_artifacts(ui: &mut egui::Ui, view: &mut TriageView) {
@@ -458,6 +485,9 @@ pub(super) fn content(
                 shot.as_deref().map(|path| (path, &mut state.thumb)),
             ) {
                 acts.push(Act::Screenshot(shot.unwrap_or_default()));
+            }
+            if let Some(path) = timed_shots(ui, &view.run_facts.timed, &mut state.strip) {
+                acts.push(Act::Screenshot(path));
             }
             run_artifacts(ui, view);
         });

@@ -680,6 +680,8 @@ fn the_bundle_holds_every_file_with_a_matching_hash_and_the_password_opens_the_i
     std::fs::write(&pcap, b"pcap-bytes-0123456789").unwrap();
     let custody = dir.join("custody-ab.json");
     std::fs::write(&custody, b"{\"custody\":true}").unwrap();
+    let shot = dir.join("t+000012.3s.png");
+    std::fs::write(&shot, b"\x89PNG-fake").unwrap();
     let content = b"#!/bin/sh\necho hi\n".to_vec();
     let want = sha(&content);
     let copy = content.clone();
@@ -694,6 +696,7 @@ fn the_bundle_holds_every_file_with_a_matching_hash_and_the_password_opens_the_i
         }],
         skipped: vec![("/tmp/big".into(), "over the limit".into())],
         custody: vec![custody],
+        screenshots: vec![shot],
         run_id: "run-1".into(),
         generated_ms: 1_792_000_000_000,
     };
@@ -733,7 +736,10 @@ fn the_bundle_holds_every_file_with_a_matching_hash_and_the_password_opens_the_i
         assert_eq!(sha(&bytes), hash, "{name}");
         checked += 1;
     }
-    assert_eq!(checked, 4, "capture, inner archive, custody, README");
+    assert_eq!(
+        checked, 5,
+        "capture, screenshot, inner archive, custody, README"
+    );
     let mut manifest = String::new();
     outer
         .by_name("manifest.json")
@@ -791,6 +797,7 @@ fn a_dropped_file_whose_bytes_do_not_match_its_hash_fails_the_bundle() {
         }],
         skipped: Vec::new(),
         custody: Vec::new(),
+        screenshots: Vec::new(),
         run_id: "r".into(),
         generated_ms: 0,
     };
@@ -877,4 +884,26 @@ fn every_format_keeps_a_matching_rule_s_author_licence_and_source() {
     anonymous.detections.as_mut().unwrap()[0].author.clear();
     let html = String::from_utf8(export::render(&anonymous, Format::Html, false).unwrap()).unwrap();
     assert!(html.contains("unknown"));
+}
+
+#[test]
+fn a_long_series_is_thinned_evenly_for_the_bundle_keeping_the_first_and_last() {
+    assert_eq!(bundle::pick_screenshots(&[]), Vec::<usize>::new());
+    assert_eq!(
+        bundle::pick_screenshots(&[10; 7]),
+        (0..7).collect::<Vec<_>>()
+    );
+    let chosen = bundle::pick_screenshots(&[10; 450]);
+    assert!(chosen.len() <= bundle::SCREENSHOT_LIMIT, "{}", chosen.len());
+    assert_eq!((chosen[0], *chosen.last().unwrap()), (0, 449));
+    assert!(chosen.windows(2).all(|w| w[0] < w[1]));
+    // Big pictures are thinned by their bytes too.
+    let big = bundle::pick_screenshots(&[8 * 1024 * 1024; 40]);
+    let bytes: u64 = big.iter().map(|_| 8 * 1024 * 1024u64).sum();
+    assert!(
+        bytes <= bundle::SCREENSHOT_BYTES || big.len() <= 2,
+        "{}",
+        big.len()
+    );
+    assert_eq!(big[0], 0);
 }

@@ -223,6 +223,12 @@ pub struct EvidencePolicy {
     /// The cores the dump trigger takes also read the pages that are not in
     /// memory ("Read non-resident pages", guest revision 22). Default off.
     pub core_nonresident: bool,
+    /// Take a screenshot of the VM screen every this many seconds while a
+    /// run goes (1 to 600), kept with the run and listed in the job's
+    /// artifacts. 0 (the default) is off. It is also the shortest interval a
+    /// job may ask for: a job may use a longer one or switch it off, never a
+    /// shorter one, and cannot switch it on when the policy leaves it off.
+    pub screenshot_every_s: u32,
 }
 
 impl Default for EvidencePolicy {
@@ -234,6 +240,7 @@ impl Default for EvidencePolicy {
             dump_trigger: TriggerSetting::Off,
             dump_trigger_kind: TriggerKind::Core,
             core_nonresident: false,
+            screenshot_every_s: 0,
         }
     }
 }

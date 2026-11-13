@@ -148,10 +148,11 @@ fn qemu_path(path: &Path) -> Result<String, String> {
         .ok_or("QEMU composite paths must be UTF-8")?
         .replace(',', ",,"))
 }
-/// Whether the VM gets QEMU's VNC display for the in-app screen tab; QEMU's
-/// own window and No screen run with `-display` alone.
+/// Whether the VM gets QEMU's VNC display for the in-app screen tab (or, in a
+/// headless engine that asked for `run_screen`, for the timed screenshots of
+/// its runs); QEMU's own window and No screen run with `-display` alone.
 fn in_app_screen(options: &BackendOptions, launch: &VmLaunchOptions) -> bool {
-    !options.headless && launch.screen == crate::api::VmScreen::InApp
+    (!options.headless || options.run_screen) && launch.screen == crate::api::VmScreen::InApp
 }
 fn initial_size(options: &BackendOptions, launch: &VmLaunchOptions) -> Option<(u16, u16)> {
     (!options.headless
@@ -1751,6 +1752,14 @@ mod tests {
                 // The guest sees the same devices without the window.
                 assert_eq!(none, in_app);
                 assert_eq!(in_app_screen(&options, &launch(VmScreen::InApp)), !headless);
+                // A headless engine that wants its runs' screenshots keeps the
+                // display, on every choice but No screen.
+                let with_screen = BackendOptions {
+                    run_screen: true,
+                    ..options.clone()
+                };
+                assert!(in_app_screen(&with_screen, &launch(VmScreen::InApp)));
+                assert!(!in_app_screen(&with_screen, &launch(VmScreen::NoScreen)));
                 assert!(!in_app_screen(&options, &launch(VmScreen::NoScreen)));
                 assert!(!in_app_screen(&options, &launch(VmScreen::QemuWindow)));
             }

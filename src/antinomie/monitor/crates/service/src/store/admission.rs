@@ -161,6 +161,32 @@ pub fn resolve(spec: &JobSpec, caller: &Caller, loaded: &LoadedPolicy) -> Result
             ids: asked.ids.or(mine.ids),
         }
     };
+    let screenshots = match o.screenshot_every_s {
+        None => policy.evidence.screenshot_every_s,
+        Some(0) => 0,
+        Some(every) if !(1..=600).contains(&every) => {
+            return Err(denied(
+                "overrides.screenshot_every_s",
+                "must be 0 (off) or 1 to 600 seconds",
+            ));
+        }
+        Some(_) if policy.evidence.screenshot_every_s == 0 => {
+            return Err(denied(
+                "overrides.screenshot_every_s",
+                "this policy does not take screenshots",
+            ));
+        }
+        Some(every) if every < policy.evidence.screenshot_every_s => {
+            return Err(denied(
+                "overrides.screenshot_every_s",
+                format!(
+                    "shorter than the policy's screenshot_every_s of {}",
+                    policy.evidence.screenshot_every_s
+                ),
+            ));
+        }
+        Some(every) => every,
+    };
     if o.keep_on_failure == Some(true) && !policy.run.allow_keep_on_failure {
         return Err(denied(
             "overrides.keep_on_failure",
@@ -201,6 +227,7 @@ pub fn resolve(spec: &JobSpec, caller: &Caller, loaded: &LoadedPolicy) -> Result
             report_bundle: Some(o.report_bundle.unwrap_or(policy.report.bundle)),
             report_defang: Some(o.report_defang.unwrap_or(policy.report.defang)),
             keep_on_failure: Some(o.keep_on_failure.unwrap_or(false)),
+            screenshot_every_s: Some(screenshots),
         },
     })
 }

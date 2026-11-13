@@ -424,6 +424,7 @@ impl MonitorApp {
         };
         let mut choose = false;
         let route = self.route_choice();
+        let screen = self.vm_screen_socket().is_some();
         ui.add_enabled_ui(ready, |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("run-setup")
@@ -447,6 +448,7 @@ impl MonitorApp {
                             core_limits: self.snapshot.guest_core_limits,
                             core_default_mib: self.settings.core_budget_mib,
                             route,
+                            screen,
                             guest_arch: self
                                 .snapshot
                                 .guest_kernel

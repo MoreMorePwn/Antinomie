@@ -1017,14 +1017,22 @@ pub enum RecordingArtifactKind {
     MemoryDump,
     CoreDump,
     FileBefore,
+    // A timed screenshot of the VM screen (`screenshots/t+SSSSSS.s.png`); a
+    // plain comment, so the schema keeps one enum list.
+    Screenshot,
 }
 
 impl RecordingArtifactKind {
-    /// `network_capture`, `memory_dump`, `core_dump` and `file_before` are S.
+    /// `network_capture`, `memory_dump`, `core_dump`, `file_before` and
+    /// `screenshot` are S.
     pub fn sensitive(self) -> bool {
         matches!(
             self,
-            Self::NetworkCapture | Self::MemoryDump | Self::CoreDump | Self::FileBefore
+            Self::NetworkCapture
+                | Self::MemoryDump
+                | Self::CoreDump
+                | Self::FileBefore
+                | Self::Screenshot
         )
     }
 }
@@ -1042,6 +1050,9 @@ pub struct RecordingArtifact {
     /// Empty past the hashing limit.
     pub sha256: Option<Sha256Hex>,
     pub sensitive: bool,
+    /// For a `screenshot`: milliseconds since the run started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_time_ms: Option<u64>,
 }
 
 /// The bytes of a read (`captured.read`, `files.content`, `artifact.get`,

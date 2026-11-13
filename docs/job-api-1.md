@@ -86,6 +86,7 @@ then the system default.
 | `overrides.static_time_limit_min` | Minutes per analysis tool, 0 to 480 |
 | `overrides.detection` | `{yara, sigma, ids}` booleans |
 | `overrides.reports`, `report_bundle`, `report_defang` | Report formats (`html`, `pdf`, `json`, `misp`, `stix`, `md`), the evidence bundle, defanging of indicators (default true) |
+| `overrides.screenshot_every_s` | Screenshots of the VM screen every N seconds during the run, 1 to 600, or 0 for none. Not shorter than the policy's `evidence.screenshot_every_s`; `invalid_argument`/denied when the policy has them off. The pictures are `recording.artifact.list` items of kind `screenshot` (`run_time_ms` is the time since the run started; sensitive), and the evidence bundle holds up to 100 under `screenshots/` |
 | `overrides.keep_on_failure` | Keep the VM as it is when the job fails; the lane is then quarantined (needs policy permission) |
 
 The sample size limit is the smallest of the engine's 256 MiB maximum, the

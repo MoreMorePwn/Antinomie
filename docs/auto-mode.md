@@ -155,6 +155,25 @@ the recording is saved without it and the job succeeds; `run.pending` lists
   one the cores hold resident pages only and the job carries the warning
   `core_nonresident_unsupported`).
 
+* **Timed screenshots.** `evidence.screenshot_every_s = 0` (default) is off; a
+  value from 1 to 600 makes every job under the policy take a picture of the VM
+  screen that many seconds apart while the program runs, and one more when its tree
+  ends. A picture is skipped when the screen has not changed since the last one.
+  The pictures are the run's own files, `screenshots/t+SSSSSS.s.png` (the name is
+  the time since the run started), listed by `recording.artifact.list` as kind
+  `screenshot` with `run_time_ms` (sensitive: they show what the guest displayed,
+  so they need `artifacts:sensitive`), and the evidence bundle holds up to 100 of
+  them under `screenshots/`. A run keeps at most 500 pictures or 256 MiB; the run's
+  notes say how many were saved, skipped or dropped and whether a limit ended the
+  series. A job may use a longer interval (`overrides.screenshot_every_s`, `auto
+  submit --screenshot-every SECONDS`) or `0` to switch it off, never a shorter
+  one, and cannot switch it on under a policy that has it off. The headless engine
+  keeps QEMU's VNC display for this on a private unix socket in the VM's runtime
+  folder (mode 0600, no TCP; the guest sees the same devices); a VM whose
+  **VM screen** is **No screen** has none and takes no pictures. What a picture
+  shows depends on the base: a BusyBox lane shows its text console, a Debian lane
+  its desktop if one runs.
+
 * **A job asks within the policy's ceiling.** `--timeout-run`, `--args`,
   `--env`, `--as`, `--route`, `--static`, `--formats` and the other flags of `auto
   submit` can lower or choose among what the policy allows, never exceed it. A

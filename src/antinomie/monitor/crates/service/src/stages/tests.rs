@@ -277,6 +277,34 @@ fn the_launch_request_is_the_policys_unless_the_spec_overrides_it() {
 }
 
 #[test]
+fn the_screenshot_interval_reaches_the_launch_request_only_when_it_is_on() {
+    let w = W::new("plan-shots");
+    let mut job = w.fx.running(1);
+    // Admission resolves the override to the policy's value; "not set" here.
+    job.spec.overrides.screenshot_every_s = None;
+    let mut policy = crate::config::Policy::default();
+    assert_eq!(
+        plan::effective(&job, &policy).request.screenshot_every_s,
+        None
+    );
+    policy.evidence.screenshot_every_s = 15;
+    assert_eq!(
+        plan::effective(&job, &policy).request.screenshot_every_s,
+        Some(15)
+    );
+    job.spec.overrides.screenshot_every_s = Some(60);
+    assert_eq!(
+        plan::effective(&job, &policy).request.screenshot_every_s,
+        Some(60)
+    );
+    job.spec.overrides.screenshot_every_s = Some(0);
+    assert_eq!(
+        plan::effective(&job, &policy).request.screenshot_every_s,
+        None
+    );
+}
+
+#[test]
 fn the_policys_dump_trigger_is_in_the_launch_request_with_a_core_budget() {
     use crate::config::policy::{TriggerKind, TriggerSetting};
     use antinomie_monitor_core::dump_trigger::TriggerTier;

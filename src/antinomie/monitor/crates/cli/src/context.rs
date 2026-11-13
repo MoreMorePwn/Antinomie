@@ -87,6 +87,9 @@ pub fn backend_options(global: &Global, home: Option<&std::path::Path>) -> Backe
     }
     options.force_tcg = global.tcg;
     options.headless = !global.no_headless;
+    // A headless VM keeps its screen readable on a private socket, so a job's
+    // timed screenshots (`evidence.screenshot_every_s`) can be taken.
+    options.run_screen = options.headless;
     // `settings.json` (the window's Tools > Settings, `config set`): the
     // capture quota, the shutdown timeout, the start waits and the caps on
     // earlier file bytes, as the window starts its engine with them. A file

@@ -244,6 +244,37 @@ fn a_spec_may_override_within_the_ceiling() {
 }
 
 #[test]
+fn a_job_may_lengthen_or_switch_off_the_screenshot_interval_never_shorten_it() {
+    let ask = |fx: &Fx, every: Option<u32>| {
+        fx.submit(JobSpec {
+            overrides: Overrides {
+                screenshot_every_s: every,
+                ..Default::default()
+            },
+            ..spec(1)
+        })
+        .job
+    };
+    let fx = Fx::with_policy("shots", |p| p.evidence.screenshot_every_s = 10);
+    for (asked, resolved) in [(None, 10), (Some(10), 10), (Some(60), 60), (Some(0), 0)] {
+        let job = ask(&fx, asked);
+        assert_eq!(job.state, JobState::Queued, "{asked:?}: {:?}", job.failure);
+        assert_eq!(job.spec.overrides.screenshot_every_s, Some(resolved));
+    }
+    for asked in [5, 601] {
+        let job = ask(&fx, Some(asked));
+        assert_eq!(job.state, JobState::Rejected, "{asked}");
+    }
+    // A policy that takes none cannot be asked for them, but a job may say 0.
+    let off = Fx::new("shots-off");
+    assert_eq!(ask(&off, Some(30)).state, JobState::Rejected);
+    let job = ask(&off, Some(0));
+    assert_eq!(job.state, JobState::Queued);
+    assert_eq!(job.spec.overrides.screenshot_every_s, Some(0));
+    assert_eq!(ask(&off, None).spec.overrides.screenshot_every_s, Some(0));
+}
+
+#[test]
 fn the_same_key_and_spec_replay_the_job() {
     let fx = Fx::new("idem");
     let first = fx.submit(keyed(1, "k1"));

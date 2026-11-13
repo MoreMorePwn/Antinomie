@@ -237,6 +237,12 @@ pub struct Overrides {
     /// `kept_for_inspection`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_on_failure: Option<bool>,
+    /// Screenshots of the VM screen every this many seconds during the run,
+    /// 1 to 600; 0 switches them off. Not shorter than the policy's
+    /// `evidence.screenshot_every_s`, and not on when the policy has it off.
+    /// The pictures are run artifacts (`screenshots`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_every_s: Option<u32>,
 }
 
 /// What a caller submits with `job.submit`, and the resolved form a [`Job`]

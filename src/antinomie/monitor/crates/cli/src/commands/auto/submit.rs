@@ -68,6 +68,11 @@ pub struct Submit {
     /// The run limit in seconds (the policy's `max_run_s` is the ceiling).
     #[arg(long, value_name = "SECONDS")]
     pub timeout_run: Option<u32>,
+    /// Take a screenshot of the VM screen every SECONDS (1 to 600; 0 turns
+    /// it off). Not shorter than the policy's `evidence.screenshot_every_s`;
+    /// the pictures are the run's `screenshot` recording artifacts.
+    #[arg(long, value_name = "SECONDS")]
+    pub screenshot_every: Option<u32>,
     /// Program arguments.
     #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "ARG")]
     pub args: Vec<String>,
@@ -156,6 +161,9 @@ pub fn spec_of(arguments: &Submit) -> Result<Value, CliError> {
     }
     if let Some(seconds) = arguments.timeout_run {
         overrides.insert("timeout_s".into(), json!(seconds));
+    }
+    if let Some(seconds) = arguments.screenshot_every {
+        overrides.insert("screenshot_every_s".into(), json!(seconds));
     }
     if !arguments.args.is_empty() {
         overrides.insert("args".into(), json!(arguments.args));
@@ -529,6 +537,14 @@ mod tests {
         let mut all = vec!["submit"];
         all.extend_from_slice(args);
         Wrapper::try_parse_from(all).unwrap().submit
+    }
+
+    #[test]
+    fn screenshot_every_becomes_the_override_and_zero_turns_it_off() {
+        for (flag, value) in [("30", 30), ("0", 0)] {
+            let spec = spec_of(&parse(&["f.elf", "--screenshot-every", flag])).unwrap();
+            assert_eq!(spec["overrides"]["screenshot_every_s"], json!(value));
+        }
     }
 
     #[test]

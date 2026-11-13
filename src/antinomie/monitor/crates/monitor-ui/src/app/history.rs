@@ -875,6 +875,12 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
         feature.available = artifact_available(state);
         features.push(feature);
     }
+    if let Some(every) = request.screenshot_every_s {
+        features.push(Feature::new(
+            0,
+            format!("Timed screenshots · every {every} s"),
+        ));
+    }
     if let Some(plan) = &request.dump_trigger {
         let what = match (plan.memory, plan.core) {
             (true, true) => "memory and core",

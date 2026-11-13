@@ -249,6 +249,15 @@
             "null"
           ],
           "description": "Leave the VM and its disk as they are when the job fails (needs policy\npermission); the lane is then quarantined with reason\n`kept_for_inspection`."
+        },
+        "screenshot_every_s": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Screenshots of the VM screen every this many seconds during the run,\n1 to 600; 0 switches them off. Not shorter than the policy's\n`evidence.screenshot_every_s`, and not on when the policy has it off.\nThe pictures are run artifacts (`screenshots`)."
         }
       },
       "description": "The per-job overrides of the policy (design 5.4.1). `overrides.base` and\n`overrides.stealth` of revision 1 are removed: the lane VM fixes both."
@@ -9810,6 +9819,15 @@
         },
         "sensitive": {
           "type": "boolean"
+        },
+        "run_time_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "For a `screenshot`: milliseconds since the run started."
         }
       },
       "required": [
@@ -9838,7 +9856,8 @@
         "network_capture",
         "memory_dump",
         "core_dump",
-        "file_before"
+        "file_before",
+        "screenshot"
       ],
       "description": "What a file of the recording is."
     },

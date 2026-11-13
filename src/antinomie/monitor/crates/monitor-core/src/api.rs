@@ -546,6 +546,11 @@ pub struct BackendOptions {
     /// Waits of a VM start and the KVM fallback.
     pub start: StartSettings,
     pub headless: bool,
+    /// Headless only: give every VM QEMU's VNC display on a private unix
+    /// socket (mode 0600, as the app's screen has), so a run can take timed
+    /// screenshots (`ExecRequest::screenshot_every_s`). The guest sees the same
+    /// devices either way. The app, which has its own screen, ignores it.
+    pub run_screen: bool,
     /// Test harnesses: put the kernel console and a login on the first serial
     /// port of a base whose command line names none (Debian's), so its boot
     /// shows in the serial log. The app leaves it off.
@@ -581,6 +586,7 @@ impl Default for BackendOptions {
             force_tcg: false,
             start: StartSettings::default(),
             headless: false,
+            run_screen: false,
             serial_console: false,
             owner: Default::default(),
             shared_root: None,
@@ -654,6 +660,12 @@ pub struct ExecRequest {
     /// file into the VM. Runs saved before this have none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preloaded: Vec<crate::samples::PreloadRef>,
+    /// Take a screenshot of the VM screen every this many seconds while the
+    /// run goes (1 to 600), kept in the run's own `screenshots` folder; `None`
+    /// is off. Needs a VM whose screen the app can read (VM screen "In the
+    /// app", or a headless run that asked for the screen).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_every_s: Option<u32>,
 }
 
 impl ExecRequest {
@@ -716,6 +728,16 @@ impl ExecRequest {
         }
         if let Some(plan) = &self.dump_trigger {
             plan.validate()?;
+        }
+        if let Some(every) = self.screenshot_every_s
+            && !(crate::timed_shots::MIN_INTERVAL_S..=crate::timed_shots::MAX_INTERVAL_S)
+                .contains(&every)
+        {
+            return Err(format!(
+                "the screenshot interval must be {} to {} seconds",
+                crate::timed_shots::MIN_INTERVAL_S,
+                crate::timed_shots::MAX_INTERVAL_S
+            ));
         }
         Ok(())
     }
@@ -2302,6 +2324,7 @@ impl Default for ExecRequest {
             host_copy: None,
             sample: None,
             preloaded: Vec::new(),
+            screenshot_every_s: None,
         }
     }
 }
@@ -3309,6 +3332,15 @@ mod tests {
         }
         assert!(bad(|r| r.path = " ".into()).contains("empty"));
         assert!(bad(|r| r.args = vec!["a\0b".into()]).contains("NUL"));
+        assert!(bad(|r| r.screenshot_every_s = Some(0)).contains("screenshot interval"));
+        assert!(bad(|r| r.screenshot_every_s = Some(601)).contains("screenshot interval"));
+        for every in [1, 10, 600] {
+            let request = ExecRequest {
+                screenshot_every_s: Some(every),
+                ..ExecRequest::default()
+            };
+            assert!(request.validate().is_ok());
+        }
         let desktop = |edit: fn(&mut ExecRequest)| {
             bad(|r| {
                 r.run_in = RunIn::GuestDesktop;

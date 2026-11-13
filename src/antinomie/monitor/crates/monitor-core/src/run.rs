@@ -53,6 +53,8 @@ pub(crate) struct ProgramRun {
     pub(crate) tasks: std::collections::HashSet<u64>,
     /// Copies of the program outside the recorded tree (`crate::persisted_copy`).
     pub(crate) persisted: crate::persisted_copy::Watch,
+    /// The timed screenshots of the run while its tree runs.
+    pub(crate) shots: Option<crate::timed_shots::TimedShots>,
 }
 
 impl ProgramRun {
@@ -96,6 +98,7 @@ impl ProgramRun {
             tasks: Default::default(),
             watch: None,
             persisted: Default::default(),
+            shots: None,
         };
         run.refresh_analysis_metadata()?;
         run.persist_summary()?;
@@ -211,11 +214,56 @@ impl ProgramRun {
         }
         Ok(())
     }
+    /// Start the timed screenshots the run asked for, from the VM's screen
+    /// socket; a VM whose screen the app cannot read says so in the notes.
+    pub(crate) fn start_shots(&mut self, socket: Option<&std::path::Path>) {
+        let Some(every) = self.summary.request.screenshot_every_s else {
+            return;
+        };
+        let Some(socket) = socket else {
+            self.add_note(
+                "Timed screenshots were asked for, but this VM's screen is not available to the app (VM screen is not \"In the app (VNC)\"), so none were taken.",
+            );
+            return;
+        };
+        self.shots = Some(crate::timed_shots::TimedShots::start(
+            socket.to_path_buf(),
+            self.summary.directory.clone(),
+            every,
+            self.started_ms,
+        ));
+    }
+    /// The program tree ended: ask the timed screenshots to take a last
+    /// picture and end. Never waits; [`Self::collect_shots`] picks up the result.
+    fn end_shots(&mut self) {
+        if let Some(shots) = &self.shots {
+            shots.request_stop();
+        }
+    }
+    /// Once the screenshot worker has ended, say what it did in the run's
+    /// notes. True when the notes changed (the summary should be saved).
+    pub(crate) fn collect_shots(&mut self, wait: bool) -> bool {
+        if !self
+            .shots
+            .as_ref()
+            .is_some_and(|shots| wait || shots.is_finished())
+        {
+            return false;
+        }
+        if let Some(mut shots) = self.shots.take()
+            && let Some(series) = shots.finish()
+        {
+            self.add_note(series.note());
+            return true;
+        }
+        false
+    }
     pub(crate) fn record_tree_completion(&mut self) {
         // A run the user stopped ended with its tree too, not at the VM stop
         // that closed the recording much later.
         if matches!(self.summary.state, RunState::Finished | RunState::Stopped) {
             self.ended_ms.get_or_insert_with(unix_ms);
+            self.end_shots();
         }
     }
     /// Keep the guest's async observation facts in the run's notes, so they
@@ -439,6 +487,8 @@ impl ProgramRun {
     /// state and times, and its final screen, with no wait for the disk.
     pub fn begin_finalize(&mut self, available: u64) {
         self.ended_ms.get_or_insert_with(unix_ms);
+        self.end_shots();
+        self.collect_shots(true);
         if !matches!(self.summary.state, RunState::Finished | RunState::Stopped) {
             self.summary.state = RunState::Finalized;
         }

@@ -34,6 +34,9 @@ pub(crate) struct LaunchCapabilities {
     pub route: crate::route_ui::RouteChoice,
     /// The guest's architecture: capa and FLOSS read x86 programs only.
     pub guest_arch: antinomie_monitor_core::GuestArch,
+    /// The VM's screen is readable by the app (VM screen "In the app"), so
+    /// timed screenshots can be taken.
+    pub screen: bool,
 }
 
 /// Where the Run form leaves the budget the user picked, for the caller to remember.
@@ -85,6 +88,7 @@ pub(crate) fn launch_fields(
             );
             x86_tools_note(&mut columns[1], &request.analysis, capabilities.guest_arch);
             capture_selection(&mut columns[1], request, capabilities, &mut outcome);
+            screenshot_selection(&mut columns[1], request, capabilities.screen);
             debugger_selection(&mut columns[1], request, capabilities.debug_on_start);
         });
     } else {
@@ -94,6 +98,7 @@ pub(crate) fn launch_fields(
         selection(ui, &mut request.analysis, tools, &mut outcome.install);
         x86_tools_note(ui, &request.analysis, capabilities.guest_arch);
         capture_selection(ui, request, capabilities, &mut outcome);
+        screenshot_selection(ui, request, capabilities.screen);
         debugger_selection(ui, request, capabilities.debug_on_start);
     }
     outcome
@@ -201,6 +206,7 @@ pub(crate) fn capture_selection_for_tests(
 ) {
     let capabilities = LaunchCapabilities {
         graphical: false,
+        screen: false,
         core_on_exit: false,
         debug_on_start: false,
         core_limits: None,
@@ -343,6 +349,49 @@ fn trigger_selection(
     if core && !request.core_dump_on_exit {
         core_budget_row(ui, request, capabilities);
     }
+}
+
+/// Why the Run form offers no timed screenshots.
+const NO_SCREEN: &str = "Timed screenshots read the VM's screen in the app. Set VM screen to \"In the app (VNC)\" in the VM's settings; it applies at the next start of the VM.";
+
+/// Take a screenshot of the VM screen every N seconds during the run, kept in
+/// the run's own folder (ANT-T0487).
+fn screenshot_selection(ui: &mut egui::Ui, request: &mut ExecRequest, available: bool) {
+    use antinomie_monitor_core::timed_shots as shots;
+    ui.add_space(12.0);
+    crate::theme::section(ui, "Screen");
+    if !available {
+        request.screenshot_every_s = None;
+    }
+    let mut on = request.screenshot_every_s.is_some();
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(available, egui::Checkbox::new(&mut on, "Take a screenshot every"))
+            .on_hover_text("Save the VM screen as a picture at this interval while the run goes, with the run-relative time in its name. A screen that has not changed since the last picture is skipped.")
+            .on_disabled_hover_text(NO_SCREEN)
+            .changed()
+        {
+            request.screenshot_every_s = on.then_some(shots::DEFAULT_INTERVAL_S);
+        }
+        if let Some(every) = request.screenshot_every_s.as_mut() {
+            ui.add(
+                egui::DragValue::new(every)
+                    .range(shots::MIN_INTERVAL_S..=shots::MAX_INTERVAL_S)
+                    .suffix(" s"),
+            )
+            .on_hover_text("1 to 600 seconds");
+        }
+    });
+    let caption = if available {
+        format!(
+            "Pictures go to the run's own folder; a run keeps at most {} pictures or {} MiB.",
+            shots::MAX_SHOTS,
+            shots::MAX_BYTES / (1024 * 1024)
+        )
+    } else {
+        NO_SCREEN.to_owned()
+    };
+    ui.add(egui::Label::new(egui::RichText::new(caption).weak()).wrap());
 }
 
 fn debugger_selection(ui: &mut egui::Ui, request: &mut ExecRequest, supported: bool) {
@@ -921,6 +970,8 @@ pub(crate) fn other_progress<'a>(
 #[cfg(test)]
 mod identity_tests;
 #[cfg(test)]
+mod screenshot_tests;
+#[cfg(test)]
 mod trigger_tests;
 
 #[cfg(test)]
@@ -963,6 +1014,7 @@ mod tests {
                         &mut request,
                         LaunchCapabilities {
                             graphical: false,
+                            screen: false,
                             core_on_exit: supported,
                             debug_on_start: false,
                             core_limits: None,
@@ -990,6 +1042,7 @@ mod tests {
                     &mut request,
                     LaunchCapabilities {
                         graphical: false,
+                        screen: false,
                         core_on_exit: true,
                         debug_on_start: false,
                         core_limits: None,

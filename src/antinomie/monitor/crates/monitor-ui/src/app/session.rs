@@ -789,6 +789,7 @@ fn requests_match(left: &ExecRequest, right: &ExecRequest) -> bool {
         && left.core_timeout_ms == right.core_timeout_ms
         && left.dump_trigger == right.dump_trigger
         && left.debug_on_start == right.debug_on_start
+        && left.screenshot_every_s == right.screenshot_every_s
 }
 
 /// Terminals keep a listing copy of their run: the analysis report is read

@@ -116,6 +116,11 @@ pub fn effective(job: &Job, policy: &Policy) -> Effective {
         host_copy: None,
         sample: None,
         preloaded: Vec::new(),
+        screenshot_every_s: Some(
+            o.screenshot_every_s
+                .unwrap_or(policy.evidence.screenshot_every_s),
+        )
+        .filter(|every| *every > 0),
     };
     Effective {
         run_limit: Duration::from_secs(u64::from(o.timeout_s.unwrap_or(policy.run.timeout_s))),

@@ -651,6 +651,7 @@ impl Worker {
             arm_process_core(&run, &mut artifacts, reply, specimen_reply);
         }
         session.run_artifacts.insert(cookie, artifacts);
+        run.start_shots(session.process.screen_socket.as_deref());
         self.submit_run_analysis(request, &mut run, reply, ack.shape);
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         if let Some(error) = session.capture.error.clone() {

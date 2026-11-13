@@ -180,6 +180,11 @@ fn ceilings_are_enforced() {
             "engine maximum of 1024",
         ),
         (
+            "screenshot_every_s = 0",
+            "screenshot_every_s = 601",
+            "0 (off) or 1 to 600",
+        ),
+        (
             "# static_time_limit_min = 2",
             "static_time_limit_min = 481 #",
             "0 to 480",

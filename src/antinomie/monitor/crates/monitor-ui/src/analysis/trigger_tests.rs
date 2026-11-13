@@ -24,6 +24,7 @@ fn render(
                     request,
                     LaunchCapabilities {
                         graphical: false,
+                        screen: false,
                         core_on_exit: true,
                         debug_on_start: false,
                         core_limits: None,

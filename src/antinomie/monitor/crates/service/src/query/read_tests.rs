@@ -846,6 +846,69 @@ fn the_terminal_transcript_pages_by_journal_offset() {
 }
 
 #[test]
+fn timed_screenshots_are_listed_as_sensitive_artifacts_with_their_run_time() {
+    let data = Data::new("artifact-shots");
+    let run = standard(&data);
+    let shots = run.dir.join("screenshots");
+    std::fs::create_dir_all(&shots).unwrap();
+    for name in ["t+000010.0s.png", "t+000125.5s.png"] {
+        std::fs::write(shots.join(name), b"\x89PNG-fixture").unwrap();
+    }
+    // The series' own bookkeeping and an unfinished file are not pictures.
+    std::fs::write(shots.join("series.json"), b"{}").unwrap();
+    std::fs::write(shots.join("t+000130.0s.png.part"), b"x").unwrap();
+    let service = data.service();
+    let key = run.key();
+    let page = reply!(
+        call(
+            &service,
+            "recording.artifact.list",
+            json!({"run_key": key}),
+            &ctx()
+        ),
+        Artifacts
+    );
+    let listed: Vec<_> = page
+        .items
+        .iter()
+        .filter(|a| json_of(a)["kind"] == "screenshot")
+        .map(|a| {
+            (
+                a.name.clone(),
+                a.sensitive,
+                json_of(a)["run_time_ms"].as_u64(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("screenshots/t+000010.0s.png".to_owned(), true, Some(10_000)),
+            (
+                "screenshots/t+000125.5s.png".to_owned(),
+                true,
+                Some(125_500)
+            ),
+        ]
+    );
+    let id = page
+        .items
+        .iter()
+        .find(|a| a.name == "screenshots/t+000010.0s.png")
+        .unwrap()
+        .id
+        .clone();
+    let error = call(
+        &service,
+        "recording.artifact.get",
+        json!({"run_key": key, "artifact_id": id}),
+        &plain_ctx(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Forbidden);
+}
+
+#[test]
 fn artifacts_list_what_the_run_kept_and_serve_ranges() {
     let data = Data::new("artifacts");
     let run = standard(&data);

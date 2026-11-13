@@ -101,6 +101,7 @@ pub mod syscalls;
 mod telemetry_loss;
 #[cfg(test)]
 mod test_exec;
+pub mod timed_shots;
 pub mod toolchain;
 mod transport;
 pub mod typed_fields;

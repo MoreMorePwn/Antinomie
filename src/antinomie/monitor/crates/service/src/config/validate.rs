@@ -429,6 +429,12 @@ fn check_policy(policy: &Policy, catalog: &dyn VmCatalog, sink: &mut Sink<'_>) {
             "must be at least 1 with core_dump or a core dump_trigger",
         );
     }
+    if policy.evidence.screenshot_every_s > 600 {
+        sink.error(
+            "evidence.screenshot_every_s",
+            "must be 0 (off) or 1 to 600 seconds",
+        );
+    }
     if policy.evidence.core_nonresident && !trigger_core {
         sink.warn(
             "evidence.core_nonresident",

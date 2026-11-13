@@ -11,6 +11,7 @@ mod relations;
 mod report;
 mod rows;
 mod state;
+mod strip;
 mod thumb;
 
 #[cfg(test)]
@@ -23,6 +24,8 @@ pub(super) use state::State as SummaryState;
 pub(super) struct RunFacts {
     pub base: Option<String>,
     pub screenshot: Option<std::path::PathBuf>,
+    /// The run's timed screenshots (ANT-T0487), oldest first.
+    pub timed: Vec<antinomie_monitor_core::timed_shots::RunShot>,
     /// The libraries the run loaded into its program, one line each.
     pub preloaded: Vec<String>,
 }
@@ -215,15 +218,18 @@ impl TriageView {
         &mut self,
         base: Option<String>,
         screenshot: Option<std::path::PathBuf>,
+        timed: Vec<antinomie_monitor_core::timed_shots::RunShot>,
         preloaded: Vec<String>,
     ) {
         if self.run_facts.base != base
             || self.run_facts.screenshot != screenshot
+            || self.run_facts.timed != timed
             || self.run_facts.preloaded != preloaded
         {
             self.run_facts = RunFacts {
                 base,
                 screenshot,
+                timed,
                 preloaded,
             };
         }
