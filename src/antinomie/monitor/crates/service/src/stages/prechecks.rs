@@ -8,9 +8,10 @@ use crate::{
         job::{Job, Stage, WaitingFor},
         ops::Scope,
     },
+    config::Policy,
     engine::Engine,
     lane::{LaneFile, LaneProblem, check_lane, layer_pending, recover::announce_quarantine},
-    store::Eligibility,
+    store::{Eligibility, admission},
     waiter::WaitError,
 };
 use antinomie_monitor_core::{Command, Snapshot, VmState};
@@ -41,6 +42,40 @@ pub fn lane_eligibility(file: &LaneFile, snapshot: &Snapshot) -> Eligibility {
 const TREE_WAIT: Duration = Duration::from_secs(60);
 
 impl<E: Engine> LaneStages<'_, E> {
+    /// The permissions the run used at submit, asked again (the access
+    /// specification, "Checked again when it starts"): a permission its client
+    /// lost while the run waited refuses it `permission_denied`. A client the
+    /// service does not configure keeps what it was admitted with.
+    fn recheck_permissions(&self, job: &Job, policy: &Policy) -> Result<(), StageStop> {
+        let Some(held) = self
+            .env
+            .callers
+            .permissions_now(&job.client_id, &job.spec.labels)
+        else {
+            return Ok(());
+        };
+        let missing: Vec<_> = admission::permissions_used(&job.spec, policy)
+            .into_iter()
+            .filter(|used| !held.contains(&used.permission))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let reject = admission::missing_permissions(&missing);
+        let mut failure = Failure::new(
+            reject.code,
+            Stage::Prechecks,
+            &format!(
+                "the client no longer holds what the run needs: {}",
+                reject.message
+            ),
+            None,
+        );
+        failure.field = reject.field;
+        failure.details = reject.details;
+        Err(StageStop::Failed(failure))
+    }
+
     /// A fresh engine lists its VMs before their snapshots: a daemon that
     /// just started may take a requeued job before the engine has read the
     /// lane VM's snapshot tree (ANT-T0474). Ask for it and wait for it, so
@@ -72,31 +107,35 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    /// The frozen policy still exists and still allows the job; the host has
-    /// room; the lane is usable (not quarantined, free, its clean snapshot
-    /// unchanged).
+    /// The frozen policy still exists and still allows the job; the client
+    /// still holds every permission the run uses; the host has room; the lane
+    /// is usable (not quarantined, free, its clean snapshot unchanged).
     pub fn prechecks(&mut self, job: &Job) -> Result<Prepared, StageStop> {
         let store = self.env.store;
         let frozen = store
             .frozen_policy(&job.id)
             .map_err(|e| self.store_error(Stage::Prechecks, e))?;
+        let preset_denied = |message: &str| {
+            let mut failure = Failure::new(
+                FailureCode::PresetDenied,
+                Stage::Prechecks,
+                message,
+                Some(&frozen.name),
+            );
+            failure.field = Some("policy".into());
+            failure
+                .details
+                .insert("preset".into(), serde_json::json!(frozen.name));
+            StageStop::Failed(failure)
+        };
         match self.env.policies.get(&frozen.name) {
-            None => {
-                return Err(fail(
-                    FailureCode::PolicyDenied,
-                    "the policy of the job no longer exists",
-                    Some(&frozen.name),
-                ));
-            }
+            None => return Err(preset_denied("the policy of the job no longer exists")),
             Some(current) if !current.allows(&job.client_id, Scope::Submit) => {
-                return Err(fail(
-                    FailureCode::PolicyDenied,
-                    "the policy no longer allows this client",
-                    Some(&frozen.name),
-                ));
+                return Err(preset_denied("the policy no longer allows this client"));
             }
             Some(_) => {}
         }
+        self.recheck_permissions(job, &frozen.policy)?;
 
         match self.env.host.check(job, &frozen.policy) {
             Ok(()) => {}

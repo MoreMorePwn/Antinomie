@@ -270,7 +270,12 @@ fn t9_the_bytes_of_a_lane_run_need_the_sensitive_scope_and_are_audited() {
         ),
     ] {
         let error = call(&service, op, params, &plain_ctx()).unwrap_err();
-        assert_eq!(error.code, ErrorCode::Forbidden, "{op}: {}", error.message);
+        assert_eq!(
+            error.code,
+            ErrorCode::PermissionDenied,
+            "{op}: {}",
+            error.message
+        );
     }
     assert!(lines.lock().unwrap().is_empty());
     // The owner is served, and the read is logged with the lane run's ids.

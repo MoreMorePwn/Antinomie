@@ -13,9 +13,16 @@ use serde_json::{Value, json};
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     InvalidArgument,
-    PolicyDenied,
-    /// A local file or directory refuses access (CLI only; exit 5).
+    /// The caller lacks a permission (`details.needs`), or a local file or
+    /// directory refuses access (exit 5).
     PermissionDenied,
+    /// The preset (in 0.9.0 the policy) is not offered to the caller (exit 5).
+    PresetDenied,
+    /// A value above the caller's limit (exit 5).
+    LimitExceeded,
+    /// The node does not have what the request needs, or a node setting has
+    /// it off (exit 5).
+    UnavailableOnNode,
     NotFound,
     Conflict,
     PreconditionFailed,
@@ -35,8 +42,10 @@ impl ErrorCode {
     pub const fn as_str(self) -> &'static str {
         match self {
             ErrorCode::InvalidArgument => "invalid_argument",
-            ErrorCode::PolicyDenied => "policy_denied",
             ErrorCode::PermissionDenied => "permission_denied",
+            ErrorCode::PresetDenied => "preset_denied",
+            ErrorCode::LimitExceeded => "limit_exceeded",
+            ErrorCode::UnavailableOnNode => "unavailable_on_node",
             ErrorCode::NotFound => "not_found",
             ErrorCode::Conflict => "conflict",
             ErrorCode::PreconditionFailed => "precondition_failed",
@@ -58,7 +67,10 @@ impl ErrorCode {
             | ErrorCode::Conflict
             | ErrorCode::PayloadTooLarge => Exit::Invalid,
             ErrorCode::NotFound => Exit::NotFound,
-            ErrorCode::PolicyDenied | ErrorCode::PermissionDenied => Exit::Denied,
+            ErrorCode::PermissionDenied
+            | ErrorCode::PresetDenied
+            | ErrorCode::LimitExceeded
+            | ErrorCode::UnavailableOnNode => Exit::Denied,
             ErrorCode::QuotaExceeded => Exit::Quota,
             ErrorCode::Unavailable => Exit::Busy,
             ErrorCode::DependencyMissing => Exit::Dependency,
@@ -209,8 +221,10 @@ mod tests {
             (ErrorCode::Conflict, 4),
             (ErrorCode::PayloadTooLarge, 4),
             (ErrorCode::NotFound, 3),
-            (ErrorCode::PolicyDenied, 5),
             (ErrorCode::PermissionDenied, 5),
+            (ErrorCode::PresetDenied, 5),
+            (ErrorCode::LimitExceeded, 5),
+            (ErrorCode::UnavailableOnNode, 5),
             (ErrorCode::QuotaExceeded, 22),
             (ErrorCode::Unavailable, 21),
             (ErrorCode::DependencyMissing, 20),

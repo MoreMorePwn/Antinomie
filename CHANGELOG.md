@@ -15,6 +15,41 @@ x86 programs by their own table.
 
 ### Host
 
+- **Auto mode checks permissions, not scopes (ANT-T0489).**
+  - The engine checks a list of permissions (`runs.submit`, `route.tor`,
+    `run.as_root`, `evidence.core_dump`, `evidence.view` and 30 more) instead of the
+    four scopes. A caller carries its permissions (and, unused until limits per
+    caller, its limits). The owner on the local socket holds every permission. A
+    watch folder submits with `runs.submit` and the folder's new `permissions` list in
+    `service.toml`: a folder whose policy takes cores needs
+    `permissions = ["evidence.core_dump"]`. The old scopes keep their meaning:
+    `read` is `runs.see_all`, `submit` is `samples.add` and `runs.submit`,
+    `artifacts:sensitive` is `evidence.view`, `evidence.download` and
+    `samples.download`, `manage` is `runs.manage_any`, `samples.tag`, `runs.delete`,
+    `queue.manage`, `lanes.reset` and `custody.verify`.
+  - `job.submit` checks, in order: the policy is offered to the caller, each run
+    option that adds risk has its permission (a live route, root or an id below
+    1000, core and memory dumps, also those of the dump trigger, Check online,
+    keeping the VM), the node has it, then the limits, then the policy's own
+    switches. Each refusal names what is missing.
+  - New error and failure codes `permission_denied` (with `details.needs`),
+    `preset_denied`, `limit_exceeded` and `unavailable_on_node`; `policy_denied` is
+    gone. A failure now carries `field` and `details`. A value outside the policy's
+    switches is refused `invalid_argument` and nothing is stored.
+  - A live route asked by a job is refused `unavailable_on_node` (no route is set
+    up for the service yet), after its `route.*` permission; it was `unsupported`.
+    `keep_on_failure: true` is refused `unavailable_on_node`: keeping a VM arrives
+    with 0.9.1.
+  - When a job starts, prechecks asks again whether its client still holds every
+    permission the run uses: one taken away while the job waited ends it `failed`
+    with `permission_denied`.
+  - `job.cancel` of another client's job needs `runs.manage_any`; `job.retry`
+    needs `runs.submit`, and `runs.see_all` for another client's job. Events are
+    sent only with the permission of their type (`runs.see_all` for all of them in
+    0.9.0). `capabilities.queries[].scope` is now `permission`. The CLI reports
+    the new codes (exit 5); `base list --remote` with the catalog off answers
+    `unavailable_on_node`.
+
 - **Statistics window (ANT-T0477).** **Statistics** in the menu bar, or Ctrl+Shift+T, opens a window on the selected run or Capture all recording (it floats over the main window and pops out into its own). Four tabs: **Properties** (the run, the guest, the recording and the recording-quality figures: lost packets, reduced recording, host read gaps, guest send waits), **Hierarchy** (calls by group, call and result, with Failed only and By error), **Call rate** (calls per interval over the run, up to four lines: all, failed, a group or your own filter, with the recording's read gaps and full-ring spells drawn on the graph) and **Latency** (the time from a call's entry to its exit, labelled with the accelerator the run was measured under, calls that wait by design shown apart, the slowest calls). The window has its own filter box in the Syscall Trace's language and a choice of time base. Every number opens exactly its calls in the Syscall Trace, every table copies and exports as CSV and JSON, and a quality chip says what the counts cannot tell. It counts the run's own program, as Triage does, and says how many calls of another program it left out. A reconnected run reads only the part after the reconnect, as the Syscall Trace does, and says so. The counting is the new `antinomie_triage::statistics` module, in one walk of the recording that costs what the Syscall Trace's own count costs.
 
 - **The golden check hides the string address in `prctl(PR_SET_NAME)` (ANT-T0461).** The Syscall Trace view now shows `arg2` of `prctl` as an address for the options that pass a pointer there (`PR_SET_NAME`, `PR_GET_NAME`, `PR_GET_PDEATHSIG`, `PR_GET_TID_ADDRESS` and the other `PR_GET_*` out-parameters), so the conformance golden files hide it as `<addr>` and a fixture built with another C library no longer fails `conf-quick`. `prctl.set_name_long` is re-blessed in the four user goldens.

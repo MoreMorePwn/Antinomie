@@ -1060,6 +1060,7 @@ fn lane_main<E: Engine>(
             store: &service.store,
             lanes: &service.lanes,
             policies: &*service.policies,
+            callers: service,
             procs: &procs,
             host: &host,
             triage: &triage,

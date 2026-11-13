@@ -4,7 +4,7 @@
 //! mode calls in-process.
 //!
 //! Every request is parsed with the contract's own types (unknown members are
-//! refused, with the member named), checked against the op's scope (5.8),
+//! refused, with the member named), checked against the op's permissions,
 //! then served from the job store, the staging store, the policies, the lane
 //! and the recording reads. `sample.path` is honoured only for a caller in
 //! the same process: over the socket a file arrives through `upload.*`, so no
@@ -116,19 +116,6 @@ pub(crate) fn params<T: DeserializeOwned>(value: Value) -> Result<T, ApiError> {
 pub(crate) fn to_value(value: &impl Serialize) -> Result<Value, ApiError> {
     serde_json::to_value(value)
         .map_err(|e| ApiError::new(ErrorCode::Internal, format!("reply: {e}")))
-}
-
-fn forbidden(scope: Scope) -> ApiError {
-    let name = to_value(&scope)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned));
-    ApiError::new(
-        ErrorCode::Forbidden,
-        format!(
-            "this operation needs the {} scope",
-            name.unwrap_or_default()
-        ),
-    )
 }
 
 /// The names 5.11 reserves for a later contract version.
@@ -588,6 +575,10 @@ impl Service {
                     request.after_seq,
                     request.limit.unwrap_or(500).clamp(1, 1000),
                 )?;
+                let events = events
+                    .into_iter()
+                    .filter(|event| caller.has(event.body.permission()))
+                    .collect();
                 to_value(&EventList { events, next_seq })
             }
             Op::EventsSubscribe => Err(ApiError::invalid_argument(
@@ -648,9 +639,7 @@ impl Handler for Service {
 
     fn call(&self, op: &str, value: Value, ctx: &CallContext) -> Result<Value, ApiError> {
         if op.starts_with("recording.") {
-            if !ctx.caller.has(Scope::Read) {
-                return Err(forbidden(Scope::Read));
-            }
+            ctx.caller.require(Permission::RunsSeeAll)?;
             return self.recording(op, value, ctx);
         }
         if let Some(answer) = super::lane_ops::call(self, op, value.clone(), ctx) {
@@ -668,9 +657,7 @@ impl Handler for Service {
         }
         let parsed: Op = serde_json::from_value(Value::String(op.to_owned()))
             .map_err(|_| ApiError::invalid_argument("op", format!("unknown operation {op:?}")))?;
-        if !ctx.caller.has(parsed.scope()) {
-            return Err(forbidden(parsed.scope()));
-        }
+        ctx.caller.require_any(parsed.needs())?;
         if starts_work(parsed) && self.controls.stopping() {
             return Err(
                 ApiError::new(ErrorCode::Unavailable, "the daemon is stopping")

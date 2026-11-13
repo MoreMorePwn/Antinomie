@@ -4,6 +4,7 @@
 //! service holds. A job freezes the policy it is submitted under, so a reload
 //! (SIGHUP) never changes a job already queued or running (5.6).
 
+pub mod callers;
 pub mod catalog;
 pub mod locate;
 pub mod policy;
@@ -139,13 +140,6 @@ impl PolicySet {
         self.by_name
             .values()
             .filter(|policy| policy.allows(&caller.client_id, Scope::Submit))
-            .filter(|policy| {
-                caller.policies.is_empty()
-                    || caller
-                        .policies
-                        .iter()
-                        .any(|pattern| policy::glob(pattern, &policy.name))
-            })
             .map(|policy| summary(policy))
             .collect()
     }

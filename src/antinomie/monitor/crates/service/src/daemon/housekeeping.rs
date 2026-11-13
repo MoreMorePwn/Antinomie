@@ -7,8 +7,8 @@
 use super::service::{Service, params, to_value};
 use crate::{
     api::{
-        error::{ApiError, ErrorCode},
-        ops::{Deleted, JobDeleteParams, Scope},
+        error::ApiError,
+        ops::{Deleted, JobDeleteParams, Permission},
     },
     clock::{Clock, SystemClock},
     retention::{self, GcReport, RealRuns, Retention},
@@ -84,8 +84,11 @@ pub(super) fn call(
     ctx: &CallContext,
 ) -> Option<Result<Value, ApiError>> {
     let need = match op {
-        "watch.list" => Scope::Read,
-        "watch.scan" | "gc.run" => Scope::Manage,
+        "watch.list" => Permission::RunsSeeAll,
+        // Intake now, as a resume starts the queue now.
+        "watch.scan" => Permission::QueueManage,
+        // Retention removes finished runs' recordings.
+        "gc.run" => Permission::RunsDelete,
         _ if op.starts_with("watch.") || op.starts_with("gc.") => {
             return Some(Err(ApiError::invalid_argument(
                 "op",
@@ -94,11 +97,8 @@ pub(super) fn call(
         }
         _ => return None,
     };
-    if !ctx.caller.has(need) {
-        return Some(Err(ApiError::new(
-            ErrorCode::Forbidden,
-            "this operation needs another scope",
-        )));
+    if let Err(error) = ctx.caller.require(need) {
+        return Some(Err(error));
     }
     Some(match op {
         "watch.list" => to_value(&service.watch.list()),

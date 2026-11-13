@@ -1,17 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The lane operations of the local socket (design 3.4.4 `auto lane ...`;
 //! card P3-5b). They are an addition to the operations of 5.3, which has none
-//! for lanes: `lane.list` needs `read`; `lane.reset` and `lane.unquarantine`
-//! need `manage` and are carried out by the lane's own thread (it owns the
+//! for lanes: `lane.list` needs `runs.see_all`; `lane.reset` and
+//! `lane.unquarantine` need `lanes.reset` and are carried out by the lane's own thread (it owns the
 //! engine) when no job runs.
 
 use super::service::{Service, params, to_value};
 use crate::{
-    api::{
-        error::{ApiError, ErrorCode},
-        ids::LaneId,
-        ops::Scope,
-    },
+    api::{error::ApiError, ids::LaneId, ops::Permission},
     lane::provision,
     server::CallContext,
 };
@@ -39,8 +35,8 @@ pub(super) fn call(
     ctx: &CallContext,
 ) -> Option<Result<Value, ApiError>> {
     let need = match op {
-        "lane.list" => Scope::Read,
-        "lane.reset" | "lane.unquarantine" => Scope::Manage,
+        "lane.list" => Permission::RunsSeeAll,
+        "lane.reset" | "lane.unquarantine" => Permission::LanesReset,
         _ if op.starts_with("lane.") => {
             return Some(Err(ApiError::invalid_argument(
                 "op",
@@ -49,11 +45,8 @@ pub(super) fn call(
         }
         _ => return None,
     };
-    if !ctx.caller.has(need) {
-        return Some(Err(ApiError::new(
-            ErrorCode::Forbidden,
-            "this lane operation needs another scope",
-        )));
+    if let Err(error) = ctx.caller.require(need) {
+        return Some(Err(error));
     }
     Some(serve(service, op, value))
 }

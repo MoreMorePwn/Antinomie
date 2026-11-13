@@ -219,11 +219,7 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
     });
     let store = Store::open(&service).expect("store");
     let admit = Admit { sample };
-    let caller = Caller {
-        client_id: "local:1000".into(),
-        scopes: vec![Scope::Read, Scope::Submit],
-        policies: vec![],
-    };
+    let caller = Caller::from_scopes("local:1000", &[Scope::Read, Scope::Submit]);
 
     let procs = ProcFs;
     for round in 1..=2 {
@@ -258,6 +254,7 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
                 store: &store,
                 lanes: &lanes,
                 policies: &policies,
+                callers: &antinomie_service::config::callers::LocalOnly,
                 procs: &procs,
                 host: &NoHostChecks,
                 evidence: &antinomie_service::waiter::load_artifacts,
@@ -402,11 +399,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
         policy,
     });
     let store = Store::open(&service).expect("store");
-    let caller = Caller {
-        client_id: "local:1000".into(),
-        scopes: vec![Scope::Read, Scope::Submit],
-        policies: vec![],
-    };
+    let caller = Caller::from_scopes("local:1000", &[Scope::Read, Scope::Submit]);
     let procs = ProcFs;
 
     // job name, script, timeout_s, what must happen
@@ -462,11 +455,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
                         .cancel(
                             &job.id,
                             Some("vm test"),
-                            &Caller {
-                                client_id: "local:1000".into(),
-                                scopes: vec![Scope::Read, Scope::Submit],
-                                policies: vec![],
-                            },
+                            &Caller::from_scopes("local:1000", &[Scope::Read, Scope::Submit]),
                         )
                         .expect("cancel");
                 });
@@ -477,6 +466,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
                     store: &store,
                     lanes: &lanes,
                     policies: &policies,
+                    callers: &antinomie_service::config::callers::LocalOnly,
                     procs: &procs,
                     host: &NoHostChecks,
                     evidence: &antinomie_service::waiter::load_artifacts,

@@ -155,18 +155,37 @@ the recording is saved without it and the job succeeds; `run.pending` lists
   one the cores hold resident pages only and the job carries the warning
   `core_nonresident_unsupported`).
 
-* **A job asks within the policy's ceiling.** `--timeout-run`, `--args`,
-  `--env`, `--as`, `--route`, `--static`, `--formats` and the other flags of `auto
-  submit` can lower or choose among what the policy allows, never exceed it. A
-  request the policy forbids is stored as a `rejected` job (exit 13) with
-  `policy_denied` and the field to blame. A switch the policy leaves off cannot
-  be turned on by a job.
+* **A job asks within the caller's permissions and the policy's ceiling.**
+  `--timeout-run`, `--args`, `--env`, `--as`, `--route`, `--static`, `--formats`
+  and the other flags of `auto submit` can lower or choose among what the policy
+  allows, never exceed it. The run, as it will run with the policy's defaults,
+  is checked in this order: the policy is offered to the caller (else
+  `preset_denied`); each option that adds risk has its permission (else
+  `permission_denied`, with every missing permission in `details.needs`): a live
+  route its `route.*`, root or an id below 1000 `run.as_root`, a core on exit or
+  from the dump trigger `evidence.core_dump`, a memory dump `evidence.memory_dump`,
+  `analysis.online_ioc` `lookup.online`, `keep_on_failure` `run.keep_vm`; the node
+  has it (a live route or a kept VM is `unavailable_on_node` in 0.9.0); the
+  priority and the run time are within the policy's `priority_max` and `max_run_s`
+  (else `limit_exceeded`). Each is stored as a `rejected` job (exit 13) with the
+  code, the field and the details. Last come the policy's own switches (a switch
+  the policy leaves off cannot be turned on by a job): a value outside them is
+  refused with `invalid_argument` (exit 4) and nothing is stored.
+* **Who holds which permission.** The owner on the local socket (the CLI and
+  `auto daemon`) holds every permission. A watch folder submits with
+  `runs.submit` and the folder's `permissions` in `service.toml` (see
+  `service-config.md`): a folder whose policy takes cores needs
+  `permissions = ["evidence.core_dump"]`. When a job starts, prechecks asks again:
+  a permission taken away while the job waited (a reload) ends it `failed` with
+  `permission_denied`.
 * **A job freezes its policy.** The file's digest and parsed content are stored with
   the job. Editing a policy, or `SIGHUP`, changes only jobs submitted afterwards.
 * **Routes.** In 0.9.0 a job may use `drop` (the default: every connection a sample
-  tries is captured and dropped) or `inet_sim` (simulated internet services). The
-  live routes (`internet`, `tor`, `vpn`, `socks5`) and NAT are refused by `config
-  validate`.
+  tries is captured and dropped) or `inet_sim` (simulated internet services); neither
+  needs a permission. A job asking for a live route (`internet`, `tor`, `vpn`,
+  `socks5`) needs its `route.*` permission and is then refused
+  `unavailable_on_node`: no live route is set up for the service before 0.9.1. In a
+  policy, live routes and NAT are refused by `config validate`.
 * **Accepted samples.** The default policy accepts ELF x86-64 programs only; add
   `"sh"` to `[sample] accept_types` for shell scripts. A script has no
   architecture, so `accept_arch` applies to ELF files only.
@@ -343,7 +362,10 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | Code | Stage | Retried | What it means and what to do |
 |---|---|---|---|
 | `sample_missing`, `sample_too_large`, `sample_type_denied`, `sample_arch_denied`, `duplicate_denied` | submit | no | The intake refused the file; the size limit is the smallest of 256 MiB, the policy's `max_sample_mib` and a quarter of the lane VM's RAM |
-| `policy_denied` | submit, prechecks | no | The policy forbids the request, or it changed or went away after the submit; `field` names the part |
+| `permission_denied` | submit, prechecks | no | The caller lacks a permission the run uses (`details.needs`), or lost it while the job waited; `field` names the option |
+| `preset_denied` | submit, prechecks | no | The policy is not offered to the caller, or it changed or went away after the submit (`details.preset`) |
+| `limit_exceeded` | submit | no | The priority or the run time is above the limit (`details.field`, `details.limit`) |
+| `unavailable_on_node` | submit | no | The node does not have it: a live route, or keeping the VM after a failure (both arrive with 0.9.1); `details.what` |
 | `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The job waits `queued` for up to the policy's `wait_s` (3600), then fails |
 | `no_base`, `no_vm` | provision | no | The lane VM or its base is gone; `auto lane list` says which |
 | `vm_start_failed`, `guest_unreachable` | provision, launch | yes | The VM or its guest did not come up, or the guest kernel crashed while it booted (the crash line is the detail); three in a row quarantine the lane |

@@ -37,24 +37,28 @@ in a request fails with `invalid_argument` naming the field.
 
 ## Operations
 
-| Op | Purpose | Scope |
+| Op | Purpose | Permission |
 |---|---|---|
-| `capabilities` | What this service can do now | `read` |
-| `health` | Liveness, readiness and engine counters | `read` |
-| `upload.begin`, `upload.put`, `upload.finish` | Staged sample upload; chunks are strictly sequential (`offset` must equal `received`, else `conflict`) | `submit` |
-| `job.submit` | Validate synchronously, then queue a job. A spec that fails validation still returns a `Job` with `state: rejected` and `failure` set, except malformed JSON (`invalid_argument`) | `submit` |
-| `job.get`, `job.list` | One job; jobs filtered by `state`, `outcome`, `sha256`, `label`, `since_ms` | `read` |
-| `job.cancel`, `job.retry` | Cancel a queued or running job; start a new job from a finished job's spec (own jobs; `manage` for any) | `submit` |
-| `job.delete` | Remove a finished job's record and artifacts (`with_recording` also the recording; never the sample) | `manage` |
-| `events.subscribe`, `events.list` | The event stream; the stored events of a job | `read` |
-| `artifact.list`, `artifact.get`, `report.get` | Artifacts of a job; bytes or a range; one report format | `read` (`artifacts:sensitive` for an artifact with `sensitive: true`) |
-| `sample.list`, `sample.get` | Library samples | `read` |
-| `sample.add` | Store a file in the library without running it | `submit` |
-| `sample.download` | The library archive of a sample (an AES zip, never the plaintext) | `artifacts:sensitive` |
-| `sample.tag` | Set tags on a sample | `manage` |
-| `policy.list`, `queue.status`, `vm.list`, `base.list` | Policies the caller may use; queue and lane state; VMs and installed bases | `read` |
-| `queue.pause`, `queue.resume` | Stop or resume starting new jobs | `manage` |
-| `custody.verify` | Verify the custody chain of one sample or the whole library | `manage` |
+| `capabilities` | What this service can do now | `runs.see_all` |
+| `health` | Liveness, readiness and engine counters | `runs.see_all` |
+| `upload.begin`, `upload.put`, `upload.finish` | Staged sample upload; chunks are strictly sequential (`offset` must equal `received`, else `conflict`) | `runs.submit` or `samples.add` |
+| `job.submit` | Validate synchronously, then queue a job. A spec that fails a check of the run still returns a `Job` with `state: rejected` and `failure` set; malformed JSON, a value out of range or outside the policy is `invalid_argument` | `runs.submit`, and the permission of each run option (see Permissions) |
+| `job.get`, `job.list` | One job; jobs filtered by `state`, `outcome`, `sha256`, `label`, `since_ms` | `runs.see_all` |
+| `job.cancel` | Cancel a queued or running job | `runs.submit` for the caller's own job, `runs.manage_any` for any |
+| `job.retry` | Start a new job from a finished job's spec | `runs.submit`, and `runs.see_all` for another client's job |
+| `job.delete` | Remove a finished job's record and artifacts (`with_recording` also the recording; never the sample) | `runs.delete` |
+| `events.subscribe`, `events.list` | The event stream; the stored events of a job | `runs.see_all` (the permission of each event's type; in 0.9.0 every type needs `runs.see_all`) |
+| `artifact.list`, `artifact.get`, `report.get` | Artifacts of a job; bytes or a range; one report format | `runs.see_all` (`evidence.download` for an artifact with `sensitive: true`) |
+| `sample.list`, `sample.get` | Library samples | `runs.see_all` |
+| `sample.add` | Store a file in the library without running it | `samples.add` |
+| `sample.download` | The library archive of a sample (an AES zip, never the plaintext) | `samples.download` |
+| `sample.tag` | Set tags on a sample | `samples.tag` |
+| `policy.list`, `queue.status`, `vm.list`, `base.list` | Policies the caller may use; queue and lane state; VMs and installed bases | `runs.see_all` |
+| `queue.pause`, `queue.resume` | Stop or resume starting new jobs | `queue.manage` |
+| `custody.verify` | Verify the custody chain of one sample or the whole library | `custody.verify` |
+
+A caller without the permission an operation needs gets `permission_denied`
+with `details.needs` listing it.
 
 Not in version 1: live terminal streaming and input, the debugger, snapshot
 management, base download or build, VM creation, rule pack management, settings
@@ -117,14 +121,18 @@ has handed it to the host work pool: `name` (`triage`, `static:<tool>`,
 and `waiting_for` (why the head waits, when it waits for memory).
 
 The policy is frozen at submit: a job whose policy has gone or now denies it ends
-`failed` with `policy_denied`.
+`failed` with `preset_denied`. When the job starts, prechecks also asks again
+whether its client still holds every permission the run uses; one taken away
+while the job waited (a watch folder's `permissions` changed by a reload) ends it
+`failed` with `permission_denied`.
 
 ## Failure codes
 
 | Code | Stage | Retryable |
 |---|---|---|
 | `sample_missing`, `sample_too_large`, `sample_type_denied`, `sample_arch_denied`, `duplicate_denied` | prechecks | no |
-| `policy_denied` | prechecks, provision | no |
+| `permission_denied`, `limit_exceeded`, `unavailable_on_node` | prechecks | no |
+| `preset_denied` | prechecks, provision | no |
 | `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | yes, later |
 | `no_base`, `no_vm` | provision | no |
 | `vm_start_failed` | provision | yes |
@@ -175,7 +183,10 @@ Every failed operation returns `{"error": {"code", "message", "field?", "retryab
 | `invalid_argument` | 400 | Malformed or unknown field; `field` names it |
 | `unauthenticated` | 401 | Added by the HTTP layer only |
 | `forbidden` | 403 | Added by the HTTP layer only |
-| `policy_denied` | 403 | The policy forbids the request |
+| `permission_denied` | 403 | The caller lacks a permission; `details.needs` lists it (also inside a rejected job's `failure`) |
+| `preset_denied` | 403 | The policy (the preset of later versions) is unknown to the caller or not offered to it; `details.preset` |
+| `limit_exceeded` | 403 | A value above a limit (priority, run time); `details.field`, `details.limit`, `details.source` |
+| `unavailable_on_node` | 409 | The node does not have what the request needs (a live route, a kept VM); `details.what` |
 | `not_found` | 404 | Job, artifact, sample, upload, policy, run or recording missing |
 | `conflict` | 409 | Idempotency key reused with another spec; the job is not in a state that allows the op; `details.reason = "cursor_stale"` |
 | `precondition_failed` | 412 | For example `job.retry` of a job that is not terminal; `details.reason = "layer_pending"` or `"recording_open"` |
@@ -185,16 +196,70 @@ Every failed operation returns `{"error": {"code", "message", "field?", "retryab
 | `unsupported` | 501 | Not in this build or not in version 1 |
 | `internal` | 500 | A bug; `details.log` names the job log |
 
-## Scopes
+## Permissions
 
-| Scope | Allows |
+A caller holds a set of permissions (`Caller.permissions`, by dotted key). The
+engine checks 35 of them (the web's own `users.manage` and `audit.read` are not
+the engine's); 0.9.0 asks for the ones below, the others are reserved for the
+features of 0.9.1 (cases, interactive sessions, presets, kept VMs).
+
+| Permission | Allows in 0.9.0 |
 |---|---|
-| `read` | The read operations above, JSON, MISP and STIX reports, and every `recording.*` operation classed normal |
-| `submit` | `upload.*`, `job.submit`, `sample.add`, and `job.cancel` and `job.retry` of the caller's own jobs |
-| `artifacts:sensitive` | Sensitive artifacts, `sample.download`, and the sensitive `recording.*` operations |
-| `manage` | `job.delete`, `job.cancel` of any job, `sample.tag`, `queue.pause`, `queue.resume`, `custody.verify` |
+| `runs.see_all` | The read operations above, JSON, MISP and STIX reports, every `recording.*` operation classed normal, the events, `lane.list`, `watch.list` |
+| `runs.submit` | `upload.*`, `job.submit`, `job.retry`, and `job.cancel` of the caller's own jobs |
+| `samples.add` | `upload.*`, `sample.add` |
+| `runs.manage_any` | `job.cancel` of any job |
+| `evidence.view` | The sensitive `recording.*` operations (bytes shown, never a file) |
+| `evidence.download` | `artifact.get` and `report.get` of an artifact with `sensitive: true` |
+| `samples.download` | `sample.download` |
+| `samples.tag` | `sample.tag` |
+| `runs.delete` | `job.delete`, `gc.run` |
+| `queue.manage` | `queue.pause`, `queue.resume`, `watch.scan` |
+| `lanes.reset` | `lane.reset`, `lane.unquarantine` |
+| `custody.verify` | `custody.verify` |
+| `route.internet`, `route.tor`, `route.vpn`, `route.socks5` | A job on that live route (then refused `unavailable_on_node`: no live route is set up for the service before 0.9.1) |
+| `run.as_root` | `run_as` root, or a UID or GID below 1000 |
+| `evidence.core_dump` | A core on exit, or a core taken by the policy's dump trigger |
+| `evidence.memory_dump` | A memory dump on exit, or one taken by the policy's dump trigger |
+| `lookup.online` | A job under a policy with `online_ioc = true` |
+| `run.keep_vm` | `keep_on_failure: true` (then refused `unavailable_on_node`: keeping a VM arrives with 0.9.1) |
 
-`read` sees every job on the node (one trust domain per node).
+Reserved: `cases.create`, `runs.share`, `cases.join_any`, `runs.annotate`,
+`indicators.mark_fp`, `route.nat`, `route.lan`, `route.unfiltered`,
+`evidence.disk_dump`, `interactive.watch`, `interactive.control`,
+`presets.manage`, `lanes.extend_keep`, `node.manage`.
+
+The four scopes of earlier drafts map to permissions as follows: `read` is
+`runs.see_all`; `submit` is `samples.add` and `runs.submit`;
+`artifacts:sensitive` is `evidence.view`, `evidence.download` and
+`samples.download`; `manage` is `runs.manage_any`, `samples.tag`,
+`runs.delete`, `queue.manage`, `lanes.reset` and `custody.verify`. A policy
+file's `[access] scopes` keeps this spelling until presets replace policies.
+
+`runs.see_all` sees every job on the node (one trust domain per node).
+
+**How `job.submit` is checked, in order.** The first failing check answers:
+
+1. `runs.submit`, else `permission_denied` (nothing stored);
+2. the shape and range of every value, else `invalid_argument` (nothing
+   stored);
+3. the policy is offered to the caller (`[access] clients`), else a rejected
+   job with `preset_denied`;
+4. every run option that adds risk has its permission, on the job as it will
+   run (the policy's defaults included): the route, the user, core and memory
+   dumps (also those the dump trigger takes), Check online, keeping the VM.
+   Else a rejected job with `permission_denied` and `details.needs` listing
+   every missing permission;
+5. the node has it (a live route, a kept VM), else a rejected job with
+   `unavailable_on_node`;
+6. the limits: `priority` up to the policy's `priority_max`, `timeout_s` up to
+   its `max_run_s`, else a rejected job with `limit_exceeded`;
+7. the policy's own switches and ceilings (arguments, environment, root,
+   allowed routes, dump switches, core size, detection engines), else
+   `invalid_argument` naming the field (nothing stored);
+8. the sample (intake: size, type, architecture), else a rejected job with the
+   `sample_*` code. Intake comes last because it archives the sample: a
+   refused job adds nothing to the library.
 
 ## Local socket
 
@@ -207,7 +272,7 @@ Every failed operation returns `{"error": {"code", "message", "field?", "retryab
 | Folder | Must be a real directory owned by the daemon's user with mode 0700; the daemon refuses to start otherwise (a symlink, another owner, group or other access) |
 | Socket file | Mode 0600, set right after `bind`. An old socket file is replaced (the daemon holds the data-directory lock, so no one else serves it); any other file at the path is left alone and the start fails. The daemon removes its own socket when it stops |
 | Who may connect | Peer credentials (`SO_PEERCRED`) are read on accept: only the daemon's own UID. Another UID is closed without a byte, not even the hello |
-| Identity | The caller is `local:<uid>` with every scope (`read`, `submit`, `artifacts:sensitive`, `manage`): the socket is the owner's single-user view. Nothing in a request changes it |
+| Identity | The caller is `local:<uid>` with every permission the engine checks: the socket is the owner's single-user view. Nothing in a request changes it |
 | Framing | One JSON object per line, UTF-8, at most 2 MiB per line, both ways. A request is `{"id": N, "op": "...", "params": {...}}` and nothing else: `id` an integer from 0 to 2^53 - 1, `op` 1 to 64 printable ASCII characters, `params` an object (absent or `null` reads as `{}`). Any other member is `invalid_argument` naming it |
 | Replies | `{"id": N, "ok": true, "result": ...}` or `{"id": N, "ok": false, "error": {...}}` |
 | Hello | The first line of a connection is `{"frame": "engine.hello", "data": {"api_version", "app_version", "owner", "epoch", "gseq", "truncated"}}`, with no `id`. A client that does not know the `api_version` closes |
@@ -272,10 +337,10 @@ from the same code direct mode runs, so the CLI prints the same objects either w
 | `sample.get` | The `Sample` object plus `sha1`, `md5`, `description`, `removed_ms` and `custody` (the chain's summary). `origins`, `events` and `runs` (booleans) add those lists |
 | `sample.add` | Takes `sample.upload_id` only. `sample.path` and `sample.sha256` are `invalid_argument` on the socket (the daemon opens no path a client names). The type and architecture come from the bytes; no policy applies. The custody entry names the caller (`local:<uid>`). The answer is `sample.get`'s object plus `new` |
 | `sample.tag` | Sets the whole tag list (`[{kind, value}]`); the custody entry `edited` (tags) names the caller. The answer is the `Sample` object |
-| `sample.download` | `sha256` and an optional `range {offset, len}` (at most 1 MiB; default the first MiB). The answer is `{sha256, format: "zip-aes256", password: "infected", size, range {offset, len, data}}` with `data` Base64 of the AES archive (never the plaintext). The first range (`offset` 0) writes one custody entry `exported`. Needs `artifacts:sensitive` |
+| `sample.download` | `sha256` and an optional `range {offset, len}` (at most 1 MiB; default the first MiB). The answer is `{sha256, format: "zip-aes256", password: "infected", size, range {offset, len, data}}` with `data` Base64 of the AES archive (never the plaintext). The first range (`offset` 0) writes one custody entry `exported`. Needs `samples.download` |
 | `vm.list` | `{vms: [{id, name, base_identity, lane}]}` from the engine's latest snapshot; the lane VM carries its lane |
 | `base.list` | `{bases: [{identity, name, architecture}]}`; no host path. While the engine still lists them: `unavailable`, `retryable` |
-| `custody.verify` | `{ok, head, problems[]}` plus, for one sample, `sha256`, `entries`, `problem`, `summary`; for the library, `index`, `samples[]`, `broken[]`. Needs `manage` |
+| `custody.verify` | `{ok, head, problems[]}` plus, for one sample, `sha256`, `entries`, `problem`, `summary`; for the library, `index`, `samples[]`, `broken[]`. Needs `custody.verify` |
 
 **Service log for sensitive reads.** Every served read of the sample's own bytes
 writes one line to the daemon's service log (`antinomie-cli auto daemon` standard
@@ -305,7 +370,7 @@ the tree ended; a reader that knows nothing of `held` sees the run as before.
 export`, `triage` and the other read commands send these operations; `run export`
 never sends an output path: the command pages through `recording.*` and writes the
 files under `--out` itself, and the bytes the sample produced are fetched only with
-`--sensitive` (the scope `artifacts:sensitive` is checked again by the daemon, and
+`--sensitive` (the permission `evidence.view` is checked again by the daemon, and
 each read is written to its service log). `sample add FILE` sends the file with
 `upload.begin`, `upload.put` and `upload.finish`, then calls `sample.add` with the
 `upload_id`. A
@@ -315,24 +380,24 @@ again for fewer rows.
 `job.retry` makes a new job from a finished one: the spec the client first sent,
 the sample named by its library hash, no idempotency key, the given `overrides`
 replacing the original's one field at a time, the current policy, and
-`repeat_of` set. The job must be terminal (`precondition_failed` otherwise) and
-the caller its owner or a holder of `manage`.
+`repeat_of` set. The job must be terminal (`precondition_failed` otherwise); the
+caller needs `runs.submit`, and `runs.see_all` for another client's job.
 
 **Lane operations** (an addition of this binding; section 5.3 has none for lanes,
 and the CLI's `auto lane` commands need them while a daemon owns the folder):
 
-| Op | Scope | Params | Result |
+| Op | Permission | Params | Result |
 |---|---|---|---|
-| `lane.list` | `read` | `lane?` (ignored) | `[{lane, vm_id, vm_name, clean_snapshot_id, base_identity, quarantine, quarantine_detail, failures, busy_with, collected, problems[]}]`; `problems` are the checks of `lane.unquarantine` in words |
-| `lane.reset` | `manage` | `lane?` (default `lane-1`) | The lane after the revert: the clean snapshot restored, the guest answering, the VM stopped and settled; a quarantine is lifted. A failed revert keeps the lane as it was |
-| `lane.unquarantine` | `manage` | `lane?` | The lane with the quarantine lifted when the checks pass (`precondition_failed` naming the failing check otherwise) |
+| `lane.list` | `runs.see_all` | `lane?` (ignored) | `[{lane, vm_id, vm_name, clean_snapshot_id, base_identity, quarantine, quarantine_detail, failures, busy_with, collected, problems[]}]`; `problems` are the checks of `lane.unquarantine` in words |
+| `lane.reset` | `lanes.reset` | `lane?` (default `lane-1`) | The lane after the revert: the clean snapshot restored, the guest answering, the VM stopped and settled; a quarantine is lifted. A failed revert keeps the lane as it was |
+| `lane.unquarantine` | `lanes.reset` | `lane?` | The lane with the quarantine lifted when the checks pass (`precondition_failed` naming the failing check otherwise) |
 
 `lane.reset` and `lane.unquarantine` are carried out by the lane's own thread and
 only while no job runs: a busy lane answers `conflict` at once (pause the queue
 first), and a request not reached within its wait (900 s, 60 s) is dropped, never
 run late. Each sends `lane.state` with the reason.
 
-`job.delete` (`manage`) removes an ended job's row, events, artifacts and folder
+`job.delete` (`runs.delete`) removes an ended job's row, events, artifacts and folder
 and answers `{deleted: true}`. A job that has not ended is a `conflict`. With
 `with_recording: true` the job's recording is deleted first through the engine's
 own run deletion (custody actor `auto:policy-<policy>`); a recording that a
@@ -343,11 +408,11 @@ removed. Without `with_recording` the recording stays where it is.
 **Watch folder and retention operations** (an addition of this binding; the
 CLI's `auto watch` and `auto gc`):
 
-| Op | Scope | Params | Result |
+| Op | Permission | Params | Result |
 |---|---|---|---|
-| `watch.list` | `read` | none | `{folders: [{path, policy, state, detail, taken, rejected, refused: [{name, reason}], pending, last_scan_ms, paused_until_ms}]}`; `state` is `watching`, `paused`, `held`, `refused` or `error` |
-| `watch.scan` | `manage` | none | The same, after a scan made now (waits at most 30 s) |
-| `gc.run` | `manage` | `dry_run?` (default false) | `{dry_run, now_ms, actions: [{kind, job, run, detail, bytes, done}], skipped: [{kind, job, why}], errors[], freed_bytes}`; `kind` is `recording`, `job`, `upload` or `rejected_file` |
+| `watch.list` | `runs.see_all` | none | `{folders: [{path, policy, state, detail, taken, rejected, refused: [{name, reason}], pending, last_scan_ms, paused_until_ms}]}`; `state` is `watching`, `paused`, `held`, `refused` or `error` |
+| `watch.scan` | `queue.manage` | none | The same, after a scan made now (waits at most 30 s) |
+| `gc.run` | `runs.delete` | `dry_run?` (default false) | `{dry_run, now_ms, actions: [{kind, job, run, detail, bytes, done}], skipped: [{kind, job, why}], errors[], freed_bytes}`; `kind` is `recording`, `job`, `upload` or `rejected_file` |
 
 Watch folders add the events `engine.alert` with `code` `watch_flood` and
 `watch_folder_refused`; delivery adds `result_drop_failed` and `hook_failed`.
@@ -419,9 +484,9 @@ with `Retry-After`. The client polls the same request. Core reads never answer
 ## Operations
 
 Class **C** needs only the engine. Class **T** needs the Triage scan and can answer
-`building`. Scope **N** is `read`, **S** is `artifacts:sensitive`.
+`building`. Permission **N** is `runs.see_all`, **S** is `evidence.view`.
 
-| Op | Class | Scope | Request besides `run_key` | Result |
+| Op | Class | Permission | Request besides `run_key` | Result |
 |---|---|---|---|---|
 | `recording.run.list` | C | N | `vm_id?`, `sample_sha256?`, `job_id?`, `state?`, `since_ms?` | `Page<RunInfo>` |
 | `recording.run.get` | C | N | | `Single<RunDetail>` |
@@ -463,7 +528,7 @@ network calls (address, protocol and time), so runs recorded earlier have them
 too; the first `made_by` read of a run indexes the run once and is a heavy read.
 
 Every list also takes `limit` and `cursor`. `capabilities.queries` lists, for the
-build in front of you, every operation with its class, scope, subject, filters,
+build in front of you, every operation with its class, permission, subject, filters,
 sortable fields, default order, maximum limit and (for operations with a `tab`) the
 columns of each table; clients must read it instead of hard-coding a filter. The
 catalogue is generated from the same table the operations are defined by, and a
@@ -508,8 +573,8 @@ the read is cancelled.
 
 | Class | What | Rule |
 |---|---|---|
-| Normal (`read`) | Run, process, finding, indicator, file, network and timeline rows; trace rows and calls; analysis rows; custody entries; packet rows; terminal replay | Strings are untrusted text. Indicator values are raw; the row carries the defanged form and `raw_indicators: true` |
-| Sensitive (`artifacts:sensitive`) | Bytes the sample or guest produced: `captured.read`, `files.content`, `network.packet`, and `artifact.get` of a capture, memory dump, core or file copy | Audit-logged: the daemon's service log gets one line per served read |
+| Normal (`runs.see_all`) | Run, process, finding, indicator, file, network and timeline rows; trace rows and calls; analysis rows; custody entries; packet rows; terminal replay | Strings are untrusted text. Indicator values are raw; the row carries the defanged form and `raw_indicators: true` |
+| Sensitive (`evidence.view`; `artifact.get` needs `evidence.download`) | Bytes the sample or guest produced: `captured.read`, `files.content`, `network.packet`, and `artifact.get` of a capture, memory dump, core or file copy | Audit-logged: the daemon's service log gets one line per served read |
 | Secret | Guest password, API keys, SOCKS password | Never in any result |
 | Local | Host paths, `directory` | Local socket and CLI only |
 

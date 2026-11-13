@@ -15,7 +15,7 @@ use crate::api::{
     failure::{Failure, FailureCode},
     ids::{JobId, LaneId},
     job::{Job, JobState, Outcome, Stage, WaitingFor},
-    ops::{Caller, Scope},
+    ops::{Caller, Permission},
 };
 use rusqlite::OptionalExtension;
 
@@ -450,14 +450,15 @@ impl Store {
 
     /// `job.cancel`. A queued job is `cancelled` at once; a running one goes to
     /// `cancelling` and the lane unwinds it; a `cancelling` one is returned as
-    /// it is; a finished one is a `conflict`. The caller must own the job or
-    /// hold `manage`.
+    /// it is; a finished one is a `conflict`. The caller's own job needs
+    /// `runs.submit`, anyone's `runs.manage_any` (else `permission_denied`).
     pub fn cancel(&self, id: &JobId, reason: Option<&str>, caller: &Caller) -> R<Job> {
         self.write(|tx| {
             let cur = current(tx, id)?;
-            let owner = cur.client_id == caller.client_id && caller.has(Scope::Submit);
-            if !owner && !caller.has(Scope::Manage) {
-                return Err(ApiError::new(ErrorCode::Forbidden, "the job belongs to another client"));
+            if cur.client_id == caller.client_id {
+                caller.require_any(&[Permission::RunsSubmit, Permission::RunsManageAny])?;
+            } else {
+                caller.require(Permission::RunsManageAny)?;
             }
             let reason = reason.map(|r| r.chars().take(256).collect::<String>());
             match cur.state {

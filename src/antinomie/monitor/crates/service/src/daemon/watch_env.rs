@@ -5,8 +5,9 @@
 //! A file becomes a job in two steps, both under the actor
 //! `auto:policy-<policy>`: the intake steps of 4.2 on the open descriptor
 //! (type, size, library, custody `Added`), then `job.submit` for the library
-//! sample (so the queue caps, the duplicate rule and the policy's ceilings
-//! apply as for any other caller).
+//! sample (so the queue caps, the duplicate rule, the permission checks and
+//! the policy's ceilings apply as for any other caller). The caller holds
+//! `runs.submit` and the folder's `permissions`.
 
 use super::service::Service;
 use crate::config::PolicyLookup;
@@ -14,24 +15,29 @@ use crate::{
     api::{
         error::ErrorCode,
         job::JobState,
-        ops::{Caller, Scope},
+        ops::Scope,
         spec::{JobSpec, SampleSource},
     },
     watch::{Admission, Admit, Defer, SCAN_EVERY, WatchEnv, Watcher},
 };
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-/// The caller a watch folder acts as: a client named for the policy, with
-/// only the right to submit to that policy.
-pub fn watch_caller(policy: &str) -> Caller {
-    Caller {
-        client_id: format!("auto:policy-{policy}"),
-        scopes: vec![Scope::Submit],
-        policies: vec![policy.to_owned()],
-    }
-}
+pub use crate::config::callers::watch_caller;
 
 pub struct ServiceEnv(pub Arc<Service>);
+
+/// The callers of `service.toml` as it reads now (a SIGHUP reload changes a
+/// watch folder's `permissions` for runs still waiting).
+impl crate::config::callers::CallerLookup for Service {
+    fn permissions_now(
+        &self,
+        client_id: &str,
+        labels: &crate::config::callers::Labels,
+    ) -> Option<std::collections::BTreeSet<crate::api::ops::Permission>> {
+        let config = self.config.read().unwrap_or_else(|p| p.into_inner());
+        crate::config::callers::permissions_now(&config, client_id, labels)
+    }
+}
 
 impl WatchEnv for ServiceEnv {
     fn policy_exists(&self, name: &str) -> bool {
@@ -66,7 +72,7 @@ impl WatchEnv for ServiceEnv {
         let loaded = policies
             .get(&request.policy)
             .ok_or_else(|| Defer(format!("policy {} does not exist", request.policy)))?;
-        let caller = watch_caller(&request.policy);
+        let caller = watch_caller(&request.policy, &request.permissions);
         if !loaded.allows(&caller.client_id, Scope::Submit) {
             return Err(Defer(format!(
                 "policy {} does not let {} submit (access.clients)",

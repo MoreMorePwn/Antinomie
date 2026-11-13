@@ -70,16 +70,16 @@ fn shape_errors_unknown_policy_and_v1_limits_are_errors_not_jobs() {
     });
     assert_eq!(error.code, ErrorCode::NotFound);
 
-    let live = JobSpec {
+    let desktop = JobSpec {
         overrides: Overrides {
-            route: Some(Route::Internet),
+            run_in: Some(crate::api::spec::RunIn::GuestDesktop),
             ..Default::default()
         },
         ..spec(1)
     };
-    let error = call(live);
+    let error = call(desktop);
     assert_eq!(error.code, ErrorCode::Unsupported);
-    assert_eq!(error.reason(), Some(ErrorReason::LiveRouteNotInV1));
+    assert_eq!(error.reason(), Some(ErrorReason::RunModeNotInV1));
 
     // sample.path is local-only.
     let remote = Caller {
@@ -96,22 +96,22 @@ fn shape_errors_unknown_policy_and_v1_limits_are_errors_not_jobs() {
     let error = fx.submit_as(&remote, by_path).unwrap_err();
     assert_eq!(error.field.as_deref(), Some("sample.path"));
 
-    // A caller without the submit scope.
-    let reader = Caller {
-        scopes: vec![Scope::Read],
-        ..caller(1000)
-    };
-    assert_eq!(
-        fx.submit_as(&reader, spec(1)).unwrap_err().code,
-        ErrorCode::Forbidden
-    );
+    // A caller without runs.submit.
+    let reader = Caller::from_scopes("local:1000", &[Scope::Read]);
+    let error = fx.submit_as(&reader, spec(1)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
+    assert_eq!(error.details["needs"], serde_json::json!(["runs.submit"]));
     // None of these stored a job.
     assert_eq!(fx.store.counts().unwrap(), Default::default());
 }
 
 #[test]
-fn a_spec_that_fails_policy_or_intake_is_stored_rejected() {
+fn a_spec_that_fails_a_check_or_intake_is_stored_rejected() {
     let fx = Fx::new("rejected");
+    let with = |overrides: Overrides| JobSpec {
+        overrides,
+        ..spec(1)
+    };
     let cases: Vec<(JobSpec, FailureCode, &str)> = vec![
         (spec(99), FailureCode::SampleMissing, "sample"),
         (spec(20), FailureCode::SampleTypeDenied, "sample"),
@@ -121,63 +121,48 @@ fn a_spec_that_fails_policy_or_intake_is_stored_rejected() {
                 priority: Some(9),
                 ..spec(1)
             },
-            FailureCode::PolicyDenied,
+            FailureCode::LimitExceeded,
             "priority",
         ),
         (
-            JobSpec {
-                overrides: Overrides {
-                    timeout_s: Some(1801),
-                    ..Default::default()
-                },
-                ..spec(1)
-            },
-            FailureCode::PolicyDenied,
+            with(Overrides {
+                timeout_s: Some(1801),
+                ..Default::default()
+            }),
+            FailureCode::LimitExceeded,
             "overrides.timeout_s",
         ),
         (
-            JobSpec {
-                overrides: Overrides {
-                    run_as: Some(RunAs::Named(RunAsName::Root)),
-                    ..Default::default()
-                },
-                ..spec(1)
-            },
-            FailureCode::PolicyDenied,
+            with(Overrides {
+                run_as: Some(RunAs::Named(RunAsName::Root)),
+                ..Default::default()
+            }),
+            FailureCode::PermissionDenied,
             "overrides.run_as",
         ),
         (
-            JobSpec {
-                overrides: Overrides {
-                    env: Some(vec!["A=1".into()]),
-                    ..Default::default()
-                },
-                ..spec(1)
-            },
-            FailureCode::PolicyDenied,
-            "overrides.env",
-        ),
-        (
-            JobSpec {
-                overrides: Overrides {
-                    memory_dump: Some(true),
-                    ..Default::default()
-                },
-                ..spec(1)
-            },
-            FailureCode::PolicyDenied,
+            with(Overrides {
+                memory_dump: Some(true),
+                ..Default::default()
+            }),
+            FailureCode::PermissionDenied,
             "overrides.memory_dump",
         ),
         (
-            JobSpec {
-                overrides: Overrides {
-                    keep_on_failure: Some(true),
-                    ..Default::default()
-                },
-                ..spec(1)
-            },
-            FailureCode::PolicyDenied,
+            with(Overrides {
+                keep_on_failure: Some(true),
+                ..Default::default()
+            }),
+            FailureCode::PermissionDenied,
             "overrides.keep_on_failure",
+        ),
+        (
+            with(Overrides {
+                route: Some(Route::Tor),
+                ..Default::default()
+            }),
+            FailureCode::PermissionDenied,
+            "overrides.route",
         ),
     ];
     for (spec, code, field) in cases {
@@ -190,6 +175,7 @@ fn a_spec_that_fails_policy_or_intake_is_stored_rejected() {
         assert_eq!(failure.stage, Stage::Prechecks);
         assert!(!failure.retryable);
         assert!(failure.detail.unwrap().contains(field), "{field}");
+        assert_eq!(failure.field.as_deref(), Some(field));
         assert_eq!(kinds(&fx, &job.id), ["job.created", "job.finished"]);
         // It consumes no lane time: it is never queued.
         assert_eq!(job.queue_position, None);
@@ -199,14 +185,17 @@ fn a_spec_that_fails_policy_or_intake_is_stored_rejected() {
 }
 
 #[test]
-fn a_policy_the_caller_may_not_use_rejects_with_policy_denied() {
+fn a_policy_the_caller_may_not_use_rejects_with_preset_denied() {
     let mut fx = Fx::new("access");
     fx.policies = PolicySet::single(policy("default", |p| {
         p.access.clients = vec!["web:*".into()];
     }));
     let job = fx.submit(spec(1)).job;
     assert_eq!(job.state, JobState::Rejected);
-    assert_eq!(job.failure.unwrap().code, FailureCode::PolicyDenied);
+    let failure = job.failure.unwrap();
+    assert_eq!(failure.code, FailureCode::PresetDenied);
+    assert_eq!(failure.field.as_deref(), Some("policy"));
+    assert_eq!(failure.details["preset"], serde_json::json!("default"));
     let web = Caller {
         client_id: "web:bob".into(),
         ..caller(0)
@@ -237,7 +226,9 @@ fn a_spec_may_override_within_the_ceiling() {
         },
         ..spec(1)
     };
-    let job = fx.submit(spec).job;
+    // The caller holds run.as_root and evidence.memory_dump.
+    let owner = Caller::with_every_permission("local:1000");
+    let job = fx.submit_as(&owner, spec).unwrap().job;
     assert_eq!(job.state, JobState::Queued, "{:?}", job.failure);
     assert_eq!(job.spec.overrides.route, Some(Route::InetSim));
     assert_eq!(job.spec.priority, Some(9));

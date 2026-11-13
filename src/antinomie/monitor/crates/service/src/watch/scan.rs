@@ -406,14 +406,10 @@ impl FolderRun {
             file: File::from(fd),
             shown: shown(candidate.rel.as_bytes()),
             file_name: shown(&candidate.name),
-            folder_label: shown(
-                self.cfg
-                    .path
-                    .file_name()
-                    .map_or(&b"watch"[..], |n| n.as_encoded_bytes()),
-            ),
+            folder_label: self.cfg.label(),
             policy: candidate.policy.clone(),
             on_duplicate: self.cfg.on_duplicate,
+            permissions: self.cfg.permissions.clone(),
         });
         match admitted {
             Ok(Admission::Submitted { job }) => {

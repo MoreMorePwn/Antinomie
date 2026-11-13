@@ -788,11 +788,7 @@ fn submit_with_an_upload_id_queues_a_job_and_uses_up_the_upload() {
         limits: SubmitLimits::default(),
         on_duplicate: None,
     };
-    let me = Caller {
-        client_id: ME.into(),
-        scopes: vec![Scope::Submit],
-        policies: vec![],
-    };
+    let me = Caller::from_scopes(ME, &[Scope::Submit]);
     let id = fx.upload(ME, Some("run-me"), &elf(0x3e, 64));
     let spec = JobSpec {
         sample: source_upload(&id),

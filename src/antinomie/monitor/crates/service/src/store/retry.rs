@@ -13,14 +13,15 @@ use crate::api::{
     error::{ApiError, ErrorCode},
     ids::JobId,
     job::Submitted,
-    ops::{Caller, Scope},
+    ops::{Caller, Permission},
     spec::{JobSpec, Overrides, SampleSource},
 };
 use serde_json::Value;
 
 impl Store {
-    /// `job.retry`. The old job must be terminal and have an archived sample;
-    /// the caller must own it (with `submit`) or hold `manage`.
+    /// `job.retry`. The old job must be terminal and have an archived sample.
+    /// Run again is part of `runs.submit`, on a run the caller can see: its
+    /// own, or any with `runs.see_all`.
     pub fn retry(
         &self,
         caller: &Caller,
@@ -28,13 +29,10 @@ impl Store {
         overrides: Option<&Overrides>,
         ctx: &SubmitContext<'_>,
     ) -> R<Submitted> {
+        caller.require(Permission::RunsSubmit)?;
         let old = self.get(id)?;
-        let owner = old.client_id == caller.client_id && caller.has(Scope::Submit);
-        if !owner && !caller.has(Scope::Manage) {
-            return Err(ApiError::new(
-                ErrorCode::Forbidden,
-                "the job belongs to another client",
-            ));
+        if old.client_id != caller.client_id {
+            caller.require(Permission::RunsSeeAll)?;
         }
         if !old.state.is_terminal() {
             return Err(ApiError::new(

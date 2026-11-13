@@ -622,7 +622,7 @@ fn a_call_is_read_in_full_by_its_ref_and_its_captured_bytes_by_field() {
         &plain_ctx(),
     )
     .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
     let error = call(
         &service,
         "recording.captured.read",
@@ -952,7 +952,7 @@ fn artifacts_list_what_the_run_kept_and_serve_ranges() {
         &plain_ctx(),
     )
     .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
     let pcap_bytes = reply!(
         call(
             &service,

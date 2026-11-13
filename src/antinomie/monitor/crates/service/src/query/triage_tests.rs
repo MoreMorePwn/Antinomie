@@ -568,7 +568,7 @@ fn the_sensitive_file_content_needs_its_scope_and_other_runs_are_not_found() {
         &plain_ctx(),
     )
     .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
     let error = call(
         &service,
         "recording.files.content",

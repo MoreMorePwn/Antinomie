@@ -253,7 +253,7 @@ fn only_the_owner_or_a_manager_may_cancel() {
     let fx = Fx::new("cancel-auth");
     let job = fx.queued(1);
     let error = fx.store.cancel(&job.id, None, &caller(2000)).unwrap_err();
-    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
     assert_eq!(fx.store.get(&job.id).unwrap().state, JobState::Queued);
     assert_eq!(
         fx.store.cancel(&job.id, None, &manager()).unwrap().state,

@@ -6,6 +6,7 @@
 
 use super::catalogue::*;
 use super::types::*;
+use crate::api::ops::Permission;
 use std::collections::BTreeMap;
 
 /// One operation: the catalogue row plus the request members that address the
@@ -107,7 +108,7 @@ fn network_tables() -> BTreeMap<String, TableInfo> {
 fn op(
     name: &str,
     class: OpClass,
-    scope: OpScope,
+    permission: Permission,
     subject: OpSubject,
     filters: Vec<FilterInfo>,
     default_order: &str,
@@ -118,7 +119,7 @@ fn op(
         info: QueryOpInfo {
             op: name.into(),
             class,
-            scope,
+            permission,
             subject,
             filters,
             sortable: Vec::new(),
@@ -133,8 +134,8 @@ fn op(
 /// Every operation of 5.12.3 in the table's order.
 pub fn definitions() -> Vec<OpDef> {
     use OpClass::{C, T};
-    use OpScope::{ArtifactsSensitive as S, Read as N};
     use OpSubject::{JobIdOrRunKey, RunKey, Sha256};
+    use Permission::{EvidenceView as S, RunsSeeAll as N};
     let limits = QueryLimits::default();
     let (row, analysis, packets, terminal) = (
         limits.row.max,
@@ -761,7 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn classes_scopes_and_subjects_follow_the_design() {
+    fn classes_permissions_and_subjects_follow_the_design() {
         let by_op = |name: &str| {
             definitions()
                 .into_iter()
@@ -790,8 +791,15 @@ mod tests {
             let op = def.info.op.as_str();
             assert_eq!(def.info.class == OpClass::T, triage.contains(&op), "{op}");
             if sensitive.contains(&op) {
-                assert_eq!(def.info.scope, OpScope::ArtifactsSensitive, "{op}");
+                assert_eq!(def.info.permission, Permission::EvidenceView, "{op}");
             }
+        }
+        for op in [
+            "recording.run.list",
+            "recording.summary",
+            "recording.files.list",
+        ] {
+            assert_eq!(by_op(op).permission, Permission::RunsSeeAll, "{op}");
         }
         assert_eq!(
             by_op("recording.analysis.list").subject,
@@ -815,7 +823,7 @@ mod tests {
             .find(|o| o["op"] == "recording.files.list")
             .unwrap();
         assert_eq!(files["class"], "T");
-        assert_eq!(files["scope"], "read");
+        assert_eq!(files["permission"], "runs.see_all");
         assert_eq!(files["subject"], "run_key");
         assert!(
             files["tables"]["changed"]["fields"]

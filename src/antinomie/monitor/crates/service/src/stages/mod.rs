@@ -59,7 +59,7 @@ use crate::{
         ids::LaneId,
         job::{Job, JobState, Stage, WaitingFor},
     },
-    config::{LoadedPolicy, PolicyLookup},
+    config::{LoadedPolicy, PolicyLookup, callers::CallerLookup},
     engine::Engine,
     lane::{LaneDir, LaneFile, LaneStateError, Processes, state::Checkpoint},
     store::{Eligibility, Store},
@@ -180,6 +180,8 @@ pub struct LaneEnv<'a> {
     pub store: &'a Store,
     pub lanes: &'a LaneDir,
     pub policies: &'a dyn PolicyLookup,
+    /// What each client holds now, for the frozen re-check of prechecks.
+    pub callers: &'a dyn CallerLookup,
     pub procs: &'a dyn Processes,
     pub host: &'a dyn HostChecks,
     /// Reads a run's `artifacts.json` ([`crate::waiter::load_artifacts`]).

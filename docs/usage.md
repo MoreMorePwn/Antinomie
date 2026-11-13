@@ -2083,7 +2083,7 @@ per line: a list command prints its items and then a last line
 | 2 | usage | Bad arguments |
 | 3 | not_found | Sample, run, VM, base or job does not exist |
 | 4 | invalid | The arguments were refused (`invalid_argument`, `precondition_failed`, `conflict`) |
-| 5 | denied | Policy or file permission |
+| 5 | denied | `permission_denied` (a permission, or a file permission), `preset_denied`, `limit_exceeded`, `unavailable_on_node` |
 | 10 | job_failed | A waited job (or `run exec`) failed |
 | 11 | job_partial | A waited job (or `run exec`) ended partial |
 | 12, 13 | job_cancelled, job_rejected | A waited job was cancelled, or a submitted job was rejected |

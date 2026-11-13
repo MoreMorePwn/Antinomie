@@ -24,7 +24,7 @@ use crate::api::{
     error::{ApiError, ErrorCode},
     ids::JobId,
     job::RecordingPhase,
-    ops::Scope,
+    ops::Permission,
 };
 use crate::daemon::lanes::read_locations;
 use antinomie_monitor_core::{
@@ -348,7 +348,7 @@ impl QueryApi for QueryService {
                 .run(light, ctx, |c| self.trace_get(&p, c))
                 .map(P::Invocation),
             R::CapturedRead(p) => {
-                ctx.require(Scope::ArtifactsSensitive)?;
+                ctx.require(Permission::EvidenceView)?;
                 let reply = self.pool.run(light, ctx, |c| self.captured_read(&p, c))?;
                 if let Some(bytes) = &reply.value {
                     self.audit_read(ctx, "recording.captured.read", &p.run_key, bytes.len);
@@ -408,7 +408,7 @@ impl QueryApi for QueryService {
                 .run(heavy, ctx, |c| self.network_packets(&p, c))
                 .map(P::Packets),
             R::NetworkPacket(p) => {
-                ctx.require(Scope::ArtifactsSensitive)?;
+                ctx.require(Permission::EvidenceView)?;
                 let reply = self.pool.run(heavy, ctx, |c| self.network_packet(&p, c))?;
                 if let Some(packet) = &reply.value {
                     self.audit_read(
@@ -447,7 +447,7 @@ impl QueryApi for QueryService {
                 .run(heavy, ctx, |_| self.files_versions(&p))
                 .map(P::Versions),
             R::FilesContent(p) => {
-                ctx.require(Scope::ArtifactsSensitive)?;
+                ctx.require(Permission::EvidenceView)?;
                 let reply = self.pool.run(heavy, ctx, |_| self.files_content(&p, ctx))?;
                 if let Some(bytes) = &reply.value {
                     self.audit_read(ctx, "recording.files.content", &p.run_key, bytes.len);

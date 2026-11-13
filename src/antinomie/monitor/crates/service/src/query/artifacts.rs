@@ -19,7 +19,7 @@ use super::{
 use crate::api::{
     error::ApiError,
     ids::{RecordingArtifactId, Sha256Hex},
-    ops::Scope,
+    ops::Permission,
 };
 use antinomie_monitor_core::{
     RunArtifactState, RunArtifacts, core_dump::CoreDump, network::NetworkCapture, network_link,
@@ -276,7 +276,7 @@ impl QueryService {
             .find(|entry| entry.id == params.artifact_id)
             .ok_or_else(|| ApiError::not_found("artifact"))?;
         if entry.kind.sensitive() {
-            ctx.require(Scope::ArtifactsSensitive)?;
+            ctx.require(Permission::EvidenceView)?;
         }
         let max = u64::from(self.settings.limits.byte_read.content);
         let (offset, len) = match params.range {

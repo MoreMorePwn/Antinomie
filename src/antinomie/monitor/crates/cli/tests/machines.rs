@@ -143,7 +143,7 @@ fn the_remote_catalog_stays_off_until_the_setting_allows_it() {
     ] {
         let (code, reply) = cli(&data, args);
         assert_eq!(code, 5, "{args:?}: {reply}");
-        assert_eq!(error_code(&reply), "policy_denied");
+        assert_eq!(error_code(&reply), "unavailable_on_node");
     }
 }
 

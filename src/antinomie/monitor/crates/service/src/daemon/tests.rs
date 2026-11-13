@@ -267,14 +267,10 @@ fn unknown_reserved_and_unserved_ops_are_told_apart() {
 }
 
 #[test]
-fn every_op_checks_its_scope() {
+fn every_op_checks_its_permission() {
     let svc = svc("scopes", |_| {});
     let reader = CallContext {
-        caller: Caller {
-            client_id: "local:1".into(),
-            scopes: vec![Scope::Read],
-            policies: vec![],
-        },
+        caller: Caller::from_scopes("local:1", &[Scope::Read]),
         cancel: Default::default(),
         transport: Transport::Socket,
     };
@@ -289,7 +285,7 @@ fn every_op_checks_its_scope() {
     ] {
         assert_eq!(
             svc.service.call(op, params, &reader).unwrap_err().code,
-            ErrorCode::Forbidden,
+            ErrorCode::PermissionDenied,
             "{op}"
         );
     }
@@ -345,21 +341,29 @@ fn a_retry_is_a_new_job_that_repeats_a_finished_one_with_the_overrides() {
     assert_eq!(again["spec"]["overrides"]["timeout_s"], 30);
     assert_ne!(again["id"], json!(job.id));
     assert_eq!(again["sample"]["sha256"], json!(job.sample.unwrap().sha256));
-    // Another client may not retry it.
-    let stranger = CallContext {
-        caller: Caller {
-            client_id: "local:4242".into(),
-            scopes: vec![Scope::Read, Scope::Submit],
-            policies: vec![],
-        },
+    // Run again is runs.submit on a run the caller can see: another client
+    // without runs.see_all may not, one with it may.
+    let blind = CallContext {
+        caller: Caller::new("local:4242", &[crate::api::ops::Permission::RunsSubmit]),
         cancel: Default::default(),
         transport: Transport::Socket,
     };
     let error = svc
         .service
-        .call("job.retry", json!({"job_id": job.id}), &stranger)
+        .call("job.retry", json!({"job_id": job.id}), &blind)
         .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
+    assert_eq!(error.details["needs"], json!(["runs.see_all"]));
+    let stranger = CallContext {
+        caller: Caller::from_scopes("local:4242", &[Scope::Read, Scope::Submit]),
+        cancel: Default::default(),
+        transport: Transport::Socket,
+    };
+    let other = svc
+        .service
+        .call("job.retry", json!({"job_id": job.id}), &stranger)
+        .unwrap();
+    assert_eq!(other["client_id"], "local:4242");
 }
 
 #[test]

@@ -64,7 +64,10 @@ fn permanent(code: FailureCode) -> bool {
             | FailureCode::SampleTypeDenied
             | FailureCode::SampleArchDenied
             | FailureCode::DuplicateDenied
-            | FailureCode::PolicyDenied
+            | FailureCode::PermissionDenied
+            | FailureCode::PresetDenied
+            | FailureCode::LimitExceeded
+            | FailureCode::UnavailableOnNode
             | FailureCode::NoBase
             | FailureCode::NoVm
             | FailureCode::RevertFailed
@@ -191,7 +194,10 @@ mod tests {
         for code in [
             FailureCode::SampleMissing,
             FailureCode::SampleTypeDenied,
-            FailureCode::PolicyDenied,
+            FailureCode::PermissionDenied,
+            FailureCode::PresetDenied,
+            FailureCode::LimitExceeded,
+            FailureCode::UnavailableOnNode,
             FailureCode::NoBase,
             FailureCode::NoVm,
             FailureCode::RevertFailed,

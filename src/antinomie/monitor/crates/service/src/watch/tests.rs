@@ -161,6 +161,7 @@ impl Rig {
             policy_by_dir: false,
             allow_group_write: false,
             watch_rate: 10,
+            permissions: Vec::new(),
         };
         tune(&mut cfg);
         let mut watcher = Watcher::new(&inbox);

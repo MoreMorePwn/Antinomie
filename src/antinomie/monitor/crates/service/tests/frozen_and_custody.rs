@@ -58,11 +58,7 @@ fn spec(sha: &Sha256Hex) -> JobSpec {
 }
 
 fn caller(id: &str) -> Caller {
-    Caller {
-        client_id: id.into(),
-        scopes: vec![Scope::Submit],
-        policies: vec![],
-    }
+    Caller::from_scopes(id, &[Scope::Submit])
 }
 
 #[test]
@@ -155,7 +151,7 @@ fn a_reload_changes_new_jobs_and_never_a_stored_one() {
         error.code,
         antinomie_service::api::error::ErrorCode::NotFound
     );
-    let _ = FailureCode::PolicyDenied;
+    let _ = FailureCode::PresetDenied;
 }
 
 #[test]

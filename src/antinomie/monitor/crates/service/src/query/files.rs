@@ -17,7 +17,7 @@ use super::{
 use crate::api::{
     error::{ApiError, ErrorCode},
     job::RecordingPhase,
-    ops::Scope,
+    ops::Permission,
 };
 use antinomie_monitor_core::{
     disk_start::DiskStart, file_before::Before, file_before_store::Store,
@@ -371,7 +371,7 @@ impl QueryService {
         params: &FileContentParams,
         ctx: &super::ReadContext,
     ) -> Result<Single<BytesReply>, ApiError> {
-        ctx.require(Scope::ArtifactsSensitive)?;
+        ctx.require(Permission::EvidenceView)?;
         let (offset, len) = params
             .range
             .as_ref()

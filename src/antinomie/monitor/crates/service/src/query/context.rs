@@ -4,10 +4,9 @@
 //! pattern (`recording.rs` takes an `&AtomicBool` in every long read).
 
 use crate::api::{
-    error::{ApiError, ErrorCode},
-    ops::{Caller, Scope},
+    error::ApiError,
+    ops::{Caller, Permission},
 };
-use serde_json::json;
 use std::{
     sync::{
         Arc,
@@ -47,28 +46,17 @@ impl ReadContext {
         self.cancel.load(Ordering::Relaxed)
     }
 
-    /// `forbidden` unless the caller holds `scope`.
-    pub fn require(&self, scope: Scope) -> Result<(), ApiError> {
-        if self.caller.has(scope) {
-            return Ok(());
-        }
-        let name = serde_json::to_value(scope)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default();
-        Err(ApiError::new(
-            ErrorCode::Forbidden,
-            format!("this read needs the {name} scope"),
-        )
-        .with_detail("scope", json!(name)))
+    /// `permission_denied` unless the caller holds `permission`.
+    pub fn require(&self, permission: Permission) -> Result<(), ApiError> {
+        self.caller.require(permission)
     }
 
-    /// The caller of a local CLI that owns the data directory: every read scope.
+    /// The caller of a local CLI that owns the data directory: the read
+    /// permissions (`runs.see_all`, `evidence.view`).
     pub fn local_owner(client_id: &str) -> Self {
-        Self::new(Caller {
-            client_id: client_id.to_owned(),
-            scopes: vec![Scope::Read, Scope::ArtifactsSensitive],
-            policies: Vec::new(),
-        })
+        Self::new(Caller::new(
+            client_id,
+            &[Permission::RunsSeeAll, Permission::EvidenceView],
+        ))
     }
 }

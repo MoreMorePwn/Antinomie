@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `job.submit` (design 5.3, 5.4.1, 5.6): validate synchronously, then store
-//! the job `queued`, or `rejected` with the failure that explains it. Shape
-//! errors, an unknown policy, a full queue and the v1 restrictions are errors
-//! of the call and store nothing.
+//! the job `queued`, or `rejected` with the failure that explains it. A
+//! caller without `runs.submit`, shape errors, an unknown policy, a value
+//! outside the policy, a full queue and the v1 restrictions are errors of the
+//! call and store nothing.
 
 use super::{
     R, Store, Tx,
-    admission::{self, Reject},
+    admission::{self, Refusal, Reject},
     canon::canonical,
     db,
     model::{JOB_COLUMNS, JobRow, assemble, load_job, name_of, to_json},
@@ -18,7 +19,7 @@ use crate::{
         failure::{Failure, FailureCode},
         ids::JobId,
         job::{Job, JobSample, JobState, Outcome, Stage, Submitted},
-        ops::{Caller, Scope},
+        ops::{Caller, Permission},
         spec::{JobSpec, SampleSource},
     },
     clock::new_job_id,
@@ -141,12 +142,7 @@ impl Store {
         ctx: &SubmitContext<'_>,
         retry_of: Option<&JobId>,
     ) -> R<Submitted> {
-        if !caller.has(Scope::Submit) {
-            return Err(ApiError::new(
-                ErrorCode::Forbidden,
-                "the caller may not submit jobs",
-            ));
-        }
+        caller.require(Permission::RunsSubmit)?;
         spec.validate_shape().map_err(invalid)?;
         let remote =
             !caller.client_id.starts_with("local:") && !caller.client_id.starts_with("auto:");
@@ -157,17 +153,12 @@ impl Store {
             ));
         }
         if let Some(unsupported) = spec.v1_unsupported() {
-            let reason = if unsupported.reason == "live_route_not_in_v1" {
-                ErrorReason::LiveRouteNotInV1
-            } else {
-                ErrorReason::RunModeNotInV1
-            };
             return Err(ApiError::new(
                 ErrorCode::Unsupported,
                 format!("{} is not available in v1", unsupported.field),
             )
             .with_field(unsupported.field)
-            .with_reason(reason));
+            .with_reason(ErrorReason::RunModeNotInV1));
         }
         let policy_name = spec.policy.clone().unwrap_or_else(|| "default".into());
         let policy = ctx
@@ -187,8 +178,13 @@ impl Store {
         }
         self.check_queue_caps(caller, &policy, ctx.limits)?;
 
-        // Policy ceilings, then intake (which may archive the sample).
-        let resolved = admission::resolve(&spec, caller, &policy);
+        // The checks of the access specification, then intake (which may
+        // archive the sample). A value outside the policy stores nothing.
+        let resolved = match admission::resolve(&spec, caller, &policy) {
+            Err(Refusal::Invalid(error)) => return Err(error),
+            Err(Refusal::Rejected(reject)) => Err(reject),
+            Ok(resolved) => Ok(resolved),
+        };
         let admitted = match resolved {
             Err(reject) => Err(reject),
             Ok(resolved) => ctx
@@ -200,11 +196,7 @@ impl Store {
                     &caller.client_id,
                 )
                 .map(|sample| (resolved, sample))
-                .map_err(|e| Reject {
-                    code: e.code,
-                    message: e.message,
-                    field: Some("sample".into()),
-                }),
+                .map_err(|e| Reject::new(e.code, Some("sample"), e.message)),
         };
 
         self.write(|tx| {
@@ -234,14 +226,14 @@ impl Store {
                     if let Some(earlier) = earlier {
                         match on_duplicate {
                             OnDuplicate::Reject => {
-                                let reject = Reject {
-                                    code: FailureCode::DuplicateDenied,
-                                    message: format!(
+                                let reject = Reject::new(
+                                    FailureCode::DuplicateDenied,
+                                    Some("sample"),
+                                    format!(
                                         "sample {} was already analysed (job {})",
                                         sample.sha256, earlier.id
                                     ),
-                                    field: Some("sample".into()),
-                                };
+                                );
                                 insert_rejected(tx, &id, caller, &spec, &policy, &canon, reject)?;
                                 return Ok(Submitted {
                                     job: load_job(&tx.tx, id.as_str())?,
@@ -531,6 +523,8 @@ fn insert_rejected(
             .as_deref(),
     );
     failure.retryable = false;
+    failure.field = reject.field;
+    failure.details = reject.details;
     let mut stored = spec.clone();
     stored.policy = Some(policy.name.clone());
     insert(

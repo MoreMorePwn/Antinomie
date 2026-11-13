@@ -76,11 +76,7 @@ fn rwx_run(data: &Data) -> Run {
 
 fn reader() -> CallContext {
     CallContext {
-        caller: Caller {
-            client_id: "local:1".into(),
-            scopes: vec![Scope::Read],
-            policies: vec![],
-        },
+        caller: Caller::from_scopes("local:1", &[Scope::Read]),
         cancel: Default::default(),
         transport: Transport::Socket,
     }
@@ -225,7 +221,12 @@ fn bytes_the_sample_produced_need_the_sensitive_scope_over_the_socket() {
         ),
     ] {
         let error = svc.service.call(op, params, &reader).unwrap_err();
-        assert_eq!(error.code, ErrorCode::Forbidden, "{op}: {}", error.message);
+        assert_eq!(
+            error.code,
+            ErrorCode::PermissionDenied,
+            "{op}: {}",
+            error.message
+        );
     }
     // The artifact bytes of a capture or a core are refused the same way,
     // before any file is touched.
@@ -249,7 +250,12 @@ fn bytes_the_sample_produced_need_the_sensitive_scope_over_the_socket() {
             .service
             .call("recording.artifact.get", params.clone(), &reader)
             .unwrap_err();
-        assert_eq!(error.code, ErrorCode::Forbidden, "{}", artifact["id"]);
+        assert_eq!(
+            error.code,
+            ErrorCode::PermissionDenied,
+            "{}",
+            artifact["id"]
+        );
         // The owner of the socket (all scopes) is served.
         assert!(call(&svc, "recording.artifact.get", params).is_ok());
     }
@@ -259,11 +265,7 @@ fn bytes_the_sample_produced_need_the_sensitive_scope_over_the_socket() {
 fn a_reader_without_read_is_refused_every_recording_read() {
     let svc = svc("noread", |_| {});
     let nobody = CallContext {
-        caller: Caller {
-            client_id: "local:2".into(),
-            scopes: vec![Scope::Submit],
-            policies: vec![],
-        },
+        caller: Caller::from_scopes("local:2", &[Scope::Submit]),
         cancel: Default::default(),
         transport: Transport::Socket,
     };
@@ -275,7 +277,7 @@ fn a_reader_without_read_is_refused_every_recording_read() {
         "base.list",
     ] {
         let error = svc.service.call(op, json!({}), &nobody).unwrap_err();
-        assert_eq!(error.code, ErrorCode::Forbidden, "{op}");
+        assert_eq!(error.code, ErrorCode::PermissionDenied, "{op}");
     }
 }
 
@@ -485,7 +487,7 @@ fn tags_are_set_by_a_manager_and_named_in_the_custody_log() {
             .service
             .call(op, json!({"sha256": script, "tags": []}), &reader)
             .unwrap_err();
-        assert_eq!(error.code, ErrorCode::Forbidden, "{op}");
+        assert_eq!(error.code, ErrorCode::PermissionDenied, "{op}");
     }
 }
 
@@ -517,7 +519,7 @@ fn the_archive_is_served_by_range_to_the_sensitive_scope_and_logged() {
         .service
         .call("sample.download", json!({"sha256": script}), &reader)
         .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
 
     let archive = std::fs::read(
         Library::open(&svc.dir.join("data"))
@@ -626,7 +628,7 @@ fn an_upload_is_added_to_the_library_and_a_client_path_never_is() {
             &reader(),
         )
         .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
 }
 
 #[test]
@@ -761,7 +763,7 @@ fn the_service_log_records_sensitive_reads_with_caller_run_and_size_never_the_by
             &reader(),
         )
         .unwrap_err();
-    assert_eq!(denied.code, ErrorCode::Forbidden);
+    assert_eq!(denied.code, ErrorCode::PermissionDenied);
     assert!(lines.lock().unwrap().is_empty(), "{:?}", lines.lock());
 
     // The bytes of a capture or a core.

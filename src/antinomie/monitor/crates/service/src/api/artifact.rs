@@ -72,10 +72,10 @@ pub struct Artifact {
     /// Of the stored bytes.
     pub sha256: Sha256Hex,
     pub media_type: MediaType,
-    /// Needs `artifacts:sensitive`.
+    /// `artifact.get` needs `evidence.download`.
     pub sensitive: bool,
     /// The artifact keeps indicators raw (JSON, MISP, STIX, or an HTML, PDF or
-    /// Markdown report exported without defang). Needs `read`; clients must not
+    /// Markdown report exported without defang). Needs `runs.see_all`; clients must not
     /// render it as active content.
     pub raw_indicators: bool,
     pub created_ms: u64,

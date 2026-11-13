@@ -248,7 +248,7 @@
             "boolean",
             "null"
           ],
-          "description": "Leave the VM and its disk as they are when the job fails (needs policy\npermission); the lane is then quarantined with reason\n`kept_for_inspection`."
+          "description": "Leave the VM as the failed run left it, for inspection. Needs the\n`run.keep_vm` permission; `true` is refused `unavailable_on_node`:\nkeeping a VM arrives with 0.9.1."
         }
       },
       "description": "The per-job overrides of the policy (design 5.4.1). `overrides.base` and\n`overrides.stealth` of revision 1 are removed: the lane VM fixes both."
@@ -262,7 +262,7 @@
           "$ref": "#/$defs/RunAsIds"
         }
       ],
-      "description": "A guest identity: `user` (UID/GID 1000, the default), `root` (needs policy\npermission) or explicit ids."
+      "description": "A guest identity: `user` (UID/GID 1000, the default), `root` (needs the\n`run.as_root` permission, as does an id below 1000) or explicit ids."
     },
     "RunAsName": {
       "type": "string",
@@ -310,7 +310,7 @@
         "vpn",
         "socks5"
       ],
-      "description": "A network route by the engine's own serde spelling (`RouteKind`). v1 jobs\naccept only `drop` and `inet_sim`; the others are valid spellings that fail\n`unsupported` with `details.reason = \"live_route_not_in_v1\"`."
+      "description": "A network route by the engine's own serde spelling (`RouteKind`). `drop`\nand `inet_sim` need no permission; a live route needs its `route.*`\npermission and is then refused `unavailable_on_node` (no route is set up\nfor the service before 0.9.1)."
     },
     "CoreDump": {
       "anyOf": [
@@ -1288,11 +1288,11 @@
         },
         "sensitive": {
           "type": "boolean",
-          "description": "Needs `artifacts:sensitive`."
+          "description": "`artifact.get` needs `evidence.download`."
         },
         "raw_indicators": {
           "type": "boolean",
-          "description": "The artifact keeps indicators raw (JSON, MISP, STIX, or an HTML, PDF or\nMarkdown report exported without defang). Needs `read`; clients must not\nrender it as active content."
+          "description": "The artifact keeps indicators raw (JSON, MISP, STIX, or an HTML, PDF or\nMarkdown report exported without defang). Needs `runs.see_all`; clients must not\nrender it as active content."
         },
         "created_ms": {
           "type": "integer",
@@ -1379,6 +1379,18 @@
         "retryable": {
           "type": "boolean"
         },
+        "field": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The request field to blame, for a refusal (`overrides.route`)."
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "What a refusal names: `needs` (the permissions, for\n`permission_denied`), `preset`, `limit`, `what` (for\n`unavailable_on_node`)."
+        },
         "detail": {
           "type": [
             "string",
@@ -1409,7 +1421,10 @@
         "sample_type_denied",
         "sample_arch_denied",
         "duplicate_denied",
-        "policy_denied",
+        "permission_denied",
+        "preset_denied",
+        "limit_exceeded",
+        "unavailable_on_node",
         "quota_exceeded",
         "dependency_missing",
         "no_base",
@@ -2513,20 +2528,43 @@
       "description": "The error of a failed operation."
     },
     "ErrorCode": {
-      "type": "string",
-      "enum": [
-        "invalid_argument",
-        "unauthenticated",
-        "forbidden",
-        "policy_denied",
-        "not_found",
-        "conflict",
-        "precondition_failed",
-        "payload_too_large",
-        "quota_exceeded",
-        "unavailable",
-        "unsupported",
-        "internal"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "invalid_argument",
+            "unauthenticated",
+            "forbidden",
+            "not_found",
+            "conflict",
+            "precondition_failed",
+            "payload_too_large",
+            "quota_exceeded",
+            "unavailable",
+            "unsupported",
+            "internal"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "permission_denied",
+          "description": "The caller lacks a permission; `details.needs` names it."
+        },
+        {
+          "type": "string",
+          "const": "preset_denied",
+          "description": "The preset (in 0.9.0: the policy) is unknown, retired or not offered\nto the caller; `details.preset` names it."
+        },
+        {
+          "type": "string",
+          "const": "limit_exceeded",
+          "description": "A value is above the caller's limit; `details.field` and\n`details.limit` name it."
+        },
+        {
+          "type": "string",
+          "const": "unavailable_on_node",
+          "description": "The node does not have what the request needs (a route, a lane, a\ntool); `details.what` names it."
+        }
       ],
       "description": "The error codes. `unauthenticated` and `forbidden` are added by the HTTP\nlayer only."
     },
@@ -2997,8 +3035,9 @@
         "class": {
           "$ref": "#/$defs/OpClass"
         },
-        "scope": {
-          "$ref": "#/$defs/OpScope"
+        "permission": {
+          "$ref": "#/$defs/Permission",
+          "description": "The permission the read needs: `runs.see_all`, or `evidence.view`\nfor the bytes the sample or the guest made."
         },
         "subject": {
           "$ref": "#/$defs/OpSubject"
@@ -3038,7 +3077,7 @@
       "required": [
         "op",
         "class",
-        "scope",
+        "permission",
         "subject",
         "filters",
         "sortable",
@@ -3054,12 +3093,46 @@
       ],
       "description": "`C` needs only the engine; `T` needs the Triage scan and can answer\n`building`."
     },
-    "OpScope": {
+    "Permission": {
       "type": "string",
       "enum": [
-        "read",
-        "artifacts:sensitive"
-      ]
+        "runs.see_all",
+        "cases.create",
+        "runs.share",
+        "cases.join_any",
+        "evidence.view",
+        "evidence.download",
+        "samples.download",
+        "lookup.online",
+        "samples.add",
+        "runs.submit",
+        "runs.manage_any",
+        "samples.tag",
+        "runs.annotate",
+        "indicators.mark_fp",
+        "runs.delete",
+        "route.internet",
+        "route.nat",
+        "route.tor",
+        "route.vpn",
+        "route.socks5",
+        "route.lan",
+        "route.unfiltered",
+        "run.as_root",
+        "evidence.core_dump",
+        "evidence.memory_dump",
+        "evidence.disk_dump",
+        "run.keep_vm",
+        "interactive.watch",
+        "interactive.control",
+        "presets.manage",
+        "queue.manage",
+        "lanes.reset",
+        "lanes.extend_keep",
+        "custody.verify",
+        "node.manage"
+      ],
+      "description": "A permission the engine checks (the access specification: 37 permissions,\nall but `users.manage` and `audit.read`, which stay in the web). A caller\nholds a set of them; every operation, run option, event and frozen re-check\nasks for one by name. The wire spelling is the dotted key."
     },
     "OpSubject": {
       "oneOf": [
@@ -3628,36 +3701,76 @@
         "client_id": {
           "type": "string"
         },
-        "scopes": {
+        "permissions": {
           "type": "array",
+          "uniqueItems": true,
           "items": {
-            "$ref": "#/$defs/Scope"
-          }
-        },
-        "policies": {
-          "type": "array",
-          "items": {
-            "type": "string"
+            "$ref": "#/$defs/Permission"
           },
-          "description": "Glob patterns of the policies the caller may use."
+          "description": "The permissions the caller holds."
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
         }
       },
       "required": [
         "client_id",
-        "scopes",
-        "policies"
+        "permissions"
       ],
-      "description": "Who is asking. The CLI uses the OS user (`local:<uid>`), the web layer\nfills it from authentication (`web:<user_id>`). The service never trusts a\nclient-supplied value."
+      "description": "Who is asking. The CLI uses the OS user (`local:<uid>`, every\npermission), a watch folder its policy (`auto:policy-<name>`, `runs.submit`\nand the folder's `permissions`); a later web layer fills it from\nauthentication (`web:<user_id>`). The service never trusts a\nclient-supplied value."
     },
-    "Scope": {
-      "type": "string",
-      "enum": [
-        "read",
-        "submit",
-        "artifacts:sensitive",
-        "manage"
-      ],
-      "description": "A permission (design 5.8). Names are final."
+    "Limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_run_s": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Longest run in seconds."
+        },
+        "priority_max": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Highest priority, 0 to 9."
+        },
+        "max_queued": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Runs waiting at once."
+        },
+        "max_runs_per_day": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Runs accepted in the last 24 hours; unset is no daily limit."
+        },
+        "max_running": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Runs running at once."
+        }
+      },
+      "description": "The limits a caller brings (the access specification's \"Limits per role,\nchangeable per person\"). Unset means the caller adds no limit of its own;\nthe node's and the policy's ceilings still apply. Nothing sets them before\nlimits per caller arrive (card P-A5), which also reads them."
     },
     "UploadBeginParams": {
       "type": "object",
@@ -4421,11 +4534,6 @@
           "type": "string",
           "const": "read_timeout",
           "description": "`unavailable`: a read passed its deadline and was cancelled."
-        },
-        {
-          "type": "string",
-          "const": "live_route_not_in_v1",
-          "description": "`unsupported`: `internet`, `tor`, `vpn` or `socks5` in a v1 job."
         },
         {
           "type": "string",

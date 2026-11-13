@@ -1097,14 +1097,10 @@ fn one_lane_runs_as_before_beside_the_files_of_other_lanes() {
 
 // ---- reads across lanes (card D) ------------------------------------------
 
-/// A caller of the socket with these scopes only.
+/// A caller of the socket with the permissions of these scopes only.
 fn caller_with(scopes: Vec<crate::api::ops::Scope>) -> CallContext {
     CallContext {
-        caller: crate::api::ops::Caller {
-            client_id: "local:7".into(),
-            scopes,
-            policies: vec![],
-        },
+        caller: crate::api::ops::Caller::from_scopes("local:7", &scopes),
         cancel: Default::default(),
         transport: Transport::Socket,
     }
@@ -1237,7 +1233,7 @@ fn reads_across(n: u32) {
         let error = service.call(op_name, params, &reader).unwrap_err();
         assert_eq!(
             error.code,
-            ErrorCode::Forbidden,
+            ErrorCode::PermissionDenied,
             "{op_name}: {}",
             error.message
         );
@@ -1250,7 +1246,7 @@ fn reads_across(n: u32) {
         let error = service.call(op_name, params, &nobody).unwrap_err();
         assert_eq!(
             error.code,
-            ErrorCode::Forbidden,
+            ErrorCode::PermissionDenied,
             "{op_name}: {}",
             error.message
         );

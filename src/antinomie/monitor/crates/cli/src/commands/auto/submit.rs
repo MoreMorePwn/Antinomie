@@ -461,6 +461,7 @@ fn direct(arguments: &Submit, mut spec: Value, context: &Context) -> Result<Repl
                 service.store(),
                 0,
                 &params,
+                &link::me(),
                 service.hello(),
                 &Limits::default(),
                 &AtomicBool::new(false),

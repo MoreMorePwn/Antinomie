@@ -256,9 +256,10 @@ fn require_outbound_catalog(data_dir: &std::path::Path) -> Result<(), CliError> 
         Ok(())
     } else {
         Err(CliError::new(
-            ErrorCode::PolicyDenied,
+            ErrorCode::UnavailableOnNode,
             "fetching the base catalog is off: run `antinomie-cli config set outbound_catalog true` to allow it",
-        ))
+        )
+        .with_details(json!({"what": "outbound_catalog"})))
     }
 }
 

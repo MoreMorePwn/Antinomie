@@ -58,9 +58,10 @@ pub struct SpecError {
     pub message: String,
 }
 
-/// A network route by the engine's own serde spelling (`RouteKind`). v1 jobs
-/// accept only `drop` and `inet_sim`; the others are valid spellings that fail
-/// `unsupported` with `details.reason = "live_route_not_in_v1"`.
+/// A network route by the engine's own serde spelling (`RouteKind`). `drop`
+/// and `inet_sim` need no permission; a live route needs its `route.*`
+/// permission and is then refused `unavailable_on_node` (no route is set up
+/// for the service before 0.9.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Route {
@@ -89,8 +90,8 @@ pub enum RunIn {
     GuestDesktopTerminal,
 }
 
-/// A guest identity: `user` (UID/GID 1000, the default), `root` (needs policy
-/// permission) or explicit ids.
+/// A guest identity: `user` (UID/GID 1000, the default), `root` (needs the
+/// `run.as_root` permission, as does an id below 1000) or explicit ids.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum RunAs {
@@ -232,9 +233,9 @@ pub struct Overrides {
     /// Defang indicators in HTML, PDF and Markdown; default true (B-W10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_defang: Option<bool>,
-    /// Leave the VM and its disk as they are when the job fails (needs policy
-    /// permission); the lane is then quarantined with reason
-    /// `kept_for_inspection`.
+    /// Leave the VM as the failed run left it, for inspection. Needs the
+    /// `run.keep_vm` permission; `true` is refused `unavailable_on_node`:
+    /// keeping a VM arrives with 0.9.1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_on_failure: Option<bool>,
 }
@@ -346,15 +347,10 @@ impl JobSpec {
     }
 
     /// The first part of the spec that is a valid spelling but not offered in
-    /// v1: a live route, a desktop run mode.
+    /// v1: a desktop run mode. (A live route is checked by admission: its
+    /// `route.*` permission, then `unavailable_on_node`.)
     pub fn v1_unsupported(&self) -> Option<Unsupported> {
         let o = &self.overrides;
-        if o.route.is_some_and(|r| !r.allowed_in_v1()) {
-            return Some(Unsupported {
-                field: "overrides.route",
-                reason: "live_route_not_in_v1",
-            });
-        }
         if o.run_in.is_some_and(|r| r != RunIn::AppTerminal) {
             return Some(Unsupported {
                 field: "overrides.run_in",

@@ -3,6 +3,7 @@
 //! operation this build implements, with its filters, sortable fields and
 //! limits, so a client never hard-codes one.
 
+use crate::api::ops::Permission;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -13,14 +14,6 @@ use std::collections::BTreeMap;
 pub enum OpClass {
     C,
     T,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub enum OpScope {
-    #[serde(rename = "read")]
-    Read,
-    #[serde(rename = "artifacts:sensitive")]
-    ArtifactsSensitive,
 }
 
 /// What addresses an operation.
@@ -100,7 +93,9 @@ pub struct QueryOpInfo {
     /// For example `recording.findings.list`.
     pub op: String,
     pub class: OpClass,
-    pub scope: OpScope,
+    /// The permission the read needs: `runs.see_all`, or `evidence.view`
+    /// for the bytes the sample or the guest made.
+    pub permission: Permission,
     pub subject: OpSubject,
     pub filters: Vec<FilterInfo>,
     /// Empty: the list has a fixed order and a `sort` on it is

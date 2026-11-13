@@ -9,6 +9,7 @@ use super::{
     failure::Failure,
     ids::{JobId, LaneId},
     job::{Job, JobState, Outcome, Stage, WaitingFor},
+    ops::Permission,
     spec::Route,
 };
 use schemars::JsonSchema;
@@ -172,6 +173,29 @@ impl EventBody {
         match self {
             Self::LaneState { .. } | Self::EngineAlert { .. } => EventScope::Engine,
             _ => EventScope::Job,
+        }
+    }
+
+    /// The permission a subscriber needs to receive the event. Every kind
+    /// is a fact about a run or the node that `runs.see_all` sees (the lanes
+    /// page too); none carries evidence bytes, which stay behind
+    /// `evidence.view` and `evidence.download` on their own reads.
+    pub fn permission(&self) -> Permission {
+        match self {
+            Self::JobCreated { .. }
+            | Self::JobState { .. }
+            | Self::JobStage { .. }
+            | Self::JobProgress { .. }
+            | Self::JobRun { .. }
+            | Self::JobWarning { .. }
+            | Self::JobArtifact { .. }
+            | Self::JobTrigger { .. }
+            | Self::JobAssessment { .. }
+            | Self::JobRequeued { .. }
+            | Self::JobFinished { .. }
+            | Self::JobMetrics { .. }
+            | Self::LaneState { .. }
+            | Self::EngineAlert { .. } => Permission::RunsSeeAll,
         }
     }
 }

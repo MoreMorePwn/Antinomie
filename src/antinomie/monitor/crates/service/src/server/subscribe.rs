@@ -28,7 +28,7 @@ use crate::{
         error::ApiError,
         event::{Event, EventBody, EventScope, Frame, Hello},
         ids::JobId,
-        ops::{EventsSubscribeParams, Reply},
+        ops::{Caller, EventsSubscribeParams, Op, Permission, Reply},
     },
     store::{Store, Subscription},
 };
@@ -87,10 +87,16 @@ fn type_name(body: &EventBody) -> String {
 struct Wanted {
     job: Option<JobId>,
     types: Option<BTreeSet<String>>,
+    /// The subscriber's permissions: an event whose kind needs another is
+    /// not sent.
+    held: BTreeSet<Permission>,
 }
 
 impl Wanted {
     fn wants(&self, event: &Event) -> bool {
+        if !self.held.contains(&event.body.permission()) {
+            return false;
+        }
         if let Some(job) = &self.job
             && event.job_id.as_ref() != Some(job)
         {
@@ -102,7 +108,8 @@ impl Wanted {
     }
 }
 
-fn check(params: &EventsSubscribeParams) -> Result<Wanted, ApiError> {
+fn check(params: &EventsSubscribeParams, caller: &Caller) -> Result<Wanted, ApiError> {
+    caller.require_any(Op::EventsSubscribe.needs())?;
     if params.job_id.is_some() && params.since_gseq.is_some() {
         return Err(ApiError::invalid_argument(
             "since_gseq",
@@ -140,6 +147,7 @@ fn check(params: &EventsSubscribeParams) -> Result<Wanted, ApiError> {
     Ok(Wanted {
         job: params.job_id.clone(),
         types,
+        held: caller.permissions.clone(),
     })
 }
 
@@ -284,13 +292,14 @@ pub fn stream(
     store: &Store,
     id: u64,
     params: &EventsSubscribeParams,
+    caller: &Caller,
     mut hello: Hello,
     limits: &Limits,
     cancel: &AtomicBool,
     stopping: &AtomicBool,
     sink: &mut dyn FnMut(&Reply) -> io::Result<()>,
 ) -> Result<StreamEnd, ApiError> {
-    let wanted = check(params)?;
+    let wanted = check(params, caller)?;
     if let Some(job) = &wanted.job {
         store.get(job)?;
     }
@@ -416,7 +425,8 @@ mod type_tests {
             types: Some(vec!["job.trigger".into()]),
             ..Default::default()
         };
-        let wanted = check(&params).unwrap();
+        let owner = crate::server::local_caller(1000);
+        let wanted = check(&params, &owner).unwrap();
         let event = |body| Event {
             seq: Some(1),
             gseq: Some(1),
@@ -437,6 +447,38 @@ mod type_tests {
             types: Some(EVENT_TYPES.iter().map(|name| (*name).to_owned()).collect()),
             ..Default::default()
         };
-        assert!(check(&every).is_ok());
+        assert!(check(&every, &owner).is_ok());
+    }
+
+    /// The permission per event kind replaces the scope check: a subscriber
+    /// without `runs.see_all` is refused, and an event whose kind needs a
+    /// permission the subscriber lacks is not sent.
+    #[test]
+    fn events_need_the_permission_of_their_kind() {
+        let params = EventsSubscribeParams::default();
+        let nobody = Caller::new("web:7", &[]);
+        let refused = check(&params, &nobody).err().expect("refused");
+        assert_eq!(refused.code, crate::api::error::ErrorCode::PermissionDenied);
+        assert_eq!(
+            refused.details["needs"],
+            serde_json::json!(["runs.see_all"])
+        );
+        let reader = Caller::new("web:7", &[Permission::RunsSeeAll]);
+        let mut wanted = check(&params, &reader).unwrap();
+        let lane = Event {
+            seq: Some(1),
+            gseq: Some(1),
+            ts_ms: 0,
+            scope: EventScope::Engine,
+            job_id: None,
+            body: EventBody::EngineAlert {
+                code: "low_disk".into(),
+                text: "x".into(),
+            },
+        };
+        assert_eq!(lane.body.permission(), Permission::RunsSeeAll);
+        assert!(wanted.wants(&lane));
+        wanted.held.clear();
+        assert!(!wanted.wants(&lane));
     }
 }

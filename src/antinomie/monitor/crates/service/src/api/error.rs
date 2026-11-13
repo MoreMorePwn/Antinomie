@@ -2,6 +2,7 @@
 //! `ApiError` (design 5.7, 5.12.8): the one error every failed operation
 //! returns. The code table is a single enum.
 
+use super::ops::Permission;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -14,7 +15,17 @@ pub enum ErrorCode {
     InvalidArgument,
     Unauthenticated,
     Forbidden,
-    PolicyDenied,
+    /// The caller lacks a permission; `details.needs` names it.
+    PermissionDenied,
+    /// The preset (in 0.9.0: the policy) is unknown, retired or not offered
+    /// to the caller; `details.preset` names it.
+    PresetDenied,
+    /// A value is above the caller's limit; `details.field` and
+    /// `details.limit` name it.
+    LimitExceeded,
+    /// The node does not have what the request needs (a route, a lane, a
+    /// tool); `details.what` names it.
+    UnavailableOnNode,
     NotFound,
     Conflict,
     PreconditionFailed,
@@ -26,11 +37,14 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 15] = [
         Self::InvalidArgument,
         Self::Unauthenticated,
         Self::Forbidden,
-        Self::PolicyDenied,
+        Self::PermissionDenied,
+        Self::PresetDenied,
+        Self::LimitExceeded,
+        Self::UnavailableOnNode,
         Self::NotFound,
         Self::Conflict,
         Self::PreconditionFailed,
@@ -46,9 +60,11 @@ impl ErrorCode {
         match self {
             Self::InvalidArgument => 400,
             Self::Unauthenticated => 401,
-            Self::Forbidden | Self::PolicyDenied => 403,
+            Self::Forbidden | Self::PermissionDenied | Self::PresetDenied | Self::LimitExceeded => {
+                403
+            }
             Self::NotFound => 404,
-            Self::Conflict => 409,
+            Self::Conflict | Self::UnavailableOnNode => 409,
             Self::PreconditionFailed => 412,
             Self::PayloadTooLarge => 413,
             Self::QuotaExceeded => 429,
@@ -74,8 +90,6 @@ pub enum ErrorReason {
     HeavyReadLimit,
     /// `unavailable`: a read passed its deadline and was cancelled.
     ReadTimeout,
-    /// `unsupported`: `internet`, `tor`, `vpn` or `socks5` in a v1 job.
-    LiveRouteNotInV1,
     /// `unsupported`: a desktop run mode in a v1 job.
     RunModeNotInV1,
     /// `unsupported`: the core needs a newer guest revision.
@@ -225,13 +239,26 @@ impl ApiError {
             .with_reason(ErrorReason::NotRecorded)
     }
 
-    pub fn live_route_not_in_v1() -> Self {
+    /// The caller lacks every one of `needs` (one is enough): the message
+    /// names them, `details.needs` lists their keys.
+    pub fn permission_denied(needs: &[Permission]) -> Self {
+        let names: Vec<String> = needs
+            .iter()
+            .map(|p| format!("{} ({})", p.key(), p.name()))
+            .collect();
         Self::new(
-            ErrorCode::Unsupported,
-            "this route is not available to v1 jobs; use drop or inet_sim",
+            ErrorCode::PermissionDenied,
+            format!("this needs the permission {}", names.join(" or ")),
         )
-        .with_field("overrides.route")
-        .with_reason(ErrorReason::LiveRouteNotInV1)
+        .with_detail(
+            "needs",
+            Value::Array(needs.iter().map(|p| json!(p.key())).collect()),
+        )
+    }
+
+    /// The node does not have `what` (`details.what`).
+    pub fn unavailable_on_node(what: &str, message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::UnavailableOnNode, message).with_detail("what", json!(what))
     }
 
     pub fn recording_unreadable(text: &str) -> Self {
@@ -272,14 +299,9 @@ impl From<super::spec::SpecError> for ApiError {
 
 impl From<super::spec::Unsupported> for ApiError {
     fn from(error: super::spec::Unsupported) -> Self {
-        let reason = if error.reason == "live_route_not_in_v1" {
-            ErrorReason::LiveRouteNotInV1
-        } else {
-            ErrorReason::RunModeNotInV1
-        };
         Self::new(ErrorCode::Unsupported, "not available in API version 1")
             .with_field(error.field)
-            .with_reason(reason)
+            .with_reason(ErrorReason::RunModeNotInV1)
     }
 }
 
@@ -290,15 +312,15 @@ mod tests {
     #[test]
     fn the_wire_form_matches_the_contract_example() {
         let error = ApiError::new(
-            ErrorCode::PolicyDenied,
-            "route internet is not allowed by policy default",
+            ErrorCode::UnavailableOnNode,
+            "route tor is not set up on this node",
         )
         .with_field("overrides.route");
         let value = serde_json::to_value(error.body()).unwrap();
         assert_eq!(
             value,
-            json!({"error": {"code": "policy_denied",
-                "message": "route internet is not allowed by policy default",
+            json!({"error": {"code": "unavailable_on_node",
+                "message": "route tor is not set up on this node",
                 "field": "overrides.route", "retryable": false, "details": {}}})
         );
     }
@@ -309,7 +331,10 @@ mod tests {
             (ErrorCode::InvalidArgument, 400),
             (ErrorCode::Unauthenticated, 401),
             (ErrorCode::Forbidden, 403),
-            (ErrorCode::PolicyDenied, 403),
+            (ErrorCode::PermissionDenied, 403),
+            (ErrorCode::PresetDenied, 403),
+            (ErrorCode::LimitExceeded, 403),
+            (ErrorCode::UnavailableOnNode, 409),
             (ErrorCode::NotFound, 404),
             (ErrorCode::Conflict, 409),
             (ErrorCode::PreconditionFailed, 412),
@@ -393,9 +418,48 @@ mod tests {
         assert_eq!(error.reason(), Some(ErrorReason::CursorStale));
         let error = ApiError::recording_open("live");
         assert_eq!(error.details["phase"], json!("live"));
+    }
+
+    #[test]
+    fn a_permission_refusal_names_what_it_needs() {
+        let error = ApiError::permission_denied(&[Permission::RouteTor]);
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert_eq!(error.details["needs"], json!(["route.tor"]));
+        assert!(error.message.contains("route.tor (Tor route)"), "{error:?}");
+        assert!(!error.retryable);
+        let either = ApiError::permission_denied(&[Permission::RunsSubmit, Permission::SamplesAdd]);
         assert_eq!(
-            ApiError::live_route_not_in_v1().reason(),
-            Some(ErrorReason::LiveRouteNotInV1)
+            either.details["needs"],
+            json!(["runs.submit", "samples.add"])
         );
+        assert!(either.message.contains(" or "), "{either:?}");
+        let node = ApiError::unavailable_on_node("route", "no route is set up");
+        assert_eq!(node.code, ErrorCode::UnavailableOnNode);
+        assert_eq!(node.details["what"], json!("route"));
+        assert_eq!(node.code.http_status(), 409);
+    }
+
+    #[test]
+    fn the_new_codes_have_their_wire_names_and_policy_denied_is_gone() {
+        let names: Vec<String> = ErrorCode::ALL
+            .iter()
+            .map(|c| {
+                serde_json::to_value(c)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        for name in [
+            "permission_denied",
+            "preset_denied",
+            "limit_exceeded",
+            "unavailable_on_node",
+        ] {
+            assert!(names.iter().any(|n| n == name), "{name}");
+        }
+        assert!(!names.iter().any(|n| n == "policy_denied"));
+        assert!(serde_json::from_value::<ErrorCode>(json!("policy_denied")).is_err());
     }
 }

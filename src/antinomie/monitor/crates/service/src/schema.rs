@@ -85,7 +85,7 @@ pub fn generate() -> Value {
         ops::BaseList,
         ops::CustodyVerifyParams,
         ops::Op,
-        ops::Scope,
+        ops::Permission,
         api::error::ErrorCode,
         api::error::ErrorReason,
     );

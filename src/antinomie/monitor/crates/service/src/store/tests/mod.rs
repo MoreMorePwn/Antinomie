@@ -5,6 +5,7 @@
 mod crash;
 mod events;
 mod lifecycle;
+mod permissions;
 mod property;
 mod submit;
 
@@ -195,20 +196,15 @@ pub(crate) fn lane() -> LaneId {
     LaneId::new(1)
 }
 
+/// A caller with the permissions of the job API 1 scopes `read` and
+/// `submit` (no run option that adds risk).
 pub(crate) fn caller(uid: u32) -> Caller {
-    Caller {
-        client_id: format!("local:{uid}"),
-        scopes: vec![Scope::Read, Scope::Submit],
-        policies: vec![],
-    }
+    Caller::from_scopes(format!("local:{uid}"), &[Scope::Read, Scope::Submit])
 }
 
+/// A caller with the permissions of `read`, `submit` and `manage`.
 pub(crate) fn manager() -> Caller {
-    Caller {
-        client_id: "local:0".into(),
-        scopes: vec![Scope::Read, Scope::Submit, Scope::Manage],
-        policies: vec![],
-    }
+    Caller::from_scopes("local:0", &[Scope::Read, Scope::Submit, Scope::Manage])
 }
 
 pub(crate) fn spec(n: u8) -> JobSpec {

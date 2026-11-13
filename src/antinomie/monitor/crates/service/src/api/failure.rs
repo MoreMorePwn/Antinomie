@@ -5,6 +5,7 @@
 use super::job::Stage;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -14,7 +15,10 @@ pub enum FailureCode {
     SampleTypeDenied,
     SampleArchDenied,
     DuplicateDenied,
-    PolicyDenied,
+    PermissionDenied,
+    PresetDenied,
+    LimitExceeded,
+    UnavailableOnNode,
     QuotaExceeded,
     DependencyMissing,
     NoBase,
@@ -49,13 +53,16 @@ pub enum RetryHint {
 }
 
 impl FailureCode {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 26] = [
         Self::SampleMissing,
         Self::SampleTooLarge,
         Self::SampleTypeDenied,
         Self::SampleArchDenied,
         Self::DuplicateDenied,
-        Self::PolicyDenied,
+        Self::PermissionDenied,
+        Self::PresetDenied,
+        Self::LimitExceeded,
+        Self::UnavailableOnNode,
         Self::QuotaExceeded,
         Self::DependencyMissing,
         Self::NoBase,
@@ -85,10 +92,13 @@ impl FailureCode {
             | Self::SampleTypeDenied
             | Self::SampleArchDenied
             | Self::DuplicateDenied
+            | Self::PermissionDenied
+            | Self::LimitExceeded
+            | Self::UnavailableOnNode
             | Self::QuotaExceeded
             | Self::DependencyMissing
             | Self::HostResources => &[Prechecks],
-            Self::PolicyDenied => &[Prechecks, Provision],
+            Self::PresetDenied => &[Prechecks, Provision],
             Self::NoBase | Self::NoVm | Self::VmStartFailed | Self::LaneChanged => &[Provision],
             Self::GuestUnreachable => &[Provision, Launch],
             Self::RevertFailed => &[Provision, Cleanup],
@@ -119,7 +129,10 @@ impl FailureCode {
             | Self::SampleTypeDenied
             | Self::SampleArchDenied
             | Self::DuplicateDenied
-            | Self::PolicyDenied
+            | Self::PermissionDenied
+            | Self::PresetDenied
+            | Self::LimitExceeded
+            | Self::UnavailableOnNode
             | Self::NoBase
             | Self::NoVm
             | Self::RevertFailed
@@ -137,6 +150,14 @@ pub struct Failure {
     /// The stage that failed.
     pub stage: Stage,
     pub retryable: bool,
+    /// The request field to blame, for a refusal (`overrides.route`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// What a refusal names: `needs` (the permissions, for
+    /// `permission_denied`), `preset`, `limit`, `what` (for
+    /// `unavailable_on_node`).
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub details: Map<String, Value>,
     /// The engine's own error text, truncated to 2 KiB, host paths removed for
     /// remote callers.
     pub detail: Option<String>,
@@ -160,6 +181,8 @@ impl Failure {
             message: message.to_owned(),
             stage,
             retryable: code.retry_hint() == RetryHint::Yes,
+            field: None,
+            details: Map::new(),
             detail: detail.map(|text| {
                 let mut end = text.len().min(MAX_DETAIL_BYTES);
                 while !text.is_char_boundary(end) {
@@ -194,8 +217,17 @@ mod tests {
                     .to_owned()
             })
             .collect();
-        assert_eq!(names.len(), 23);
+        assert_eq!(names.len(), FailureCode::ALL.len());
         assert!(names.contains("sample_arch_denied") && names.contains("no_base"));
+        for name in [
+            "permission_denied",
+            "preset_denied",
+            "limit_exceeded",
+            "unavailable_on_node",
+        ] {
+            assert!(names.contains(name), "{name}");
+        }
+        assert!(!names.contains("policy_denied"));
     }
 
     #[test]

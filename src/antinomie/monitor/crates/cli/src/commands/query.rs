@@ -226,9 +226,12 @@ impl<'a> Client<'a> {
 pub fn api_error(error: ApiError) -> CliError {
     let code = match error.code {
         ApiCode::InvalidArgument => ErrorCode::InvalidArgument,
-        ApiCode::Forbidden | ApiCode::PolicyDenied | ApiCode::Unauthenticated => {
-            ErrorCode::PolicyDenied
+        ApiCode::Forbidden | ApiCode::PermissionDenied | ApiCode::Unauthenticated => {
+            ErrorCode::PermissionDenied
         }
+        ApiCode::PresetDenied => ErrorCode::PresetDenied,
+        ApiCode::LimitExceeded => ErrorCode::LimitExceeded,
+        ApiCode::UnavailableOnNode => ErrorCode::UnavailableOnNode,
         ApiCode::NotFound => ErrorCode::NotFound,
         ApiCode::Conflict => ErrorCode::Conflict,
         ApiCode::PreconditionFailed => ErrorCode::PreconditionFailed,

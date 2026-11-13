@@ -53,6 +53,8 @@ pub struct Admit {
     pub folder_label: String,
     pub policy: String,
     pub on_duplicate: Option<OnDuplicate>,
+    /// The folder's `permissions`, held beside `runs.submit`.
+    pub permissions: Vec<crate::api::ops::Permission>,
 }
 
 /// What came of a file.

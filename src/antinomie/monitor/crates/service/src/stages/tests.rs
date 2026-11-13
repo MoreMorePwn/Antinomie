@@ -81,6 +81,7 @@ pub(super) struct W {
     pub(super) evidence: EvidenceFn,
     pub(super) triage: Box<dyn super::host::HostTriage>,
     pub(super) tags: TagLog,
+    pub(super) callers: Box<dyn crate::config::callers::CallerLookup>,
 }
 
 impl W {
@@ -101,6 +102,7 @@ impl W {
                 antinomie_monitor_core::BackendOptions::default(),
             )),
             tags: TagLog::default(),
+            callers: Box::new(crate::config::callers::LocalOnly),
             evidence: Box::new(|_| {
                 Ok(Some(antinomie_monitor_core::RunArtifacts {
                     network_state: antinomie_monitor_core::RunArtifactState::Complete,
@@ -140,6 +142,7 @@ impl W {
                 store: &self.fx.store,
                 lanes: &self.lanes,
                 policies: &self.fx.policies,
+                callers: self.callers.as_ref(),
                 procs: &self.procs,
                 host: self.host.as_ref(),
                 evidence: self.evidence.as_ref(),
@@ -357,14 +360,78 @@ fn a_policy_that_is_gone_or_closed_to_the_client_denies_the_job() {
     // Gone.
     w.fx.policies = crate::config::PolicySet::default();
     let stop = w.stages(&mut waiter).prechecks(&job).unwrap_err();
-    assert_eq!(code(&stop), FailureCode::PolicyDenied);
+    assert_eq!(code(&stop), FailureCode::PresetDenied);
     assert_eq!(stop.failure().unwrap().stage, Stage::Prechecks);
+    assert_eq!(stop.failure().unwrap().details["preset"], "default");
     // Closed to this client.
     w.fx.policies = crate::config::PolicySet::single(crate::store::tests::policy("default", |p| {
         p.access.clients = vec!["web:*".into()];
     }));
     let stop = w.stages(&mut waiter).prechecks(&job).unwrap_err();
-    assert_eq!(code(&stop), FailureCode::PolicyDenied);
+    assert_eq!(code(&stop), FailureCode::PresetDenied);
+}
+
+/// What a client holds now, as a reloaded `service.toml` would say.
+struct Holds(Option<std::collections::BTreeSet<crate::api::ops::Permission>>);
+
+impl crate::config::callers::CallerLookup for Holds {
+    fn permissions_now(
+        &self,
+        _: &str,
+        _: &crate::config::callers::Labels,
+    ) -> Option<std::collections::BTreeSet<crate::api::ops::Permission>> {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn prechecks_refuse_a_run_whose_client_lost_a_permission_it_uses() {
+    use crate::api::ops::Permission;
+    let mut w = W::with("pre-perm", |p| p.evidence.core_dump = true);
+    let mut who = crate::store::tests::caller(1000);
+    who.permissions.insert(Permission::EvidenceCoreDump);
+    let queued =
+        w.fx.submit_as(&who, crate::store::tests::spec(1))
+            .unwrap()
+            .job;
+    assert_eq!(
+        queued.state,
+        crate::api::job::JobState::Queued,
+        "{:?}",
+        queued.failure
+    );
+    let job =
+        w.fx.store
+            .claim_next(&lane(), &mut |_| crate::store::Eligibility::Ready)
+            .unwrap()
+            .unwrap();
+    let mut waiter = w.engine(|_| {});
+    // Still held: the run goes on.
+    w.callers = Box::new(Holds(Some(
+        [Permission::RunsSubmit, Permission::EvidenceCoreDump].into(),
+    )));
+    assert!(w.stages(&mut waiter).prechecks(&job).is_ok());
+    // A client the service does not configure keeps what it was admitted with.
+    w.callers = Box::new(Holds(None));
+    assert!(w.stages(&mut waiter).prechecks(&job).is_ok());
+    // The core dump permission was taken away while the run waited.
+    w.callers = Box::new(Holds(Some([Permission::RunsSubmit].into())));
+    let stop = w.stages(&mut waiter).prechecks(&job).unwrap_err();
+    let failure = stop.failure().unwrap();
+    assert_eq!(failure.code, FailureCode::PermissionDenied);
+    assert_eq!(failure.stage, Stage::Prechecks);
+    assert_eq!(
+        failure.details["needs"],
+        serde_json::json!(["evidence.core_dump"])
+    );
+    assert!(failure.message.contains("no longer holds"), "{failure:?}");
+    // runs.submit itself is used by every run.
+    w.callers = Box::new(Holds(Some([Permission::EvidenceCoreDump].into())));
+    let stop = w.stages(&mut waiter).prechecks(&job).unwrap_err();
+    assert_eq!(
+        stop.failure().unwrap().details["needs"],
+        serde_json::json!(["runs.submit"])
+    );
 }
 
 pub(super) struct Host(pub(super) Option<HostProblem>);

@@ -122,10 +122,10 @@ pub fn ctx() -> ReadContext {
     ReadContext::local_owner("local:1000")
 }
 
-/// A reader with the normal scope only.
+/// A reader with `runs.see_all` only (no `evidence.view`).
 pub fn plain_ctx() -> ReadContext {
     let mut context = ReadContext::local_owner("web:7");
-    context.caller.scopes = vec![crate::api::ops::Scope::Read];
+    context.caller.permissions = [crate::api::ops::Permission::RunsSeeAll].into();
     context
 }
 

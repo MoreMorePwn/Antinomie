@@ -13,7 +13,7 @@
 //!
 //! The sensitivity of each field (the **Sens.** column of the design) is in its
 //! doc comment: **N** normal, **U** untrusted text from the sample or the guest
-//! (5.2), **S** needs `artifacts:sensitive`, **L** local socket and CLI only.
+//! (5.2), **S** needs `evidence.view`, **L** local socket and CLI only.
 
 use super::key::RunKey;
 use crate::api::{

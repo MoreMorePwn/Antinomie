@@ -15,7 +15,7 @@ use antinomie_service::api::{
         EndReason, Job, JobRecording, JobRun, JobSample, JobState, JobVm, Outcome, PolicyRef,
         RecordingPhase, Revert, Stage, Submitted, WaitingFor,
     },
-    ops::{Op, Reply, Request, Scope},
+    ops::{Op, Permission, Reply, Request},
     spec::{
         CoreDump, JobSpec, Overrides, ReportFormat, Route, RunAs, RunAsName, StaticCheck,
         StaticChecks,
@@ -214,7 +214,7 @@ fn shape_limits_name_the_field() {
 }
 
 #[test]
-fn live_routes_and_desktop_modes_are_not_in_v1() {
+fn desktop_modes_are_not_in_v1_and_live_routes_go_to_admission() {
     let spec: JobSpec =
         serde_json::from_value(json!({"sample": {"sha256": SHA}, "overrides": {"route": "tor"}}))
             .unwrap();
@@ -222,9 +222,8 @@ fn live_routes_and_desktop_modes_are_not_in_v1() {
         spec.validate_shape().is_ok(),
         "a valid spelling is not invalid"
     );
-    let unsupported = spec.v1_unsupported().unwrap();
-    assert_eq!(unsupported.field, "overrides.route");
-    assert_eq!(unsupported.reason, "live_route_not_in_v1");
+    // A live route needs its permission, then the node (admission).
+    assert_eq!(spec.v1_unsupported(), None);
     let spec = JobSpec {
         overrides: Overrides {
             route: Some(Route::InetSim),
@@ -636,14 +635,17 @@ fn every_op_spelling_round_trips_and_has_a_scope() {
     for name in names {
         let op: Op = serde_json::from_value(json!(name)).unwrap();
         assert_eq!(serde_json::to_value(op).unwrap(), json!(name));
-        let _ = op.scope();
+        assert!(!op.needs().is_empty(), "{name}");
     }
-    assert_eq!(Op::SampleDownload.scope(), Scope::ArtifactsSensitive);
-    assert_eq!(Op::JobCancel.scope(), Scope::Submit);
-    assert_eq!(Op::QueuePause.scope(), Scope::Manage);
+    assert_eq!(Op::SampleDownload.needs(), [Permission::SamplesDownload]);
     assert_eq!(
-        serde_json::to_value(Scope::ArtifactsSensitive).unwrap(),
-        json!("artifacts:sensitive")
+        Op::JobCancel.needs(),
+        [Permission::RunsSubmit, Permission::RunsManageAny]
+    );
+    assert_eq!(Op::QueuePause.needs(), [Permission::QueueManage]);
+    assert_eq!(
+        serde_json::to_value(Permission::EvidenceDownload).unwrap(),
+        json!("evidence.download")
     );
     assert!(
         serde_json::from_value::<Op>(json!("run.list")).is_err(),

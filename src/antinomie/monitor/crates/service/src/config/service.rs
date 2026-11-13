@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `service.toml` (design 2.4.2): daemon behaviour. Unknown keys are errors.
 
+use crate::api::ops::Permission;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -144,6 +145,27 @@ pub struct Watch {
     /// New jobs per minute per folder before the folder pauses.
     #[serde(default = "default_watch_rate")]
     pub watch_rate: u32,
+    /// The permissions the folder's runs hold beside `runs.submit` (for
+    /// example `["evidence.core_dump"]` for a policy that takes cores). A run
+    /// whose options need a permission the folder lacks is rejected
+    /// `permission_denied`.
+    #[serde(default)]
+    pub permissions: Vec<Permission>,
+}
+
+impl Watch {
+    /// The folder's last component as the `watch` label of its jobs shows it
+    /// (control characters as spaces).
+    pub fn label(&self) -> String {
+        String::from_utf8_lossy(
+            self.path
+                .file_name()
+                .map_or(&b"watch"[..], |n| n.as_encoded_bytes()),
+        )
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+    }
 }
 
 fn default_policy_name() -> String {
@@ -248,8 +270,9 @@ pub struct Results {
     pub mode: ResultsMode,
 }
 
-/// Reserved: live routes are not in v1 (decided D6); the key is parsed and
-/// rejected until the later contract version.
+/// Reserved: no live route is set up for the service in 0.9.0 (a job asking
+/// for one is refused `unavailable_on_node`); the key is parsed and refused
+/// until the per-route acknowledgement of 0.9.1's node route setup.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Safety {

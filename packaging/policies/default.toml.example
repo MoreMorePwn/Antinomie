@@ -2,6 +2,15 @@
 #
 # The policy `auto init` writes as <data>/policies/default.toml when the folder has
 # none. Copy it there and point vm.lane_vm at your lane VM. Reference: docs/service-config.md.
+#
+# A job is checked against its caller's permissions before this policy's switches:
+# root (run_as = "root", or a job asking for it, which allow_root must also allow)
+# needs run.as_root; core_dump, or a dump_trigger whose
+# kind takes a core, needs evidence.core_dump; memory_dump, or a trigger that takes
+# memory, needs evidence.memory_dump; online_ioc needs lookup.online. The owner on the
+# local socket holds every permission; a watch folder holds runs.submit and the
+# folder's `permissions` in service.toml. [access] scopes = ["submit"] and clients
+# say which callers the policy is offered to.
 
 description = "Static checks, 5 minute run, nothing leaves the machine"
 

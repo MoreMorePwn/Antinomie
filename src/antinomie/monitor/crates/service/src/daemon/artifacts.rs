@@ -7,7 +7,7 @@
 //! job's directory: an absolute location or one with `..` is refused, the
 //! real path (symlinks followed) must still lie inside the job directory, and
 //! it must be a regular file. A range is read through a descriptor opened
-//! with `O_NOFOLLOW`. Sensitive kinds need `artifacts:sensitive` (5.8).
+//! with `O_NOFOLLOW`. Sensitive kinds need `evidence.download`.
 
 use super::service::{Service, to_value};
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
         artifact::{Artifact, ArtifactKind},
         error::{ApiError, ErrorCode},
         ids::ArtifactId,
-        ops::{ByteRange, Caller, ReportGetParams, Scope},
+        ops::{ByteRange, Caller, Permission, ReportGetParams},
         spec::ReportFormat,
     },
     server::b64,
@@ -94,11 +94,9 @@ fn served(
     range: Option<ByteRange>,
     caller: &Caller,
 ) -> Result<serde_json::Value, ApiError> {
-    if artifact.sensitive && !caller.has(Scope::ArtifactsSensitive) {
-        return Err(ApiError::new(
-            ErrorCode::Forbidden,
-            "this artifact is sensitive and needs the artifacts:sensitive scope",
-        ));
+    // Bytes the sample or the guest made leave the engine: evidence.download.
+    if artifact.sensitive {
+        caller.require(Permission::EvidenceDownload)?;
     }
     let path = resolve(&service.store.job_dir(&artifact.job_id), location)?;
     let mut out = json!({ "artifact": to_value(&artifact)?, "path": path });

@@ -15,7 +15,7 @@
 //!    out while it is not.
 //! 2. **Who connects.** The peer's credentials (`SO_PEERCRED`) are read on
 //!    accept; a peer with another UID gets nothing, not even the hello, and is
-//!    closed. The caller is `local:<uid>` with every scope (5.8: the local
+//!    closed. The caller is `local:<uid>` with every permission (the local
 //!    socket is a single-user view, A15). Nothing the client sends can change
 //!    its identity.
 //! 3. **What it may send.** [`frame`]: lines of at most 2 MiB, strictly
@@ -38,11 +38,7 @@ pub mod subscribe;
 mod tests;
 
 use crate::{
-    api::{
-        error::ApiError,
-        event::Hello,
-        ops::{Caller, Scope},
-    },
+    api::{error::ApiError, event::Hello, ops::Caller},
     store::Store,
 };
 use limits::{Bucket, Limits};
@@ -99,18 +95,10 @@ pub trait Handler: Send + Sync + 'static {
     fn store(&self) -> &Store;
 }
 
-/// The caller of a peer with `uid`: the owner of the data directory.
+/// The caller of a peer with `uid`: the owner of the data directory, with
+/// every permission the engine checks.
 pub fn local_caller(uid: u32) -> Caller {
-    Caller {
-        client_id: format!("local:{uid}"),
-        scopes: vec![
-            Scope::Read,
-            Scope::Submit,
-            Scope::ArtifactsSensitive,
-            Scope::Manage,
-        ],
-        policies: Vec::new(),
-    }
+    Caller::with_every_permission(format!("{}{uid}", crate::config::callers::LOCAL_PREFIX))
 }
 
 /// This process's effective UID: the only peer the socket admits.

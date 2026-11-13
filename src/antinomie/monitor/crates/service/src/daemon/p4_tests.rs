@@ -33,6 +33,7 @@ fn drop_folder(svc: &super::tests::Svc, name: &str) -> (PathBuf, Watch) {
         policy_by_dir: false,
         allow_group_write: false,
         watch_rate: 10,
+        permissions: Vec::new(),
     };
     (folder, watch)
 }
@@ -196,22 +197,22 @@ fn a_full_queue_holds_the_watched_files() {
 }
 
 #[test]
-fn the_watch_caller_may_only_submit_to_its_own_policy() {
-    let caller = watch_caller("strict");
+fn the_watch_caller_holds_runs_submit_and_its_folder_permissions() {
+    let caller = watch_caller("strict", &[]);
     assert_eq!(caller.client_id, "auto:policy-strict");
-    assert_eq!(caller.scopes, [Scope::Submit]);
-    assert_eq!(caller.policies, ["strict"]);
+    assert_eq!(
+        caller.permissions,
+        [crate::api::ops::Permission::RunsSubmit].into()
+    );
+    let cores = watch_caller("strict", &[crate::api::ops::Permission::EvidenceCoreDump]);
+    assert!(cores.has(crate::api::ops::Permission::EvidenceCoreDump));
 }
 
 #[test]
-fn watch_and_gc_operations_check_their_scopes() {
+fn watch_and_gc_operations_check_their_permissions() {
     let svc = svc("ops-scopes", |_| {});
     let reader = CallContext {
-        caller: Caller {
-            client_id: "local:1".into(),
-            scopes: vec![Scope::Read],
-            policies: vec![],
-        },
+        caller: Caller::from_scopes("local:1", &[Scope::Read]),
         cancel: Default::default(),
         transport: Transport::Socket,
     };
@@ -223,7 +224,7 @@ fn watch_and_gc_operations_check_their_scopes() {
         };
         assert_eq!(
             svc.service.call(op, params, &reader).unwrap_err().code,
-            ErrorCode::Forbidden,
+            ErrorCode::PermissionDenied,
             "{op}"
         );
     }

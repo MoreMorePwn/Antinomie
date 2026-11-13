@@ -201,7 +201,7 @@ fn a_decoded_packet_needs_the_sensitive_scope() {
         &plain_ctx(),
     )
     .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
     let single = match call(&service, "recording.network.packet", params, &ctx()).unwrap() {
         RecordingReply::Packet(single) => single,
         other => panic!("{other:?}"),

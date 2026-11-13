@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The operations of design 5.3 and the local socket framing of 5.9: the
-//! stable operation names, their parameters and results, the caller and its
-//! scopes (5.8). The recording reads (`recording.*`) are in `query`.
+//! stable operation names, their parameters and results, the caller and the
+//! permissions it holds. The recording reads (`recording.*`) are in `query`.
 
 use super::{
     artifact::Artifact,
@@ -15,6 +15,7 @@ use super::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 /// The stable operation name used on the local socket (`op`) and in the CLI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -78,24 +79,26 @@ pub enum Op {
 }
 
 impl Op {
-    /// The scope the operation needs (design 5.8). `artifact.get` and
-    /// `report.get` need `read` for an artifact with `sensitive: false` and
-    /// `artifacts:sensitive` otherwise; the value here is the lower bound.
-    pub fn scope(self) -> Scope {
+    /// The permissions the operation needs: holding any one of them lets the
+    /// call through (the access specification's permission list). Finer
+    /// checks follow inside the operation: `artifact.get` and `report.get` of
+    /// a sensitive artifact need `evidence.download`, `job.cancel` of another
+    /// client's job needs `runs.manage_any`, and `job.submit` checks each run
+    /// option. Uploads serve both a run and a library add.
+    pub fn needs(self) -> &'static [Permission] {
+        use Permission as P;
         match self {
-            Self::UploadBegin
-            | Self::UploadPut
-            | Self::UploadFinish
-            | Self::JobSubmit
-            | Self::SampleAdd
-            | Self::JobCancel
-            | Self::JobRetry => Scope::Submit,
-            Self::SampleDownload => Scope::ArtifactsSensitive,
-            Self::JobDelete
-            | Self::SampleTag
-            | Self::QueuePause
-            | Self::QueueResume
-            | Self::CustodyVerify => Scope::Manage,
+            Self::UploadBegin | Self::UploadPut | Self::UploadFinish => {
+                &[P::RunsSubmit, P::SamplesAdd]
+            }
+            Self::JobSubmit | Self::JobRetry => &[P::RunsSubmit],
+            Self::JobCancel => &[P::RunsSubmit, P::RunsManageAny],
+            Self::SampleAdd => &[P::SamplesAdd],
+            Self::SampleDownload => &[P::SamplesDownload],
+            Self::JobDelete => &[P::RunsDelete],
+            Self::SampleTag => &[P::SamplesTag],
+            Self::QueuePause | Self::QueueResume => &[P::QueueManage],
+            Self::CustodyVerify => &[P::CustodyVerify],
             Self::Capabilities
             | Self::Health
             | Self::JobGet
@@ -110,12 +113,229 @@ impl Op {
             | Self::PolicyList
             | Self::QueueStatus
             | Self::VmList
-            | Self::BaseList => Scope::Read,
+            | Self::BaseList => &[P::RunsSeeAll],
         }
     }
 }
 
-/// A permission (design 5.8). Names are final.
+/// A permission the engine checks (the access specification: 37 permissions,
+/// all but `users.manage` and `audit.read`, which stay in the web). A caller
+/// holds a set of them; every operation, run option, event and frozen re-check
+/// asks for one by name. The wire spelling is the dotted key.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+pub enum Permission {
+    #[serde(rename = "runs.see_all")]
+    RunsSeeAll,
+    #[serde(rename = "cases.create")]
+    CasesCreate,
+    #[serde(rename = "runs.share")]
+    RunsShare,
+    #[serde(rename = "cases.join_any")]
+    CasesJoinAny,
+    #[serde(rename = "evidence.view")]
+    EvidenceView,
+    #[serde(rename = "evidence.download")]
+    EvidenceDownload,
+    #[serde(rename = "samples.download")]
+    SamplesDownload,
+    #[serde(rename = "lookup.online")]
+    LookupOnline,
+    #[serde(rename = "samples.add")]
+    SamplesAdd,
+    #[serde(rename = "runs.submit")]
+    RunsSubmit,
+    #[serde(rename = "runs.manage_any")]
+    RunsManageAny,
+    #[serde(rename = "samples.tag")]
+    SamplesTag,
+    #[serde(rename = "runs.annotate")]
+    RunsAnnotate,
+    #[serde(rename = "indicators.mark_fp")]
+    IndicatorsMarkFp,
+    #[serde(rename = "runs.delete")]
+    RunsDelete,
+    #[serde(rename = "route.internet")]
+    RouteInternet,
+    #[serde(rename = "route.nat")]
+    RouteNat,
+    #[serde(rename = "route.tor")]
+    RouteTor,
+    #[serde(rename = "route.vpn")]
+    RouteVpn,
+    #[serde(rename = "route.socks5")]
+    RouteSocks5,
+    #[serde(rename = "route.lan")]
+    RouteLan,
+    #[serde(rename = "route.unfiltered")]
+    RouteUnfiltered,
+    #[serde(rename = "run.as_root")]
+    RunAsRoot,
+    #[serde(rename = "evidence.core_dump")]
+    EvidenceCoreDump,
+    #[serde(rename = "evidence.memory_dump")]
+    EvidenceMemoryDump,
+    #[serde(rename = "evidence.disk_dump")]
+    EvidenceDiskDump,
+    #[serde(rename = "run.keep_vm")]
+    RunKeepVm,
+    #[serde(rename = "interactive.watch")]
+    InteractiveWatch,
+    #[serde(rename = "interactive.control")]
+    InteractiveControl,
+    #[serde(rename = "presets.manage")]
+    PresetsManage,
+    #[serde(rename = "queue.manage")]
+    QueueManage,
+    #[serde(rename = "lanes.reset")]
+    LanesReset,
+    #[serde(rename = "lanes.extend_keep")]
+    LanesExtendKeep,
+    #[serde(rename = "custody.verify")]
+    CustodyVerify,
+    #[serde(rename = "node.manage")]
+    NodeManage,
+}
+
+impl Permission {
+    /// Every permission the engine checks, in the order of the access
+    /// specification's table.
+    pub const ALL: [Self; 35] = [
+        Self::RunsSeeAll,
+        Self::CasesCreate,
+        Self::RunsShare,
+        Self::CasesJoinAny,
+        Self::EvidenceView,
+        Self::EvidenceDownload,
+        Self::SamplesDownload,
+        Self::LookupOnline,
+        Self::SamplesAdd,
+        Self::RunsSubmit,
+        Self::RunsManageAny,
+        Self::SamplesTag,
+        Self::RunsAnnotate,
+        Self::IndicatorsMarkFp,
+        Self::RunsDelete,
+        Self::RouteInternet,
+        Self::RouteNat,
+        Self::RouteTor,
+        Self::RouteVpn,
+        Self::RouteSocks5,
+        Self::RouteLan,
+        Self::RouteUnfiltered,
+        Self::RunAsRoot,
+        Self::EvidenceCoreDump,
+        Self::EvidenceMemoryDump,
+        Self::EvidenceDiskDump,
+        Self::RunKeepVm,
+        Self::InteractiveWatch,
+        Self::InteractiveControl,
+        Self::PresetsManage,
+        Self::QueueManage,
+        Self::LanesReset,
+        Self::LanesExtendKeep,
+        Self::CustodyVerify,
+        Self::NodeManage,
+    ];
+
+    /// The dotted key (`route.tor`), as on the wire and in `service.toml`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::RunsSeeAll => "runs.see_all",
+            Self::CasesCreate => "cases.create",
+            Self::RunsShare => "runs.share",
+            Self::CasesJoinAny => "cases.join_any",
+            Self::EvidenceView => "evidence.view",
+            Self::EvidenceDownload => "evidence.download",
+            Self::SamplesDownload => "samples.download",
+            Self::LookupOnline => "lookup.online",
+            Self::SamplesAdd => "samples.add",
+            Self::RunsSubmit => "runs.submit",
+            Self::RunsManageAny => "runs.manage_any",
+            Self::SamplesTag => "samples.tag",
+            Self::RunsAnnotate => "runs.annotate",
+            Self::IndicatorsMarkFp => "indicators.mark_fp",
+            Self::RunsDelete => "runs.delete",
+            Self::RouteInternet => "route.internet",
+            Self::RouteNat => "route.nat",
+            Self::RouteTor => "route.tor",
+            Self::RouteVpn => "route.vpn",
+            Self::RouteSocks5 => "route.socks5",
+            Self::RouteLan => "route.lan",
+            Self::RouteUnfiltered => "route.unfiltered",
+            Self::RunAsRoot => "run.as_root",
+            Self::EvidenceCoreDump => "evidence.core_dump",
+            Self::EvidenceMemoryDump => "evidence.memory_dump",
+            Self::EvidenceDiskDump => "evidence.disk_dump",
+            Self::RunKeepVm => "run.keep_vm",
+            Self::InteractiveWatch => "interactive.watch",
+            Self::InteractiveControl => "interactive.control",
+            Self::PresetsManage => "presets.manage",
+            Self::QueueManage => "queue.manage",
+            Self::LanesReset => "lanes.reset",
+            Self::LanesExtendKeep => "lanes.extend_keep",
+            Self::CustodyVerify => "custody.verify",
+            Self::NodeManage => "node.manage",
+        }
+    }
+
+    /// The name people read ("the Tor route permission" uses `Tor route`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::RunsSeeAll => "See the node's runs",
+            Self::CasesCreate => "Create cases",
+            Self::RunsShare => "Move runs into a case",
+            Self::CasesJoinAny => "Open as admin",
+            Self::EvidenceView => "See evidence bytes",
+            Self::EvidenceDownload => "Download evidence",
+            Self::SamplesDownload => "Download samples",
+            Self::LookupOnline => "Check online",
+            Self::SamplesAdd => "Add samples to the library",
+            Self::RunsSubmit => "Submit runs",
+            Self::RunsManageAny => "Manage anyone's runs",
+            Self::SamplesTag => "Tag samples",
+            Self::RunsAnnotate => "Name, tag and note runs",
+            Self::IndicatorsMarkFp => "Mark as false positive",
+            Self::RunsDelete => "Delete runs",
+            Self::RouteInternet => "Internet route",
+            Self::RouteNat => "NAT",
+            Self::RouteTor => "Tor route",
+            Self::RouteVpn => "VPN route",
+            Self::RouteSocks5 => "SOCKS5 route",
+            Self::RouteLan => "Private network addresses",
+            Self::RouteUnfiltered => "Turn off the abuse filter",
+            Self::RunAsRoot => "Run as root",
+            Self::EvidenceCoreDump => "Core dumps",
+            Self::EvidenceMemoryDump => "Memory dumps",
+            Self::EvidenceDiskDump => "Disk dumps",
+            Self::RunKeepVm => "Keep the VM after a failure",
+            Self::InteractiveWatch => "Watch a running VM",
+            Self::InteractiveControl => "Type into a running VM",
+            Self::PresetsManage => "Manage presets",
+            Self::QueueManage => "Manage the queue",
+            Self::LanesReset => "Reset lanes",
+            Self::LanesExtendKeep => "Extend a kept VM",
+            Self::CustodyVerify => "Verify custody",
+            Self::NodeManage => "Set up the node",
+        }
+    }
+
+    /// The permission spelled `key`, or `None`.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.key() == key)
+    }
+}
+
+impl std::fmt::Display for Permission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.key())
+    }
+}
+
+/// The four scopes of job API 1 before the permission list. They stay only
+/// as the spelling of a policy file's `[access] scopes` (until presets
+/// replace policies); each means the permissions it became.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -130,20 +350,115 @@ pub enum Scope {
     Manage,
 }
 
-/// Who is asking. The CLI uses the OS user (`local:<uid>`), the web layer
-/// fills it from authentication (`web:<user_id>`). The service never trusts a
+impl Scope {
+    /// The permissions a scope became (the access specification's column
+    /// "In 0.9.0"): `read` sees every run; `submit` adds samples and starts
+    /// runs; `artifacts:sensitive` reads, downloads evidence and samples;
+    /// `manage` cancels any run, tags samples, deletes runs, pauses the
+    /// queue, resets lanes and verifies custody.
+    pub fn permissions(self) -> &'static [Permission] {
+        use Permission as P;
+        match self {
+            Self::Read => &[P::RunsSeeAll],
+            Self::Submit => &[P::SamplesAdd, P::RunsSubmit],
+            Self::ArtifactsSensitive => &[P::EvidenceView, P::EvidenceDownload, P::SamplesDownload],
+            Self::Manage => &[
+                P::RunsManageAny,
+                P::SamplesTag,
+                P::RunsDelete,
+                P::QueueManage,
+                P::LanesReset,
+                P::CustodyVerify,
+            ],
+        }
+    }
+}
+
+/// The limits a caller brings (the access specification's "Limits per role,
+/// changeable per person"). Unset means the caller adds no limit of its own;
+/// the node's and the policy's ceilings still apply. Nothing sets them before
+/// limits per caller arrive (card P-A5), which also reads them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Limits {
+    /// Longest run in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_run_s: Option<u32>,
+    /// Highest priority, 0 to 9.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_max: Option<u8>,
+    /// Runs waiting at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_queued: Option<u32>,
+    /// Runs accepted in the last 24 hours; unset is no daily limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_runs_per_day: Option<u32>,
+    /// Runs running at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_running: Option<u32>,
+}
+
+impl Limits {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Who is asking. The CLI uses the OS user (`local:<uid>`, every
+/// permission), a watch folder its policy (`auto:policy-<name>`, `runs.submit`
+/// and the folder's `permissions`); a later web layer fills it from
+/// authentication (`web:<user_id>`). The service never trusts a
 /// client-supplied value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Caller {
     pub client_id: String,
-    pub scopes: Vec<Scope>,
-    /// Glob patterns of the policies the caller may use.
-    pub policies: Vec<String>,
+    /// The permissions the caller holds.
+    pub permissions: BTreeSet<Permission>,
+    #[serde(default, skip_serializing_if = "Limits::is_empty")]
+    pub limits: Limits,
 }
 
 impl Caller {
-    pub fn has(&self, scope: Scope) -> bool {
-        self.scopes.contains(&scope)
+    /// A caller holding `permissions` and no limits of its own.
+    pub fn new(client_id: impl Into<String>, permissions: &[Permission]) -> Self {
+        Self {
+            client_id: client_id.into(),
+            permissions: permissions.iter().copied().collect(),
+            limits: Limits::default(),
+        }
+    }
+
+    /// A caller holding every permission the engine checks.
+    pub fn with_every_permission(client_id: impl Into<String>) -> Self {
+        Self::new(client_id, &Permission::ALL)
+    }
+
+    /// A caller described by job API 1 scopes: the permissions they became.
+    pub fn from_scopes(client_id: impl Into<String>, scopes: &[Scope]) -> Self {
+        let permissions: Vec<Permission> = scopes
+            .iter()
+            .flat_map(|scope| scope.permissions().iter().copied())
+            .collect();
+        Self::new(client_id, &permissions)
+    }
+
+    pub fn has(&self, permission: Permission) -> bool {
+        self.permissions.contains(&permission)
+    }
+
+    /// `permission_denied` naming `permission` unless the caller holds it.
+    pub fn require(&self, permission: Permission) -> Result<(), ApiError> {
+        self.require_any(&[permission])
+    }
+
+    /// `permission_denied` naming every one of `any` unless the caller holds
+    /// at least one. An empty list needs nothing.
+    pub fn require_any(&self, any: &[Permission]) -> Result<(), ApiError> {
+        if any.is_empty() || any.iter().any(|p| self.has(*p)) {
+            Ok(())
+        } else {
+            Err(ApiError::permission_denied(any))
+        }
     }
 }
 
@@ -478,4 +793,124 @@ pub struct BaseList {
 pub struct CustodyVerifyParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<Sha256Hex>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn the_engine_checks_35_permissions_with_their_dotted_keys() {
+        let keys: BTreeSet<&str> = Permission::ALL.iter().map(|p| p.key()).collect();
+        assert_eq!(keys.len(), 35);
+        // users.manage and audit.read stay in the web.
+        assert!(!keys.contains("users.manage") && !keys.contains("audit.read"));
+        for permission in Permission::ALL {
+            assert_eq!(
+                serde_json::to_value(permission).unwrap(),
+                json!(permission.key())
+            );
+            assert_eq!(Permission::from_key(permission.key()), Some(permission));
+            assert_eq!(permission.to_string(), permission.key());
+            assert!(!permission.name().is_empty());
+        }
+        assert_eq!(Permission::from_key("users.manage"), None);
+        assert!(serde_json::from_value::<Permission>(json!("manage")).is_err());
+    }
+
+    #[test]
+    fn the_four_scopes_map_to_the_documented_permissions() {
+        let keys =
+            |scope: Scope| -> Vec<&str> { scope.permissions().iter().map(|p| p.key()).collect() };
+        assert_eq!(keys(Scope::Read), ["runs.see_all"]);
+        assert_eq!(keys(Scope::Submit), ["samples.add", "runs.submit"]);
+        assert_eq!(
+            keys(Scope::ArtifactsSensitive),
+            ["evidence.view", "evidence.download", "samples.download"]
+        );
+        assert_eq!(
+            keys(Scope::Manage),
+            [
+                "runs.manage_any",
+                "samples.tag",
+                "runs.delete",
+                "queue.manage",
+                "lanes.reset",
+                "custody.verify"
+            ]
+        );
+        let reader = Caller::from_scopes("web:7", &[Scope::Read, Scope::ArtifactsSensitive]);
+        assert_eq!(reader.permissions.len(), 4);
+        assert!(reader.has(Permission::EvidenceView) && !reader.has(Permission::RunsSubmit));
+    }
+
+    #[test]
+    fn each_operation_needs_the_permissions_its_scope_became() {
+        for op in [
+            Op::JobSubmit,
+            Op::JobRetry,
+            Op::SampleAdd,
+            Op::UploadBegin,
+            Op::JobDelete,
+            Op::SampleTag,
+            Op::QueuePause,
+            Op::QueueResume,
+            Op::CustodyVerify,
+            Op::SampleDownload,
+            Op::JobGet,
+            Op::Health,
+        ] {
+            // Every permission an op accepts belongs to the scope it needed.
+            let old = match op {
+                Op::JobSubmit | Op::JobRetry | Op::SampleAdd | Op::UploadBegin => Scope::Submit,
+                Op::SampleDownload => Scope::ArtifactsSensitive,
+                Op::JobGet | Op::Health => Scope::Read,
+                _ => Scope::Manage,
+            };
+            for needed in op.needs() {
+                assert!(old.permissions().contains(needed), "{op:?}: {needed}");
+            }
+        }
+        // Cancel: an own job with runs.submit, any with runs.manage_any.
+        assert_eq!(
+            Op::JobCancel.needs(),
+            [Permission::RunsSubmit, Permission::RunsManageAny]
+        );
+    }
+
+    #[test]
+    fn require_answers_permission_denied_naming_what_is_missing() {
+        let caller = Caller::new("web:7", &[Permission::RunsSeeAll]);
+        assert!(caller.require(Permission::RunsSeeAll).is_ok());
+        assert!(caller.require_any(&[]).is_ok());
+        let error = caller
+            .require_any(&[Permission::RunsSubmit, Permission::SamplesAdd])
+            .unwrap_err();
+        assert_eq!(error.code, super::super::error::ErrorCode::PermissionDenied);
+        assert_eq!(
+            error.details["needs"],
+            json!(["runs.submit", "samples.add"])
+        );
+        let owner = Caller::with_every_permission("local:1000");
+        assert!(Permission::ALL.iter().all(|p| owner.has(*p)));
+        // The wire form: permissions as keys, no limits when none are set.
+        let value = serde_json::to_value(&caller).unwrap();
+        assert_eq!(
+            value,
+            json!({"client_id": "web:7", "permissions": ["runs.see_all"]})
+        );
+        let limited = Caller {
+            limits: Limits {
+                priority_max: Some(5),
+                ..Limits::default()
+            },
+            ..caller
+        };
+        assert_eq!(
+            serde_json::to_value(&limited).unwrap()["limits"],
+            json!({"priority_max": 5})
+        );
+    }
 }

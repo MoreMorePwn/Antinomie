@@ -6,9 +6,9 @@
 //! with TShark's text, host paths removed.
 //!
 //! Sensitivity (5.12.7): the rows carry TShark's default columns and no
-//! payload bytes (normal scope). The decoded packet (its tree, which spells
-//! payload text, and its bytes) needs `artifacts:sensitive`; the operation
-//! checks the scope before it touches the capture.
+//! payload bytes (`runs.see_all`). The decoded packet (its tree, which spells
+//! payload text, and its bytes) needs `evidence.view`; the operation checks
+//! the permission before it touches the capture.
 
 use super::{
     convert::base64,

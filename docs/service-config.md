@@ -156,7 +156,17 @@ delete_after = "move"           # move (to <inbox>/processed/), delete, or keep
 on_duplicate = "run"            # optional: replaces the policy's rule for this folder
 allow_group_write = false       # see below
 watch_rate = 10                 # new jobs a minute before the folder pauses
+permissions = []                # held beside runs.submit, e.g. ["evidence.core_dump"]
 ```
+
+A folder submits as the client `auto:policy-<policy>` holding `runs.submit` and
+the folder's `permissions` (dotted keys of the permission list; an unknown key
+fails the load). A job whose options, with the policy's defaults, need a
+permission the folder lacks is rejected `permission_denied` and the file is
+counted as rejected: a policy with `core_dump = true` or a core `dump_trigger`
+needs `"evidence.core_dump"`, a memory dump `"evidence.memory_dump"`,
+`online_ioc = true` `"lookup.online"`. A reload that takes a permission away
+also refuses the folder's jobs still waiting (`permission_denied` at prechecks).
 
 The daemon scans each folder every 2 seconds. A file is taken once its size,
 modification time and change time have been the same for 3 seconds (so a file
@@ -274,11 +284,16 @@ file) and the parsed content are stored with the job. Editing a policy file, or
 reloading the daemon (`SIGHUP`), changes only jobs submitted afterwards. A reload
 with an error keeps the old policies.
 
-A spec may override a default only within the policy's ceiling. A request the
-policy forbids is stored as a `rejected` job with the failure `policy_denied`
-and the field to blame. A switch the policy leaves off (`evidence.memory_dump`,
-`evidence.core_dump`, `run.allow_keep_on_failure`, a detection engine) cannot be
-turned on by a job.
+A spec may override a default only within the caller's permissions and the
+policy's ceiling. A policy not offered to the caller is a `rejected` job with
+`preset_denied`; an option the caller has no permission for (a live route,
+root, a core or memory dump, Check online, keeping the VM) with
+`permission_denied` naming every missing permission in `details.needs`; a live
+route or a kept VM, which the node does not have in 0.9.0, with
+`unavailable_on_node`; a priority or run time above the policy's limit with
+`limit_exceeded`. A switch the policy leaves off (`evidence.memory_dump`,
+`evidence.core_dump`, `run.allow_root`, a detection engine) cannot be turned on
+by a job: that request is refused `invalid_argument` and nothing is stored.
 
 ## Uploads and intake
 

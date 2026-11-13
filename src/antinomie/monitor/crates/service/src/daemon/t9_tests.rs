@@ -78,9 +78,10 @@ fn denied_field(reply: &Value) -> Option<String> {
     })
 }
 
-/// A job cannot ask for more than its policy gives: not a route the policy
-/// does not list, not a live route in v1, not root, not switches the policy
-/// leaves off, not a higher priority, not a longer run. The same through a
+/// A job cannot ask for more than its policy and the node give, even for the
+/// owner who holds every permission: not a live route (not set up on this
+/// node), not root, not switches the policy leaves off, not a higher
+/// priority, not a longer run. The same through a
 /// retry's overrides, and a watched file brings no overrides at all.
 #[test]
 fn no_override_climbs_above_the_policy_through_submit_retry_or_a_watch() {
@@ -102,7 +103,7 @@ fn no_override_climbs_above_the_policy_through_submit_retry_or_a_watch() {
                 assert_eq!(reply["state"], "rejected", "{overrides}: {reply}");
                 assert_eq!(denied_field(&reply).as_deref(), Some(*field), "{reply}");
             }
-            // A live route is refused before the policy is asked.
+            // A value outside the policy is refused and stores nothing.
             Err(error) => assert!(
                 matches!(
                     error.code,
@@ -154,7 +155,7 @@ fn no_override_climbs_above_the_policy_through_submit_retry_or_a_watch() {
             Err(error) => assert!(
                 matches!(
                     error.code,
-                    ErrorCode::InvalidArgument | ErrorCode::PolicyDenied | ErrorCode::Unsupported
+                    ErrorCode::InvalidArgument | ErrorCode::Unsupported
                 ),
                 "{overrides}: {error:?}"
             ),
@@ -185,6 +186,7 @@ fn drop_folder(svc: &super::tests::Svc, name: &str) -> (std::path::PathBuf, Watc
         policy_by_dir: false,
         allow_group_write: false,
         watch_rate: 50,
+        permissions: Vec::new(),
     };
     (folder, watch)
 }

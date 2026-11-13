@@ -173,6 +173,8 @@ impl HostPool {
                 store: &self.env.store,
                 lanes: &self.env.lanes,
                 policies: &*self.env.policies,
+                // The pool runs no prechecks.
+                callers: &crate::config::callers::LocalOnly,
                 procs,
                 host: &NoHostChecks,
                 evidence: &self.env.evidence,

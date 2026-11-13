@@ -33,8 +33,12 @@ const CONNECT: Duration = Duration::from_secs(10);
 pub fn api(error: ApiError) -> CliError {
     let code = match error.code {
         ApiCode::InvalidArgument => ErrorCode::InvalidArgument,
-        ApiCode::PolicyDenied => ErrorCode::PolicyDenied,
-        ApiCode::Unauthenticated | ApiCode::Forbidden => ErrorCode::PermissionDenied,
+        ApiCode::PermissionDenied | ApiCode::Unauthenticated | ApiCode::Forbidden => {
+            ErrorCode::PermissionDenied
+        }
+        ApiCode::PresetDenied => ErrorCode::PresetDenied,
+        ApiCode::LimitExceeded => ErrorCode::LimitExceeded,
+        ApiCode::UnavailableOnNode => ErrorCode::UnavailableOnNode,
         ApiCode::NotFound => ErrorCode::NotFound,
         ApiCode::Conflict => ErrorCode::Conflict,
         ApiCode::PreconditionFailed => ErrorCode::PreconditionFailed,
