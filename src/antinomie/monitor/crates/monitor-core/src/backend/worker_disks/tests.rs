@@ -216,6 +216,7 @@ fn blank_worker(root: PathBuf) -> Worker {
         tool: None,
         last_publish: Instant::now(),
         layer_scan: Instant::now(),
+        layer_sweep: Vec::new(),
         latest_snapshot: Arc::new(Mutex::new(None)),
         guest_epoch: Arc::new(AtomicU64::new(0)),
         reconnect: (0, None),

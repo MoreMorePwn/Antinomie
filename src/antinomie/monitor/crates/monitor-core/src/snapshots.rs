@@ -19,6 +19,7 @@ use std::{
 };
 
 mod efi_vars;
+pub(crate) mod orphans;
 pub(crate) mod run_layer;
 pub use run_layer::{Record as RunLayerRecord, lock_free as run_layer_lock_free};
 
@@ -27,6 +28,14 @@ const MAX_CHAIN: usize = 64;
 const MAX_METADATA_SIZE: u64 = 4 * 1024 * 1024;
 const MANIFEST: &str = "snapshots.json";
 const JOURNAL: &str = "snapshot-operation.json";
+/// Entries of `snapshots/` whole-VM deletion checks by name before it refuses.
+/// A VM needs at most about four files per checkpoint ([`MAX_NODES`]) plus
+/// the working disk and a run layer, about 1,030; 0.9.0 code before the
+/// unreferenced-layer cleanup ([`orphans`]) left one more per revert, about
+/// 4,500 for a day of short lane jobs. Each entry costs one `lstat` and a
+/// name check, and the deletion itself is one rename of the folder, so the
+/// bound only stops a folder that is clearly not ours.
+const DELETION_ENTRY_LIMIT: usize = 65_536;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Record {
@@ -745,7 +754,15 @@ pub(crate) fn commit_restore(
     manifest.active_parent_id = Some(prepared.id.clone());
     manifest.recovery_note = None;
     save(&directory, &manifest)?;
-    remove_journal(&directory)
+    remove_journal(&directory)?;
+    // The replaced working disk held the discarded unsaved changes. Without
+    // this every revert of a lane left one file behind. The restore is
+    // published either way: a layer that cannot be removed now is left to
+    // the next start's sweep.
+    if let Err(error) = orphans::remove_unreferenced(&directory, &vm.id, &[journal.previous_disk]) {
+        eprintln!("snapshot restore: the replaced working disk was kept: {error}");
+    }
+    Ok(())
 }
 pub(crate) fn cancel_restore(
     options: &BackendOptions,
@@ -834,7 +851,7 @@ pub(crate) fn deletion_paths(
     for entry in fs::read_dir(&folder).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         count += 1;
-        if count > 4096 {
+        if count > DELETION_ENTRY_LIMIT {
             return Err("snapshot artifact deletion count exceeds limit; files retained".into());
         }
         let path = entry.path();
@@ -958,17 +975,22 @@ mod tests {
     }
     impl Fixture {
         pub(super) fn new() -> Self {
+            Self::named("fixture")
+        }
+        /// A fixture whose VM is `id`: the run layer's live-boot set is
+        /// process-wide and keyed by VM id, so tests that boot use their own.
+        pub(super) fn named(id: &str) -> Self {
             let root = std::env::temp_dir().join(format!("ant-snapshot-{}", unique_id()));
             let options = BackendOptions {
                 data_dir: root.clone(),
                 ..BackendOptions::default()
             };
             let mut vm = VmConfig {
-                id: "fixture".into(),
+                id: id.into(),
                 name: "Fixture".into(),
                 ..VmConfig::default()
             };
-            let directory = root.join("fixture");
+            let directory = root.join(id);
             private_dir(&directory).unwrap();
             let base = root.join("base.qcow2");
             Self::command("qemu-img", &["create", "-f", "qcow2"], &base, Some("4M"));
@@ -1252,7 +1274,9 @@ mod tests {
         let restore = prepare_restore(&fixture.options, &fixture.vm, &a.id, true).unwrap();
         commit_restore(&fixture.options, &fixture.vm, &restore).unwrap();
         assert!(cancel_restore(&fixture.options, &fixture.vm, &restore).is_err());
-        fixture.read(&future, 34);
+        // The discarded unsaved changes go with the committed restore.
+        assert!(!future.exists());
+        fixture.read(&active_disk(&fixture.options, &fixture.vm).unwrap(), 17);
     }
     #[test]
     fn tampered_memory_digest_and_invalid_artifact_paths_fail_before_restore() {

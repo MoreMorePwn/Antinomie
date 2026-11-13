@@ -239,6 +239,7 @@ impl Backend {
                     tool: None,
                     last_publish: Instant::now(),
                     layer_scan: Instant::now(),
+                    layer_sweep: Vec::new(),
                     latest_snapshot: worker_snapshot,
                     guest_epoch: worker_epoch,
                     reconnect: (0, None),
@@ -805,6 +806,9 @@ struct Worker {
     last_publish: Instant,
     /// When the pending disk layers were last read.
     layer_scan: Instant,
+    /// VMs whose `snapshots/` folder the startup sweep has still to go over
+    /// (`snapshots::orphans`), one bounded pass per loop.
+    layer_sweep: Vec<String>,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
     guest_epoch: Arc<AtomicU64>,
     /// Automatic reconnection after the guest stopped answering (see

@@ -2590,3 +2590,22 @@ Old recordings and saved ancestors remain immutable. Restore confirmation can
 save current state first; failure to save prevents restore. Hidden checkpoints
 retain all disk/memory artifacts until confirmed whole-VM deletion. Snapshot-aware
 reset/data relocation are guarded until their dependency-safe implementations.
+
+**Unreferenced writable layers (0.9.0, ANT-T0480).** A committed restore
+removes the working child it replaced (the discarded unsaved state) unless
+something still needs it: the live set is every file on the backing chain of
+the new active disk, of every checkpoint's layer (hidden ones included) and of
+a pending run layer, read from the qcow2 headers (`snapshots/orphans.rs`). A
+boot that ended with a restore keeps its run layer in the chain; when its
+record settles, its top and sealed files are removed the same way, so a
+snapshot taken during that boot keeps both. When the engine starts, the worker
+loop sweeps each VM's `snapshots/` folder in passes of at most 256 removals,
+taking the folder's run layer lock, for layers an earlier version or a crash
+left. Only `snapshots/<hex id>.qcow2` regular files directly in the VM's own
+folder are candidates, plus `snapshots/<hex id>.state` memory files that no
+checkpoint names (what a failed Full take left behind); an unfinished operation's journal, an unreadable header
+or a missing backing file removes nothing. A lane that reverts before every
+job therefore keeps `snapshots/` at the checkpoints' files plus one working
+disk (and a run layer while a boot runs). Whole-VM deletion checks up to
+65,536 entries by name (a VM needs about 1,030 at most; 0.9.0 lanes before the
+fix kept one per job).
