@@ -40,6 +40,11 @@ x86 programs by their own table.
     `run=`; the retention and `run.delete` lines name the run `run=` and its
     recording `recording=`. A host work item's `basis` for a fixed limit is
     `preset`.
+  - The run store's layout is 2. A store written by a 0.9.0 test build before
+    the run API (layout 1) is not converted: the daemon and the `auto`
+    commands refuse it with a message naming `<data>/service/jobs.sqlite` and
+    `jobs/`, which must be moved away (data folders of 0.9.0 pre-release
+    tests are recreated).
   - Command line: `auto preset list|show NAME` (was `auto policy list`),
     `auto submit --preset`, `auto rerun` (was `auto retry`), run words in the
     output; `recording list|show|export` (was `run list|show|export`; `run

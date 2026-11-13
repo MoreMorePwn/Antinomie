@@ -293,7 +293,7 @@ fn the_database_is_wal_private_and_versioned() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(version, "1");
+    assert_eq!(version, "2");
     use std::os::unix::fs::PermissionsExt;
     let mode = std::fs::metadata(fx.dir.join("service/jobs.sqlite"))
         .unwrap()
@@ -327,6 +327,62 @@ fn the_database_is_wal_private_and_versioned() {
 }
 
 #[test]
+fn a_store_of_a_test_build_before_the_run_api_is_refused_and_a_new_one_opens() {
+    let fx = Fx::new("layout-1");
+    let service = fx.dir.join("service");
+    fx.store
+        .conn()
+        .execute(
+            "UPDATE meta SET value = '1' WHERE key = 'schema_version'",
+            [],
+        )
+        .unwrap();
+    for error in [
+        Store::open(&service).err().unwrap(),
+        Store::open_read_only(&service).err().unwrap(),
+    ] {
+        assert_eq!(error.code, ErrorCode::Unavailable);
+        for words in [
+            "(layout 1)",
+            "0.9.0 test build before the run API",
+            "not converted",
+            "must be recreated",
+            &format!("{}/jobs.sqlite", service.display()),
+            &format!("{}/jobs/", service.display()),
+        ] {
+            assert!(error.message.contains(words), "{words}: {}", error.message);
+        }
+    }
+    // Nothing was changed: the store still says layout 1.
+    let version: String = fx
+        .store
+        .conn()
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, "1");
+    // A new store in a fresh folder opens at layout 2, and opens again.
+    let fresh = scratch("layout-2").join("service");
+    drop(Store::open(&fresh).unwrap());
+    let store = Store::open(&fresh).unwrap();
+    let version: String = store
+        .conn()
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, "2");
+    assert!(Store::open_read_only(&fresh).is_ok());
+    drop(store);
+    let _ = std::fs::remove_dir_all(fresh.parent().unwrap());
+}
+
+#[test]
 fn a_newer_database_refuses_to_open_and_a_reader_cannot_write() {
     let fx = Fx::new("version");
     fx.store
@@ -342,7 +398,7 @@ fn a_newer_database_refuses_to_open_and_a_reader_cannot_write() {
     fx.store
         .conn()
         .execute(
-            "UPDATE meta SET value = '1' WHERE key = 'schema_version'",
+            "UPDATE meta SET value = '2' WHERE key = 'schema_version'",
             [],
         )
         .unwrap();

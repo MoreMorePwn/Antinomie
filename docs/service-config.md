@@ -359,6 +359,15 @@ the priority and the changed options). After a crash the
 daemon puts a run left `running` back in the queue (once per run without using
 an attempt) and repairs the mirror files.
 
+The store has a layout number (`meta.schema_version`, 2 in 0.9.0). A store of a
+newer layout does not open. Layout 1 was written by 0.9.0 test builds before the
+run API; it is not converted and does not open either: the daemon and the
+`auto` commands stop with a message naming the store. Data folders of 0.9.0
+pre-release tests must be recreated: stop the daemon and move
+`<data>/service/jobs.sqlite` (with its `-wal` and `-shm` files) and
+`<data>/service/jobs/` out of the way. The samples, recordings, presets and lane
+files stay.
+
 ## Custody actors
 
 Every custody entry names who caused it: `app` and `analyst` in the window,

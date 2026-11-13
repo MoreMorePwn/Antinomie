@@ -203,6 +203,47 @@ impl Tx<'_> {
     }
 }
 
+/// The layout of the store in `conn` against this build's: a newer one is
+/// refused, and so is layout 1, written by 0.9.0 test builds before the run
+/// API (its rows hold `policy` members and policy terms no reader of this
+/// build parses; they are not converted). A new store has no layout yet.
+fn check_layout(conn: &Connection, service_dir: &Path) -> R<()> {
+    let found: Option<u32> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|text| text.parse().ok());
+    match found {
+        Some(found) if found > schema::SCHEMA_VERSION => Err(ApiError::new(
+            ErrorCode::Unavailable,
+            format!(
+                "the job store was made by a newer Antinomie (layout {found}); this one reads layout {}",
+                schema::SCHEMA_VERSION
+            ),
+        )),
+        Some(found) if found < schema::SCHEMA_VERSION => Err(ApiError::new(
+            ErrorCode::Unavailable,
+            layout_1_refused(service_dir, found),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Why a store of layout 1 does not open.
+fn layout_1_refused(service_dir: &Path, found: u32) -> String {
+    let dir = service_dir.display();
+    format!(
+        "the job store {dir}/jobs.sqlite (layout {found}) was written by a 0.9.0 test build \
+         before the run API and is not converted: data folders of 0.9.0 pre-release tests \
+         must be recreated. Stop the daemon and move {dir}/jobs.sqlite (with its -wal and \
+         -shm files) and {dir}/jobs/ out of the way; the samples, recordings, presets and \
+         lane files stay"
+    )
+}
+
 impl Store {
     /// Open (and create) the store under `service_dir`
     /// (`<data>/service`) as its one writer.
@@ -234,25 +275,7 @@ impl Store {
             .map_err(db)?;
         conn.pragma_update(None, "synchronous", "FULL")
             .map_err(db)?;
-        let version: Option<u32> = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'schema_version'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .ok()
-            .and_then(|text| text.parse().ok());
-        if let Some(found) = version
-            && found > schema::SCHEMA_VERSION
-        {
-            return Err(ApiError::new(
-                ErrorCode::Unavailable,
-                format!(
-                    "the job store was made by a newer Antinomie (layout {found}); this one reads layout {}",
-                    schema::SCHEMA_VERSION
-                ),
-            ));
-        }
+        check_layout(&conn, service_dir)?;
         conn.execute_batch(schema::SCHEMA).map_err(db)?;
         conn.execute(
             "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?1)",
@@ -272,6 +295,7 @@ impl Store {
         )
         .map_err(db)?;
         conn.busy_timeout(BUSY_TIMEOUT).map_err(db)?;
+        check_layout(&conn, service_dir)?;
         Ok(Self::with(conn, service_dir, Arc::new(SystemClock), true))
     }
 

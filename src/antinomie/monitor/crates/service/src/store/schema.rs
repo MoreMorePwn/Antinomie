@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The tables of design 4.3. `schema_version` starts at 1; a newer database
-//! refuses to open on an older daemon.
+//! The tables of design 4.3. A newer database refuses to open on an older
+//! daemon. Layout 2 is the run API's (ANT-T0492: runs, presets, `run_json`
+//! with `run_id`); layout 1, of 0.9.0 test builds before it, is refused and
+//! not converted (ANT-T0548 F1).
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Columns beyond design 4.3, and why:
 /// `terms_json` holds the frozen policy (5.6: "the policy digest and the
