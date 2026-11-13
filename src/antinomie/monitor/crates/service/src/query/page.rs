@@ -6,7 +6,7 @@ use super::{
     cursor::Generation,
     types::{AnalysisPageNotes, ProcessTreeNotes},
 };
-use crate::api::{error::ApiError, job::RecordingPhase};
+use crate::api::{error::ApiError, run::RecordingPhase};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -115,7 +115,7 @@ impl<T> Page<T> {
     }
 }
 
-/// A single result (`recording.run.get`, `summary`, `findings.get`,
+/// A single result (`recording.get`, `summary`, `findings.get`,
 /// `network.summary`, `trace.get`, `files.versions`, `packet`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Single<T> {

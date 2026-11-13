@@ -17,7 +17,7 @@ use crate::{
         assessment::Label,
         event::{EventBody, StageStatus},
         failure::FailureCode,
-        job::{EndReason, Job, JobRecording, JobRun, JobState, Outcome, RecordingPhase, Stage},
+        run::{EndReason, Outcome, RecordingPhase, Run, RunProgram, RunRecording, RunState, Stage},
     },
     engine::FakeEngine,
     store::{
@@ -27,7 +27,7 @@ use crate::{
     waiter::Waiter,
 };
 use antinomie_monitor_core::{
-    BackendOptions, ExecRequest, RunState, RunSummary,
+    BackendOptions, ExecRequest, RunState as CoreRunState, RunSummary,
     analysis::detection::Engine as DetectionEngine, report::Choices, samples::SampleRef,
 };
 use antinomie_triage::{
@@ -58,7 +58,7 @@ pub(super) struct Hooked {
     pub(super) datasets: u32,
     pub(super) scans: AtomicU32,
     /// The jobs whose run was opened, in order, when set.
-    pub(super) opened: Option<Arc<std::sync::Mutex<Vec<crate::api::ids::JobId>>>>,
+    pub(super) opened: Option<Arc<std::sync::Mutex<Vec<crate::api::ids::RunId>>>>,
 }
 
 impl Hooked {
@@ -68,7 +68,7 @@ impl Hooked {
 }
 
 impl HostTriage for Hooked {
-    fn open_run(&self, job: &Job) -> Result<SavedRun, String> {
+    fn open_run(&self, job: &Run) -> Result<SavedRun, String> {
         if let Some(opened) = &self.opened {
             opened.lock().unwrap().push(job.id.clone());
         }
@@ -105,7 +105,7 @@ impl HostTriage for Hooked {
         self.real().save_digest(saved, scan, outcomes)
     }
 
-    fn ensure_digest(&self, job: &Job, cancel: &Arc<AtomicBool>) -> Result<Option<String>, String> {
+    fn ensure_digest(&self, job: &Run, cancel: &Arc<AtomicBool>) -> Result<Option<String>, String> {
         self.real().ensure_digest(job, cancel)
     }
 
@@ -225,7 +225,7 @@ pub(super) fn recording(w: &W, sample_sha: &str, telemetry: bool) -> PathBuf {
         },
         directory: dir.clone(),
         terminal_eof: true,
-        state: RunState::Finished,
+        state: CoreRunState::Finished,
         notes: Vec::new(),
         machine: None,
         route: None,
@@ -239,7 +239,7 @@ pub(super) fn recording(w: &W, sample_sha: &str, telemetry: bool) -> PathBuf {
 
 /// A running job with a finished recording, collected: the lane file has the
 /// entry `collect` leaves.
-pub(super) fn collected(w: &W, n: u8) -> Job {
+pub(super) fn collected(w: &W, n: u8) -> Run {
     let job = w.fx.running(n);
     let dir = recording(w, job.sample.as_ref().unwrap().sha256.as_str(), true);
     attach(w, &job, &dir, EndReason::Exited);
@@ -247,14 +247,14 @@ pub(super) fn collected(w: &W, n: u8) -> Job {
 }
 
 /// Point `job` at the recording in `dir` and mark its lane work collected.
-pub(super) fn attach(w: &W, job: &Job, dir: &std::path::Path, end: EndReason) {
+pub(super) fn attach(w: &W, job: &Run, dir: &std::path::Path, end: EndReason) {
     attach_on(w, job, dir, end, &lane());
 }
 
 /// [`attach`] for a job of `on`: that lane's file has the collected entry.
 pub(super) fn attach_on(
     w: &W,
-    job: &Job,
+    job: &Run,
     dir: &std::path::Path,
     end: EndReason,
     on: &crate::api::ids::LaneId,
@@ -263,8 +263,8 @@ pub(super) fn attach_on(
         .patch(
             &job.id,
             JobPatch {
-                run: Some(JobRun {
-                    run_id: RUN.into(),
+                run: Some(RunProgram {
+                    id: RUN.into(),
                     started_ms: Some(1),
                     ended_ms: Some(2),
                     end_reason: Some(end),
@@ -275,11 +275,11 @@ pub(super) fn attach_on(
                     trigger_notes: Vec::new(),
                     pending: Vec::new(),
                 }),
-                recording: Some(JobRecording {
+                recording: Some(RunRecording {
                     vm_id: "vm-1".into(),
                     boot_id: "boot-1".into(),
                     run_id: RUN.into(),
-                    run_key: "vm-1:boot-1:5f3c9a10-run-fixture".into(),
+                    recording_key: "vm-1:boot-1:5f3c9a10-run-fixture".into(),
                     phase: RecordingPhase::Complete,
                     directory: Some(dir.display().to_string()),
                 }),
@@ -305,31 +305,31 @@ pub(super) fn end_ok() -> CollectEnd {
     }
 }
 
-pub(super) fn host(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Job) -> Hosted {
+pub(super) fn host(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Run) -> Hosted {
     w.stages(waiter).host(job, &end_ok())
 }
 
-fn finished(hosted: Hosted) -> Job {
+fn finished(hosted: Hosted) -> Run {
     match hosted {
         Hosted::Finished(job) => *job,
         other => panic!("{other:?}"),
     }
 }
 
-pub(super) fn stage_events(w: &W, job: &Job) -> Vec<(Stage, StageStatus)> {
+pub(super) fn stage_events(w: &W, job: &Run) -> Vec<(Stage, StageStatus)> {
     w.fx.store
         .events_list(&job.id, 0, 1000)
         .unwrap()
         .0
         .into_iter()
         .filter_map(|e| match e.body {
-            EventBody::JobStage { stage, status, .. } => Some((stage, status)),
+            EventBody::RunStage { stage, status, .. } => Some((stage, status)),
             _ => None,
         })
         .collect()
 }
 
-fn warnings(w: &W, job: &Job) -> Vec<String> {
+fn warnings(w: &W, job: &Run) -> Vec<String> {
     w.job(&job.id)
         .warnings
         .into_iter()
@@ -345,7 +345,7 @@ fn a_collected_job_is_analysed_reported_and_finished() {
     let job = collected(&w, 1);
     let mut waiter = w.engine(|_| {});
     let done = finished(host(&w, &mut waiter, &job));
-    assert_eq!(done.state, JobState::Succeeded);
+    assert_eq!(done.state, RunState::Succeeded);
     assert_eq!(done.outcome, Some(Outcome::Succeeded));
 
     // The assessment: the facts, a label and the sentence that produced it.
@@ -431,11 +431,11 @@ fn a_collected_job_is_analysed_reported_and_finished() {
         ]
     );
     assert!(w.lane_file().collected.is_empty());
-    let copy: Job = serde_json::from_slice(
+    let copy: Run = serde_json::from_slice(
         &std::fs::read(w.fx.store.job_dir(&job.id).join("job.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(copy.state, JobState::Succeeded);
+    assert_eq!(copy.state, RunState::Succeeded);
     assert_eq!(copy.assessment, done.assessment);
     // No VM command was needed.
     assert!(waiter.engine_mut().sent_names().is_empty());
@@ -462,7 +462,7 @@ fn the_assessment_event_is_sent_once_and_the_label_follows_the_policy_rules() {
             .unwrap()
             .0
             .into_iter()
-            .filter(|e| matches!(e.body, EventBody::JobAssessment { .. }))
+            .filter(|e| matches!(e.body, EventBody::RunAssessment { .. }))
             .count();
     assert_eq!(sent, 1);
 }
@@ -573,7 +573,7 @@ fn a_policy_without_formats_skips_report_and_a_policy_without_work_skips_analyse
     );
     assert_eq!(done.assessment.unwrap().label, Some(Label::Inconclusive));
     // Triage did not run, so there is nothing to report either.
-    assert_eq!(done.state, JobState::Partial);
+    assert_eq!(done.state, RunState::Partial);
     assert!(warnings(&w, &job).contains(&"report_failed".to_owned()));
 }
 
@@ -592,7 +592,7 @@ fn a_missing_recording_fails_a_required_analyse_stage() {
     let failure = done.failure.unwrap();
     assert_eq!(failure.code, FailureCode::AnalysisFailed);
     assert_eq!(failure.stage, Stage::Analyse);
-    assert_eq!(done.state, JobState::Failed);
+    assert_eq!(done.state, RunState::Failed);
     assert!(w.lane_file().collected.is_empty(), "the lane let it go");
     // The recording is the engine's to keep: the job did not touch it.
     assert!(!w.fx.store.job_dir(&job.id).join("artifacts").exists());
@@ -611,7 +611,7 @@ fn a_failed_scan_in_a_stage_the_policy_does_not_require_is_a_warning_and_partial
     let job = collected(&w, 1);
     let mut waiter = w.engine(|_| {});
     let done = finished(host(&w, &mut waiter, &job));
-    assert_eq!(done.state, JobState::Partial);
+    assert_eq!(done.state, RunState::Partial);
     let codes = warnings(&w, &job);
     assert!(codes.contains(&"analysis_failed".to_owned()), "{codes:?}");
     assert!(codes.contains(&"report_failed".to_owned()), "{codes:?}");
@@ -656,7 +656,7 @@ fn a_run_whose_scan_failed_still_gets_its_digest_and_a_partial_one_is_a_warning(
     );
     let mut waiter = w.engine(|_| {});
     let done = finished(host(&w, &mut waiter, &job));
-    assert_eq!(done.state, JobState::Partial);
+    assert_eq!(done.state, RunState::Partial);
     let digest = antinomie_monitor_core::run_digest::RunDigest::read(&run_dir(&w))
         .expect("the digest was built although the scan failed");
     let coverage = digest.coverage.unwrap();
@@ -696,7 +696,7 @@ fn a_report_that_cannot_be_written_fails_a_required_report_and_degrades_otherwis
     let job = collected(&w, 1);
     let mut waiter = w.engine(|_| {});
     let done = finished(host(&w, &mut waiter, &job));
-    assert_eq!(done.state, JobState::Partial);
+    assert_eq!(done.state, RunState::Partial);
     assert!(warnings(&w, &job).contains(&"report_failed".to_owned()));
 }
 
@@ -764,7 +764,7 @@ fn a_cancel_during_the_scan_ends_the_job_cancelled_and_keeps_the_recording() {
     let Hosted::Cancelled(done) = hosted else {
         panic!("cancelled: {hosted:?}");
     };
-    assert_eq!(done.state, JobState::Cancelled);
+    assert_eq!(done.state, RunState::Cancelled);
     assert!(
         run_dir(&w).join("run.json").is_file(),
         "the recording is kept"
@@ -783,7 +783,7 @@ fn a_cancel_before_the_stages_start_is_honoured_and_a_shutdown_cancel_requeues()
     let Hosted::Cancelled(done) = host(&w, &mut waiter, &job) else {
         panic!("cancelled");
     };
-    assert_eq!(done.state, JobState::Cancelled);
+    assert_eq!(done.state, RunState::Cancelled);
     assert!(done.artifacts.is_empty() && done.assessment.is_none());
 
     let w = world("host-shutdown");
@@ -791,7 +791,7 @@ fn a_cancel_before_the_stages_start_is_honoured_and_a_shutdown_cancel_requeues()
     w.fx.store.cancel_for_shutdown(&job.id).unwrap();
     let mut waiter = w.engine(|_| {});
     assert!(matches!(host(&w, &mut waiter, &job), Hosted::Requeued));
-    assert_eq!(w.job(&job.id).state, JobState::Queued);
+    assert_eq!(w.job(&job.id).state, RunState::Queued);
     assert!(w.lane_file().collected.is_empty());
 }
 
@@ -815,7 +815,7 @@ fn analysis_failed_is_repeated_in_place_when_the_policy_retries_it() {
     let job = collected(&w, 1);
     let mut waiter = w.engine(|_| {});
     let done = finished(host(&w, &mut waiter, &job));
-    assert_eq!(done.state, JobState::Succeeded);
+    assert_eq!(done.state, RunState::Succeeded);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(warnings(&w, &job), ["analysis_retry"]);
     assert_eq!(
@@ -878,7 +878,7 @@ fn engines_run_after_the_scan_and_a_failed_or_skipped_one_is_reported() {
     let job = collected(&w, 1);
     let mut waiter = w.engine(|_| {});
     let done = finished(host(&w, &mut waiter, &job));
-    assert_eq!(done.state, JobState::Partial, "an engine that failed");
+    assert_eq!(done.state, RunState::Partial, "an engine that failed");
     let all = w.job(&job.id).warnings;
     assert!(
         all.iter()
@@ -947,7 +947,7 @@ fn the_static_analysis_of_the_library_copy_goes_through_the_engine() {
         }
     });
     let done = finished(host(&w, &mut waiter, &job));
-    assert_eq!(done.state, JobState::Succeeded);
+    assert_eq!(done.state, RunState::Succeeded);
     // One work item per tool (ANT-T0454): one analysis each.
     let sent = waiter.engine_mut().sent();
     assert_eq!(sent.len(), 2);
@@ -973,7 +973,7 @@ fn a_refused_or_unfinished_static_analysis_is_a_problem_not_a_stop() {
         fake.on("AnalyzeSample").fail("bubblewrap is not usable");
     });
     let done = finished(host(&w, &mut waiter, &job));
-    assert_eq!(done.state, JobState::Partial);
+    assert_eq!(done.state, RunState::Partial);
     let texts: Vec<_> = w
         .job(&job.id)
         .warnings
@@ -999,7 +999,7 @@ fn a_refused_or_unfinished_static_analysis_is_a_problem_not_a_stop() {
             .ok("rep-1");
     });
     let done = finished(host(&w, &mut waiter, &job));
-    assert_eq!(done.state, JobState::Partial);
+    assert_eq!(done.state, RunState::Partial);
     let took = (w.fx.clock.now_ms() - began) / 1000;
     assert!(
         (120..200).contains(&took),
@@ -1023,7 +1023,7 @@ fn a_refused_or_unfinished_static_analysis_is_a_problem_not_a_stop() {
             .ok("rep-1");
     });
     let done = finished(host(&w, &mut waiter, &job));
-    assert_eq!(done.state, JobState::Partial);
+    assert_eq!(done.state, RunState::Partial);
 }
 
 #[test]
@@ -1066,7 +1066,7 @@ fn analyse_with(
     required_stage: bool,
     required_checks: Vec<crate::api::spec::StaticCheck>,
     report: antinomie_monitor_core::analysis::AnalysisReport,
-) -> (W, Job, Hosted) {
+) -> (W, Run, Hosted) {
     let w = world_with(name, |p| {
         static_policy(p);
         if required_stage {
@@ -1095,7 +1095,7 @@ fn a_timed_out_optional_check_makes_the_job_partial_even_when_analyse_is_require
     );
     let (w, job, hosted) = analyse_with("host-static-timeout", true, Vec::new(), report);
     let done = finished(hosted);
-    assert_eq!(done.state, JobState::Partial);
+    assert_eq!(done.state, RunState::Partial);
     assert!(done.failure.is_none());
     let warnings = w.job(&job.id).warnings;
     assert!(
@@ -1142,7 +1142,7 @@ fn a_required_check_that_times_out_fails_the_analyse_stage() {
         vec![crate::api::spec::StaticCheck::Metadata],
         report,
     );
-    assert_eq!(finished(hosted).state, JobState::Partial);
+    assert_eq!(finished(hosted).state, RunState::Partial);
 }
 
 #[test]
@@ -1159,7 +1159,7 @@ fn static_checks_that_all_finish_leave_the_job_succeeded() {
         report,
     );
     let done = finished(hosted);
-    assert_eq!(done.state, JobState::Succeeded);
+    assert_eq!(done.state, RunState::Succeeded);
     assert!(w.job(&job.id).warnings.is_empty());
 }
 
@@ -1176,7 +1176,7 @@ fn an_engine_that_dies_leaves_the_job_for_the_resume_and_the_resume_finishes_it(
     let hosted = host(&w, &mut waiter, &job);
     assert!(matches!(hosted, Hosted::Aborted(_)), "{hosted:?}");
     let stuck = w.job(&job.id);
-    assert_eq!(stuck.state, JobState::Running);
+    assert_eq!(stuck.state, RunState::Running);
     assert_eq!(
         w.lane_file().collected.len(),
         1,
@@ -1195,7 +1195,7 @@ fn an_engine_that_dies_leaves_the_job_for_the_resume_and_the_resume_finishes_it(
             .ok("rep-1");
     });
     let done = finished(w.stages(&mut fresh).resume_host(&stuck));
-    assert_eq!(done.state, JobState::Succeeded);
+    assert_eq!(done.state, RunState::Succeeded);
     assert_eq!(done.artifacts.len(), 2);
     assert!(w.lane_file().collected.is_empty());
     let analyse: Vec<_> = stage_events(&w, &job)
@@ -1226,7 +1226,7 @@ fn the_resume_reads_incomplete_evidence_as_partial() {
     let job = collected(&w, 1);
     let mut waiter = w.engine(|_| {});
     let done = finished(w.stages(&mut waiter).resume_host(&job));
-    assert_eq!(done.state, JobState::Partial);
+    assert_eq!(done.state, RunState::Partial);
 }
 
 #[test]
@@ -1258,7 +1258,7 @@ fn a_tool_with_nothing_to_give_is_named_in_its_warning() {
         &[("metadata", "complete"), ("structures", "unavailable")],
     );
     let (w, job, hosted) = analyse_with("host-static-unavailable", false, Vec::new(), report);
-    assert_eq!(finished(hosted).state, JobState::Partial);
+    assert_eq!(finished(hosted).state, RunState::Partial);
     let warnings = w.job(&job.id).warnings;
     assert!(
         warnings.iter().any(|x| x.code == "static_check_incomplete"

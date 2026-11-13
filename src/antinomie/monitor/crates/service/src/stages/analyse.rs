@@ -14,7 +14,7 @@
 //!    worker thread bounded by the item's limit and a cancel flag.
 //! 3. **The assessment** (item `assess`): the Triage summary and the
 //!    detections go through the preset's verdict mapping ([`crate::verdict`]);
-//!    the result is stored with the job (`job.assessment`). It is computed
+//!    the result is stored with the job (`run.assessment`). It is computed
 //!    here and not in `report`, so a job that asks for no report still has
 //!    its label (departure from 4.1, which has `report` build it).
 //!
@@ -34,7 +34,7 @@ use super::{
     plan::HostPlan,
 };
 use crate::{
-    api::job::{Job, Stage},
+    api::run::{Run, Stage},
     engine::Engine,
     verdict::{Facts, Mapping, assessment_of},
     waiter::{WaitError, millis},
@@ -239,7 +239,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// it to end, and the item has timed out.
     pub(super) fn static_item(
         &mut self,
-        job: &Job,
+        job: &Run,
         plan: &HostPlan,
         group: &[AnalysisKind],
         limit: Duration,
@@ -395,7 +395,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// result is the problem in words, with whether the limit ended it.
     pub(super) fn triage_item(
         &mut self,
-        job: &Job,
+        job: &Run,
         limit: Duration,
     ) -> Result<TriageDone, StageStop> {
         let triage: &dyn HostTriage = self.env.triage;
@@ -425,7 +425,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// whether the limit ended the item.
     pub(super) fn detection_item(
         &mut self,
-        job: &Job,
+        job: &Run,
         plan: &HostPlan,
         scanned: &(SavedRun, ArchiveScan),
         limit: Duration,
@@ -491,7 +491,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// The summary and detections of the scanned run, through the mapping.
     pub(super) fn assess(
         &mut self,
-        job: &Job,
+        job: &Run,
         scanned: Option<&(SavedRun, ArchiveScan)>,
         problems: &mut Vec<String>,
         limit: Duration,
@@ -503,7 +503,7 @@ impl<E: Engine> LaneStages<'_, E> {
         let current = store
             .get(&job.id)
             .map_err(|e| self.store_error(Stage::Analyse, e))?;
-        let end_reason = current.run.as_ref().and_then(|run| run.end_reason);
+        let end_reason = current.program.as_ref().and_then(|run| run.end_reason);
         let triage: &dyn HostTriage = self.env.triage;
         let datasets = triage.ioc_datasets();
         let mapping = match Mapping::compile(&frozen.preset.verdict) {
@@ -558,7 +558,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// adds once the stage is not failing (a retry makes the digest again).
     pub(super) fn digest(
         &mut self,
-        job: &Job,
+        job: &Run,
         limit: Duration,
     ) -> Result<Option<String>, StageStop> {
         if job.recording.is_none() {
@@ -579,7 +579,7 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 }
 
-fn facts_of(built: &Built, end_reason: Option<crate::api::job::EndReason>, datasets: u32) -> Facts {
+fn facts_of(built: &Built, end_reason: Option<crate::api::run::EndReason>, datasets: u32) -> Facts {
     let report = built.report();
     Facts::of_report(
         &built.summary(),

@@ -109,23 +109,26 @@ fn every_recording_read_is_served_and_equals_the_direct_read_of_the_same_run() {
 
     // Class C: the list, one run, a trace page, the custody list.
     for (op, params) in [
-        ("recording.run.list", json!({})),
-        ("recording.run.get", json!({"run_key": standard_run.key()})),
+        ("recording.list", json!({})),
+        (
+            "recording.get",
+            json!({"recording_key": standard_run.key()}),
+        ),
         (
             "recording.trace.page",
-            json!({"run_key": standard_run.key()}),
+            json!({"recording_key": standard_run.key()}),
         ),
         (
             "recording.process.tree",
-            json!({"run_key": standard_run.key()}),
+            json!({"recording_key": standard_run.key()}),
         ),
         (
             "recording.artifact.list",
-            json!({"run_key": standard_run.key()}),
+            json!({"recording_key": standard_run.key()}),
         ),
         (
             "recording.analysis.list",
-            json!({"run_key": standard_run.key()}),
+            json!({"recording_key": standard_run.key()}),
         ),
     ] {
         let over_socket = call(&svc, op, params.clone()).unwrap();
@@ -143,19 +146,19 @@ fn every_recording_read_is_served_and_equals_the_direct_read_of_the_same_run() {
     // same objects as the in-process service gives.
     let key = rwx.key();
     for (op, params) in [
-        ("recording.summary", json!({"run_key": key})),
-        ("recording.findings.list", json!({"run_key": key})),
-        ("recording.indicators.list", json!({"run_key": key})),
+        ("recording.summary", json!({"recording_key": key})),
+        ("recording.findings.list", json!({"recording_key": key})),
+        ("recording.indicators.list", json!({"recording_key": key})),
         (
             "recording.files.list",
-            json!({"run_key": key, "tab": "opened"}),
+            json!({"recording_key": key, "tab": "opened"}),
         ),
-        ("recording.network.summary", json!({"run_key": key})),
+        ("recording.network.summary", json!({"recording_key": key})),
         (
             "recording.network.list",
-            json!({"run_key": key, "tab": "endpoints"}),
+            json!({"recording_key": key, "tab": "endpoints"}),
         ),
-        ("recording.timeline", json!({"run_key": key})),
+        ("recording.timeline", json!({"recording_key": key})),
     ] {
         let over_socket = settled(&svc, op, params.clone(), &socket_ctx()).unwrap();
         let started = Instant::now();
@@ -177,7 +180,7 @@ fn every_recording_read_is_served_and_equals_the_direct_read_of_the_same_run() {
     let summary = settled(
         &svc,
         "recording.summary",
-        json!({"run_key": key}),
+        json!({"recording_key": key}),
         &socket_ctx(),
     )
     .unwrap();
@@ -199,22 +202,26 @@ fn bytes_the_sample_produced_need_the_sensitive_scope_over_the_socket() {
     // A reader sees the rows and the artifact list ...
     assert!(
         svc.service
-            .call("recording.artifact.list", json!({"run_key": key}), &reader)
+            .call(
+                "recording.artifact.list",
+                json!({"recording_key": key}),
+                &reader
+            )
             .is_ok()
     );
     // ... and none of the bytes the sample produced.
     for (op, params) in [
         (
             "recording.captured.read",
-            json!({"run_key": key, "field": "x", "offset": "0", "len": 4}),
+            json!({"recording_key": key, "field": "x", "offset": "0", "len": 4}),
         ),
         (
             "recording.files.content",
-            json!({"run_key": key, "version_id": "v1", "range": {"offset": 0, "len": 4}}),
+            json!({"recording_key": key, "version_id": "v1", "range": {"offset": 0, "len": 4}}),
         ),
         (
             "recording.network.packet",
-            json!({"run_key": key, "capture_id": "c1", "n": 1}),
+            json!({"recording_key": key, "capture_id": "c1", "n": 1}),
         ),
     ] {
         let error = svc.service.call(op, params, &reader).unwrap_err();
@@ -227,7 +234,12 @@ fn bytes_the_sample_produced_need_the_sensitive_scope_over_the_socket() {
     }
     // The artifact bytes of a capture or a core are refused the same way,
     // before any file is touched.
-    let listed = call(&svc, "recording.artifact.list", json!({"run_key": key})).unwrap();
+    let listed = call(
+        &svc,
+        "recording.artifact.list",
+        json!({"recording_key": key}),
+    )
+    .unwrap();
     let sensitive: Vec<&Value> = listed["items"]
         .as_array()
         .unwrap()
@@ -240,7 +252,7 @@ fn bytes_the_sample_produced_need_the_sensitive_scope_over_the_socket() {
     );
     for artifact in sensitive {
         let params = json!({
-            "run_key": key, "artifact_id": artifact["id"],
+            "recording_key": key, "artifact_id": artifact["id"],
             "range": {"offset": 0, "len": 8},
         });
         let error = svc
@@ -273,7 +285,7 @@ fn a_reader_without_read_is_refused_every_recording_read() {
         transport: Transport::Socket,
     };
     for op in [
-        "recording.run.list",
+        "recording.list",
         "recording.summary",
         "sample.list",
         "vm.list",
@@ -294,7 +306,7 @@ fn run_keys_that_name_nothing_or_something_outside_are_not_found() {
         "../../etc:boot-1:run-1",
         "no-vm:boot-1:run-1",
     ] {
-        let error = call(&svc, "recording.run.get", json!({"run_key": key})).unwrap_err();
+        let error = call(&svc, "recording.get", json!({"recording_key": key})).unwrap_err();
         assert!(
             matches!(error.code, ErrorCode::NotFound | ErrorCode::InvalidArgument),
             "{key}: {:?}",
@@ -353,7 +365,7 @@ fn the_library_is_listed_paged_filtered_and_shown_over_the_socket() {
         "tags",
         "first_seen_ms",
         "run_count",
-        "last_job",
+        "last_run",
         "custody_ok",
     ] {
         assert!(all["samples"][0].get(key).is_some(), "missing {key}");
@@ -707,11 +719,11 @@ fn the_reads_work_over_a_real_socket_with_the_same_answers() {
     let thread = std::thread::spawn(move || server.serve());
     let mut client = Client::connect(&path, Duration::from_secs(5)).unwrap();
     for (op, params) in [
-        ("recording.run.list", json!({})),
-        ("recording.run.get", json!({"run_key": run.key()})),
+        ("recording.list", json!({})),
+        ("recording.get", json!({"recording_key": run.key()})),
         (
             "recording.trace.page",
-            json!({"run_key": run.key(), "limit": 5}),
+            json!({"recording_key": run.key(), "limit": 5}),
         ),
         ("sample.list", json!({})),
         ("sample.get", json!({"sha256": script})),
@@ -725,7 +737,7 @@ fn the_reads_work_over_a_real_socket_with_the_same_answers() {
     }
     // The identity is the socket's, never a member of the request.
     let error = client
-        .call("recording.run.list", json!({"client_id": "web:mallory"}))
+        .call("recording.list", json!({"client_id": "web:mallory"}))
         .unwrap_err();
     assert!(error.to_string().contains("client_id"), "{error}");
     drop(client);
@@ -756,13 +768,18 @@ fn the_service_log_records_sensitive_reads_with_caller_run_and_size_never_the_by
     let triple = format!("{vm}:{boot}:{id}");
 
     // Reads of the rows and refused reads write nothing.
-    call(&svc, "recording.run.list", json!({})).unwrap();
-    call(&svc, "recording.artifact.list", json!({"run_key": key})).unwrap();
+    call(&svc, "recording.list", json!({})).unwrap();
+    call(
+        &svc,
+        "recording.artifact.list",
+        json!({"recording_key": key}),
+    )
+    .unwrap();
     let denied = svc
         .service
         .call(
             "recording.captured.read",
-            json!({"run_key": key, "field": "x", "offset": "0", "len": 4}),
+            json!({"recording_key": key, "field": "x", "offset": "0", "len": 4}),
             &reader(),
         )
         .unwrap_err();
@@ -770,7 +787,12 @@ fn the_service_log_records_sensitive_reads_with_caller_run_and_size_never_the_by
     assert!(lines.lock().unwrap().is_empty(), "{:?}", lines.lock());
 
     // The bytes of a capture or a core.
-    let listed = call(&svc, "recording.artifact.list", json!({"run_key": key})).unwrap();
+    let listed = call(
+        &svc,
+        "recording.artifact.list",
+        json!({"recording_key": key}),
+    )
+    .unwrap();
     let mut served = Vec::new();
     for artifact in listed["items"].as_array().unwrap() {
         if artifact["sensitive"] != json!(true) {
@@ -779,7 +801,7 @@ fn the_service_log_records_sensitive_reads_with_caller_run_and_size_never_the_by
         let reply = call(
             &svc,
             "recording.artifact.get",
-            json!({"run_key": key, "artifact_id": artifact["id"], "range": {"offset": 0, "len": 8}}),
+            json!({"recording_key": key, "artifact_id": artifact["id"], "range": {"offset": 0, "len": 8}}),
         )
         .unwrap();
         served.push((
@@ -803,7 +825,7 @@ fn the_service_log_records_sensitive_reads_with_caller_run_and_size_never_the_by
         assert_eq!(
             line,
             &format!(
-                "sensitive read: caller={owner} op=recording.artifact.get run={triple} size={len}"
+                "sensitive read: caller={owner} op=recording.artifact.get recording={triple} size={len}"
             )
         );
     }
@@ -826,7 +848,7 @@ fn run_list_shows_the_job_that_made_a_run_the_same_through_the_daemon_and_in_pro
     use crate::{
         api::{
             ids::LaneId,
-            job::{JobRecording, RecordingPhase},
+            run::{RecordingPhase, RunRecording},
         },
         store::{Eligibility, JobPatch, job_index::StoreJobIndex},
     };
@@ -846,11 +868,11 @@ fn run_list_shows_the_job_that_made_a_run_the_same_through_the_daemon_and_in_pro
         .patch(
             &job.id,
             JobPatch {
-                recording: Some(JobRecording {
+                recording: Some(RunRecording {
                     vm_id: VM.into(),
                     boot_id: made.boot.clone(),
                     run_id: made.id.clone(),
-                    run_key: made.key().to_string(),
+                    recording_key: made.key().to_string(),
                     phase: RecordingPhase::Complete,
                     directory: None,
                 }),
@@ -860,19 +882,19 @@ fn run_list_shows_the_job_that_made_a_run_the_same_through_the_daemon_and_in_pro
         .unwrap();
 
     // The daemon's reads.
-    let list = call(&svc, "recording.run.list", json!({})).unwrap();
+    let list = call(&svc, "recording.list", json!({})).unwrap();
     let job_of = |list: &Value, run: &str| {
         list["items"]
             .as_array()
             .unwrap()
             .iter()
             .find(|item| item["run_id"] == run)
-            .map(|item| item["job_id"].clone())
+            .map(|item| item["from_run"].clone())
             .unwrap()
     };
     assert_eq!(job_of(&list, "run-made"), json!(job.id.as_str()));
     assert_eq!(job_of(&list, "run-other"), Value::Null);
-    let found = call(&svc, "recording.run.list", json!({"job_id": job.id})).unwrap();
+    let found = call(&svc, "recording.list", json!({"from_run": job.id})).unwrap();
     assert_eq!(found["items"].as_array().unwrap().len(), 1);
     assert_eq!(found["items"][0]["run_id"], "run-made");
 
@@ -882,17 +904,17 @@ fn run_list_shows_the_job_that_made_a_run_the_same_through_the_daemon_and_in_pro
     let index = StoreJobIndex::open_read_only(&options.data_dir).expect("the store is there");
     let direct = crate::query::QueryService::new(options).with_jobs(Arc::new(index));
     let ctx = ReadContext::local_owner("local:1");
-    for params in [json!({}), json!({"job_id": job.id})] {
+    for params in [json!({}), json!({"from_run": job.id})] {
         let in_process = serde_json::to_value(
             direct
                 .read(
-                    RecordingRead::parse("recording.run.list", params.clone()).unwrap(),
+                    RecordingRead::parse("recording.list", params.clone()).unwrap(),
                     &ctx,
                 )
                 .unwrap(),
         )
         .unwrap();
-        let over_socket = call(&svc, "recording.run.list", params).unwrap();
+        let over_socket = call(&svc, "recording.list", params).unwrap();
         assert_eq!(in_process, over_socket, "the same list both ways");
     }
     // Without a job store, direct mode lists runs without jobs and creates none.

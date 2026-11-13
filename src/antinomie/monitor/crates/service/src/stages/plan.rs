@@ -5,7 +5,7 @@
 use crate::{
     api::{
         failure::FailureCode,
-        job::Stage,
+        run::Stage,
         spec::{ReportFormat, Route, RunIn},
     },
     config::{Preset, preset::kind_of, service::RevertMode},

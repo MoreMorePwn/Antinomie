@@ -6,14 +6,14 @@ use super::*;
 use crate::store::{mirror::job_events, recover::RecoveryReport};
 use std::process::Command;
 
-fn mirror_lines(fx: &Fx, id: &JobId) -> Vec<String> {
+fn mirror_lines(fx: &Fx, id: &RunId) -> Vec<String> {
     let text =
         std::fs::read_to_string(fx.store.job_dir(id).join("events.ndjson")).unwrap_or_default();
     text.lines().map(str::to_owned).collect()
 }
 
 /// The mirror file equals the stored events.
-fn assert_mirror_complete(fx: &Fx, id: &JobId) {
+fn assert_mirror_complete(fx: &Fx, id: &RunId) {
     let stored = job_events(&fx.store.conn(), id).unwrap();
     let lines = mirror_lines(fx, id);
     assert_eq!(lines.len(), stored.len(), "mirror lines of {id}");
@@ -38,7 +38,7 @@ fn a_transition_killed_before_the_commit_leaves_nothing() {
     let report = fx.store.recover().unwrap();
     assert_eq!(report.requeued, []);
     assert_eq!(fx.store.get(&job.id).unwrap(), before);
-    assert_eq!(kinds(&fx, &job.id), ["job.created"]);
+    assert_eq!(kinds(&fx, &job.id), ["run.created"]);
     // And the work can simply be done again.
     assert_eq!(
         fx.store
@@ -58,10 +58,10 @@ fn a_kill_after_the_commit_leaves_the_state_and_recovery_appends_the_mirror() {
     assert!(fx.store.cancel(&job.id, None, &caller(1000)).is_err());
     fx.reopen();
     // The transition is there: state and events.
-    assert_eq!(fx.store.get(&job.id).unwrap().state, JobState::Cancelled);
+    assert_eq!(fx.store.get(&job.id).unwrap().state, RunState::Cancelled);
     assert_eq!(
         kinds(&fx, &job.id),
-        ["job.created", "job.state", "job.finished"]
+        ["run.created", "run.state", "run.finished"]
     );
     // The mirror lacks its last lines until recovery.
     assert_eq!(mirror_lines(&fx, &job.id).len(), 1);
@@ -115,12 +115,12 @@ fn a_job_left_running_is_requeued_once_without_counting_the_attempt() {
     let queued = fx.store.get(&job.id).unwrap();
     assert_eq!(
         (queued.state, queued.stage, queued.lane, queued.attempt),
-        (JobState::Queued, None, None, 1)
+        (RunState::Queued, None, None, 1)
     );
     let types = kinds(&fx, &job.id);
     assert_eq!(
         types[types.len() - 3..],
-        ["job.stage", "job.requeued", "job.state"]
+        ["run.stage", "run.requeued", "run.state"]
     );
     let (code, detail): (String, String) = fx
         .store
@@ -174,7 +174,7 @@ fn a_job_left_running_is_requeued_once_without_counting_the_attempt() {
     let second = fx.store.recover().unwrap();
     assert_eq!(second.failed, std::slice::from_ref(&job.id));
     let failed = fx.store.get(&job.id).unwrap();
-    assert_eq!(failed.state, JobState::Failed);
+    assert_eq!(failed.state, RunState::Failed);
     assert_eq!(failed.failure.unwrap().code, FailureCode::GuestLost);
 }
 
@@ -187,13 +187,13 @@ fn a_cancel_in_progress_is_finished_or_requeued_by_its_reason() {
         .unwrap();
     let mut other = fx.running(2);
     other = fx.store.cancel_for_shutdown(&other.id).unwrap();
-    assert_eq!(other.state, JobState::Cancelling);
+    assert_eq!(other.state, RunState::Cancelling);
     fx.reopen();
     let report = fx.store.recover().unwrap();
     assert_eq!(report.cancelled, std::slice::from_ref(&user.id));
     assert_eq!(report.requeued, std::slice::from_ref(&other.id));
-    assert_eq!(fx.store.get(&user.id).unwrap().state, JobState::Cancelled);
-    assert_eq!(fx.store.get(&other.id).unwrap().state, JobState::Queued);
+    assert_eq!(fx.store.get(&user.id).unwrap().state, RunState::Cancelled);
+    assert_eq!(fx.store.get(&other.id).unwrap().state, RunState::Queued);
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn a_real_process_kill_at_each_point_leaves_a_store_that_recovers() {
             _ => Fault::MidMirror,
         };
         let store = Store::open(std::path::Path::new(&dir)).unwrap();
-        let id = JobId::try_from(std::env::var("ANT_STORE_CRASH_JOB").unwrap()).unwrap();
+        let id = RunId::try_from(std::env::var("ANT_STORE_CRASH_JOB").unwrap()).unwrap();
         store.inject_fault(point, FaultAction::Abort);
         let _ = store.claim_next(&lane(), &mut |_| Eligibility::Ready);
         let _ = store.cancel(&id, None, &caller(1000));
@@ -257,14 +257,14 @@ fn a_real_process_kill_at_each_point_leaves_a_store_that_recovers() {
         match point {
             // Nothing committed: the job is still queued, as before.
             "before" => {
-                assert_eq!(state.state, JobState::Queued);
-                assert_eq!(kinds(&fx, &job.id), ["job.created"]);
+                assert_eq!(state.state, RunState::Queued);
+                assert_eq!(kinds(&fx, &job.id), ["run.created"]);
             }
             // The claim committed; the job was running when the process died,
             // so recovery put it back.
             _ => {
                 assert_eq!(report.requeued, std::slice::from_ref(&job.id), "{point}");
-                assert_eq!(state.state, JobState::Queued);
+                assert_eq!(state.state, RunState::Queued);
             }
         }
         assert_mirror_complete(&fx, &job.id);

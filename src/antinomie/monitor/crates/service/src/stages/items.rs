@@ -21,7 +21,7 @@ use crate::{
     api::{
         event::StageStatus,
         failure::{Failure, FailureCode},
-        job::{HostItem, HostItemState, Job, Outcome, Stage},
+        run::{HostItem, HostItemState, Outcome, Run, Stage},
     },
     engine::Engine,
     store::lock,
@@ -223,7 +223,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// Run one item with no job deadline; what it found goes into `work`.
     pub fn run_item(
         &mut self,
-        job: &Job,
+        job: &Run,
         work: &Mutex<JobWork>,
         kind: &ItemKind,
         limit: Duration,
@@ -235,7 +235,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// which also bounds the wait for the engine to take a static item.
     pub fn run_item_until(
         &mut self,
-        job: &Job,
+        job: &Run,
         work: &Mutex<JobWork>,
         kind: &ItemKind,
         limit: Duration,
@@ -329,7 +329,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// covers the three steps together.
     fn assess_item(
         &mut self,
-        job: &Job,
+        job: &Run,
         work: &Mutex<JobWork>,
         plan: &HostPlan,
         scan: Option<Arc<(SavedRun, ArchiveScan)>>,
@@ -378,7 +378,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     /// The first `analyse` item starts: the stage begins (not when the
     /// analysis was skipped; `assess` records that).
-    pub fn begin_analyse(&mut self, job: &Job, plan: &HostPlan) -> Result<(), StageStop> {
+    pub fn begin_analyse(&mut self, job: &Run, plan: &HostPlan) -> Result<(), StageStop> {
         self.cancel_point(job)?;
         if plan.analyse_skipped() {
             return Ok(());
@@ -393,7 +393,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// Every `analyse` item has ended: a problem in a required stage fails
     /// it (or the stages run again), otherwise each problem is a warning and
     /// the job is `partial`. A skipped report is recorded here.
-    pub fn end_analyse(&mut self, job: &Job, work: &mut JobWork) -> Result<PhaseEnd, StageStop> {
+    pub fn end_analyse(&mut self, job: &Run, work: &mut JobWork) -> Result<PhaseEnd, StageStop> {
         let store = self.env.store;
         if !work.plan.analyse_skipped() {
             if !work.problems.is_empty() && work.plan.requires(Stage::Analyse) {
@@ -431,7 +431,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     fn retry_or_fail(
         &mut self,
-        job: &Job,
+        job: &Run,
         work: &mut JobWork,
         failure: Failure,
     ) -> Result<PhaseEnd, StageStop> {
@@ -451,7 +451,7 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 
     /// The report item starts.
-    pub fn begin_report(&mut self, job: &Job) -> Result<(), StageStop> {
+    pub fn begin_report(&mut self, job: &Run) -> Result<(), StageStop> {
         self.cancel_point(job)?;
         self.env
             .store
@@ -461,7 +461,7 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 
     /// The report item has ended.
-    pub fn end_report(&mut self, job: &Job, work: &mut JobWork) -> Result<PhaseEnd, StageStop> {
+    pub fn end_report(&mut self, job: &Run, work: &mut JobWork) -> Result<PhaseEnd, StageStop> {
         let store = self.env.store;
         let Some(failure) = work.report_failure.take() else {
             store
@@ -493,9 +493,9 @@ impl<E: Engine> LaneStages<'_, E> {
     /// `cleanup`: the library tags and the end of the job.
     pub fn conclude(
         &mut self,
-        job: &Job,
+        job: &Run,
         work: &JobWork,
-    ) -> Result<(Job, Option<String>), StageStop> {
+    ) -> Result<(Run, Option<String>), StageStop> {
         self.cancel_point(job)?;
         let store = self.env.store;
         let frozen = store

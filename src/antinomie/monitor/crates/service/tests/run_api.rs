@@ -10,24 +10,24 @@ use antinomie_service::api::{
         MetricsRun, MetricsVm, StageStatus,
     },
     failure::{Failure, FailureCode},
-    ids::{ArtifactId, JobId, LaneId, Sha256Hex},
-    job::{
-        EndReason, Job, JobRecording, JobRun, JobSample, JobState, JobVm, Outcome, PresetRef,
-        RecordingPhase, Revert, Stage, Submitted, WaitingFor,
-    },
+    ids::{ArtifactId, LaneId, RunId, Sha256Hex},
     ops::{Op, Permission, Reply, Request},
-    spec::{JobSpec, Overrides, ReportFormat, Route},
+    run::{
+        EndReason, Outcome, PresetRef, RecordingPhase, Revert, Run, RunProgram, RunRecording,
+        RunSample, RunState, RunVm, Stage, Submitted, WaitingFor,
+    },
+    spec::{Overrides, ReportFormat, Route, RunRequest},
 };
 use serde_json::json;
 
 const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-fn job_id() -> JobId {
-    JobId::from_parts(1_794_000_000_000, [1; 10])
+fn job_id() -> RunId {
+    RunId::from_parts(1_794_000_000_000, [1; 10])
 }
 
-fn job(state: JobState) -> Job {
-    Job {
+fn job(state: RunState) -> Run {
+    Run {
         api_version: 1,
         id: job_id(),
         state,
@@ -41,32 +41,38 @@ fn job(state: JobState) -> Job {
         attempt: 1,
         max_attempts: 2,
         client_id: "local:1000".into(),
-        spec: serde_json::from_value(json!({"sample": {"sha256": SHA}})).unwrap(),
-        sample: Some(JobSample {
+        request: serde_json::from_value(json!({"sample": {"sha256": SHA}})).unwrap(),
+        sample: Some(RunSample {
             sha256: SHA.to_owned().try_into().unwrap(),
             size: 12,
             kind: "elf".into(),
             architecture: Some("x86_64".into()),
             name: "a.out".into(),
         }),
-        policy: PresetRef {
+        preset: PresetRef {
             name: "custom".into(),
             digest: "d".into(),
-            based_on: Some(antinomie_service::api::job::PresetBase {
+            based_on: Some(antinomie_service::api::run::PresetBase {
                 name: "standard".into(),
                 digest: "s".into(),
             }),
             changes: vec!["program.run_time_s".into()],
         },
+        settings: json!({"program": {"run_time_s": 60}}),
+        permissions_used: vec![antinomie_service::api::run::PermissionUse {
+            permission: antinomie_service::api::ops::Permission::EvidenceCoreDump,
+            field: "dumps.core_dump_on_exit".into(),
+            source: "caller".into(),
+        }],
         lane: Some(LaneId::new(1)),
-        vm: Some(JobVm {
+        vm: Some(RunVm {
             id: "vm".into(),
             name: "lane".into(),
             base_identity: None,
             revert: Revert::SnapshotDisk,
         }),
-        run: Some(JobRun {
-            run_id: "r".into(),
+        program: Some(RunProgram {
+            id: "r".into(),
             started_ms: Some(2),
             ended_ms: Some(3),
             end_reason: Some(EndReason::TimeLimit),
@@ -77,11 +83,11 @@ fn job(state: JobState) -> Job {
             trigger_notes: Vec::new(),
             pending: Vec::new(),
         }),
-        recording: Some(JobRecording {
+        recording: Some(RunRecording {
             vm_id: "vm".into(),
             boot_id: "b".into(),
             run_id: "r".into(),
-            run_key: "key".into(),
+            recording_key: "key".into(),
             phase: RecordingPhase::Finalizing,
             directory: None,
         }),
@@ -97,19 +103,20 @@ fn job(state: JobState) -> Job {
 
 #[test]
 fn a_minimal_spec_parses_and_unknown_fields_are_refused() {
-    let spec: JobSpec = serde_json::from_value(json!({"sample": {"sha256": SHA}})).unwrap();
+    let spec: RunRequest = serde_json::from_value(json!({"sample": {"sha256": SHA}})).unwrap();
     assert!(spec.validate_shape().is_ok());
     assert_eq!(
         serde_json::to_value(&spec).unwrap(),
         json!({"sample": {"sha256": SHA}})
     );
-    let error = serde_json::from_value::<JobSpec>(json!({"sample": {"sha256": SHA}, "flavour": 1}))
-        .unwrap_err()
-        .to_string();
+    let error =
+        serde_json::from_value::<RunRequest>(json!({"sample": {"sha256": SHA}, "flavour": 1}))
+            .unwrap_err()
+            .to_string();
     assert!(error.contains("flavour"), "{error}");
     // Overrides are a partial preset: a key outside its tables is refused
     // by the shape check (and a key inside one by admission).
-    let spec = serde_json::from_value::<JobSpec>(
+    let spec = serde_json::from_value::<RunRequest>(
         json!({"sample": {"sha256": SHA}, "overrides": {"base": "x"}}),
     )
     .unwrap();
@@ -118,12 +125,12 @@ fn a_minimal_spec_parses_and_unknown_fields_are_refused() {
 
 #[test]
 fn exactly_one_sample_source() {
-    let none: JobSpec = serde_json::from_value(json!({"sample": {}})).unwrap();
+    let none: RunRequest = serde_json::from_value(json!({"sample": {}})).unwrap();
     assert_eq!(none.validate_shape().unwrap_err().field, "sample");
-    let two: JobSpec =
+    let two: RunRequest =
         serde_json::from_value(json!({"sample": {"sha256": SHA, "path": "/tmp/x"}})).unwrap();
     assert_eq!(two.validate_shape().unwrap_err().field, "sample");
-    let bad_hash = serde_json::from_value::<JobSpec>(json!({"sample": {"sha256": "ABC"}}));
+    let bad_hash = serde_json::from_value::<RunRequest>(json!({"sample": {"sha256": "ABC"}}));
     assert!(bad_hash.is_err());
 }
 
@@ -131,7 +138,7 @@ fn exactly_one_sample_source() {
 fn overrides_are_a_partial_preset_in_the_documented_spellings() {
     let value = json!({
         "sample": {"sha256": SHA},
-        "name": "x.bin", "policy": "standard", "priority": 9,
+        "name": "x.bin", "preset": "standard", "priority": 9,
         "labels": {"case": "42"}, "idempotency_key": "k1",
         "overrides": {
             "program": {"run_time_s": 60, "arguments": ["-v"], "environment": ["A=1"],
@@ -146,7 +153,7 @@ fn overrides_are_a_partial_preset_in_the_documented_spellings() {
             "vm": {"keep_on_failure": false}
         }
     });
-    let spec: JobSpec = serde_json::from_value(value.clone()).unwrap();
+    let spec: RunRequest = serde_json::from_value(value.clone()).unwrap();
     assert!(spec.validate_shape().is_ok());
     assert_eq!(serde_json::to_value(&spec).unwrap(), value);
     assert_eq!(spec.overrides.0["program"]["run_time_s"], json!(60));
@@ -184,7 +191,7 @@ fn shape_limits_name_the_field() {
         for (key, item) in extra.as_object().unwrap() {
             value[key] = item.clone();
         }
-        let spec: JobSpec = serde_json::from_value(value).unwrap();
+        let spec: RunRequest = serde_json::from_value(value).unwrap();
         spec.validate_shape().unwrap_err().field
     };
     assert_eq!(check(json!({"name": "a/b"})), "name");
@@ -198,7 +205,7 @@ fn shape_limits_name_the_field() {
     // A 0.9.0 policy override is not a table of the preset format.
     assert_eq!(check(json!({"overrides": {"timeout_s": 4}})), "overrides");
     // The values are checked against the preset (admission).
-    let spec: JobSpec = serde_json::from_value(
+    let spec: RunRequest = serde_json::from_value(
         json!({"sample": {"sha256": SHA}, "overrides": {"program": {"run_time_s": 4}}}),
     )
     .unwrap();
@@ -209,14 +216,14 @@ fn shape_limits_name_the_field() {
 #[test]
 fn a_job_round_trips_and_state_equals_outcome_once_terminal() {
     for state in [
-        JobState::Queued,
-        JobState::Running,
-        JobState::Cancelling,
-        JobState::Succeeded,
-        JobState::Partial,
-        JobState::Failed,
-        JobState::Cancelled,
-        JobState::Rejected,
+        RunState::Queued,
+        RunState::Running,
+        RunState::Cancelling,
+        RunState::Succeeded,
+        RunState::Partial,
+        RunState::Failed,
+        RunState::Cancelled,
+        RunState::Rejected,
     ] {
         let job = job(state);
         let value = serde_json::to_value(&job).unwrap();
@@ -224,17 +231,28 @@ fn a_job_round_trips_and_state_equals_outcome_once_terminal() {
         assert_eq!(value["state"], serde_json::to_value(state).unwrap());
         assert_eq!(value["outcome"].is_null(), !state.is_terminal());
         if let Some(outcome) = state.outcome() {
-            assert_eq!(JobState::from(outcome), state);
+            assert_eq!(RunState::from(outcome), state);
             assert_eq!(value["outcome"], value["state"]);
         }
-        let back: Job = serde_json::from_value(value).unwrap();
+        let back: Run = serde_json::from_value(value).unwrap();
         assert_eq!(back, job);
     }
-    let value = serde_json::to_value(job(JobState::Queued)).unwrap();
+    let value = serde_json::to_value(job(RunState::Queued)).unwrap();
     assert_eq!(value["sample"]["type"], "elf");
     assert_eq!(value["waiting_for"], "layer_pending");
     assert_eq!(value["vm"]["revert"], "snapshot_disk");
-    assert_eq!(value["run"]["end_reason"], "time_limit");
+    assert_eq!(value["program"]["end_reason"], "time_limit");
+    assert_eq!(value["program"]["id"], "r");
+    assert_eq!(value["preset"]["based_on"]["name"], "standard");
+    assert_eq!(value["settings"]["program"]["run_time_s"], 60);
+    assert_eq!(
+        value["permissions_used"],
+        json!([{"permission": "evidence.core_dump", "field": "dumps.core_dump_on_exit", "source": "caller"}])
+    );
+    assert!(value["id"].as_str().unwrap().starts_with("r_"));
+    for old in ["spec", "policy", "run"] {
+        assert!(value.get(old).is_none(), "{old} is not a member of a run");
+    }
     assert_eq!(value["recording"]["phase"], "finalizing");
     assert!(
         value["recording"].get("directory").is_none(),
@@ -245,7 +263,7 @@ fn a_job_round_trips_and_state_equals_outcome_once_terminal() {
 #[test]
 fn submitted_is_a_job_plus_replayed() {
     let submitted = Submitted {
-        job: job(JobState::Queued),
+        run: job(RunState::Queued),
         replayed: true,
     };
     let value = serde_json::to_value(&submitted).unwrap();
@@ -302,7 +320,7 @@ fn stages_and_waits_use_the_documented_names() {
 fn artifact_kinds_keep_their_dotted_names_and_sensitivity() {
     let artifact = Artifact {
         id: ArtifactId::from_parts(5, [2; 10]),
-        job_id: job_id(),
+        run_id: job_id(),
         kind: ArtifactKind::NetworkPcap,
         name: "net.pcap".into(),
         size: 9,
@@ -368,7 +386,7 @@ fn event(body: EventBody) -> Event {
         gseq: Some(30),
         ts_ms: 9,
         scope: body.scope(),
-        job_id: Some(job_id()),
+        run_id: Some(job_id()),
         body,
     }
 }
@@ -377,15 +395,15 @@ fn event(body: EventBody) -> Event {
 fn every_event_type_has_its_documented_name_and_round_trips() {
     let bodies = vec![
         (
-            "job.created",
-            EventBody::JobCreated {
-                job: Box::new(job(JobState::Queued)),
+            "run.created",
+            EventBody::RunCreated {
+                run: Box::new(job(RunState::Queued)),
             },
         ),
         (
-            "job.state",
-            EventBody::JobState {
-                state: JobState::Running,
+            "run.state",
+            EventBody::RunState {
+                state: RunState::Running,
                 stage: Some(Stage::Run),
                 waiting_for: None,
                 attempt: 1,
@@ -393,46 +411,46 @@ fn every_event_type_has_its_documented_name_and_round_trips() {
             },
         ),
         (
-            "job.stage",
-            EventBody::JobStage {
+            "run.stage",
+            EventBody::RunStage {
                 stage: Stage::Collect,
                 status: StageStatus::Finished,
                 duration_ms: Some(12),
             },
         ),
         (
-            "job.progress",
-            EventBody::JobProgress {
+            "run.progress",
+            EventBody::RunProgress {
                 stage: Stage::Provision,
                 text: "booting".into(),
                 fraction: Some(0.5),
             },
         ),
         (
-            "job.run",
-            EventBody::JobRun {
-                run_id: "r".into(),
+            "run.program",
+            EventBody::RunProgram {
+                program_id: "r".into(),
                 pid: Some(7),
                 route: Route::Drop,
             },
         ),
         (
-            "job.warning",
-            EventBody::JobWarning {
+            "run.warning",
+            EventBody::RunWarning {
                 code: "tool_missing".into(),
                 text: "capa".into(),
             },
         ),
         (
-            "job.requeued",
-            EventBody::JobRequeued {
+            "run.requeued",
+            EventBody::RunRequeued {
                 attempt: 2,
                 reason: "guest_unreachable".into(),
             },
         ),
         (
-            "job.finished",
-            EventBody::JobFinished {
+            "run.finished",
+            EventBody::RunFinished {
                 outcome: Outcome::Failed,
                 failure: Some(Failure::new(FailureCode::Internal, Stage::Run, "x", None)),
             },
@@ -442,7 +460,7 @@ fn every_event_type_has_its_documented_name_and_round_trips() {
             EventBody::LaneState {
                 lane: LaneId::new(1),
                 state: LaneState::Quarantined,
-                job_id: None,
+                run_id: None,
                 reason: Some("revert_failed".into()),
             },
         ),
@@ -454,8 +472,8 @@ fn every_event_type_has_its_documented_name_and_round_trips() {
             },
         ),
         (
-            "job.metrics",
-            EventBody::JobMetrics {
+            "run.metrics",
+            EventBody::RunMetrics {
                 stage: Stage::Run,
                 vm: MetricsVm::default(),
                 run: MetricsRun {
@@ -480,12 +498,12 @@ fn every_event_type_has_its_documented_name_and_round_trips() {
             if name.starts_with("lane") || name.starts_with("engine") {
                 "engine"
             } else {
-                "job"
+                "run"
             }
         );
         let back: Event = serde_json::from_value(value).unwrap();
         assert_eq!(back, event, "{name}");
-        assert_eq!(ephemeral, name == "job.progress" || name == "job.metrics");
+        assert_eq!(ephemeral, name == "run.progress" || name == "run.metrics");
     }
 }
 
@@ -495,9 +513,9 @@ fn ephemeral_events_carry_no_sequence() {
         seq: None,
         gseq: None,
         ts_ms: 1,
-        scope: EventScope::Job,
-        job_id: Some(job_id()),
-        body: EventBody::JobProgress {
+        scope: EventScope::Run,
+        run_id: Some(job_id()),
+        body: EventBody::RunProgress {
             stage: Stage::Upload,
             text: "x".into(),
             fraction: None,
@@ -535,13 +553,13 @@ fn hello_and_ping_are_frames() {
 #[test]
 fn socket_requests_and_replies_use_the_documented_framing() {
     let request: Request = serde_json::from_value(
-        json!({"id": 7, "op": "job.submit", "params": {"sample": {"sha256": SHA}}}),
+        json!({"id": 7, "op": "run.submit", "params": {"sample": {"sha256": SHA}}}),
     )
     .unwrap();
     assert_eq!(request.id, 7);
     assert_eq!(
         serde_json::from_value::<Op>(json!(request.op)).unwrap(),
-        Op::JobSubmit
+        Op::RunSubmit
     );
     let ok = serde_json::to_value(Reply::ok(7, json!({"deleted": true}))).unwrap();
     assert_eq!(
@@ -550,7 +568,7 @@ fn socket_requests_and_replies_use_the_documented_framing() {
     );
     let failed = serde_json::to_value(Reply::failed(
         7,
-        antinomie_service::api::ApiError::not_found("job"),
+        antinomie_service::api::ApiError::not_found("run"),
     ))
     .unwrap();
     assert_eq!(failed["ok"], false);
@@ -578,12 +596,12 @@ fn every_op_spelling_round_trips_and_has_a_scope() {
         "upload.begin",
         "upload.put",
         "upload.finish",
-        "job.submit",
-        "job.get",
-        "job.list",
-        "job.cancel",
-        "job.retry",
-        "job.delete",
+        "run.submit",
+        "run.get",
+        "run.list",
+        "run.cancel",
+        "run.rerun",
+        "run.delete",
         "events.subscribe",
         "events.list",
         "artifact.list",
@@ -594,7 +612,8 @@ fn every_op_spelling_round_trips_and_has_a_scope() {
         "sample.add",
         "sample.download",
         "sample.tag",
-        "policy.list",
+        "preset.list",
+        "preset.get",
         "queue.status",
         "queue.pause",
         "queue.resume",
@@ -609,7 +628,7 @@ fn every_op_spelling_round_trips_and_has_a_scope() {
     }
     assert_eq!(Op::SampleDownload.needs(), [Permission::SamplesDownload]);
     assert_eq!(
-        Op::JobCancel.needs(),
+        Op::RunCancel.needs(),
         [Permission::RunsSubmit, Permission::RunsManageAny]
     );
     assert_eq!(Op::QueuePause.needs(), [Permission::QueueManage]);
@@ -617,8 +636,16 @@ fn every_op_spelling_round_trips_and_has_a_scope() {
         serde_json::to_value(Permission::EvidenceDownload).unwrap(),
         json!("evidence.download")
     );
-    assert!(
-        serde_json::from_value::<Op>(json!("run.list")).is_err(),
-        "run.* is reserved"
-    );
+    // No job API ships: the names before the rename are not operations.
+    for old in [
+        "job.submit",
+        "job.get",
+        "job.retry",
+        "policy.list",
+        "run.end",
+    ] {
+        assert!(serde_json::from_value::<Op>(json!(old)).is_err(), "{old}");
+    }
+    assert_eq!(Op::PresetGet.needs(), [Permission::RunsSubmit]);
+    assert_eq!(Op::PresetList.needs(), [Permission::RunsSubmit]);
 }

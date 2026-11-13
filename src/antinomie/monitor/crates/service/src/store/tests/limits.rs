@@ -21,23 +21,23 @@ fn a_priority_above_the_ceiling_is_refused_and_one_within_it_is_kept() {
             ..Limits::default()
         },
     );
-    let ask = |n: u8, priority: u8| JobSpec {
+    let ask = |n: u8, priority: u8| RunRequest {
         priority: Some(priority),
         ..spec(n)
     };
     // Urgent (8) is above the ceiling: refused, not lowered.
     let refused = fx.submit_as(&who, ask(1, 8)).unwrap();
-    assert_eq!(refused.job.state, JobState::Rejected);
-    let failure = refused.job.failure.unwrap();
+    assert_eq!(refused.run.state, RunState::Rejected);
+    let failure = refused.run.failure.unwrap();
     assert_eq!(failure.code, FailureCode::LimitExceeded);
     assert_eq!(failure.field.as_deref(), Some("priority"));
     assert_eq!(failure.details["limit"], serde_json::json!(5));
     assert_eq!(failure.details["source"], serde_json::json!("caller"));
     // Low (2), Normal (5) and the ceiling itself pass, as asked.
     for (n, priority) in [(2, 2), (3, 5), (4, 0)] {
-        let job = fx.submit_as(&who, ask(n, priority)).unwrap().job;
-        assert_eq!(job.state, JobState::Queued);
-        assert_eq!(job.spec.priority, Some(priority));
+        let job = fx.submit_as(&who, ask(n, priority)).unwrap().run;
+        assert_eq!(job.state, RunState::Queued);
+        assert_eq!(job.request.priority, Some(priority));
     }
     // Nothing asked: Normal, or the ceiling when that is lower.
     let low = limited(
@@ -48,12 +48,12 @@ fn a_priority_above_the_ceiling_is_refused_and_one_within_it_is_kept() {
         },
     );
     assert_eq!(
-        fx.submit_as(&low, spec(5)).unwrap().job.spec.priority,
+        fx.submit_as(&low, spec(5)).unwrap().run.request.priority,
         Some(2)
     );
     // Another caller without a ceiling may ask for Urgent.
-    let free = fx.submit_as(&caller(1002), ask(6, 8)).unwrap().job;
-    assert_eq!(free.state, JobState::Queued);
+    let free = fx.submit_as(&caller(1002), ask(6, 8)).unwrap().run;
+    assert_eq!(free.state, RunState::Queued);
 }
 
 #[test]
@@ -62,22 +62,22 @@ fn waiting_time_never_raises_a_priority() {
     let low = fx
         .submit_as(
             &caller(1000),
-            JobSpec {
+            RunRequest {
                 priority: Some(2),
                 ..spec(1)
             },
         )
         .unwrap()
-        .job;
+        .run;
     fx.clock.advance(48 * 3_600_000);
-    let normal = fx.submit(spec(2)).job;
+    let normal = fx.submit(spec(2)).run;
     let first = fx
         .store
         .claim_next(&lane(), &mut |_| Eligibility::Ready)
         .unwrap()
         .unwrap();
     assert_eq!(first.id, normal.id);
-    assert_eq!(fx.store.get(&low.id).unwrap().spec.priority, Some(2));
+    assert_eq!(fx.store.get(&low.id).unwrap().request.priority, Some(2));
 }
 
 #[test]
@@ -119,12 +119,12 @@ fn a_caller_at_max_running_waits_while_the_others_go_on() {
         },
     );
     // Submitted in this order (the clock moves so the order is certain).
-    let a1 = fx.submit_as(&alice, spec(1)).unwrap().job;
+    let a1 = fx.submit_as(&alice, spec(1)).unwrap().run;
     fx.clock.advance(10);
-    let a2 = fx.submit_as(&alice, spec(2)).unwrap().job;
+    let a2 = fx.submit_as(&alice, spec(2)).unwrap().run;
     fx.clock.advance(10);
-    let b1 = fx.submit_as(&caller(1001), spec(3)).unwrap().job;
-    let cap = |job: &Job| (job.client_id == "local:1000").then_some(1);
+    let b1 = fx.submit_as(&caller(1001), spec(3)).unwrap().run;
+    let cap = |job: &Run| (job.client_id == "local:1000").then_some(1);
     let claim = || {
         fx.store
             .claim_next_within(&lane(), &cap, &mut |_| Eligibility::Ready)
@@ -135,7 +135,7 @@ fn a_caller_at_max_running_waits_while_the_others_go_on() {
     assert_eq!(claim().unwrap().id, b1.id);
     assert!(claim().is_none());
     let waiting = fx.store.get(&a2.id).unwrap();
-    assert_eq!(waiting.state, JobState::Queued);
+    assert_eq!(waiting.state, RunState::Queued);
     assert_eq!(waiting.waiting_for, Some(WaitingFor::Quota));
     // She finishes the first: the second is taken.
     fx.store.finish(&a1.id, Outcome::Succeeded, None).unwrap();
@@ -147,8 +147,8 @@ fn the_daily_limit_is_off_by_default_and_counted_per_caller_when_set() {
     let fx = Fx::new("limits-daily");
     // Not set: any number of runs in a day.
     for _ in 1..=12 {
-        let job = fx.submit_as(&caller(1000), spec(1)).unwrap().job;
-        assert_eq!(job.state, JobState::Queued);
+        let job = fx.submit_as(&caller(1000), spec(1)).unwrap().run;
+        assert_eq!(job.state, RunState::Queued);
     }
     let alice = limited(
         1001,
@@ -160,8 +160,8 @@ fn the_daily_limit_is_off_by_default_and_counted_per_caller_when_set() {
     fx.submit_as(&alice, spec(1)).unwrap();
     fx.submit_as(&alice, spec(1)).unwrap();
     let refused = fx.submit_as(&alice, spec(1)).unwrap();
-    assert_eq!(refused.job.state, JobState::Rejected);
-    let failure = refused.job.failure.unwrap();
+    assert_eq!(refused.run.state, RunState::Rejected);
+    let failure = refused.run.failure.unwrap();
     assert_eq!(failure.code, FailureCode::LimitExceeded);
     assert_eq!(failure.field.as_deref(), Some("max_runs_per_day"));
     assert_eq!(failure.details["limit"], serde_json::json!(2));
@@ -178,6 +178,6 @@ fn the_daily_limit_is_off_by_default_and_counted_per_caller_when_set() {
     fx.submit_as(&bob, spec(1)).unwrap();
     // A day later her count starts again.
     fx.clock.advance(24 * 3_600_000 + 1);
-    let again = fx.submit_as(&alice, spec(1)).unwrap().job;
-    assert_eq!(again.state, JobState::Queued, "{:?}", again.failure);
+    let again = fx.submit_as(&alice, spec(1)).unwrap().run;
+    assert_eq!(again.state, RunState::Queued, "{:?}", again.failure);
 }

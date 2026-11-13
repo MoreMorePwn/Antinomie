@@ -4,7 +4,7 @@
 //!
 //! | Channel | Config | What happens |
 //! |---|---|---|
-//! | Result drop | `[results] dir` | `<dir>/<yyyy-mm-dd>/<sha8>-<jobid>/` with `job.json` and the reports ([`results`]) |
+//! | Result drop | `[results] dir` | `<dir>/<yyyy-mm-dd>/<sha8>-<runid>/` with `job.json` and the reports ([`results`]) |
 //! | Command hook | `[notify] on_finish = ["/abs/path", "arg", ...]` | the argv is run directly, with a cleared environment holding the five `ANTINOMIE_*` variables, a 30 s limit, the output in `job.log` ([`hook`]) |
 //!
 //! Neither can fail a job: a job that ended has ended. A failure is a line
@@ -23,8 +23,8 @@ mod tests;
 
 use crate::{
     api::{
-        ids::JobId,
-        job::{Job, JobState},
+        ids::RunId,
+        run::{Run, RunState},
     },
     store::{Store, mirror::write_private},
 };
@@ -73,14 +73,14 @@ pub struct Delivery<'a> {
     pub alert: &'a dyn Fn(&str, &str),
 }
 
-fn read_marker(store: &Store, id: &JobId) -> Marker {
+fn read_marker(store: &Store, id: &RunId) -> Marker {
     std::fs::read(store.job_dir(id).join(MARKER))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
 }
 
-fn write_marker(store: &Store, id: &JobId, marker: &Marker) {
+fn write_marker(store: &Store, id: &RunId, marker: &Marker) {
     if let Ok(bytes) = serde_json::to_vec(marker) {
         let _ = write_private(&store.job_dir(id).join(MARKER), &bytes);
     }
@@ -108,7 +108,7 @@ impl Delivery<'_> {
 
     /// Deliver what is configured and not yet delivered for the ended job
     /// `id`. `Err` only when the job cannot be read or has not ended.
-    pub fn deliver(&self, id: &JobId) -> Result<Delivered, String> {
+    pub fn deliver(&self, id: &RunId) -> Result<Delivered, String> {
         let mut done = Delivered::default();
         if !self.configured() {
             return Ok(done);
@@ -164,7 +164,7 @@ impl Delivery<'_> {
         Ok(done)
     }
 
-    fn run_hook(&self, job: &Job, job_json: &std::path::Path) -> hook::HookRun {
+    fn run_hook(&self, job: &Run, job_json: &std::path::Path) -> hook::HookRun {
         let label = job
             .assessment
             .as_ref()
@@ -175,9 +175,9 @@ impl Delivery<'_> {
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_default();
-        debug_assert!(job.state != JobState::Queued);
+        debug_assert!(job.state != RunState::Queued);
         let env = [
-            ("ANTINOMIE_JOB_ID", job.id.to_string()),
+            ("ANTINOMIE_RUN_ID", job.id.to_string()),
             ("ANTINOMIE_STATE", state),
             ("ANTINOMIE_LABEL", label),
             (
@@ -206,7 +206,7 @@ impl Delivery<'_> {
     }
 
     /// The hook's output goes to the job's `job.log`, bounded.
-    fn append_job_log(&self, id: &JobId, run: &hook::HookRun) {
+    fn append_job_log(&self, id: &RunId, run: &hook::HookRun) {
         let path = self.store.job_dir(id).join("job.log");
         if std::fs::metadata(&path).is_ok_and(|m| m.len() >= JOB_LOG_LIMIT) {
             return;

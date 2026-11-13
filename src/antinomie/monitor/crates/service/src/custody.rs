@@ -2,7 +2,7 @@
 //! Custody entries for jobs (design 4.11, card P3-7): who caused what.
 //!
 //! Every library entry a job causes names the caller that submitted it:
-//! `local:<uid>`, `web:<user>` or, for a watch folder, `auto:policy-<name>`
+//! `local:<uid>`, `web:<user>` or, for a watch folder, `auto:preset-<name>`
 //! (the job's `client_id`). The intake writes `added` under that name
 //! (`Library::add_bytes_as`); the lane names it as its engine's custody actor
 //! for the job's launch (`Engine::set_custody_actor`) so that the push record
@@ -12,13 +12,13 @@
 //! `automation` per job records the job, the policy digest, the route and the
 //! submitter.
 
-use crate::api::{job::Job, spec::Route};
+use crate::api::{run::Run, spec::Route};
 use antinomie_monitor_core::samples::{self, CustodyEvent, Library, actor};
 use std::path::Path;
 
 /// The custody actor of a job: its `client_id`, when the log accepts it, else
 /// `app`.
-pub fn actor_of(job: &Job) -> String {
+pub fn actor_of(job: &Run) -> String {
     if actor::is_valid(&job.client_id) {
         job.client_id.clone()
     } else {
@@ -27,15 +27,15 @@ pub fn actor_of(job: &Job) -> String {
 }
 
 /// The actor of an entry the service writes on its own account (a tag it
-/// sets on a sample): `auto:policy-<preset>` (the preset a Custom run was
+/// sets on a sample): `auto:preset-<preset>` (the preset a Custom run was
 /// based on), else the job's own actor.
-pub fn automation_actor(job: &Job) -> String {
+pub fn automation_actor(job: &Run) -> String {
     let preset = job
-        .policy
+        .preset
         .based_on
         .as_ref()
-        .map_or(&job.policy.name, |base| &base.name);
-    let actor = format!("auto:policy-{preset}");
+        .map_or(&job.preset.name, |base| &base.name);
+    let actor = format!("auto:preset-{preset}");
     if actor::is_valid(&actor) {
         actor
     } else {
@@ -46,7 +46,7 @@ pub fn automation_actor(job: &Job) -> String {
 /// Write the `automation` entry of a job to its sample's custody log, under
 /// the job's actor, with the route its preset uses. The job must have its
 /// sample (`job.sample`).
-pub fn record_automation(data_dir: &Path, job: &Job, route: &Route) -> Result<(), String> {
+pub fn record_automation(data_dir: &Path, job: &Run, route: &Route) -> Result<(), String> {
     let sample = job.sample.as_ref().ok_or("the job has no sample yet")?;
     let by = actor_of(job);
     let library = Library::open_patient(data_dir)?.with_actor(&by)?;
@@ -56,8 +56,8 @@ pub fn record_automation(data_dir: &Path, job: &Job, route: &Route) -> Result<()
         &by,
         CustodyEvent::Automation {
             job: job.id.to_string(),
-            policy: job.policy.name.clone(),
-            policy_digest: job.policy.digest.clone(),
+            policy: job.preset.name.clone(),
+            policy_digest: job.preset.digest.clone(),
             route,
             submitted_by: job.client_id.clone(),
         },

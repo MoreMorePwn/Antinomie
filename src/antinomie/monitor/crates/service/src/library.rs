@@ -134,7 +134,7 @@ fn tag_value(tag: &Tag) -> Value {
     json!({"kind": tag.kind, "value": tag.value})
 }
 
-/// The `Sample` object of design 5.4.7. `last_job` is null until Auto mode
+/// The `Sample` object of design 5.4.7. `last_run` is null until Auto mode
 /// records jobs; `custody_ok` is null when no chain check was made.
 pub fn sample_value(
     record: &SampleRecord,
@@ -151,7 +151,7 @@ pub fn sample_value(
         "tags": tags.iter().map(tag_value).collect::<Vec<_>>(),
         "first_seen_ms": record.added_ms,
         "run_count": run_count,
-        "last_job": Value::Null,
+        "last_run": Value::Null,
         "custody_ok": custody_ok,
     })
 }

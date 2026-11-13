@@ -28,7 +28,7 @@
 use crate::{
     api::{
         ids::LaneId,
-        job::{Job, WaitingFor},
+        run::{Run, WaitingFor},
     },
     store::Eligibility,
 };
@@ -56,7 +56,7 @@ impl LaneProfile {
     /// Whether this lane's VM can run `job`: the base of the policy's lane
     /// VM (`base`, when the policy names a lane VM of the daemon) and the
     /// sample's architecture (an ELF; a script runs anywhere).
-    pub fn fits(&self, job: &Job, base: Option<&str>) -> bool {
+    pub fn fits(&self, job: &Run, base: Option<&str>) -> bool {
         if base.is_some_and(|base| base != self.base_identity) {
             return false;
         }
@@ -185,7 +185,7 @@ impl LaneBoard {
     pub fn decide(
         &self,
         me: &LaneId,
-        job: &Job,
+        job: &Run,
         lane_vm: Option<&str>,
         now_ms: u64,
     ) -> Eligibility {

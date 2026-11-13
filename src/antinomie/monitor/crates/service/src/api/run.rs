@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `Job` (design 5.4.2) and the small enums around it: states, stages, wait
+//! `Run` (design 5.4.2) and the small enums around it: states, stages, wait
 //! reasons, revert strategies, run end reasons, and the recording phase.
 
+use super::ops::Permission;
 use super::{
     artifact::Artifact,
     assessment::Assessment,
     failure::Failure,
-    ids::{JobId, LaneId, Sha256Hex},
-    spec::JobSpec,
+    ids::{LaneId, RunId, Sha256Hex},
+    spec::RunRequest,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 
-/// The job states of design 5.6. `state` and `outcome` are equal once terminal.
+/// The run states of design 5.6. `state` and `outcome` are equal once terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum JobState {
+pub enum RunState {
     Queued,
     Running,
     Cancelling,
@@ -27,7 +29,7 @@ pub enum JobState {
     Rejected,
 }
 
-impl JobState {
+impl RunState {
     pub fn is_terminal(self) -> bool {
         self.outcome().is_some()
     }
@@ -56,7 +58,7 @@ pub enum Outcome {
     Rejected,
 }
 
-impl From<Outcome> for JobState {
+impl From<Outcome> for RunState {
     fn from(outcome: Outcome) -> Self {
         match outcome {
             Outcome::Succeeded => Self::Succeeded,
@@ -85,13 +87,15 @@ pub enum Stage {
     Cleanup,
 }
 
-/// Why a `queued` job is not running yet.
+/// Why a `queued` run is not running yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitingFor {
     Lane,
     Resources,
     Dependency,
+    /// A limit of the caller: also the caller already has `max_running`
+    /// runs running (the run starts when one of them ends).
     Quota,
     QueuePaused,
     LayerPending,
@@ -131,9 +135,9 @@ pub enum RecordingPhase {
     Interrupted,
 }
 
-/// The library sample of a job, once archived.
+/// The library sample of a run, once archived.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct JobSample {
+pub struct RunSample {
     pub sha256: Sha256Hex,
     pub size: u64,
     /// From `samples::detect_type`: `elf`, `sh`, `py`, ... (lower case).
@@ -159,6 +163,18 @@ pub struct PresetRef {
     pub changes: Vec<String>,
 }
 
+/// One permission a run's options use: the permission, the preset key that
+/// uses it, and where the caller's permission came from (`caller`: the
+/// permission set of the caller, the only source before 0.9.1's roles and
+/// grants).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PermissionUse {
+    pub permission: Permission,
+    /// The dotted preset key (`network.route`).
+    pub field: String,
+    pub source: String,
+}
+
 /// The preset a Custom run started from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PresetBase {
@@ -166,9 +182,9 @@ pub struct PresetBase {
     pub digest: String,
 }
 
-/// The VM a job ran on.
+/// The VM a run ran on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct JobVm {
+pub struct RunVm {
     pub id: String,
     pub name: String,
     pub base_identity: Option<String>,
@@ -177,7 +193,7 @@ pub struct JobVm {
 
 /// One dump a dump trigger took (or tried to take).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct JobDump {
+pub struct RunDump {
     /// The artifact state: `in_progress`, `complete`, `partial`,
     /// `interrupted` or `failed`. A core is usually `partial`: the guest
     /// copies only the pages that are resident.
@@ -197,7 +213,7 @@ pub struct JobDump {
 /// A suspicious-activity match that took a dump: the rule, its tier, the
 /// process and call, and what became of the memory dump and the core.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct JobTrigger {
+pub struct RunTrigger {
     pub rule: String,
     /// `low`, `medium` or `high`.
     pub tier: String,
@@ -207,15 +223,16 @@ pub struct JobTrigger {
     /// Host Unix milliseconds of the match.
     pub at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory: Option<JobDump>,
+    pub memory: Option<RunDump>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub core: Option<JobDump>,
+    pub core: Option<RunDump>,
 }
 
-/// The program's run.
+/// The program: the sample's execution inside the run. `id` is the engine's
+/// id of that execution (the `run_id` of its recording).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct JobRun {
-    pub run_id: String,
+pub struct RunProgram {
+    pub id: String,
     pub started_ms: Option<u64>,
     pub ended_ms: Option<u64>,
     pub end_reason: Option<EndReason>,
@@ -227,7 +244,7 @@ pub struct JobRun {
     /// The dumps the preset's dump trigger took, in order; empty when the
     /// trigger is off or took none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub triggers: Vec<JobTrigger>,
+    pub triggers: Vec<RunTrigger>,
     /// What the trigger did when it took nothing, or took less than it was
     /// asked: "armed but no rule of that tier matched", matches that came too
     /// late, matches over the budget.
@@ -235,19 +252,20 @@ pub struct JobRun {
     pub trigger_notes: Vec<String>,
     /// Evidence still being written when the collect wait ended and the
     /// recording was saved without it: `analysis` (the guest-side static
-    /// checks). The job still succeeds. Empty when everything finished.
+    /// checks). The run still succeeds. Empty when everything finished.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<String>,
 }
 
-/// The recording of the job's run. `run_key` is the address of every
-/// `recording.*` read.
+/// The recording of the run's program. `recording_key` is the address of
+/// every `recording.*` read; `vm_id`, `boot_id` and `run_id` are the engine's
+/// own ids of the recorded execution (`run_id` equals `program.id`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct JobRecording {
+pub struct RunRecording {
     pub vm_id: String,
     pub boot_id: String,
     pub run_id: String,
-    pub run_key: String,
+    pub recording_key: String,
     pub phase: RecordingPhase,
     /// Local-only; absent from every remote reply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -262,12 +280,12 @@ pub struct Warning {
     pub text: String,
 }
 
-/// The job object returned by `job.get`, `job.submit` and the list.
+/// The run object returned by `run.get`, `run.submit` and `run.list`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct Job {
+pub struct Run {
     pub api_version: u32,
-    pub id: JobId,
-    pub state: JobState,
+    pub id: RunId,
+    pub state: RunState,
     /// While `running` or `cancelling`; null otherwise.
     pub stage: Option<Stage>,
     /// While `queued`: why it is not running yet; null otherwise.
@@ -282,24 +300,36 @@ pub struct Job {
     pub attempt: u32,
     pub max_attempts: u32,
     pub client_id: String,
-    pub spec: JobSpec,
-    pub sample: Option<JobSample>,
-    /// The preset (the member keeps its 0.9.0 name until the run API).
-    pub policy: PresetRef,
+    /// The request as stored: the preset's name and the priority filled in,
+    /// `overrides` reduced to the keys that changed a value.
+    pub request: RunRequest,
+    pub sample: Option<RunSample>,
+    /// The preset the run froze: its name and digest, or `custom` with the
+    /// preset it was based on and the keys it changed.
+    pub preset: PresetRef,
+    /// Every resolved option of the run (the frozen preset, with the same
+    /// tables and keys as a preset file).
+    #[serde(default)]
+    pub settings: Value,
+    /// The permissions the run's options use, beside `runs.submit`, in the
+    /// order of the access specification; checked at submit and again when
+    /// the run starts.
+    #[serde(default)]
+    pub permissions_used: Vec<PermissionUse>,
     pub lane: Option<LaneId>,
-    pub vm: Option<JobVm>,
-    pub run: Option<JobRun>,
-    pub recording: Option<JobRecording>,
+    pub vm: Option<RunVm>,
+    pub program: Option<RunProgram>,
+    pub recording: Option<RunRecording>,
     pub assessment: Option<Assessment>,
     pub artifacts: Vec<Artifact>,
     pub warnings: Vec<Warning>,
-    /// Set when `failed` or `rejected`. Null for `partial`: a partial job
+    /// Set when `failed` or `rejected`. Null for `partial`: a partial run
     /// explains itself only through `warnings`.
     pub failure: Option<Failure>,
-    pub repeat_of: Option<JobId>,
+    pub repeat_of: Option<RunId>,
     pub labels: BTreeMap<String, String>,
-    /// The host work items of the job (pipelined host stages, ANT-T0454):
-    /// empty until `collect` has handed the job to the host work pool.
+    /// The host work items of the run (pipelined host stages, ANT-T0454):
+    /// empty until `collect` has handed the run to the host work pool.
     #[serde(default)]
     pub host_work: Vec<HostItem>,
 }
@@ -308,20 +338,20 @@ pub struct Job {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HostItemState {
-    /// In the pool's queue (first come, first served by job arrival).
+    /// In the pool's queue (first come, first served by run arrival).
     Queued,
     Running,
     Done,
-    /// It ended with a problem (a warning of the job, or its failure when the
+    /// It ended with a problem (a warning of the run, or its failure when the
     /// preset requires the stage).
     Failed,
     /// It passed its time limit and was stopped.
     TimedOut,
-    /// Not run: the job ended first (cancelled, failed, past its deadline).
+    /// Not run: the run ended first (cancelled, failed, past its deadline).
     Skipped,
 }
 
-/// One piece of a job's host processing: a static tool (`static:floss`,
+/// One piece of a run's host processing: a static tool (`static:floss`,
 /// `static:decompilation`, ...), `triage`, `detection`, `assess` (digest and
 /// label) or `report`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -347,12 +377,12 @@ pub struct HostItem {
     pub note: Option<String>,
 }
 
-/// The result of `job.submit`: the stored job, plus `replayed` when an
+/// The result of `run.submit`: the stored run, plus `replayed` when an
 /// idempotency key returned the original.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Submitted {
     #[serde(flatten)]
-    pub job: Job,
+    pub run: Run,
     #[serde(default)]
     pub replayed: bool,
 }

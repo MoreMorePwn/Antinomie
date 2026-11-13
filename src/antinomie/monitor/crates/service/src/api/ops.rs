@@ -7,8 +7,8 @@ use super::{
     artifact::Artifact,
     error::ApiError,
     event::{Event, Frame},
-    ids::{ArtifactId, JobId, Sha256Hex, UploadId},
-    job::{Job, JobState, Outcome},
+    ids::{ArtifactId, RunId, Sha256Hex, UploadId},
+    run::{Outcome, Run, RunState},
     spec::{Overrides, ReportFormat, SampleSource},
     status::{Sample, Tag},
 };
@@ -30,18 +30,18 @@ pub enum Op {
     UploadPut,
     #[serde(rename = "upload.finish")]
     UploadFinish,
-    #[serde(rename = "job.submit")]
-    JobSubmit,
-    #[serde(rename = "job.get")]
-    JobGet,
-    #[serde(rename = "job.list")]
-    JobList,
-    #[serde(rename = "job.cancel")]
-    JobCancel,
-    #[serde(rename = "job.retry")]
-    JobRetry,
-    #[serde(rename = "job.delete")]
-    JobDelete,
+    #[serde(rename = "run.submit")]
+    RunSubmit,
+    #[serde(rename = "run.get")]
+    RunGet,
+    #[serde(rename = "run.list")]
+    RunList,
+    #[serde(rename = "run.cancel")]
+    RunCancel,
+    #[serde(rename = "run.rerun")]
+    RunRerun,
+    #[serde(rename = "run.delete")]
+    RunDelete,
     #[serde(rename = "events.subscribe")]
     EventsSubscribe,
     #[serde(rename = "events.list")]
@@ -62,8 +62,10 @@ pub enum Op {
     SampleDownload,
     #[serde(rename = "sample.tag")]
     SampleTag,
-    #[serde(rename = "policy.list")]
-    PolicyList,
+    #[serde(rename = "preset.list")]
+    PresetList,
+    #[serde(rename = "preset.get")]
+    PresetGet,
     #[serde(rename = "queue.status")]
     QueueStatus,
     #[serde(rename = "queue.pause")]
@@ -82,8 +84,8 @@ impl Op {
     /// The permissions the operation needs: holding any one of them lets the
     /// call through (the access specification's permission list). Finer
     /// checks follow inside the operation: `artifact.get` and `report.get` of
-    /// a sensitive artifact need `evidence.download`, `job.cancel` of another
-    /// client's job needs `runs.manage_any`, and `job.submit` checks each run
+    /// a sensitive artifact need `evidence.download`, `run.cancel` of another
+    /// client's run needs `runs.manage_any`, and `run.submit` checks each run
     /// option. Uploads serve both a run and a library add.
     pub fn needs(self) -> &'static [Permission] {
         use Permission as P;
@@ -91,18 +93,20 @@ impl Op {
             Self::UploadBegin | Self::UploadPut | Self::UploadFinish => {
                 &[P::RunsSubmit, P::SamplesAdd]
             }
-            Self::JobSubmit | Self::JobRetry => &[P::RunsSubmit],
-            Self::JobCancel => &[P::RunsSubmit, P::RunsManageAny],
+            Self::RunSubmit | Self::RunRerun | Self::PresetList | Self::PresetGet => {
+                &[P::RunsSubmit]
+            }
+            Self::RunCancel => &[P::RunsSubmit, P::RunsManageAny],
             Self::SampleAdd => &[P::SamplesAdd],
             Self::SampleDownload => &[P::SamplesDownload],
-            Self::JobDelete => &[P::RunsDelete],
+            Self::RunDelete => &[P::RunsDelete],
             Self::SampleTag => &[P::SamplesTag],
             Self::QueuePause | Self::QueueResume => &[P::QueueManage],
             Self::CustodyVerify => &[P::CustodyVerify],
             Self::Capabilities
             | Self::Health
-            | Self::JobGet
-            | Self::JobList
+            | Self::RunGet
+            | Self::RunList
             | Self::EventsSubscribe
             | Self::EventsList
             | Self::ArtifactList
@@ -110,7 +114,6 @@ impl Op {
             | Self::ReportGet
             | Self::SampleList
             | Self::SampleGet
-            | Self::PolicyList
             | Self::QueueStatus
             | Self::VmList
             | Self::BaseList => &[P::RunsSeeAll],
@@ -368,7 +371,7 @@ impl Limits {
 }
 
 /// Who is asking. The CLI uses the OS user (`local:<uid>`, every
-/// permission), a watch folder its preset (`auto:policy-<name>`, `runs.submit`
+/// permission), a watch folder its preset (`auto:preset-<name>`, `runs.submit`
 /// and the folder's `permissions`); a later web layer fills it from
 /// authentication (`web:<user_id>`). The service never trusts a
 /// client-supplied value.
@@ -531,16 +534,16 @@ pub struct UploadFinished {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct JobIdParams {
-    pub job_id: JobId,
+pub struct RunIdParams {
+    pub run_id: RunId,
 }
 
 /// 1 to 200, default 50, newest first.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct JobListParams {
+pub struct RunListParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state: Option<JobState>,
+    pub state: Option<RunState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<Outcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -556,31 +559,34 @@ pub struct JobListParams {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct JobList {
-    pub jobs: Vec<Job>,
+pub struct RunList {
+    pub runs: Vec<Run>,
     pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct JobCancelParams {
-    pub job_id: JobId,
+pub struct RunCancelParams {
+    pub run_id: RunId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct JobRetryParams {
-    pub job_id: JobId,
+pub struct RunRerunParams {
+    pub run_id: RunId,
+    /// Another preset, as it is now (default: the run's own options).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overrides: Option<Overrides>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct JobDeleteParams {
-    pub job_id: JobId,
+pub struct RunDeleteParams {
+    pub run_id: RunId,
     /// Also remove the recording (the sample is never removed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub with_recording: Option<bool>,
@@ -595,14 +601,14 @@ pub struct Deleted {
 #[serde(deny_unknown_fields)]
 pub struct EventsSubscribeParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub job_id: Option<JobId>,
-    /// With `job_id`.
+    pub run_id: Option<RunId>,
+    /// With `run_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_seq: Option<u64>,
-    /// Without `job_id`.
+    /// Without `run_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_gseq: Option<u64>,
-    /// Event type names (`job.state`, ...).
+    /// Event type names (`run.state`, ...).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub types: Option<Vec<String>>,
 }
@@ -610,7 +616,7 @@ pub struct EventsSubscribeParams {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EventsListParams {
-    pub job_id: JobId,
+    pub run_id: RunId,
     pub after_seq: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
@@ -646,7 +652,7 @@ pub struct ArtifactGetParams {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReportGetParams {
-    pub job_id: JobId,
+    pub run_id: RunId,
     pub format: ReportFormat,
 }
 
@@ -727,10 +733,29 @@ pub struct SampleTagParams {
     pub tags: Vec<Tag>,
 }
 
-/// `policy.list` (named `preset.list` from the run API): every preset.
+/// `preset.list`: every preset, with what its options need.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PolicyList {
-    pub policies: Vec<super::status::PresetSummary>,
+pub struct PresetList {
+    pub presets: Vec<super::status::PresetSummary>,
+}
+
+/// `preset.get`: one preset by name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PresetGetParams {
+    pub name: String,
+}
+
+/// The result of `preset.get`: the whole preset with the same tables and keys
+/// as its file (`settings`, flattened), beside its name, digest and whether
+/// it is built in.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PresetDetail {
+    pub name: String,
+    pub digest: String,
+    pub built_in: bool,
+    #[serde(flatten)]
+    pub settings: serde_json::Map<String, Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -779,22 +804,22 @@ mod tests {
     fn each_operation_needs_its_permissions() {
         use Permission as P;
         for (op, needs) in [
-            (Op::JobSubmit, &[P::RunsSubmit][..]),
-            (Op::JobRetry, &[P::RunsSubmit]),
+            (Op::RunSubmit, &[P::RunsSubmit][..]),
+            (Op::RunRerun, &[P::RunsSubmit]),
             (Op::SampleAdd, &[P::SamplesAdd]),
-            (Op::JobDelete, &[P::RunsDelete]),
+            (Op::RunDelete, &[P::RunsDelete]),
             (Op::SampleTag, &[P::SamplesTag]),
             (Op::QueuePause, &[P::QueueManage]),
             (Op::CustodyVerify, &[P::CustodyVerify]),
             (Op::SampleDownload, &[P::SamplesDownload]),
-            (Op::JobGet, &[P::RunsSeeAll]),
+            (Op::RunGet, &[P::RunsSeeAll]),
             (Op::Health, &[P::RunsSeeAll]),
         ] {
             assert_eq!(op.needs(), needs, "{op:?}");
         }
-        // Cancel: an own job with runs.submit, any with runs.manage_any.
+        // Cancel: an own run with runs.submit, any with runs.manage_any.
         assert_eq!(
-            Op::JobCancel.needs(),
+            Op::RunCancel.needs(),
             [Permission::RunsSubmit, Permission::RunsManageAny]
         );
     }

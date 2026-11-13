@@ -3,7 +3,7 @@
 //! one function shared by `prechecks`, recovery and `auto lane unquarantine`
 //! ("snapshot present with the recorded id, VM stopped, no pending layer").
 use super::state::LaneFile;
-use crate::api::{failure::FailureCode, job::WaitingFor};
+use crate::api::{failure::FailureCode, run::WaitingFor};
 use antinomie_monitor_core::{Snapshot, VmState};
 
 /// One thing that keeps the lane from taking a job.

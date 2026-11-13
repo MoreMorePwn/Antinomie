@@ -18,21 +18,21 @@ use std::collections::HashSet;
 
 use crate::api::{
     failure::{Failure, FailureCode},
-    ids::JobId,
-    job::{JobState, Outcome, Stage},
+    ids::RunId,
+    run::{Outcome, RunState, Stage},
 };
 
 /// What `recover` did, for the log and the tests.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RecoveryReport {
     /// Jobs found `running`/`cancelling` and put back in the queue.
-    pub requeued: Vec<JobId>,
+    pub requeued: Vec<RunId>,
     /// Jobs found `running` that had used their restart credit and attempts.
-    pub failed: Vec<JobId>,
+    pub failed: Vec<RunId>,
     /// Jobs found `cancelling` for a user's cancel, now `cancelled`.
-    pub cancelled: Vec<JobId>,
+    pub cancelled: Vec<RunId>,
     /// Jobs found `running` that the caller asked to leave (`keep`).
-    pub kept: Vec<JobId>,
+    pub kept: Vec<RunId>,
     /// Mirror lines appended again.
     pub mirror_lines: usize,
     /// `spec.json` files written again.
@@ -51,7 +51,7 @@ impl Store {
     /// finished, the lane file says so) and their host stages resume at
     /// `analyse`, so putting them back in the queue would run the VM again
     /// (design 4.1, idempotent re-entry).
-    pub fn recover_keeping(&self, keep: &HashSet<JobId>) -> R<RecoveryReport> {
+    pub fn recover_keeping(&self, keep: &HashSet<RunId>) -> R<RecoveryReport> {
         let mut report = RecoveryReport::default();
         let stuck: Vec<String> = {
             let conn = self.conn();
@@ -65,8 +65,8 @@ impl Store {
                 .map_err(db)?
         };
         for id in stuck {
-            let id = JobId::try_from(id).map_err(internal)?;
-            if keep.contains(&id) && self.raw_state(&id)? == JobState::Running {
+            let id = RunId::try_from(id).map_err(internal)?;
+            if keep.contains(&id) && self.raw_state(&id)? == RunState::Running {
                 report.kept.push(id);
                 continue;
             }
@@ -87,11 +87,11 @@ impl Store {
                     )
                     .map_err(db)?;
                 match cur.state {
-                    JobState::Cancelling if !cur.cancel_shutdown => {
+                    RunState::Cancelling if !cur.cancel_shutdown => {
                         terminate(tx, &id, &cur, Outcome::Cancelled, None)?;
                         report.cancelled.push(id.clone());
                     }
-                    JobState::Cancelling => {
+                    RunState::Cancelling => {
                         requeue_in(tx, &id, &cur, RequeueKind::Shutdown, "service_shutdown", None, None)?;
                         report.requeued.push(id.clone());
                     }
@@ -142,7 +142,7 @@ impl Store {
                 .map_err(db)?
         };
         for id in touched {
-            let id = JobId::try_from(id).map_err(internal)?;
+            let id = RunId::try_from(id).map_err(internal)?;
             let conn = self.conn();
             report.mirror_lines += self.repair_mirror(&conn, &id)?;
             if !self.job_dir(&id).join("spec.json").exists() {
@@ -168,7 +168,7 @@ impl Store {
 
     /// The state of a stored job by name, for tests and tools that read the
     /// raw column.
-    pub fn raw_state(&self, id: &JobId) -> R<JobState> {
+    pub fn raw_state(&self, id: &RunId) -> R<RunState> {
         let text: String = self
             .conn()
             .query_row("SELECT state FROM jobs WHERE id = ?1", [id.as_str()], |r| {

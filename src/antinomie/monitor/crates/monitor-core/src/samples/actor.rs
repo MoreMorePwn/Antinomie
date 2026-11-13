@@ -2,8 +2,8 @@
 //! Who a custody entry names as its actor (`by`).
 //!
 //! The GUI writes `app` (what the program did) or `analyst` (what a person
-//! did to a guest). Headless mode gives every entry a job causes the actor
-//! that caused the job: `auto:policy-<name>` for a watch folder or a policy,
+//! did to a guest). Headless mode gives every entry a run causes the actor
+//! that caused the run: `auto:preset-<name>` for a watch folder or a preset,
 //! `web:<user>` for a web caller, `local:<uid>` for the command line (design
 //! 4.11, card P3-7).
 //!
@@ -25,7 +25,7 @@ pub const ANALYST: &str = "analyst";
 pub const MAX_ACTOR: usize = 128;
 
 /// Whether `actor` is a name the log accepts: `app`, `analyst`, or one of
-/// `auto:policy-<name>`, `web:<user>`, `local:<uid>` with a non-empty rest of
+/// `auto:preset-<name>`, `web:<user>`, `local:<uid>` with a non-empty rest of
 /// printable characters.
 pub fn is_valid(actor: &str) -> bool {
     if actor.is_empty() || actor.len() > MAX_ACTOR || actor.chars().any(char::is_control) {
@@ -42,7 +42,7 @@ pub fn is_valid(actor: &str) -> bool {
     if let Some(uid) = rest("local:") {
         return uid.bytes().all(|b| b.is_ascii_digit());
     }
-    rest("auto:policy-").is_some() || rest("web:").is_some()
+    rest("auto:preset-").is_some() || rest("web:").is_some()
 }
 
 /// A slot holding the current actor of one engine.
@@ -91,7 +91,7 @@ mod tests {
             "app",
             "analyst",
             "local:1000",
-            "auto:policy-default",
+            "auto:preset-default",
             "web:alice",
             "web:a b",
         ] {
@@ -102,7 +102,7 @@ mod tests {
             "root",
             "local:",
             "local:abc",
-            "auto:policy-",
+            "auto:preset-",
             "web:",
             "web:  ",
             "a\nb",
@@ -117,10 +117,10 @@ mod tests {
     fn a_slot_defaults_to_app_and_refuses_bad_names() {
         let slot = ActorSlot::new();
         assert_eq!(slot.get(), "app");
-        slot.set(Some("auto:policy-ci")).unwrap();
-        assert_eq!(slot.get(), "auto:policy-ci");
+        slot.set(Some("auto:preset-ci")).unwrap();
+        assert_eq!(slot.get(), "auto:preset-ci");
         assert!(slot.set(Some("nobody")).is_err());
-        assert_eq!(slot.get(), "auto:policy-ci");
+        assert_eq!(slot.get(), "auto:preset-ci");
         slot.set(None).unwrap();
         assert_eq!(slot.get(), "app");
     }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `job.retry` (design 5.3; Run again in the presets specification): a new job
+//! `run.rerun` (design 5.3; Run again in the presets specification): a new job
 //! from a finished one. The spec is the one the client sent (the canonical
 //! submitted spec, 5.2), with the sample now named by its library hash (an
 //! upload or a local path was consumed by the first job) and the idempotency
@@ -7,17 +7,17 @@
 //! is now; a Custom run runs again with its resolved options (every key of
 //! its frozen preset as overrides of the preset it was based on), so it is
 //! Custom again. `overrides` (a partial preset) are merged on top. The new job
-//! goes through the whole of `job.submit` (preset, permissions, node, limits),
+//! goes through the whole of `run.submit` (preset, permissions, node, limits),
 //! except the duplicate rule: a retry asks to run again. Its `repeat_of` is
 //! the old job.
 
 use super::{R, Store, SubmitContext, db, model::from_json};
 use crate::api::{
     error::{ApiError, ErrorCode},
-    ids::JobId,
-    job::Submitted,
+    ids::RunId,
     ops::{Caller, Permission},
-    spec::{JobSpec, Overrides, SampleSource},
+    run::Submitted,
+    spec::{Overrides, RunRequest, SampleSource},
 };
 use serde_json::{Map, Value};
 
@@ -34,13 +34,27 @@ fn merge(into: &mut Map<String, Value>, changes: &Map<String, Value>) {
 }
 
 impl Store {
-    /// `job.retry`. The old job must be terminal and have an archived sample.
+    /// `run.rerun`. The old job must be terminal and have an archived sample.
     /// Run again is part of `runs.submit`, on a run the caller can see: its
     /// own, or any with `runs.see_all`.
     pub fn retry(
         &self,
         caller: &Caller,
-        id: &JobId,
+        id: &RunId,
+        overrides: Option<&Overrides>,
+        ctx: &SubmitContext<'_>,
+    ) -> R<Submitted> {
+        self.rerun(caller, id, None, overrides, ctx)
+    }
+
+    /// `run.rerun` with `preset`: the run's sample and request under another
+    /// preset as it is now (its own options, not the old run's), with
+    /// `overrides` on top. Without `preset`, [`Store::retry`].
+    pub fn rerun(
+        &self,
+        caller: &Caller,
+        id: &RunId,
+        preset: Option<&str>,
         overrides: Option<&Overrides>,
         ctx: &SubmitContext<'_>,
     ) -> R<Submitted> {
@@ -52,16 +66,16 @@ impl Store {
         if !old.state.is_terminal() {
             return Err(ApiError::new(
                 ErrorCode::PreconditionFailed,
-                "only a finished job can be retried",
+                "only a finished run can be run again",
             )
-            .with_field("job_id"));
+            .with_field("run_id"));
         }
         let Some(sample) = &old.sample else {
             return Err(ApiError::new(
                 ErrorCode::PreconditionFailed,
-                "the job has no archived sample to run again",
+                "the run has no archived sample to run again",
             )
-            .with_field("job_id"));
+            .with_field("run_id"));
         };
         let canon: String = self
             .conn()
@@ -75,10 +89,13 @@ impl Store {
         let mut value: Value = from_json(&canon)?;
         if let Some(object) = value.as_object_mut() {
             object.remove("idempotency_key");
-            if let Some(base) = &frozen.based_on {
+            if let Some(preset) = preset {
+                object.insert("preset".into(), Value::String(preset.to_owned()));
+                object.remove("overrides");
+            } else if let Some(base) = &frozen.based_on {
                 // A Custom run: its resolved options onto the preset it was
                 // based on.
-                object.insert("policy".into(), Value::String(base.name.clone()));
+                object.insert("preset".into(), Value::String(base.name.clone()));
                 object.insert("overrides".into(), frozen.preset.to_json());
                 if let Some(Value::Object(options)) = object.get_mut("overrides") {
                     for key in crate::config::preset::NOT_RUN_OPTIONS {
@@ -95,7 +112,7 @@ impl Store {
                 }
             }
         }
-        let mut spec: JobSpec = serde_json::from_value(value)
+        let mut spec: RunRequest = serde_json::from_value(value)
             .map_err(|e| ApiError::invalid_argument("overrides", e.to_string()))?;
         spec.sample = SampleSource {
             sha256: Some(sample.sha256.clone()),

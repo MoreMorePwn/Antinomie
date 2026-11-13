@@ -3,7 +3,7 @@
 //! host stages.
 //!
 //! The lane forgets the job's `collected` entry, the job becomes terminal with
-//! the outcome the stages settled (`job.finished`), and its `job.json` copy is
+//! the outcome the stages settled (`run.finished`), and its `job.json` copy is
 //! written into the job directory (4.9.3). Retention, notifications and the
 //! result drop belong to the daemon cards; this stage never fails a job: a
 //! file that cannot be written is left out and the job is final all the same.
@@ -13,7 +13,7 @@ use super::{LaneStages, StageStop};
 use crate::{
     api::{
         failure::Failure,
-        job::{Job, Outcome, Stage},
+        run::{Outcome, Run, Stage},
     },
     engine::Engine,
     store::mirror::write_private,
@@ -25,10 +25,10 @@ impl<E: Engine> LaneStages<'_, E> {
     /// written to its directory.
     pub(crate) fn end_job(
         &mut self,
-        job: &Job,
+        job: &Run,
         outcome: Outcome,
         failure: Option<Failure>,
-    ) -> Result<(Job, Option<String>), StageStop> {
+    ) -> Result<(Run, Option<String>), StageStop> {
         let done = self
             .env
             .store

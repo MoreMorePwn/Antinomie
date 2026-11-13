@@ -13,8 +13,8 @@ use super::{
 };
 use crate::api::{
     error::{ApiError, ErrorCode, ErrorReason},
-    ids::JobId,
-    job::RecordingPhase,
+    ids::RunId,
+    run::RecordingPhase,
 };
 use antinomie_monitor_core::disk_layers::{DiskLayer, LayerPhase};
 use serde_json::{Value, json};
@@ -48,13 +48,10 @@ fn run_list_is_newest_first_and_carries_the_run_info() {
     let older = add_run(&data, "boot-1", "run-old", 1_700_000_000_000, "Finalized");
     let newer = add_run(&data, "boot-2", "run-new", 1_700_000_100_000, "Stopped");
     let service = data.service();
-    let page = reply!(
-        call(&service, "recording.run.list", json!({}), &ctx()),
-        Runs
-    );
+    let page = reply!(call(&service, "recording.list", json!({}), &ctx()), Runs);
     assert_eq!(page.items.len(), 2);
-    assert_eq!(page.items[0].run_key, newer.key());
-    assert_eq!(page.items[1].run_key, older.key());
+    assert_eq!(page.items[0].recording_key, newer.key());
+    assert_eq!(page.items[1].recording_key, older.key());
     assert_eq!(page.total, Some(2));
     assert_eq!(page.total_exact, Some(true));
     assert_eq!(page.phase, RecordingPhase::Complete);
@@ -73,7 +70,7 @@ fn run_list_is_newest_first_and_carries_the_run_info() {
     assert_eq!(info["program"], "/tmp/sample.sh");
     assert_eq!(info["route"], "drop");
     assert_eq!(info["exit"], json!({"kind": "exited", "code": 0}));
-    assert_eq!(info["job_id"], Value::Null);
+    assert_eq!(info["from_run"], Value::Null);
     assert_eq!(json_of(&page.items[0])["state"], "stopped");
 }
 
@@ -91,7 +88,7 @@ fn run_list_filters_and_pages_with_a_cursor() {
     }
     let service = data.service();
     let first = reply!(
-        call(&service, "recording.run.list", json!({"limit": 2}), &ctx()),
+        call(&service, "recording.list", json!({"limit": 2}), &ctx()),
         Runs
     );
     assert_eq!(first.items.len(), 2);
@@ -99,7 +96,7 @@ fn run_list_filters_and_pages_with_a_cursor() {
     let second = reply!(
         call(
             &service,
-            "recording.run.list",
+            "recording.list",
             json!({"limit": 2, "cursor": cursor}),
             &ctx()
         ),
@@ -112,7 +109,7 @@ fn run_list_filters_and_pages_with_a_cursor() {
     let stopped = reply!(
         call(
             &service,
-            "recording.run.list",
+            "recording.list",
             json!({"state": "stopped"}),
             &ctx()
         ),
@@ -122,7 +119,7 @@ fn run_list_filters_and_pages_with_a_cursor() {
     let since = reply!(
         call(
             &service,
-            "recording.run.list",
+            "recording.list",
             json!({"since_ms": 1_700_000_001_000u64}),
             &ctx()
         ),
@@ -132,7 +129,7 @@ fn run_list_filters_and_pages_with_a_cursor() {
     let sha = reply!(
         call(
             &service,
-            "recording.run.list",
+            "recording.list",
             json!({"sample_sha256": sample_sha()}),
             &ctx()
         ),
@@ -142,7 +139,7 @@ fn run_list_filters_and_pages_with_a_cursor() {
     let other = reply!(
         call(
             &service,
-            "recording.run.list",
+            "recording.list",
             json!({"sample_sha256": "0".repeat(64)}),
             &ctx()
         ),
@@ -152,7 +149,7 @@ fn run_list_filters_and_pages_with_a_cursor() {
     let none = reply!(
         call(
             &service,
-            "recording.run.list",
+            "recording.list",
             json!({"vm_id": "other-vm"}),
             &ctx()
         ),
@@ -160,14 +157,9 @@ fn run_list_filters_and_pages_with_a_cursor() {
     );
     assert!(none.items.is_empty());
     // A filter that needs the job store finds no job without one.
-    let job = JobId::from_parts(1, [1; 10]);
+    let job = RunId::from_parts(1, [1; 10]);
     let by_job = reply!(
-        call(
-            &service,
-            "recording.run.list",
-            json!({"job_id": job}),
-            &ctx()
-        ),
+        call(&service, "recording.list", json!({"from_run": job}), &ctx()),
         Runs
     );
     assert!(by_job.items.is_empty());
@@ -175,25 +167,19 @@ fn run_list_filters_and_pages_with_a_cursor() {
     let cursor = first.next_cursor.clone().unwrap();
     let error = call(
         &service,
-        "recording.run.list",
+        "recording.list",
         json!({"state": "stopped", "cursor": cursor}),
         &ctx(),
     )
     .unwrap_err();
     assert_eq!(error.reason(), Some(ErrorReason::CursorStale));
-    let error = call(
-        &service,
-        "recording.run.list",
-        json!({"limit": 501}),
-        &ctx(),
-    )
-    .unwrap_err();
+    let error = call(&service, "recording.list", json!({"limit": 501}), &ctx()).unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidArgument);
     // A new run in front shifts every offset: the old cursor is stale.
     add_run(&data, "boot-1", "run-new", 1_700_000_900_000, "Finalized");
     let error = call(
         &service,
-        "recording.run.list",
+        "recording.list",
         json!({"limit": 2, "cursor": cursor}),
         &ctx(),
     )
@@ -203,15 +189,15 @@ fn run_list_filters_and_pages_with_a_cursor() {
 
 struct Jobs {
     run: String,
-    job: JobId,
+    job: RunId,
     analysis: PathBuf,
 }
 
 impl JobIndex for Jobs {
-    fn job_of_run(&self, _: &str, _: &str, run: &str) -> Option<JobId> {
+    fn job_of_run(&self, _: &str, _: &str, run: &str) -> Option<RunId> {
         (run == self.run).then(|| self.job.clone())
     }
-    fn analysis_directory(&self, job: &JobId) -> Option<PathBuf> {
+    fn analysis_directory(&self, job: &RunId) -> Option<PathBuf> {
         (*job == self.job).then(|| self.analysis.clone())
     }
 }
@@ -221,7 +207,7 @@ fn run_list_knows_the_job_that_made_a_run_when_the_store_does() {
     let data = Data::new("jobs");
     add_run(&data, "boot-1", "run-1", 1_700_000_000_000, "Finalized");
     add_run(&data, "boot-1", "run-2", 1_700_000_001_000, "Finalized");
-    let job = JobId::from_parts(5, [3; 10]);
+    let job = RunId::from_parts(5, [3; 10]);
     let jobs = Jobs {
         run: "run-1".into(),
         job: job.clone(),
@@ -229,24 +215,16 @@ fn run_list_knows_the_job_that_made_a_run_when_the_store_does() {
     };
     let service = data.service().with_jobs(Arc::new(jobs));
     let page = reply!(
-        call(
-            &service,
-            "recording.run.list",
-            json!({"job_id": job}),
-            &ctx()
-        ),
+        call(&service, "recording.list", json!({"from_run": job}), &ctx()),
         Runs
     );
     assert_eq!(page.items.len(), 1);
-    assert_eq!(json_of(&page.items[0])["job_id"], json!(job));
-    let all = reply!(
-        call(&service, "recording.run.list", json!({}), &ctx()),
-        Runs
-    );
+    assert_eq!(json_of(&page.items[0])["from_run"], json!(job));
+    let all = reply!(call(&service, "recording.list", json!({}), &ctx()), Runs);
     assert_eq!(
         all.items
             .iter()
-            .filter(|i| json_of(i)["job_id"] != Value::Null)
+            .filter(|i| json_of(i)["from_run"] != Value::Null)
             .count(),
         1
     );
@@ -260,8 +238,8 @@ fn run_get_is_the_detail_and_sends_no_host_path() {
     let single = reply!(
         call(
             &service,
-            "recording.run.get",
-            json!({"run_key": run.key()}),
+            "recording.get",
+            json!({"recording_key": run.key()}),
             &ctx()
         ),
         Run
@@ -300,21 +278,21 @@ fn run_get_is_the_detail_and_sends_no_host_path() {
     assert_eq!(single.phase, RecordingPhase::Complete);
     assert_eq!(single.untrusted, Some(true));
     // Unknown and foreign runs are not found.
-    let ghost = super::key::RunKey::new(VM, "boot-1", "nope").unwrap();
+    let ghost = super::key::RecordingKey::new(VM, "boot-1", "nope").unwrap();
     let error = call(
         &service,
-        "recording.run.get",
-        json!({"run_key": ghost}),
+        "recording.get",
+        json!({"recording_key": ghost}),
         &ctx(),
     )
     .unwrap_err();
     assert_eq!(error.code, ErrorCode::NotFound);
-    let foreign = super::key::RunKey::new("other-vm", "boot-1", "run-1").unwrap();
+    let foreign = super::key::RecordingKey::new("other-vm", "boot-1", "run-1").unwrap();
     assert_eq!(
         call(
             &service,
-            "recording.run.get",
-            json!({"run_key": foreign}),
+            "recording.get",
+            json!({"recording_key": foreign}),
             &ctx()
         )
         .unwrap_err()
@@ -322,12 +300,12 @@ fn run_get_is_the_detail_and_sends_no_host_path() {
         ErrorCode::NotFound
     );
     // The boot is part of the address: a run id alone is not unique.
-    let wrong_boot = super::key::RunKey::new(VM, "boot-9", "run-1").unwrap();
+    let wrong_boot = super::key::RecordingKey::new(VM, "boot-9", "run-1").unwrap();
     assert_eq!(
         call(
             &service,
-            "recording.run.get",
-            json!({"run_key": wrong_boot}),
+            "recording.get",
+            json!({"recording_key": wrong_boot}),
             &ctx()
         )
         .unwrap_err()
@@ -346,7 +324,7 @@ fn the_trace_pages_in_event_order_with_totals_and_cursors() {
         call(
             &service,
             "recording.trace.page",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx()
         ),
         Trace
@@ -373,7 +351,7 @@ fn the_trace_pages_in_event_order_with_totals_and_cursors() {
     let mut seen = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
-        let mut params = json!({"run_key": key, "limit": 2});
+        let mut params = json!({"recording_key": key, "limit": 2});
         if let Some(cursor) = &cursor {
             params["cursor"] = json!(cursor);
         }
@@ -397,7 +375,8 @@ fn bh_28_a_filtered_total_is_counted_once_and_never_on_a_cursor_page() {
     let run = standard(&data);
     let key = run.key();
     let params = |cursor: Option<&str>| {
-        let mut params = json!({"run_key": key, "q": "syscall.name == \"openat\"", "limit": 1});
+        let mut params =
+            json!({"recording_key": key, "q": "syscall.name == \"openat\"", "limit": 1});
         if let Some(cursor) = cursor {
             params["cursor"] = json!(cursor);
         }
@@ -451,7 +430,7 @@ fn bh_28_a_filtered_total_is_counted_once_and_never_on_a_cursor_page() {
         call(
             &hurried,
             "recording.trace.page",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &patient()
         ),
         Trace
@@ -469,7 +448,7 @@ fn the_trace_filters_by_process_and_hidden_groups() {
         call(
             &service,
             "recording.trace.page",
-            json!({"run_key": key, "pid": 101}),
+            json!({"recording_key": key, "pid": 101}),
             &ctx()
         ),
         Trace
@@ -480,7 +459,7 @@ fn the_trace_filters_by_process_and_hidden_groups() {
         call(
             &service,
             "recording.trace.page",
-            json!({"run_key": key, "hide_groups": ["file"]}),
+            json!({"recording_key": key, "hide_groups": ["file"]}),
             &ctx()
         ),
         Trace
@@ -493,7 +472,7 @@ fn the_trace_filters_by_process_and_hidden_groups() {
         call(
             &service,
             "recording.trace.page",
-            json!({"run_key": key, "q": "syscall.name == \"openat\""}),
+            json!({"recording_key": key, "q": "syscall.name == \"openat\""}),
             &ctx()
         ),
         Trace
@@ -505,7 +484,7 @@ fn the_trace_filters_by_process_and_hidden_groups() {
     let error = call(
         &service,
         "recording.trace.page",
-        json!({"run_key": key, "q": "syscall.nope == 1"}),
+        json!({"recording_key": key, "q": "syscall.nope == 1"}),
         &ctx(),
     )
     .unwrap_err();
@@ -516,7 +495,7 @@ fn the_trace_filters_by_process_and_hidden_groups() {
         call(
             &service,
             "recording.trace.page",
-            json!({"run_key": key, "q": "pid >= 0", "limit": 1}),
+            json!({"recording_key": key, "q": "pid >= 0", "limit": 1}),
             &ctx()
         ),
         Trace
@@ -525,7 +504,7 @@ fn the_trace_filters_by_process_and_hidden_groups() {
     let error = call(
         &service,
         "recording.trace.page",
-        json!({"run_key": key, "q": "pid >= 1", "limit": 1, "cursor": cursor}),
+        json!({"recording_key": key, "q": "pid >= 1", "limit": 1, "cursor": cursor}),
         &ctx(),
     )
     .unwrap_err();
@@ -533,7 +512,7 @@ fn the_trace_filters_by_process_and_hidden_groups() {
     let error = call(
         &service,
         "recording.trace.page",
-        json!({"run_key": key, "limit": 0}),
+        json!({"recording_key": key, "limit": 0}),
         &ctx(),
     )
     .unwrap_err();
@@ -543,7 +522,7 @@ fn the_trace_filters_by_process_and_hidden_groups() {
         call(
             &service,
             "recording.trace.page",
-            json!({"run_key": key, "limit": 1}),
+            json!({"recording_key": key, "limit": 1}),
             &ctx()
         ),
         Trace
@@ -551,7 +530,7 @@ fn the_trace_filters_by_process_and_hidden_groups() {
     let error = call(
         &service,
         "recording.trace.page",
-        json!({"run_key": key, "limit": 1, "pid": 100, "cursor": first.next_cursor.unwrap()}),
+        json!({"recording_key": key, "limit": 1, "pid": 100, "cursor": first.next_cursor.unwrap()}),
         &ctx(),
     )
     .unwrap_err();
@@ -568,7 +547,7 @@ fn a_call_is_read_in_full_by_its_ref_and_its_captured_bytes_by_field() {
         call(
             &service,
             "recording.trace.get",
-            json!({"run_key": key, "ref": {"stream": "9", "task": "10", "call": "2"}}),
+            json!({"recording_key": key, "ref": {"stream": "9", "task": "10", "call": "2"}}),
             &ctx()
         ),
         Invocation
@@ -593,7 +572,7 @@ fn a_call_is_read_in_full_by_its_ref_and_its_captured_bytes_by_field() {
         call(
             &service,
             "recording.captured.read",
-            json!({"run_key": key, "field": field, "offset": "0", "len": 11}),
+            json!({"recording_key": key, "field": field, "offset": "0", "len": 11}),
             &ctx()
         ),
         Bytes
@@ -605,7 +584,7 @@ fn a_call_is_read_in_full_by_its_ref_and_its_captured_bytes_by_field() {
         call(
             &service,
             "recording.captured.read",
-            json!({"run_key": key, "field": field, "offset": "5", "len": 6}),
+            json!({"recording_key": key, "field": field, "offset": "5", "len": 6}),
             &ctx()
         ),
         Bytes
@@ -618,7 +597,7 @@ fn a_call_is_read_in_full_by_its_ref_and_its_captured_bytes_by_field() {
     let error = call(
         &service,
         "recording.captured.read",
-        json!({"run_key": key, "field": field, "offset": "0", "len": 4}),
+        json!({"recording_key": key, "field": field, "offset": "0", "len": 4}),
         &plain_ctx(),
     )
     .unwrap_err();
@@ -626,7 +605,7 @@ fn a_call_is_read_in_full_by_its_ref_and_its_captured_bytes_by_field() {
     let error = call(
         &service,
         "recording.captured.read",
-        json!({"run_key": key, "field": field, "offset": "0", "len": 65_537}),
+        json!({"recording_key": key, "field": field, "offset": "0", "len": 65_537}),
         &ctx(),
     )
     .unwrap_err();
@@ -634,7 +613,7 @@ fn a_call_is_read_in_full_by_its_ref_and_its_captured_bytes_by_field() {
     let error = call(
         &service,
         "recording.captured.read",
-        json!({"run_key": key, "field": field, "offset": "8", "len": 16}),
+        json!({"recording_key": key, "field": field, "offset": "8", "len": 16}),
         &ctx(),
     )
     .unwrap_err();
@@ -646,7 +625,7 @@ fn a_call_is_read_in_full_by_its_ref_and_its_captured_bytes_by_field() {
     let error = call(
         &service,
         "recording.captured.read",
-        json!({"run_key": key, "field": "junk", "offset": "0", "len": 1}),
+        json!({"recording_key": key, "field": "junk", "offset": "0", "len": 1}),
         &ctx(),
     )
     .unwrap_err();
@@ -655,7 +634,7 @@ fn a_call_is_read_in_full_by_its_ref_and_its_captured_bytes_by_field() {
     let error = call(
         &service,
         "recording.trace.get",
-        json!({"run_key": key, "ref": {"stream": "9", "task": "10", "call": "77"}}),
+        json!({"recording_key": key, "ref": {"stream": "9", "task": "10", "call": "77"}}),
         &ctx(),
     )
     .unwrap_err();
@@ -672,7 +651,7 @@ fn the_process_tree_is_flat_rows_by_pid_with_the_engines_issues_on_the_first_pag
         call(
             &service,
             "recording.process.tree",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx()
         ),
         Processes
@@ -691,7 +670,7 @@ fn the_process_tree_is_flat_rows_by_pid_with_the_engines_issues_on_the_first_pag
         call(
             &service,
             "recording.process.tree",
-            json!({"run_key": key, "limit": 1}),
+            json!({"recording_key": key, "limit": 1}),
             &ctx()
         ),
         Processes
@@ -701,7 +680,7 @@ fn the_process_tree_is_flat_rows_by_pid_with_the_engines_issues_on_the_first_pag
         call(
             &service,
             "recording.process.tree",
-            json!({"run_key": key, "limit": 1, "cursor": again.next_cursor.unwrap()}),
+            json!({"recording_key": key, "limit": 1, "cursor": again.next_cursor.unwrap()}),
             &ctx()
         ),
         Processes
@@ -713,7 +692,7 @@ fn the_process_tree_is_flat_rows_by_pid_with_the_engines_issues_on_the_first_pag
         call(
             &service,
             "recording.process.tree",
-            json!({"run_key": key, "root_pid": 101}),
+            json!({"recording_key": key, "root_pid": 101}),
             &ctx()
         ),
         Processes
@@ -731,7 +710,7 @@ fn captures_and_cores_are_metadata_with_opaque_ids() {
         call(
             &service,
             "recording.network.captures",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx()
         ),
         Captures
@@ -752,7 +731,7 @@ fn captures_and_cores_are_metadata_with_opaque_ids() {
         call(
             &service,
             "recording.cores.list",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx()
         ),
         Cores
@@ -770,7 +749,7 @@ fn captures_and_cores_are_metadata_with_opaque_ids() {
     // A run that kept none: not recorded.
     let bare = add_run(&data, "boot-1", "run-bare", 1_700_000_200_000, "Finalized");
     for op in ["recording.network.captures", "recording.cores.list"] {
-        let error = call(&service, op, json!({"run_key": bare.key()}), &ctx()).unwrap_err();
+        let error = call(&service, op, json!({"recording_key": bare.key()}), &ctx()).unwrap_err();
         assert_eq!(error.code, ErrorCode::NotFound, "{op}");
         assert_eq!(error.reason(), Some(ErrorReason::NotRecorded), "{op}");
     }
@@ -786,7 +765,7 @@ fn the_terminal_transcript_pages_by_journal_offset() {
         call(
             &service,
             "recording.terminal.replay",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx()
         ),
         Terminal
@@ -810,7 +789,7 @@ fn the_terminal_transcript_pages_by_journal_offset() {
         call(
             &service,
             "recording.terminal.replay",
-            json!({"run_key": key, "limit": 2}),
+            json!({"recording_key": key, "limit": 2}),
             &ctx()
         ),
         Terminal
@@ -820,7 +799,7 @@ fn the_terminal_transcript_pages_by_journal_offset() {
         call(
             &service,
             "recording.terminal.replay",
-            json!({"run_key": key, "limit": 2, "cursor": first.next_cursor.unwrap()}),
+            json!({"recording_key": key, "limit": 2, "cursor": first.next_cursor.unwrap()}),
             &ctx()
         ),
         Terminal
@@ -829,7 +808,7 @@ fn the_terminal_transcript_pages_by_journal_offset() {
     let error = call(
         &service,
         "recording.terminal.replay",
-        json!({"run_key": key, "limit": 257}),
+        json!({"recording_key": key, "limit": 257}),
         &ctx(),
     )
     .unwrap_err();
@@ -838,7 +817,7 @@ fn the_terminal_transcript_pages_by_journal_offset() {
     let error = call(
         &service,
         "recording.terminal.replay",
-        json!({"run_key": bare.key()}),
+        json!({"recording_key": bare.key()}),
         &ctx(),
     )
     .unwrap_err();
@@ -855,7 +834,7 @@ fn artifacts_list_what_the_run_kept_and_serve_ranges() {
         call(
             &service,
             "recording.artifact.list",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx()
         ),
         Artifacts
@@ -902,7 +881,7 @@ fn artifacts_list_what_the_run_kept_and_serve_ranges() {
         call(
             &service,
             "recording.artifact.list",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx()
         ),
         Artifacts
@@ -921,7 +900,7 @@ fn artifacts_list_what_the_run_kept_and_serve_ranges() {
         call(
             &service,
             "recording.artifact.get",
-            json!({"run_key": key, "artifact_id": id_of("terminal.journal"), "range": {"offset": 0, "len": 5}}),
+            json!({"recording_key": key, "artifact_id": id_of("terminal.journal"), "range": {"offset": 0, "len": 5}}),
             &plain_ctx()
         ),
         Bytes
@@ -934,7 +913,7 @@ fn artifacts_list_what_the_run_kept_and_serve_ranges() {
         call(
             &service,
             "recording.artifact.get",
-            json!({"run_key": key, "artifact_id": id_of("run.json")}),
+            json!({"recording_key": key, "artifact_id": id_of("run.json")}),
             &plain_ctx()
         ),
         Bytes
@@ -948,7 +927,7 @@ fn artifacts_list_what_the_run_kept_and_serve_ranges() {
     let error = call(
         &service,
         "recording.artifact.get",
-        json!({"run_key": key, "artifact_id": capture}),
+        json!({"recording_key": key, "artifact_id": capture}),
         &plain_ctx(),
     )
     .unwrap_err();
@@ -957,30 +936,30 @@ fn artifacts_list_what_the_run_kept_and_serve_ranges() {
         call(
             &service,
             "recording.artifact.get",
-            json!({"run_key": key, "artifact_id": capture}),
+            json!({"recording_key": key, "artifact_id": capture}),
             &ctx()
         ),
         Bytes
     );
     assert_eq!(pcap_bytes.value.unwrap().len as usize, pcap().len());
     // Bounds: more than 1 MiB, past the end, an id of another run.
-    let error = call(&service, "recording.artifact.get", json!({"run_key": key, "artifact_id": capture, "range": {"offset": 0, "len": (1u64 << 20) + 1}}), &ctx()).unwrap_err();
+    let error = call(&service, "recording.artifact.get", json!({"recording_key": key, "artifact_id": capture, "range": {"offset": 0, "len": (1u64 << 20) + 1}}), &ctx()).unwrap_err();
     assert_eq!(error.code, ErrorCode::PayloadTooLarge);
     let error = call(
         &service,
         "recording.artifact.get",
-        json!({"run_key": key, "artifact_id": capture, "range": {"offset": 99_999, "len": 4}}),
+        json!({"recording_key": key, "artifact_id": capture, "range": {"offset": 99_999, "len": 4}}),
         &ctx(),
     )
     .unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidArgument);
-    let other = JobId::from_parts(1, [0; 10])
+    let other = RunId::from_parts(1, [0; 10])
         .to_string()
-        .replacen("j_", "ra_", 1);
+        .replacen("r_", "ra_", 1);
     let error = call(
         &service,
         "recording.artifact.get",
-        json!({"run_key": key, "artifact_id": other}),
+        json!({"recording_key": key, "artifact_id": other}),
         &ctx(),
     )
     .unwrap_err();
@@ -1000,7 +979,7 @@ fn an_artifact_that_is_a_symlink_is_not_listed_or_served() {
         call(
             &service,
             "recording.artifact.list",
-            json!({"run_key": run.key()}),
+            json!({"recording_key": run.key()}),
             &ctx()
         ),
         Artifacts
@@ -1011,7 +990,7 @@ fn an_artifact_that_is_a_symlink_is_not_listed_or_served() {
         call(
             &service,
             "recording.terminal.replay",
-            json!({"run_key": run.key()}),
+            json!({"recording_key": run.key()}),
             &ctx()
         )
         .is_err()
@@ -1028,7 +1007,7 @@ fn the_analysis_is_read_by_section_with_paging_filter_and_sort() {
         call(
             &service,
             "recording.analysis.list",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx()
         ),
         AnalysisSections
@@ -1043,7 +1022,7 @@ fn the_analysis_is_read_by_section_with_paging_filter_and_sort() {
         call(
             &service,
             "recording.analysis.section",
-            json!({"run_key": key, "kind": "metadata"}),
+            json!({"recording_key": key, "kind": "metadata"}),
             &ctx()
         ),
         AnalysisRows
@@ -1054,7 +1033,7 @@ fn the_analysis_is_read_by_section_with_paging_filter_and_sort() {
         call(
             &service,
             "recording.analysis.section",
-            json!({"run_key": key, "kind": "strings", "limit": 2}),
+            json!({"recording_key": key, "kind": "strings", "limit": 2}),
             &ctx()
         ),
         AnalysisRows
@@ -1076,7 +1055,7 @@ fn the_analysis_is_read_by_section_with_paging_filter_and_sort() {
         call(
             &service,
             "recording.analysis.section",
-            json!({"run_key": key, "kind": "strings", "limit": 2, "cursor": page.next_cursor.unwrap()}),
+            json!({"recording_key": key, "kind": "strings", "limit": 2, "cursor": page.next_cursor.unwrap()}),
             &ctx()
         ),
         AnalysisRows
@@ -1087,7 +1066,7 @@ fn the_analysis_is_read_by_section_with_paging_filter_and_sort() {
         call(
             &service,
             "recording.analysis.section",
-            json!({"run_key": key, "kind": "strings", "q": "RAV"}),
+            json!({"recording_key": key, "kind": "strings", "q": "RAV"}),
             &ctx()
         ),
         AnalysisRows
@@ -1098,7 +1077,7 @@ fn the_analysis_is_read_by_section_with_paging_filter_and_sort() {
         call(
             &service,
             "recording.analysis.section",
-            json!({"run_key": key, "kind": "strings", "sort": {"field": "text", "dir": "desc"}}),
+            json!({"recording_key": key, "kind": "strings", "sort": {"field": "text", "dir": "desc"}}),
             &ctx()
         ),
         AnalysisRows
@@ -1115,7 +1094,7 @@ fn the_analysis_is_read_by_section_with_paging_filter_and_sort() {
     let error = call(
         &service,
         "recording.analysis.section",
-        json!({"run_key": key, "kind": "strings", "sort": {"field": "nope", "dir": "asc"}}),
+        json!({"recording_key": key, "kind": "strings", "sort": {"field": "nope", "dir": "asc"}}),
         &ctx(),
     )
     .unwrap_err();
@@ -1124,18 +1103,18 @@ fn the_analysis_is_read_by_section_with_paging_filter_and_sort() {
     let error = call(
         &service,
         "recording.analysis.section",
-        json!({"run_key": key, "kind": "floss"}),
+        json!({"recording_key": key, "kind": "floss"}),
         &ctx(),
     )
     .unwrap_err();
     assert_eq!(error.code, ErrorCode::NotFound);
     let error = call(&service, "recording.analysis.list", json!({}), &ctx()).unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidArgument);
-    let job = JobId::from_parts(1, [1; 10]);
+    let job = RunId::from_parts(1, [1; 10]);
     let error = call(
         &service,
         "recording.analysis.list",
-        json!({"run_key": key, "job_id": job}),
+        json!({"recording_key": key, "run_id": job}),
         &ctx(),
     )
     .unwrap_err();
@@ -1144,7 +1123,7 @@ fn the_analysis_is_read_by_section_with_paging_filter_and_sort() {
     let error = call(
         &service,
         "recording.analysis.ghidra",
-        json!({"run_key": key}),
+        json!({"recording_key": key}),
         &ctx(),
     )
     .unwrap_err();
@@ -1154,7 +1133,7 @@ fn the_analysis_is_read_by_section_with_paging_filter_and_sort() {
     let error = call(
         &service,
         "recording.analysis.list",
-        json!({"run_key": bare.key()}),
+        json!({"recording_key": bare.key()}),
         &ctx(),
     )
     .unwrap_err();
@@ -1167,7 +1146,7 @@ fn the_host_side_analysis_of_a_job_is_read_through_the_job_store() {
     standard(&data);
     let analysis = data.root.join("analyses").join("analysis-job");
     write_analysis(&analysis, "analysis-job");
-    let job = JobId::from_parts(9, [9; 10]);
+    let job = RunId::from_parts(9, [9; 10]);
     let jobs = Jobs {
         run: "none".into(),
         job: job.clone(),
@@ -1178,7 +1157,7 @@ fn the_host_side_analysis_of_a_job_is_read_through_the_job_store() {
         call(
             &service,
             "recording.analysis.list",
-            json!({"job_id": job}),
+            json!({"run_id": job}),
             &ctx()
         ),
         AnalysisSections
@@ -1189,17 +1168,17 @@ fn the_host_side_analysis_of_a_job_is_read_through_the_job_store() {
         call(
             &service,
             "recording.analysis.section",
-            json!({"job_id": job, "kind": "strings"}),
+            json!({"run_id": job, "kind": "strings"}),
             &ctx()
         ),
         AnalysisRows
     );
     assert_eq!(rows.items.len(), 3);
-    let other = JobId::from_parts(9, [8; 10]);
+    let other = RunId::from_parts(9, [8; 10]);
     let error = call(
         &service,
         "recording.analysis.list",
-        json!({"job_id": other}),
+        json!({"run_id": other}),
         &ctx(),
     )
     .unwrap_err();
@@ -1210,7 +1189,7 @@ fn the_host_side_analysis_of_a_job_is_read_through_the_job_store() {
         call(
             &bare,
             "recording.analysis.list",
-            json!({"job_id": job}),
+            json!({"run_id": job}),
             &ctx()
         )
         .unwrap_err()
@@ -1273,7 +1252,7 @@ fn custody_lists_the_chain_of_the_runs_sample_and_hides_host_paths_from_remote_c
         call(
             &service,
             "recording.custody.list",
-            json!({"run_key": run.key()}),
+            json!({"recording_key": run.key()}),
             &ctx()
         ),
         Custody
@@ -1333,7 +1312,7 @@ fn custody_lists_the_chain_of_the_runs_sample_and_hides_host_paths_from_remote_c
     // Exactly one subject; an unknown sample; a run without one.
     for params in [
         json!({}),
-        json!({"run_key": run.key(), "sha256": sample_sha()}),
+        json!({"recording_key": run.key(), "sha256": sample_sha()}),
     ] {
         assert_eq!(
             call(&service, "recording.custody.list", params, &ctx())
@@ -1379,7 +1358,7 @@ fn every_read_leaves_the_data_directory_exactly_as_it_was() {
         call(
             &service,
             "recording.artifact.list",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx()
         ),
         Artifacts
@@ -1393,26 +1372,26 @@ fn every_read_leaves_the_data_directory_exactly_as_it_was() {
         .id
         .to_string();
     let operations = [
-        ("recording.run.list", json!({})),
-        ("recording.run.get", json!({"run_key": key})),
-        ("recording.trace.page", json!({"run_key": key})),
+        ("recording.list", json!({})),
+        ("recording.get", json!({"recording_key": key})),
+        ("recording.trace.page", json!({"recording_key": key})),
         (
             "recording.trace.get",
-            json!({"run_key": key, "ref": {"stream": "9", "task": "10", "call": "1"}}),
+            json!({"recording_key": key, "ref": {"stream": "9", "task": "10", "call": "1"}}),
         ),
-        ("recording.process.tree", json!({"run_key": key})),
-        ("recording.network.captures", json!({"run_key": key})),
-        ("recording.cores.list", json!({"run_key": key})),
-        ("recording.analysis.list", json!({"run_key": key})),
+        ("recording.process.tree", json!({"recording_key": key})),
+        ("recording.network.captures", json!({"recording_key": key})),
+        ("recording.cores.list", json!({"recording_key": key})),
+        ("recording.analysis.list", json!({"recording_key": key})),
         (
             "recording.analysis.section",
-            json!({"run_key": key, "kind": "strings"}),
+            json!({"recording_key": key, "kind": "strings"}),
         ),
-        ("recording.terminal.replay", json!({"run_key": key})),
-        ("recording.artifact.list", json!({"run_key": key})),
+        ("recording.terminal.replay", json!({"recording_key": key})),
+        ("recording.artifact.list", json!({"recording_key": key})),
         (
             "recording.artifact.get",
-            json!({"run_key": key, "artifact_id": capture}),
+            json!({"recording_key": key, "artifact_id": capture}),
         ),
     ];
     for (op, params) in operations {
@@ -1422,7 +1401,7 @@ fn every_read_leaves_the_data_directory_exactly_as_it_was() {
         let _ = call(
             &service,
             "recording.artifact.get",
-            json!({"run_key": key, "artifact_id": id}),
+            json!({"recording_key": key, "artifact_id": id}),
             &ctx(),
         );
     }
@@ -1452,11 +1431,11 @@ fn a_stale_analysis_is_not_sealed_or_changed_by_listing_runs() {
     .unwrap();
     let before = data.snapshot();
     let service = data.service();
-    call(&service, "recording.run.list", json!({}), &ctx()).unwrap();
+    call(&service, "recording.list", json!({}), &ctx()).unwrap();
     call(
         &service,
-        "recording.run.get",
-        json!({"run_key": run.key()}),
+        "recording.get",
+        json!({"recording_key": run.key()}),
         &ctx(),
     )
     .unwrap();
@@ -1480,7 +1459,7 @@ fn a_live_recording_reports_its_phase_grows_and_a_cursor_goes_stale_as_it_does()
         call(
             &service,
             "recording.trace.page",
-            json!({"run_key": key, "limit": 2}),
+            json!({"recording_key": key, "limit": 2}),
             &ctx()
         ),
         Trace
@@ -1514,7 +1493,7 @@ fn a_live_recording_reports_its_phase_grows_and_a_cursor_goes_stale_as_it_does()
     let error = call(
         &service,
         "recording.trace.page",
-        json!({"run_key": key, "limit": 2, "cursor": cursor}),
+        json!({"recording_key": key, "limit": 2, "cursor": cursor}),
         &ctx(),
     )
     .unwrap_err();
@@ -1524,7 +1503,7 @@ fn a_live_recording_reports_its_phase_grows_and_a_cursor_goes_stale_as_it_does()
         call(
             &service,
             "recording.trace.page",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx()
         ),
         Trace
@@ -1535,8 +1514,8 @@ fn a_live_recording_reports_its_phase_grows_and_a_cursor_goes_stale_as_it_does()
     let detail = reply!(
         call(
             &service,
-            "recording.run.get",
-            json!({"run_key": key}),
+            "recording.get",
+            json!({"recording_key": key}),
             &ctx()
         ),
         Run
@@ -1561,8 +1540,8 @@ fn a_run_still_running_in_a_live_boot_is_running_not_interrupted() {
     let detail = reply!(
         call(
             &with_layer,
-            "recording.run.get",
-            json!({"run_key": run.key()}),
+            "recording.get",
+            json!({"recording_key": run.key()}),
             &ctx()
         ),
         Run
@@ -1581,8 +1560,8 @@ fn a_run_still_running_in_a_live_boot_is_running_not_interrupted() {
     let detail = reply!(
         call(
             &without,
-            "recording.run.get",
-            json!({"run_key": run.key()}),
+            "recording.get",
+            json!({"recording_key": run.key()}),
             &ctx()
         ),
         Run
@@ -1611,7 +1590,7 @@ fn a_finalizing_recording_answers_with_its_phase_and_stays_readable() {
         call(
             &service,
             "recording.trace.page",
-            json!({"run_key": run.key()}),
+            json!({"recording_key": run.key()}),
             &ctx()
         ),
         Trace
@@ -1626,8 +1605,8 @@ fn a_finalizing_recording_answers_with_its_phase_and_stays_readable() {
     let detail = reply!(
         call(
             &service,
-            "recording.run.get",
-            json!({"run_key": run.key()}),
+            "recording.get",
+            json!({"recording_key": run.key()}),
             &ctx()
         ),
         Run
@@ -1648,8 +1627,8 @@ fn an_open_read_holds_a_lease_that_retention_can_see() {
     assert!(!service.run_is_open(&key));
     call(
         &service,
-        "recording.run.get",
-        json!({"run_key": key}),
+        "recording.get",
+        json!({"recording_key": key}),
         &ctx(),
     )
     .unwrap();
@@ -1668,7 +1647,7 @@ fn a_cancelled_read_answers_unavailable_and_a_past_deadline_read_timeout() {
     let error = call(
         &service,
         "recording.trace.page",
-        json!({"run_key": run.key()}),
+        json!({"recording_key": run.key()}),
         &context,
     )
     .unwrap_err();
@@ -1681,7 +1660,7 @@ fn a_cancelled_read_answers_unavailable_and_a_past_deadline_read_timeout() {
     let error = call(
         &service,
         "recording.trace.page",
-        json!({"run_key": run.key()}),
+        json!({"recording_key": run.key()}),
         &late,
     )
     .unwrap_err();
@@ -1734,7 +1713,7 @@ fn reads_stay_consistent_while_a_writer_appends_to_the_trace() {
             // grown recording restarts from the first page.
             let mut cursor: Option<String> = None;
             loop {
-                let mut params = json!({"run_key": key, "limit": 2});
+                let mut params = json!({"recording_key": key, "limit": 2});
                 if let Some(cursor) = &cursor {
                     params["cursor"] = json!(cursor);
                 }
@@ -1763,7 +1742,7 @@ fn reads_stay_consistent_while_a_writer_appends_to_the_trace() {
         call(
             &service,
             "recording.trace.page",
-            json!({"run_key": key, "limit": 100}),
+            json!({"recording_key": key, "limit": 100}),
             &ctx()
         ),
         Trace
@@ -1788,7 +1767,7 @@ fn sensitive_reads_are_logged_by_the_service_with_caller_run_and_size_never_the_
         call(
             &service,
             "recording.trace.get",
-            json!({"run_key": key, "ref": {"stream": "9", "task": "10", "call": "2"}}),
+            json!({"recording_key": key, "ref": {"stream": "9", "task": "10", "call": "2"}}),
             &ctx()
         ),
         Invocation
@@ -1801,7 +1780,7 @@ fn sensitive_reads_are_logged_by_the_service_with_caller_run_and_size_never_the_
     call(
         &service,
         "recording.captured.read",
-        json!({"run_key": key, "field": field, "offset": "0", "len": 4}),
+        json!({"recording_key": key, "field": field, "offset": "0", "len": 4}),
         &plain_ctx(),
     )
     .unwrap_err();
@@ -1810,7 +1789,7 @@ fn sensitive_reads_are_logged_by_the_service_with_caller_run_and_size_never_the_
         call(
             &service,
             "recording.captured.read",
-            json!({"run_key": key, "field": field, "offset": "0", "len": 11}),
+            json!({"recording_key": key, "field": field, "offset": "0", "len": 11}),
             &ctx()
         ),
         Bytes
@@ -1825,7 +1804,7 @@ fn sensitive_reads_are_logged_by_the_service_with_caller_run_and_size_never_the_
     );
     assert!(
         seen[0].ends_with(&format!(
-            " op=recording.captured.read run={vm}:{boot}:{id} size=11"
+            " op=recording.captured.read recording={vm}:{boot}:{id} size=11"
         )),
         "{}",
         seen[0]

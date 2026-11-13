@@ -4,8 +4,8 @@
 //! through the engine's own run deletion (`samples::delete_run_as`).
 
 use crate::{
-    api::job::Job,
-    query::{QueryService, key::RunKey},
+    api::run::Run,
+    query::{QueryService, key::RecordingKey},
 };
 use antinomie_monitor_core::{
     BackendOptions, RunArtifacts,
@@ -28,11 +28,11 @@ pub enum RunState {
 }
 
 pub trait Runs: Send + Sync {
-    fn inspect(&self, job: &Job) -> Result<RunState, String>;
+    fn inspect(&self, job: &Run) -> Result<RunState, String>;
     /// Whether a read of the run is open now.
-    fn is_open(&self, job: &Job) -> bool;
+    fn is_open(&self, job: &Run) -> bool;
     /// Delete the run through the engine's own deletion; the bytes freed.
-    fn delete(&self, job: &Job, actor: &str) -> Result<u64, String>;
+    fn delete(&self, job: &Run, actor: &str) -> Result<u64, String>;
 }
 
 pub struct RealRuns<'a> {
@@ -45,7 +45,7 @@ impl RealRuns<'_> {
     /// The engine options of the folder that holds `job`'s run: its lane's
     /// (`<data>/lanes/N/`, `daemon::lanes::lane_options`), else the data
     /// folder's. A run stays in the folder of the lane that recorded it.
-    fn options_for(&self, job: &Job) -> BackendOptions {
+    fn options_for(&self, job: &Run) -> BackendOptions {
         match &job.lane {
             Some(lane) => crate::daemon::lanes::lane_options(self.options, lane),
             None => self.options.clone(),
@@ -55,7 +55,7 @@ impl RealRuns<'_> {
     /// The recording folders of the VM that recorded `job`'s run, as the
     /// engine knows them (a VM's `recording_root` may be outside the data
     /// folder), real paths.
-    fn recording_roots(&self, job: &Job) -> Vec<PathBuf> {
+    fn recording_roots(&self, job: &Run) -> Vec<PathBuf> {
         let Some(recording) = &job.recording else {
             return Vec::new();
         };
@@ -70,7 +70,7 @@ impl RealRuns<'_> {
 
     /// The run's folder as the job names it, only when it is a plain folder
     /// inside the data folder or inside a recording folder of its VM.
-    fn run_dir(&self, job: &Job) -> Result<Option<PathBuf>, String> {
+    fn run_dir(&self, job: &Run) -> Result<Option<PathBuf>, String> {
         let Some(recording) = &job.recording else {
             return Ok(None);
         };
@@ -120,7 +120,7 @@ impl RealRuns<'_> {
 }
 
 impl Runs for RealRuns<'_> {
-    fn inspect(&self, job: &Job) -> Result<RunState, String> {
+    fn inspect(&self, job: &Run) -> Result<RunState, String> {
         let Some(dir) = self.run_dir(job)? else {
             return Ok(RunState::Gone);
         };
@@ -142,17 +142,17 @@ impl Runs for RealRuns<'_> {
         })
     }
 
-    fn is_open(&self, job: &Job) -> bool {
+    fn is_open(&self, job: &Run) -> bool {
         let (Some(query), Some(recording)) = (self.query, &job.recording) else {
             return false;
         };
-        RunKey::new(&recording.vm_id, &recording.boot_id, &recording.run_id)
+        RecordingKey::new(&recording.vm_id, &recording.boot_id, &recording.run_id)
             .map(|key| query.run_is_open(&key))
             // A key that cannot be built cannot be deleted either.
             .unwrap_or(true)
     }
 
-    fn delete(&self, job: &Job, actor: &str) -> Result<u64, String> {
+    fn delete(&self, job: &Run, actor: &str) -> Result<u64, String> {
         let recording = job.recording.as_ref().ok_or("the job has no recording")?;
         let sample = job.sample.as_ref().ok_or("the job has no sample")?;
         let options = self.options_for(job);

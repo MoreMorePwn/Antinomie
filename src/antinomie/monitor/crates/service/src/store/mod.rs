@@ -45,7 +45,7 @@ use crate::{
     api::{
         error::{ApiError, ErrorCode},
         event::{Event, EventBody, EventScope},
-        ids::JobId,
+        ids::RunId,
     },
     clock::{Clock, SystemClock, new_epoch},
 };
@@ -166,10 +166,10 @@ pub(crate) struct Tx<'a> {
 impl Tx<'_> {
     /// Insert an event row. A stored event of a job gets the next `seq` of
     /// that job; an engine event the next of this epoch.
-    pub fn emit(&mut self, job: Option<&JobId>, body: EventBody) -> R<()> {
+    pub fn emit(&mut self, job: Option<&RunId>, body: EventBody) -> R<()> {
         let scope = body.scope();
         debug_assert!(!body.is_ephemeral());
-        debug_assert_eq!(scope == EventScope::Job, job.is_some());
+        debug_assert_eq!(scope == EventScope::Run, job.is_some());
         let seq: u64 = match job {
             Some(id) => self
                 .tx
@@ -187,7 +187,7 @@ impl Tx<'_> {
         self.tx
             .execute(
                 "INSERT INTO events(job_id, seq, ts_ms, type, data_json) VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![job.map(JobId::as_str), seq, self.now, kind, data],
+                rusqlite::params![job.map(RunId::as_str), seq, self.now, kind, data],
             )
             .map_err(db)?;
         let gseq = self.tx.last_insert_rowid() as u64;
@@ -196,7 +196,7 @@ impl Tx<'_> {
             gseq: Some(gseq),
             ts_ms: self.now,
             scope,
-            job_id: job.cloned(),
+            run_id: job.cloned(),
             body,
         });
         Ok(())
@@ -300,7 +300,7 @@ impl Store {
     }
 
     /// `<service>/jobs/<id>`.
-    pub fn job_dir(&self, id: &JobId) -> PathBuf {
+    pub fn job_dir(&self, id: &RunId) -> PathBuf {
         self.root.join("jobs").join(id.as_str())
     }
 
@@ -428,16 +428,16 @@ impl Store {
         lock(&self.subscribers).len()
     }
 
-    /// Send an ephemeral event (`job.progress`, `job.metrics`): not stored, no
+    /// Send an ephemeral event (`run.progress`, `run.metrics`): not stored, no
     /// `seq`, no `gseq`, never replayed.
-    pub fn publish_ephemeral(&self, job: &JobId, body: EventBody) {
+    pub fn publish_ephemeral(&self, job: &RunId, body: EventBody) {
         debug_assert!(body.is_ephemeral());
         let event = Event {
             seq: None,
             gseq: None,
             ts_ms: self.clock.now_ms(),
-            scope: EventScope::Job,
-            job_id: Some(job.clone()),
+            scope: EventScope::Run,
+            run_id: Some(job.clone()),
             body,
         };
         self.publish(vec![event]);

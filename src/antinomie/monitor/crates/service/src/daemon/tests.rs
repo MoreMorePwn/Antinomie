@@ -12,9 +12,9 @@ use crate::{
     api::{
         artifact::{ArtifactKind, MediaType},
         error::{ApiError, ErrorCode, ErrorReason},
-        ids::{JobId, Sha256Hex},
-        job::{Job, JobState, Outcome},
+        ids::{RunId, Sha256Hex},
         ops::Caller,
+        run::{Outcome, Run, RunState},
         status::{Accelerator, Owner},
     },
     clock::SystemClock,
@@ -161,9 +161,9 @@ pub(super) fn upload(svc: &Svc, bytes: &[u8]) -> String {
     id
 }
 
-pub(super) fn submit_upload(svc: &Svc) -> Job {
+pub(super) fn submit_upload(svc: &Svc) -> Run {
     let id = upload(svc, SCRIPT);
-    let reply = call(svc, "job.submit", json!({"sample": {"upload_id": id}})).unwrap();
+    let reply = call(svc, "run.submit", json!({"sample": {"upload_id": id}})).unwrap();
     assert_eq!(reply["replayed"], false);
     serde_json::from_value(reply).unwrap()
 }
@@ -172,7 +172,7 @@ pub(super) fn submit_upload(svc: &Svc) -> Job {
 fn an_upload_becomes_a_queued_job_and_a_client_path_is_never_opened() {
     let svc = svc("upload", |_| {});
     let job = submit_upload(&svc);
-    assert_eq!(job.state, JobState::Queued, "{:?}", job.failure);
+    assert_eq!(job.state, RunState::Queued, "{:?}", job.failure);
     assert_eq!(job.sample.as_ref().unwrap().kind, "sh");
     assert_eq!(job.client_id, me().client_id);
 
@@ -184,7 +184,7 @@ fn an_upload_becomes_a_queued_job_and_a_client_path_is_never_opened() {
         "/etc/passwd".into(),
         "../../x".into(),
     ] {
-        let error = call(&svc, "job.submit", json!({"sample": {"path": path}})).unwrap_err();
+        let error = call(&svc, "run.submit", json!({"sample": {"path": path}})).unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidArgument);
         assert_eq!(error.field.as_deref(), Some("sample.path"));
     }
@@ -192,7 +192,7 @@ fn an_upload_becomes_a_queued_job_and_a_client_path_is_never_opened() {
     let direct = svc
         .service
         .call(
-            "job.submit",
+            "run.submit",
             json!({"sample": {"path": outside}}),
             &CallContext::in_process(me()),
         )
@@ -272,12 +272,12 @@ fn every_op_checks_its_permission() {
         transport: Transport::Socket,
     };
     for (op, params) in [
-        ("job.submit", json!({"sample": {"sha256": "00".repeat(32)}})),
+        ("run.submit", json!({"sample": {"sha256": "00".repeat(32)}})),
         ("upload.begin", json!({"size": 1})),
         ("queue.pause", json!({})),
         (
-            "job.retry",
-            json!({"job_id": "j_01ARZ3NDEKTSV4RRFFQ69G5FAV"}),
+            "run.rerun",
+            json!({"run_id": "j_01ARZ3NDEKTSV4RRFFQ69G5FAV"}),
         ),
     ] {
         assert_eq!(
@@ -297,7 +297,7 @@ fn a_stopping_daemon_refuses_new_work_and_still_answers_reads() {
     let error = call(&svc, "upload.begin", json!({"size": 4})).unwrap_err();
     assert_eq!(error.code, ErrorCode::Unavailable);
     assert_eq!(error.reason(), Some(ErrorReason::ServiceStopping));
-    let got = call(&svc, "job.get", json!({"job_id": job.id})).unwrap();
+    let got = call(&svc, "run.get", json!({"run_id": job.id})).unwrap();
     assert_eq!(got["state"], "queued");
     let health = call(&svc, "health", json!({})).unwrap();
     assert_eq!(health["ready"], false);
@@ -308,7 +308,7 @@ fn a_stopping_daemon_refuses_new_work_and_still_answers_reads() {
 fn a_retry_is_a_new_job_that_repeats_a_finished_one_with_the_overrides() {
     let svc = svc("retry", |_| {});
     let job = submit_upload(&svc);
-    let error = call(&svc, "job.retry", json!({"job_id": job.id})).unwrap_err();
+    let error = call(&svc, "run.rerun", json!({"run_id": job.id})).unwrap_err();
     assert_eq!(error.code, ErrorCode::PreconditionFailed);
     let store = &svc.service.store;
     let running = store
@@ -321,7 +321,7 @@ fn a_retry_is_a_new_job_that_repeats_a_finished_one_with_the_overrides() {
             Outcome::Failed,
             Some(crate::api::failure::Failure::new(
                 crate::api::failure::FailureCode::GuestLost,
-                crate::api::job::Stage::Run,
+                crate::api::run::Stage::Run,
                 "lost",
                 None,
             )),
@@ -329,15 +329,15 @@ fn a_retry_is_a_new_job_that_repeats_a_finished_one_with_the_overrides() {
         .unwrap();
     let again = call(
         &svc,
-        "job.retry",
-        json!({"job_id": job.id, "overrides": {"program": {"run_time_s": 30}}}),
+        "run.rerun",
+        json!({"run_id": job.id, "overrides": {"program": {"run_time_s": 30}}}),
     )
     .unwrap();
     assert_eq!(again["state"], "queued");
     assert_eq!(again["repeat_of"], json!(job.id));
-    assert_eq!(again["spec"]["overrides"]["program"]["run_time_s"], 30);
-    assert_eq!(again["policy"]["name"], "custom");
-    assert_eq!(again["policy"]["based_on"]["name"], "standard");
+    assert_eq!(again["request"]["overrides"]["program"]["run_time_s"], 30);
+    assert_eq!(again["preset"]["name"], "custom");
+    assert_eq!(again["preset"]["based_on"]["name"], "standard");
     assert_ne!(again["id"], json!(job.id));
     assert_eq!(again["sample"]["sha256"], json!(job.sample.unwrap().sha256));
     // Run again is runs.submit on a run the caller can see: another client
@@ -349,7 +349,7 @@ fn a_retry_is_a_new_job_that_repeats_a_finished_one_with_the_overrides() {
     };
     let error = svc
         .service
-        .call("job.retry", json!({"job_id": job.id}), &blind)
+        .call("run.rerun", json!({"run_id": job.id}), &blind)
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::PermissionDenied);
     assert_eq!(error.details["needs"], json!(["runs.see_all"]));
@@ -360,7 +360,7 @@ fn a_retry_is_a_new_job_that_repeats_a_finished_one_with_the_overrides() {
     };
     let other = svc
         .service
-        .call("job.retry", json!({"job_id": job.id}), &stranger)
+        .call("run.rerun", json!({"run_id": job.id}), &stranger)
         .unwrap();
     assert_eq!(other["client_id"], "local:4242");
 }
@@ -396,9 +396,9 @@ fn the_queue_pauses_and_resumes_and_capabilities_follow_the_policies() {
             .unwrap()
             .contains(&json!("events.resume"))
     );
-    let presets = call(&svc, "policy.list", json!({})).unwrap();
-    assert_eq!(presets["policies"][0]["name"], "standard");
-    assert_eq!(presets["policies"][0]["needs"], json!([]));
+    let presets = call(&svc, "preset.list", json!({})).unwrap();
+    assert_eq!(presets["presets"][0]["name"], "standard");
+    assert_eq!(presets["presets"][0]["needs"], json!([]));
 }
 
 #[test]
@@ -460,7 +460,7 @@ fn an_artifact_is_served_by_path_and_range_and_never_outside_its_job() {
     let report = call(
         &svc,
         "report.get",
-        json!({"job_id": job.id, "format": "html"}),
+        json!({"run_id": job.id, "format": "html"}),
     )
     .unwrap();
     assert_eq!(report["artifact"]["id"], json!(good.id));
@@ -475,7 +475,7 @@ struct Scripted {
     controls: Arc<Controls>,
     lane: Duration,
     host: Duration,
-    ran: Arc<Mutex<Vec<JobId>>>,
+    ran: Arc<Mutex<Vec<RunId>>>,
 }
 
 impl LaneRunner for Scripted {
@@ -485,11 +485,11 @@ impl LaneRunner for Scripted {
     fn eligibility(&mut self) -> Eligibility {
         Eligibility::Ready
     }
-    fn run_job(&mut self, job: &Job, to_host: &mut dyn FnMut()) -> JobEnd {
+    fn run_job(&mut self, job: &Run, to_host: &mut dyn FnMut()) -> JobEnd {
         crate::store::lock(&self.ran).push(job.id.clone());
         let until = Instant::now() + self.lane;
         while Instant::now() < until {
-            if self.store.get(&job.id).unwrap().state == JobState::Cancelling {
+            if self.store.get(&job.id).unwrap().state == RunState::Cancelling {
                 if self.store.cancel_is_shutdown(&job.id).unwrap() {
                     self.store
                         .requeue(
@@ -522,7 +522,7 @@ impl LaneRunner for Scripted {
             .unwrap();
         JobEnd::Done
     }
-    fn resume(&mut self, job: &Job) -> JobEnd {
+    fn resume(&mut self, job: &Run) -> JobEnd {
         self.store
             .finish(&job.id, Outcome::Succeeded, None)
             .unwrap();
@@ -538,7 +538,7 @@ impl LaneRunner for Scripted {
 /// that runs `shutdown_step` once the stop begins.
 struct Running {
     svc: Svc,
-    ran: Arc<Mutex<Vec<JobId>>>,
+    ran: Arc<Mutex<Vec<RunId>>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -625,11 +625,11 @@ fn the_lane_runs_jobs_in_queue_order_and_a_submit_wakes_it() {
     let first = submit_upload(&svc);
     let mut running = start(svc, Duration::ZERO, Duration::ZERO);
     running.wait_for("the first job", || {
-        running.store().get(&first.id).unwrap().state == JobState::Succeeded
+        running.store().get(&first.id).unwrap().state == RunState::Succeeded
     });
     let second = submit_upload(&running.svc);
     running.wait_for("the second job", || {
-        running.store().get(&second.id).unwrap().state == JobState::Succeeded
+        running.store().get(&second.id).unwrap().state == RunState::Succeeded
     });
     assert_eq!(*running.ran.lock().unwrap(), vec![first.id, second.id]);
     // A lane command is served while idle.
@@ -653,12 +653,12 @@ fn at_shutdown_a_job_in_its_lane_stages_goes_back_to_the_queue_uncounted() {
     let lines = running.stop(Duration::from_secs(120));
     assert!(lines[0].contains("cancelled for shutdown"), "{lines:?}");
     let after = running.store().get(&job.id).unwrap();
-    assert_eq!(after.state, JobState::Queued);
+    assert_eq!(after.state, RunState::Queued);
     let (events, _) = running.store().events_list(&job.id, 0, 1000).unwrap();
     assert!(
         events.iter().any(|e| matches!(
             &e.body,
-            crate::api::event::EventBody::JobRequeued { reason, .. } if reason.contains("shutdown")
+            crate::api::event::EventBody::RunRequeued { reason, .. } if reason.contains("shutdown")
         )),
         "{events:?}"
     );
@@ -687,7 +687,7 @@ fn at_shutdown_a_job_in_its_host_stages_is_let_finish() {
     assert!(began.elapsed() >= Duration::from_millis(300));
     assert_eq!(
         running.store().get(&job.id).unwrap().state,
-        JobState::Succeeded
+        RunState::Succeeded
     );
     // No other job was started during the stop.
     assert_eq!(running.ran.lock().unwrap().len(), 1);
@@ -706,7 +706,7 @@ fn a_host_stage_past_the_grace_is_interrupted_and_left_for_recovery() {
     // Untouched: recovery finds it `running` with its collected entry.
     assert_eq!(
         running.store().get(&job.id).unwrap().state,
-        JobState::Running
+        RunState::Running
     );
 }
 
@@ -728,13 +728,13 @@ fn drain_lets_the_lane_stages_run_on_until_the_drain_timeout() {
     assert!(lines.is_empty(), "{lines:?}");
     assert_eq!(
         running.store().get(&job.id).unwrap().state,
-        JobState::Succeeded
+        RunState::Succeeded
     );
     // With the drain over, the step cancels.
     let service = &running.svc.service;
     assert_eq!(
         service.store.get(&second.id).unwrap().state,
-        JobState::Queued
+        RunState::Queued
     );
     service
         .store
@@ -754,7 +754,7 @@ fn drain_lets_the_lane_stages_run_on_until_the_drain_timeout() {
     assert!(line.unwrap().contains("cancelled for shutdown"));
     assert_eq!(
         service.store.get(&second.id).unwrap().state,
-        JobState::Cancelling
+        RunState::Cancelling
     );
 }
 

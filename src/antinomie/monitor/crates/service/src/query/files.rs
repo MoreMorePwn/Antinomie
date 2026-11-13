@@ -16,8 +16,8 @@ use super::{
 };
 use crate::api::{
     error::{ApiError, ErrorCode},
-    job::RecordingPhase,
     ops::Permission,
+    run::RecordingPhase,
 };
 use antinomie_monitor_core::{
     disk_start::DiskStart, file_before::Before, file_before_store::Store,
@@ -206,7 +206,7 @@ impl QueryService {
     pub(super) fn files_list(&self, params: &FilesListParams) -> Result<Page<FileRow>, ApiError> {
         tables::check_sort(params.sort.as_ref(), FILE_FIELDS)?;
         let compiled = tables::compile_q(params.q.as_deref(), FILE_FIELDS)?;
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let binding = opened.binding(&(params.tab, &params.q), &params.sort);
         let scanned = match self.triage_scan(&opened)? {
             Err(building) => {
@@ -290,7 +290,7 @@ impl QueryService {
         &self,
         params: &FileVersionsParams,
     ) -> Result<Single<FileVersions>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let scanned = match self.triage_scan(&opened)? {
             Err(building) => {
                 return Ok(Single::building(
@@ -379,7 +379,7 @@ impl QueryService {
         if len > CONTENT_LIMIT {
             return Err(ApiError::payload_too_large(CONTENT_LIMIT));
         }
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let scanned = match self.triage_scan(&opened)? {
             Err(building) => {
                 return Ok(Single::building(

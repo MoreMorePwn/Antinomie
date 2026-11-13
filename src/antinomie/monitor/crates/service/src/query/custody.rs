@@ -12,7 +12,7 @@ use super::{
     service::QueryService,
     types::*,
 };
-use crate::api::{error::ApiError, job::RecordingPhase};
+use crate::api::{error::ApiError, run::RecordingPhase};
 use antinomie_monitor_core::samples::{self, EventRow, Library};
 use serde_json::{Map, Value};
 
@@ -64,11 +64,11 @@ impl QueryService {
         params: &CustodyListParams,
         ctx: &ReadContext,
     ) -> Result<Page<CustodyEntry>, ApiError> {
-        let sha256 = match (&params.run_key, &params.sha256) {
+        let sha256 = match (&params.recording_key, &params.sha256) {
             (Some(_), Some(_)) | (None, None) => {
                 return Err(ApiError::invalid_argument(
                     "sha256",
-                    "exactly one of run_key or sha256 is required",
+                    "exactly one of recording_key or sha256 is required",
                 ));
             }
             (None, Some(sha)) => sha.as_str().to_owned(),

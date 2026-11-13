@@ -16,7 +16,7 @@
 //! it.
 use super::{LaneStages, StageStop};
 use crate::{
-    api::job::Job,
+    api::run::Run,
     engine::Engine,
     lane::process::is_recorded_qemu,
     waiter::{SETTLE_WAIT, WaitError, settled_after_stop},
@@ -49,7 +49,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// final. `stop_limit` bounds the answer to `Stop`.
     pub(crate) fn stop_lane_vm(
         &mut self,
-        job: &Job,
+        job: &Run,
         vm: &str,
         stop_limit: Duration,
     ) -> Result<Stopped, StageStop> {
@@ -64,7 +64,7 @@ impl<E: Engine> LaneStages<'_, E> {
             return Ok(Stopped::Unsettled("another VM is running".into()));
         }
         if snapshot.state != VmState::Stopped {
-            self.progress(job, crate::api::job::Stage::Collect, "stopping the VM");
+            self.progress(job, crate::api::run::Stage::Collect, "stopping the VM");
             match self.waiter.command(Command::Stop, Some(stop_limit)) {
                 Ok(_) => {}
                 Err(WaitError::TimedOut { .. }) => {
@@ -122,7 +122,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     /// The hard path: kill the recorded QEMU if it is still the one we
     /// started, then let the engine notice. Returns what happened, in words.
-    pub(crate) fn hard_stop(&mut self, job: &Job) -> Result<String, StageStop> {
+    pub(crate) fn hard_stop(&mut self, job: &Run) -> Result<String, StageStop> {
         let record = self.lane_file()?.qemu;
         let how = match record {
             None => "no QEMU process is recorded; nothing was killed".to_owned(),

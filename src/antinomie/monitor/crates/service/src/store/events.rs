@@ -6,7 +6,7 @@ use super::{R, Store, db, mirror::event_from_parts};
 use crate::api::{
     error::ApiError,
     event::{Event, EventBody},
-    ids::JobId,
+    ids::RunId,
 };
 
 /// Engine-scope events are kept 7 days or 100 000 rows (design 5.5).
@@ -35,7 +35,7 @@ impl Store {
 
     /// `events.list`: the stored events of a job after `after_seq`, and the
     /// `seq` to ask for next.
-    pub fn events_list(&self, job: &JobId, after_seq: u64, limit: u32) -> R<(Vec<Event>, u64)> {
+    pub fn events_list(&self, job: &RunId, after_seq: u64, limit: u32) -> R<(Vec<Event>, u64)> {
         let limit = limit.clamp(1, 1000);
         let conn = self.conn();
         let exists: bool = conn
@@ -44,7 +44,7 @@ impl Store {
             })
             .unwrap_or(false);
         if !exists {
-            return Err(ApiError::not_found("job"));
+            return Err(ApiError::not_found("run"));
         }
         let mut statement = conn
             .prepare(
@@ -91,7 +91,7 @@ impl Store {
         for row in rows {
             let ((gseq, seq, ts_ms, kind, data), job) = row.map_err(db)?;
             let job = job
-                .map(|id| JobId::try_from(id).map_err(super::internal))
+                .map(|id| RunId::try_from(id).map_err(super::internal))
                 .transpose()?;
             events.push(event_from_parts(gseq, seq, ts_ms, &kind, &data, job)?);
         }
@@ -115,7 +115,7 @@ impl Store {
     }
 
     /// Delete engine events older than 7 days, and the oldest above 100 000
-    /// rows. Job events live as long as the job.
+    /// rows. Run events live as long as the job.
     pub fn prune_engine_events(&self) -> R<u64> {
         self.write(|tx| {
             let cutoff = tx.now.saturating_sub(ENGINE_EVENT_DAYS * 24 * 3600 * 1000);

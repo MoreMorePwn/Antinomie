@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The checks of `job.submit` in the order of the access specification
+//! The checks of `run.submit` in the order of the access specification
 //! ("How a submit is checked, in order"), on the run as it will run:
 //!
 //! 1. the caller may submit at all (`runs.submit`; [`super::submit`]);
-//! 2. the request's shape (`JobSpec::validate_shape`);
+//! 2. the request's shape (`RunRequest::validate_shape`);
 //! 3. the preset exists, else `preset_denied` ([`super::submit`]; `offered_to`
 //!    names roles, and 0.9.0 callers have none, so it locks nothing);
 //! 4. the overrides resolve onto the preset (the Custom rule) and every value
@@ -24,7 +24,7 @@ use crate::{
         error::{ApiError, ErrorCode, ErrorReason},
         failure::FailureCode,
         ops::{Caller, Permission},
-        spec::{JobSpec, Overrides, Route},
+        spec::{Overrides, Route, RunRequest},
     },
     config::{
         LoadedPreset, Preset,
@@ -225,13 +225,13 @@ pub(super) fn limit(field: &str, limit: u64, message: String) -> Reject {
 /// preset it freezes (the named one, or Custom).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolved {
-    pub spec: JobSpec,
+    pub spec: RunRequest,
     pub preset: LoadedPreset,
 }
 
 /// Steps 3 to 7 at once: [`settle`], then [`check`].
 pub fn resolve(
-    spec: &JobSpec,
+    spec: &RunRequest,
     caller: &Caller,
     base: &LoadedPreset,
     lane_group: &str,
@@ -245,7 +245,11 @@ pub fn resolve(
 /// changed value makes the run Custom, based on the preset), check every
 /// value and the reserved keys, and fill in the priority. An error stores
 /// nothing.
-pub fn settle(spec: &JobSpec, caller: &Caller, base: &LoadedPreset) -> Result<Resolved, ApiError> {
+pub fn settle(
+    spec: &RunRequest,
+    caller: &Caller,
+    base: &LoadedPreset,
+) -> Result<Resolved, ApiError> {
     let preset = base
         .apply(&spec.overrides.0)
         .map_err(|error| ApiError::invalid_argument(&error.field, error.message))?;
@@ -276,10 +280,10 @@ pub fn settle(spec: &JobSpec, caller: &Caller, base: &LoadedPreset) -> Result<Re
         DEFAULT_PRIORITY.min(caller.limits.priority_max.unwrap_or(DEFAULT_PRIORITY))
     });
     Ok(Resolved {
-        spec: JobSpec {
+        spec: RunRequest {
             sample: spec.sample.clone(),
             name: spec.name.clone(),
-            policy: Some(base.name.clone()),
+            preset: Some(base.name.clone()),
             priority: Some(priority),
             labels: spec.labels.clone(),
             idempotency_key: spec.idempotency_key.clone(),

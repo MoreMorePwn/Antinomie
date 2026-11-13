@@ -14,7 +14,7 @@
 //! never half of one; a leftover temporary file is ignored and swept at the
 //! next load. The file carries a `version`; a file of a newer version is
 //! refused, never rewritten.
-use crate::api::{failure::FailureCode, ids::JobId, ids::LaneId, job::Stage};
+use crate::api::{failure::FailureCode, ids::LaneId, ids::RunId, run::Stage};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -66,7 +66,7 @@ pub enum Checkpoint {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LaneWork {
-    pub job_id: JobId,
+    pub job_id: RunId,
     pub attempt: u32,
     pub stage: Stage,
     pub checkpoint: Checkpoint,
@@ -81,7 +81,7 @@ pub struct LaneWork {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Collected {
-    pub job_id: JobId,
+    pub job_id: RunId,
     pub attempt: u32,
     pub collected_ms: u64,
 }
@@ -167,7 +167,7 @@ impl LaneFile {
 
     /// The lane takes a job: stage `prechecks` is the job's, the lane's own
     /// work begins at `provision`.
-    pub fn begin_work(&mut self, job_id: JobId, attempt: u32, now_ms: u64) {
+    pub fn begin_work(&mut self, job_id: RunId, attempt: u32, now_ms: u64) {
         self.current = Some(LaneWork {
             job_id,
             attempt,
@@ -208,7 +208,7 @@ impl LaneFile {
     }
 
     /// The host stages of `job` began (or the job ended): forget the entry.
-    pub fn release(&mut self, job: &JobId, now_ms: u64) {
+    pub fn release(&mut self, job: &RunId, now_ms: u64) {
         self.collected.retain(|c| &c.job_id != job);
         self.updated_ms = now_ms;
     }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The JSON Schema of the job and query API, generated from the Rust types
-//! with `schemars` and checked in as `docs/job-api-1.schema.json`. A test fails
+//! with `schemars` and checked in as `docs/run-api-1.schema.json`. A test fails
 //! when regenerating changes the file; `UPDATE_SCHEMA=1 cargo test -p
 //! antinomie-service --release schema` rewrites it. ANT-T0192's tests import
 //! the file.
@@ -13,16 +13,16 @@ use crate::api::{
     event::Event,
     event::Frame,
     failure::Failure,
-    job::{Job, Submitted},
     ops,
-    spec::JobSpec,
+    run::{Run, Submitted},
+    spec::RunRequest,
     status,
 };
 use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};
 
 /// The checked-in schema, relative to the repository root.
-pub const SCHEMA_FILE: &str = "docs/job-api-1.schema.json";
+pub const SCHEMA_FILE: &str = "docs/run-api-1.schema.json";
 
 /// The schema document: one `$defs` entry per type the API sends or accepts.
 pub fn generate() -> Value {
@@ -34,8 +34,8 @@ pub fn generate() -> Value {
         };
     }
     root!(
-        JobSpec,
-        Job,
+        RunRequest,
+        Run,
         Submitted,
         Assessment,
         Artifact,
@@ -60,12 +60,12 @@ pub fn generate() -> Value {
         ops::UploadReceived,
         ops::UploadFinishParams,
         ops::UploadFinished,
-        ops::JobIdParams,
-        ops::JobListParams,
-        ops::JobList,
-        ops::JobCancelParams,
-        ops::JobRetryParams,
-        ops::JobDeleteParams,
+        ops::RunIdParams,
+        ops::RunListParams,
+        ops::RunList,
+        ops::RunCancelParams,
+        ops::RunRerunParams,
+        ops::RunDeleteParams,
         ops::Deleted,
         ops::EventsSubscribeParams,
         ops::EventsListParams,
@@ -80,7 +80,9 @@ pub fn generate() -> Value {
         ops::SampleDownloadParams,
         ops::SampleAddParams,
         ops::SampleTagParams,
-        ops::PolicyList,
+        ops::PresetList,
+        ops::PresetGetParams,
+        ops::PresetDetail,
         ops::VmList,
         ops::BaseList,
         ops::CustodyVerifyParams,
@@ -100,8 +102,8 @@ pub fn generate() -> Value {
             QueryCatalogue,
             PageRequest,
             Sort,
-            Page<RunInfo>,
-            Single<RunDetail>,
+            Page<RecordingInfo>,
+            Single<RecordingDetail>,
             Single<Summary>,
             Page<TraceRow>,
             Single<Invocation>,
@@ -154,8 +156,8 @@ pub fn generate() -> Value {
     let definitions: Map<String, Value> = generator.take_definitions(true);
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://antinomie.invalid/schema/job-api-1.schema.json",
-        "title": "Antinomie job and query API, version 1",
+        "$id": "https://antinomie.invalid/schema/run-api-1.schema.json",
+        "title": "Antinomie run and query API, version 1",
         "description": "Generated from the Rust types of the antinomie-service crate. Do not edit.",
         "$defs": definitions,
     })
@@ -189,7 +191,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{}: {e}; run with UPDATE_SCHEMA=1", file().display()));
         assert!(
             stored == current,
-            "docs/job-api-1.schema.json is stale; regenerate it with UPDATE_SCHEMA=1"
+            "docs/run-api-1.schema.json is stale; regenerate it with UPDATE_SCHEMA=1"
         );
     }
 
@@ -198,8 +200,8 @@ mod tests {
         let schema = generate();
         let defs = schema["$defs"].as_object().unwrap();
         for name in [
-            "JobSpec",
-            "Job",
+            "RunRequest",
+            "Run",
             "Event",
             "ApiError",
             "Frame",

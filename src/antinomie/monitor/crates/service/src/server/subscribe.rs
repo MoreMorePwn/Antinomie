@@ -10,14 +10,14 @@
 //! before an earlier one. If the channel overflows (the client is slower than
 //! the event rate, or another job is very busy), the stream subscribes again
 //! and re-reads the table from the last event it sent: nothing is lost.
-//! Ephemeral events (`job.progress`, `job.metrics`) are never replayed.
+//! Ephemeral events (`run.progress`, `run.metrics`) are never replayed.
 //!
 //! | Stream | Resume point | Without one |
 //! |---|---|---|
 //! | one job (`job_id`) | `since_seq` | the job's whole history |
 //! | all jobs and the engine | `since_gseq` | from now |
 //!
-//! A job stream ends with a result line once `job.finished` has passed (that
+//! A job stream ends with a result line once `run.finished` has passed (that
 //! is the job's last event). Every stream ends on `cancel`, when the daemon
 //! stops, or when the client cannot take a line within the write timeout
 //! (`slow_consumer`).
@@ -27,7 +27,7 @@ use crate::{
     api::{
         error::ApiError,
         event::{Event, EventBody, EventScope, Frame, Hello},
-        ids::JobId,
+        ids::RunId,
         ops::{Caller, EventsSubscribeParams, Op, Permission, Reply},
     },
     store::{Store, Subscription},
@@ -43,20 +43,20 @@ use std::{
 /// The stored event types a subscription may ask for (`types`), plus the
 /// ephemeral ones.
 pub const EVENT_TYPES: [&str; 15] = [
-    "job.created",
-    "job.state",
-    "job.stage",
-    "job.progress",
-    "job.run",
-    "job.warning",
-    "job.artifact",
-    "job.trigger",
-    "job.assessment",
-    "job.requeued",
-    "job.finished",
+    "run.created",
+    "run.state",
+    "run.stage",
+    "run.progress",
+    "run.program",
+    "run.warning",
+    "run.artifact",
+    "run.trigger",
+    "run.assessment",
+    "run.requeued",
+    "run.finished",
     "lane.state",
     "engine.alert",
-    "job.metrics",
+    "run.metrics",
     // Accepted so a client may name every type of 5.5 without an error.
     "engine.ping",
 ];
@@ -64,7 +64,7 @@ pub const EVENT_TYPES: [&str; 15] = [
 /// How a stream ended. The caller writes the last line.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StreamEnd {
-    /// The job's `job.finished` has been sent (job streams only).
+    /// The job's `run.finished` has been sent (job streams only).
     Finished { last_seq: u64 },
     /// `{"op": "cancel"}` or the connection closing.
     Cancelled { last_seq: u64, last_gseq: u64 },
@@ -85,7 +85,7 @@ fn type_name(body: &EventBody) -> String {
 
 /// The checked request.
 struct Wanted {
-    job: Option<JobId>,
+    job: Option<RunId>,
     types: Option<BTreeSet<String>>,
     /// The subscriber's permissions: an event whose kind needs another is
     /// not sent.
@@ -98,7 +98,7 @@ impl Wanted {
             return false;
         }
         if let Some(job) = &self.job
-            && event.job_id.as_ref() != Some(job)
+            && event.run_id.as_ref() != Some(job)
         {
             return false;
         }
@@ -110,13 +110,13 @@ impl Wanted {
 
 fn check(params: &EventsSubscribeParams, caller: &Caller) -> Result<Wanted, ApiError> {
     caller.require_any(Op::EventsSubscribe.needs())?;
-    if params.job_id.is_some() && params.since_gseq.is_some() {
+    if params.run_id.is_some() && params.since_gseq.is_some() {
         return Err(ApiError::invalid_argument(
             "since_gseq",
             "a job's stream resumes by since_seq",
         ));
     }
-    if params.job_id.is_none() && params.since_seq.is_some() {
+    if params.run_id.is_none() && params.since_seq.is_some() {
         return Err(ApiError::invalid_argument(
             "since_seq",
             "the all-jobs stream resumes by since_gseq",
@@ -145,7 +145,7 @@ fn check(params: &EventsSubscribeParams, caller: &Caller) -> Result<Wanted, ApiE
         }
     };
     Ok(Wanted {
-        job: params.job_id.clone(),
+        job: params.run_id.clone(),
         types,
         held: caller.permissions.clone(),
     })
@@ -182,7 +182,7 @@ pub fn slow_consumer_line(id: u64, now_ms: u64) -> Reply {
             gseq: None,
             ts_ms: now_ms,
             scope: EventScope::Engine,
-            job_id: None,
+            run_id: None,
             body: EventBody::EngineAlert {
                 code: "slow_consumer".into(),
                 text: "the subscription fell behind and is closed; resume with since_seq or since_gseq"
@@ -241,7 +241,7 @@ impl Run<'_> {
             return Sent::Ok;
         };
         if self.wanted.job.is_some() {
-            if event.job_id != self.wanted.job || seq <= self.cursor.last_seq {
+            if event.run_id != self.wanted.job || seq <= self.cursor.last_seq {
                 return Sent::Ok;
             }
             self.cursor.last_seq = seq;
@@ -249,7 +249,7 @@ impl Run<'_> {
             return Sent::Ok;
         }
         self.cursor.last_gseq = self.cursor.last_gseq.max(gseq);
-        let finished = matches!(event.body, EventBody::JobFinished { .. });
+        let finished = matches!(event.body, EventBody::RunFinished { .. });
         if self.wanted.wants(&event)
             && let Sent::End(end) = self.write(&Reply::event(self.id, event))
         {
@@ -357,7 +357,7 @@ pub fn stream(
             }
             if stopping.load(Ordering::SeqCst) {
                 // What was committed before the stop still goes out (a job's
-                // `job.finished` at shutdown among it).
+                // `run.finished` at shutdown among it).
                 while let Ok(event) = subscription.events.try_recv() {
                     let sent = if event.gseq.is_none() {
                         Sent::Ok
@@ -422,7 +422,7 @@ mod type_tests {
     #[test]
     fn bh_30_a_subscription_may_ask_for_job_trigger() {
         let params = EventsSubscribeParams {
-            types: Some(vec!["job.trigger".into()]),
+            types: Some(vec!["run.trigger".into()]),
             ..Default::default()
         };
         let owner = crate::server::local_caller(1000);
@@ -431,15 +431,15 @@ mod type_tests {
             seq: Some(1),
             gseq: Some(1),
             ts_ms: 0,
-            scope: EventScope::Job,
-            job_id: None,
+            scope: EventScope::Run,
+            run_id: None,
             body,
         };
-        assert!(wanted.wants(&event(EventBody::JobTrigger {
+        assert!(wanted.wants(&event(EventBody::RunTrigger {
             trigger: None,
             note: Some("the core dump was skipped".into()),
         })));
-        assert!(!wanted.wants(&event(EventBody::JobWarning {
+        assert!(!wanted.wants(&event(EventBody::RunWarning {
             code: "x".into(),
             text: "y".into(),
         })));
@@ -470,7 +470,7 @@ mod type_tests {
             gseq: Some(1),
             ts_ms: 0,
             scope: EventScope::Engine,
-            job_id: None,
+            run_id: None,
             body: EventBody::EngineAlert {
                 code: "low_disk".into(),
                 text: "x".into(),

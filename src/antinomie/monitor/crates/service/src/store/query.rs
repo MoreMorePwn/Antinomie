@@ -7,9 +7,9 @@ use super::{
 };
 use crate::api::{
     error::ApiError,
-    ids::JobId,
-    job::{Job, JobState},
-    ops::{JobList, JobListParams},
+    ids::RunId,
+    ops::{RunList, RunListParams},
+    run::{Run, RunState},
 };
 
 const CURSOR_PREFIX: &str = "jc1.";
@@ -22,15 +22,15 @@ pub struct QueueCounts {
 }
 
 impl Store {
-    /// `job.get`.
-    pub fn get(&self, id: &JobId) -> R<Job> {
+    /// `run.get`.
+    pub fn get(&self, id: &RunId) -> R<Run> {
         load_job(&self.conn(), id.as_str())
     }
 
-    /// `job.list`: newest first (job ids are time-ordered), filtered; `limit`
+    /// `run.list`: newest first (job ids are time-ordered), filtered; `limit`
     /// is 1 to 200, default 50. `visible` limits the list to one client's own
     /// jobs (a caller without `read` of the whole node).
-    pub fn list(&self, params: &JobListParams, visible: Option<&str>) -> R<JobList> {
+    pub fn list(&self, params: &RunListParams, visible: Option<&str>) -> R<RunList> {
         let limit = params.limit.unwrap_or(50);
         if !(1..=200).contains(&limit) {
             return Err(ApiError::invalid_argument("limit", "1 to 200"));
@@ -39,7 +39,7 @@ impl Store {
             Some(cursor) => Some(
                 cursor
                     .strip_prefix(CURSOR_PREFIX)
-                    .and_then(|id| JobId::try_from(id.to_owned()).ok())
+                    .and_then(|id| RunId::try_from(id.to_owned()).ok())
                     .ok_or_else(|| {
                         ApiError::invalid_argument("cursor", "not a cursor of this list")
                     })?,
@@ -54,7 +54,7 @@ impl Store {
                 None => (text.to_owned(), None),
             });
         let conn = self.conn();
-        let mut found: Vec<Job> = Vec::new();
+        let mut found: Vec<Run> = Vec::new();
         let mut more = false;
         'pages: loop {
             let mut sql = format!("SELECT {JOB_COLUMNS} FROM jobs WHERE 1 = 1");
@@ -93,7 +93,7 @@ impl Store {
                 .map_err(db)?;
             let full = rows.len() == 200;
             for row in rows {
-                after = JobId::try_from(row.id.clone()).ok();
+                after = RunId::try_from(row.id.clone()).ok();
                 let job = assemble(&conn, row)?;
                 if let Some((key, value)) = &label {
                     match job.labels.get(key) {
@@ -114,15 +114,15 @@ impl Store {
         let next_cursor = more
             .then(|| found.last().map(|job| format!("{CURSOR_PREFIX}{}", job.id)))
             .flatten();
-        Ok(JobList {
-            jobs: found,
+        Ok(RunList {
+            runs: found,
             next_cursor,
         })
     }
 
     /// The preset a job froze when it was submitted (design 5.6), with every
     /// option resolved: what the pipeline runs, whatever the files say now.
-    pub fn frozen_preset(&self, id: &JobId) -> R<crate::config::LoadedPreset> {
+    pub fn frozen_preset(&self, id: &RunId) -> R<crate::config::LoadedPreset> {
         load_terms(&self.conn(), id.as_str())
     }
 
@@ -157,7 +157,7 @@ impl Store {
     }
 
     /// How many jobs of a state exist.
-    pub fn count_state(&self, state: JobState) -> R<u32> {
+    pub fn count_state(&self, state: RunState) -> R<u32> {
         self.conn()
             .query_row(
                 "SELECT COUNT(*) FROM jobs WHERE state = ?1",

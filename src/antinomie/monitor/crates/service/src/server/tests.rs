@@ -14,8 +14,8 @@ use crate::{
     api::{
         error::{ApiError, ErrorCode, ErrorReason},
         event::{EventBody, Hello, HelloOwner},
-        ids::JobId,
-        job::Outcome,
+        ids::RunId,
+        run::Outcome,
     },
     store::tests::{Fx, lane},
     store::{Eligibility, Store},
@@ -32,7 +32,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// A handler over a store: `job.get`, `echo`, and `slow` (answers when
+/// A handler over a store: `run.get`, `echo`, and `slow` (answers when
 /// cancelled, or after 10 s).
 struct TestHandler {
     store: Arc<Store>,
@@ -515,7 +515,7 @@ fn a_job_stream_carries_only_that_job_from_its_resume_point_and_ends_after_it_fi
         sock.store
             .submit(&caller, crate::store::tests::spec(n), &ctx)
             .unwrap()
-            .job
+            .run
     };
     let mine = submit(1);
     let other = submit(2);
@@ -537,9 +537,9 @@ fn a_job_stream_carries_only_that_job_from_its_resume_point_and_ends_after_it_fi
             let mut client = Client::connect(&path, Duration::from_secs(5)).unwrap();
             let mut seen = Vec::new();
             let end = client
-                .subscribe(json!({"job_id": id, "since_seq": resume_at}), &mut |line| {
+                .subscribe(json!({"run_id": id, "since_seq": resume_at}), &mut |line| {
                     if let Streamed::Event(event) = line {
-                        seen.push((event.job_id.clone(), event.seq));
+                        seen.push((event.run_id.clone(), event.seq));
                     }
                     true
                 })
@@ -559,8 +559,8 @@ fn a_job_stream_carries_only_that_job_from_its_resume_point_and_ends_after_it_fi
     let (seen, end) = stream.join().unwrap();
     assert_eq!(end["finished"], true);
     let (all, _) = sock.store.events_list(&mine.id, resume_at, 100).unwrap();
-    let expected: Vec<(Option<JobId>, Option<u64>)> =
-        all.iter().map(|e| (e.job_id.clone(), e.seq)).collect();
+    let expected: Vec<(Option<RunId>, Option<u64>)> =
+        all.iter().map(|e| (e.run_id.clone(), e.seq)).collect();
     assert_eq!(seen, expected);
     assert!(seen.iter().all(|(job, _)| job.as_ref() == Some(&mine.id)));
 }
@@ -601,11 +601,11 @@ fn a_resume_point_the_store_never_reached_or_no_longer_keeps_is_truncated() {
 fn a_bad_subscription_is_refused_before_any_line() {
     let sock = serve("badsub", quick());
     let mut client = connect(&sock);
-    let unknown = JobId::try_from("j_01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned()).unwrap();
+    let unknown = RunId::try_from("j_01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned()).unwrap();
     for (params, field) in [
         (json!({"since_seq": 3}), Some("since_seq")),
         (
-            json!({"job_id": unknown, "since_gseq": 3}),
+            json!({"run_id": unknown, "since_gseq": 3}),
             Some("since_gseq"),
         ),
         (json!({"types": ["job.nope"]}), Some("types")),
@@ -618,7 +618,7 @@ fn a_bad_subscription_is_refused_before_any_line() {
             assert_eq!(error.field.as_deref(), Some(field), "{params}");
         }
     }
-    let error = api_error(client.subscribe(json!({"job_id": unknown}), &mut |_| true));
+    let error = api_error(client.subscribe(json!({"run_id": unknown}), &mut |_| true));
     assert_eq!(error.code, ErrorCode::NotFound);
 }
 
@@ -636,7 +636,7 @@ fn a_quiet_subscription_is_pinged_and_types_filter_the_stream() {
             .emit_engine(EventBody::LaneState {
                 lane: lane(),
                 state: crate::api::event::LaneState::Idle,
-                job_id: None,
+                run_id: None,
                 reason: None,
             })
             .unwrap();

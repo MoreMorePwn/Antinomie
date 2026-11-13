@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Rows to objects and back: the `Job` of design 5.4.2 is assembled from the
+//! Rows to objects and back: the `Run` of the run API is assembled from the
 //! `jobs` row, the `artifacts` rows and the queue position.
 
 use super::{R, db, internal};
@@ -7,13 +7,15 @@ use crate::{
     api::{
         artifact::{Artifact, ArtifactKind, MediaType},
         error::ApiError,
-        ids::{ArtifactId, JobId, LaneId, Sha256Hex},
-        job::{Job, JobState, PresetBase, PresetRef, Warning},
+        ids::{ArtifactId, LaneId, RunId, Sha256Hex},
+        ops::Permission,
+        run::{PermissionUse, PresetRef, Run, RunState, Warning},
     },
     config::LoadedPreset,
 };
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
 
 /// The wire spelling of a unit-like enum value (`"queued"`).
 pub(crate) fn name_of<T: Serialize>(value: &T) -> String {
@@ -75,13 +77,31 @@ pub(crate) struct JobRow {
     pub terms_json: String,
 }
 
-/// The parts of a frozen preset the job object shows.
-#[derive(serde::Deserialize)]
-struct FrozenRef {
-    #[serde(default)]
-    based_on: Option<PresetBase>,
-    #[serde(default)]
-    changes: Vec<String>,
+/// The frozen preset as the run object shows it: the reference, every
+/// resolved option and the permissions those options use.
+fn frozen_parts(
+    terms_json: &str,
+    name: String,
+    digest: String,
+) -> R<(PresetRef, Value, Vec<PermissionUse>)> {
+    let frozen: LoadedPreset = from_json(terms_json)?;
+    let settings = serde_json::to_value(&frozen.preset).map_err(internal)?;
+    let used = super::admission::permissions_used(&frozen.preset)
+        .into_iter()
+        .filter(|used| used.permission != Permission::RunsSubmit)
+        .map(|used| PermissionUse {
+            permission: used.permission,
+            field: used.field.unwrap_or_default().to_owned(),
+            source: "caller".to_owned(),
+        })
+        .collect();
+    let preset = PresetRef {
+        name,
+        digest,
+        based_on: frozen.based_on,
+        changes: frozen.changes,
+    };
+    Ok((preset, settings, used))
 }
 
 impl JobRow {
@@ -116,11 +136,13 @@ impl JobRow {
         })
     }
 
-    pub fn into_job(self, queue_position: Option<u32>, artifacts: Vec<Artifact>) -> R<Job> {
-        let state: JobState = from_name(&self.state)?;
-        Ok(Job {
+    pub fn into_job(self, queue_position: Option<u32>, artifacts: Vec<Artifact>) -> R<Run> {
+        let state: RunState = from_name(&self.state)?;
+        let (preset, settings, permissions_used) =
+            frozen_parts(&self.terms_json, self.policy_name, self.policy_digest)?;
+        Ok(Run {
             api_version: crate::API_VERSION,
-            id: JobId::try_from(self.id).map_err(internal)?,
+            id: RunId::try_from(self.id).map_err(internal)?,
             state,
             stage: self.stage.as_deref().map(from_name).transpose()?,
             waiting_for: self.waiting_for.as_deref().map(from_name).transpose()?,
@@ -132,23 +154,17 @@ impl JobRow {
             attempt: self.attempt,
             max_attempts: self.max_attempts,
             client_id: self.client_id,
-            spec: from_json(&self.spec_json)?,
+            request: from_json(&self.spec_json)?,
             sample: opt_json(self.sample_json)?,
-            policy: {
-                let frozen: FrozenRef = from_json(&self.terms_json)?;
-                PresetRef {
-                    name: self.policy_name,
-                    digest: self.policy_digest,
-                    based_on: frozen.based_on,
-                    changes: frozen.changes,
-                }
-            },
+            preset,
+            settings,
+            permissions_used,
             lane: self
                 .lane
                 .map(|lane| LaneId::try_from(lane).map_err(internal))
                 .transpose()?,
             vm: opt_json(self.vm_json)?,
-            run: opt_json(self.run_json)?,
+            program: opt_json(self.run_json)?,
             recording: opt_json(self.recording_json)?,
             assessment: opt_json(self.assessment_json)?,
             artifacts,
@@ -156,7 +172,7 @@ impl JobRow {
             failure: opt_json(self.failure_json)?,
             repeat_of: self
                 .repeat_of
-                .map(|id| JobId::try_from(id).map_err(internal))
+                .map(|id| RunId::try_from(id).map_err(internal))
                 .transpose()?,
             labels: from_json(&self.labels_json)?,
             host_work: Vec::new(),
@@ -191,7 +207,7 @@ pub(crate) fn artifacts_of(conn: &Connection, job: &str) -> R<Vec<Artifact>> {
         let (id, kind, name, size, sha256, media, sensitive, raw, created_ms) = row.map_err(db)?;
         out.push(Artifact {
             id: ArtifactId::try_from(id).map_err(internal)?,
-            job_id: JobId::try_from(job.to_owned()).map_err(internal)?,
+            run_id: RunId::try_from(job.to_owned()).map_err(internal)?,
             kind: from_name::<ArtifactKind>(&kind)?,
             name,
             size,
@@ -222,7 +238,7 @@ pub(crate) fn queue_position(
 }
 
 /// One job by id, fully assembled.
-pub(crate) fn load_job(conn: &Connection, id: &str) -> R<Job> {
+pub(crate) fn load_job(conn: &Connection, id: &str) -> R<Run> {
     let row = conn
         .query_row(
             &format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = ?1"),
@@ -231,11 +247,11 @@ pub(crate) fn load_job(conn: &Connection, id: &str) -> R<Job> {
         )
         .optional()
         .map_err(db)?
-        .ok_or_else(|| ApiError::not_found("job"))?;
+        .ok_or_else(|| ApiError::not_found("run"))?;
     assemble(conn, row)
 }
 
-pub(crate) fn assemble(conn: &Connection, row: JobRow) -> R<Job> {
+pub(crate) fn assemble(conn: &Connection, row: JobRow) -> R<Run> {
     let position = (row.state == "queued")
         .then(|| queue_position(conn, &row.id, row.priority, row.created_ms))
         .transpose()?;
@@ -254,6 +270,6 @@ pub(crate) fn load_terms(conn: &Connection, id: &str) -> R<LoadedPreset> {
         })
         .optional()
         .map_err(db)?
-        .ok_or_else(|| ApiError::not_found("job"))?;
+        .ok_or_else(|| ApiError::not_found("run"))?;
     from_json(&text)
 }

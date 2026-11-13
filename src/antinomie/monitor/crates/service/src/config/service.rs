@@ -408,7 +408,7 @@ pub struct Webhook {
 }
 
 fn default_webhook_events() -> Vec<String> {
-    vec!["job.finished".into()]
+    vec!["run.finished".into()]
 }
 fn default_webhook_timeout() -> u32 {
     10

@@ -10,7 +10,7 @@ use super::{
 use crate::{
     api::{
         failure::FailureCode,
-        job::{EndReason, Job, Outcome, RecordingPhase, Stage},
+        run::{EndReason, Outcome, RecordingPhase, Run, Stage},
     },
     engine::FakeEngine,
     lane::process::ProcessInfo,
@@ -115,14 +115,14 @@ pub(super) fn qemu(w: &W, pid: u32, ticks: u64) {
 }
 
 /// Run `prechecks` to `launch`.
-pub(super) fn launched(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Job) -> (Prepared, Launched) {
+pub(super) fn launched(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Run) -> (Prepared, Launched) {
     w.stages(waiter).launch_cycle(job).expect("the launch")
 }
 
 fn run_stage(
     w: &W,
     waiter: &mut Waiter<FakeEngine>,
-    job: &Job,
+    job: &Run,
     ready: &(Prepared, Launched),
 ) -> Result<RunEnd, StageStop> {
     w.stages(waiter).run(job, &ready.0, &ready.1)
@@ -131,7 +131,7 @@ fn run_stage(
 fn collect_stage(
     w: &W,
     waiter: &mut Waiter<FakeEngine>,
-    job: &Job,
+    job: &Run,
     ready: &(Prepared, Launched),
 ) -> Result<CollectEnd, StageStop> {
     w.stages(waiter).collect(job, &ready.1)
@@ -172,7 +172,7 @@ fn a_program_that_exits_ends_the_run_with_its_exit_code() {
         (EndReason::Exited, Some(3), None)
     );
     let stored = w.job(&job.id);
-    let run = stored.run.unwrap();
+    let run = stored.program.unwrap();
     assert_eq!(run.end_reason, Some(EndReason::Exited));
     assert_eq!(run.exit, Some(3));
     assert!(run.ended_ms.is_some());
@@ -210,7 +210,7 @@ fn a_program_killed_by_a_signal_is_signaled_with_its_core_flag() {
         (end.reason, end.exit, end.signal, end.core_dumped),
         (EndReason::Signaled, None, Some(11), true)
     );
-    assert!(w.job(&job.id).run.unwrap().core_dumped);
+    assert!(w.job(&job.id).program.unwrap().core_dumped);
 }
 
 #[test]
@@ -237,7 +237,7 @@ fn the_run_limit_stops_the_run_once_and_is_not_a_failure() {
         .count();
     assert_eq!(stops, 1);
     assert_eq!(
-        w.job(&job.id).run.unwrap().end_reason,
+        w.job(&job.id).program.unwrap().end_reason,
         Some(EndReason::TimeLimit)
     );
 }
@@ -262,7 +262,7 @@ fn a_run_that_ignores_stop_run_is_guest_lost_after_the_grace() {
         "20 s limit plus 120 s grace: {took}"
     );
     assert_eq!(
-        w.job(&job.id).run.unwrap().end_reason,
+        w.job(&job.id).program.unwrap().end_reason,
         Some(EndReason::GuestLost)
     );
 }
@@ -381,7 +381,7 @@ fn a_qemu_killed_under_the_program_is_guest_lost_though_the_engine_finalized_the
         );
         let stored = w.job(&job.id);
         assert_eq!(
-            stored.run.unwrap().end_reason,
+            stored.program.unwrap().end_reason,
             Some(EndReason::GuestLost),
             "{name}"
         );
@@ -487,7 +487,7 @@ fn a_cancel_stops_the_run_and_ends_the_stage_cancelled() {
             .contains(&"StopRun".to_owned())
     );
     assert_eq!(
-        w.job(&job.id).run.unwrap().end_reason,
+        w.job(&job.id).program.unwrap().end_reason,
         Some(EndReason::Stopped)
     );
 }
@@ -532,7 +532,7 @@ fn complete() -> RunArtifacts {
 fn finished_run(
     w: &W,
     extra: impl FnOnce(&mut FakeEngine),
-) -> (Job, Waiter<FakeEngine>, (Prepared, Launched)) {
+) -> (Run, Waiter<FakeEngine>, (Prepared, Launched)) {
     let job = w.fx.running(1);
     let mut waiter = w.engine(|fake| {
         restore_ok(fake);
@@ -642,7 +642,7 @@ fn evidence_that_never_completes_is_recording_failed_at_300_seconds() {
 }
 
 /// A finished run that asked for static analysis, which never reports.
-fn finished_analysis_run(w: &W) -> (Job, Waiter<FakeEngine>, (Prepared, Launched)) {
+fn finished_analysis_run(w: &W) -> (Run, Waiter<FakeEngine>, (Prepared, Launched)) {
     let job = w.fx.running(1);
     let mut waiter = w.engine(|fake| {
         restore_ok(fake);
@@ -675,7 +675,7 @@ fn a_slow_static_analysis_does_not_fail_a_complete_recording() {
     assert!(end.warnings.is_empty());
     assert_eq!(end.pending, ["analysis"]);
     let stored = w.job(&job.id);
-    assert_eq!(stored.run.unwrap().pending, ["analysis"]);
+    assert_eq!(stored.program.unwrap().pending, ["analysis"]);
     assert_eq!(stored.recording.unwrap().phase, RecordingPhase::Complete);
     assert_eq!(waiter.snapshot().state, VmState::Stopped);
 }

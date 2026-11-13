@@ -7,7 +7,7 @@
 //! | The cycle ends with | The lane | The job |
 //! |---|---|---|
 //! | `collect` finished | `collected` entry, free for the next job | stays `running`; the host stages (`analyse`, `report`) are the next card; [`LaneStages::finish_collected`] ends it meanwhile |
-//! | a failure the policy retries | VM stopped and settled, work ended | `queued` again after the backoff (`job.requeued`), attempt kept in the store |
+//! | a failure the policy retries | VM stopped and settled, work ended | `queued` again after the backoff (`run.requeued`), attempt kept in the store |
 //! | any other failure | the same | `failed` with the failure |
 //! | a cancel | the same; the recording is kept | `cancelled` (or back in the queue when the daemon is shutting down) |
 //! | the watchdog (`job_hard_s`) | the same | `failed`, `internal`, detail `watchdog`, never retried |
@@ -15,7 +15,7 @@
 //! | a signal or a dead engine | untouched: recovery finishes it | untouched |
 //!
 //! Cancellation is polled inside every wait of every stage through the
-//! waiter's cancel hook (a subscription to the store's `job.state` events), so
+//! waiter's cancel hook (a subscription to the store's `run.state` events), so
 //! a cancel during the 180 s boot ends the wait within 100 ms; the run and
 //! collect stages act on it themselves because they must still stop the run and
 //! the VM.
@@ -29,7 +29,7 @@ use crate::{
     api::{
         event::{EventBody, StageStatus},
         failure::{Failure, FailureCode},
-        job::{Job, JobState, Outcome, RecordingPhase, Stage, WaitingFor},
+        run::{Outcome, RecordingPhase, Run, RunState, Stage, WaitingFor},
     },
     engine::Engine,
     lane::{recover::announce_quarantine, state::Checkpoint},
@@ -65,7 +65,7 @@ pub enum Driven {
 
 impl<E: Engine> LaneStages<'_, E> {
     /// Run the job through the lane and end or requeue it.
-    pub fn drive(&mut self, job: &Job) -> Driven {
+    pub fn drive(&mut self, job: &Run) -> Driven {
         let driven = self.drive_job(job);
         // `launch_cycle` named the job's caller as the engine's custody
         // actor; the lane's next work is not this job's.
@@ -73,7 +73,7 @@ impl<E: Engine> LaneStages<'_, E> {
         driven
     }
 
-    fn drive_job(&mut self, job: &Job) -> Driven {
+    fn drive_job(&mut self, job: &Run) -> Driven {
         match self.arm(job) {
             Ok(()) => {}
             Err(stop) => return self.settle(job, Err(stop)),
@@ -85,7 +85,7 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 
     /// The job limit and the cancel hook.
-    fn arm(&mut self, job: &Job) -> Result<(), StageStop> {
+    fn arm(&mut self, job: &Run) -> Result<(), StageStop> {
         let frozen = self
             .env
             .store
@@ -98,18 +98,18 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 
     /// Arm the waiter's cancel hook for `job`: a subscription to the store's
-    /// `job.state` events that turns true on this job's `cancelling`.
-    pub(crate) fn cancel_hook(&mut self, job: &Job) {
+    /// `run.state` events that turns true on this job's `cancelling`.
+    pub(crate) fn cancel_hook(&mut self, job: &Run) {
         let events = self.env.store.subscribe();
         let id = job.id.clone();
         self.waiter.cancel_when(true, move || {
             let mut cancel = false;
             while let Ok(event) = events.try_recv() {
-                cancel |= event.job_id.as_ref() == Some(&id)
+                cancel |= event.run_id.as_ref() == Some(&id)
                     && matches!(
                         event.body,
-                        EventBody::JobState {
-                            state: JobState::Cancelling,
+                        EventBody::RunState {
+                            state: RunState::Cancelling,
                             ..
                         }
                     );
@@ -118,7 +118,7 @@ impl<E: Engine> LaneStages<'_, E> {
         });
     }
 
-    fn lane_cycle(&mut self, job: &Job) -> Result<CollectEnd, StageStop> {
+    fn lane_cycle(&mut self, job: &Run) -> Result<CollectEnd, StageStop> {
         self.cancel_point(job)?;
         let (prepared, launched) = self.launch_cycle(job)?;
         self.cancel_point(job)?;
@@ -134,7 +134,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// attempt) or "collected" (the job resumes at `analyse`), never both.
     pub(super) fn collect_stage(
         &mut self,
-        job: &Job,
+        job: &Run,
         launched: &Launched,
     ) -> Result<CollectEnd, StageStop> {
         let store = self.env.store;
@@ -178,7 +178,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// End a collected job with the outcome `collect` found, until the host
     /// stages exist: the lane forgets the `collected` entry and the job
     /// finishes.
-    pub fn finish_collected(&mut self, job: &Job, end: &CollectEnd) -> Result<Job, StageStop> {
+    pub fn finish_collected(&mut self, job: &Run, end: &CollectEnd) -> Result<Run, StageStop> {
         let now = self.waiter.now_ms();
         self.update_lane(|file| file.release(&job.id, now))?;
         self.env
@@ -187,7 +187,7 @@ impl<E: Engine> LaneStages<'_, E> {
             .map_err(|e| self.store_error(Stage::Cleanup, e))
     }
 
-    fn settle(&mut self, job: &Job, result: Result<CollectEnd, StageStop>) -> Driven {
+    fn settle(&mut self, job: &Run, result: Result<CollectEnd, StageStop>) -> Driven {
         let stop = match result {
             Ok(end) => return Driven::Collected(Box::new(end)),
             Err(stop) => stop,
@@ -219,7 +219,7 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    fn job_stage(&self, job: &Job) -> Stage {
+    fn job_stage(&self, job: &Run) -> Stage {
         self.env
             .store
             .get(&job.id)
@@ -231,7 +231,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// The lane lets go of a job that did not finish `collect`: its VM is
     /// stopped and settled, then the work ends. A lane that never took this
     /// job is left alone.
-    fn leave_lane(&mut self, job: &Job) -> Result<(), WaitError> {
+    fn leave_lane(&mut self, job: &Run) -> Result<(), WaitError> {
         self.waiter.clear_cancel();
         self.waiter.clear_deadline();
         let Ok(file) = self.lane_file() else {
@@ -326,7 +326,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// disk, nor fail without a record of it).
     pub(crate) fn until_written<T, X: std::fmt::Display>(
         &mut self,
-        job: &Job,
+        job: &Run,
         what: &str,
         mut write: impl FnMut(&Self) -> Result<T, X>,
     ) -> Result<Result<T, X>, WaitError> {
@@ -352,7 +352,7 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    fn end_failed(&mut self, job: &Job, failure: Failure) -> Driven {
+    fn end_failed(&mut self, job: &Run, failure: Failure) -> Driven {
         if let Err(error) = self.leave_lane(job) {
             return Driven::Aborted(error);
         }
@@ -385,7 +385,7 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    fn finish_failed(&mut self, job: &Job, failure: Failure, why: Option<FinalReason>) -> Driven {
+    fn finish_failed(&mut self, job: &Run, failure: Failure, why: Option<FinalReason>) -> Driven {
         let store = self.env.store;
         if failure.code == FailureCode::GuestLost && why == Some(FinalReason::Repeated) {
             let _ = store.add_warning(
@@ -419,7 +419,7 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    fn end_cancelled(&mut self, job: &Job) -> Driven {
+    fn end_cancelled(&mut self, job: &Run) -> Driven {
         if let Err(error) = self.leave_lane(job) {
             return Driven::Aborted(error);
         }
@@ -450,7 +450,7 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    fn end_by_watchdog(&mut self, job: &Job) -> Driven {
+    fn end_by_watchdog(&mut self, job: &Run) -> Driven {
         let stage = self.job_stage(job);
         let failure = Failure::new(
             FailureCode::Internal,
@@ -464,7 +464,7 @@ impl<E: Engine> LaneStages<'_, E> {
         self.finish_failed(job, failure, None)
     }
 
-    fn end_waiting(&mut self, job: &Job, waiting_for: WaitingFor, detail: String) -> Driven {
+    fn end_waiting(&mut self, job: &Run, waiting_for: WaitingFor, detail: String) -> Driven {
         if let Err(error) = self.leave_lane(job) {
             return Driven::Aborted(error);
         }

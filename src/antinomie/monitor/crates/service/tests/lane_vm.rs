@@ -32,9 +32,9 @@ use antinomie_service::{
     api::{
         failure::FailureCode,
         ids::{LaneId, Sha256Hex},
-        job::{EndReason, JobSample, JobState, RecordingPhase},
         ops::{Caller, Permission},
-        spec::{JobSpec, SampleSource},
+        run::{EndReason, RecordingPhase, RunSample, RunState},
+        spec::{RunRequest, SampleSource},
     },
     clock::SystemClock,
     config::{LoadedPreset, Preset, PresetSet},
@@ -58,7 +58,7 @@ const READ_SUBMIT: [Permission; 3] = [
 const SCRIPT: &str = "#!/bin/sh\necho lane-stage-check\nsleep 1\necho done\n";
 
 struct Admit {
-    sample: JobSample,
+    sample: RunSample,
 }
 
 impl SampleAdmission for Admit {
@@ -68,7 +68,7 @@ impl SampleAdmission for Admit {
         _: Option<&str>,
         _: &LoadedPreset,
         _: &str,
-    ) -> Result<JobSample, IntakeError> {
+    ) -> Result<RunSample, IntakeError> {
         Ok(self.sample.clone())
     }
 }
@@ -208,7 +208,7 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
             },
         )
         .expect("add sample");
-    let sample = JobSample {
+    let sample = RunSample {
         sha256: Sha256Hex::try_from(added.sha256.clone()).unwrap(),
         size: SCRIPT.len() as u64,
         kind: "sh".into(),
@@ -225,7 +225,7 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
 
     let procs = ProcFs;
     for round in 1..=2 {
-        let spec: JobSpec = serde_json::from_value(serde_json::json!({
+        let spec: RunRequest = serde_json::from_value(serde_json::json!({
             "sample": {"sha256": added.sha256},
             "labels": {"round": round.to_string()},
         }))
@@ -244,10 +244,10 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
             )
             .expect("submit");
         assert_eq!(
-            submitted.job.state,
-            JobState::Queued,
+            submitted.run.state,
+            RunState::Queued,
             "{:?}",
-            submitted.job.failure
+            submitted.run.failure
         );
 
         let mut stages = LaneStages {
@@ -288,8 +288,8 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
         );
 
         let stored = store.get(&job.id).unwrap();
-        assert_eq!(stored.state, JobState::Running);
-        assert!(stored.vm.is_some() && stored.run.is_some() && stored.recording.is_some());
+        assert_eq!(stored.state, RunState::Running);
+        assert!(stored.vm.is_some() && stored.program.is_some() && stored.recording.is_some());
 
         // The recorded process is the VM's QEMU.
         let record = lanes
@@ -321,11 +321,11 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
                 .is_none_or(|i| i.start_ticks != record.start_ticks),
             "the recorded QEMU is still running after the stop"
         );
-        // Job bookkeeping for the next round.
+        // Run bookkeeping for the next round.
         store
             .finish(
                 &job.id,
-                antinomie_service::api::job::Outcome::Succeeded,
+                antinomie_service::api::run::Outcome::Succeeded,
                 None,
             )
             .unwrap();
@@ -336,7 +336,7 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
 }
 
 /// A benign shell script in the library; the sample record for a job.
-fn add_script(data: &std::path::Path, name: &str, script: &str) -> JobSample {
+fn add_script(data: &std::path::Path, name: &str, script: &str) -> RunSample {
     let mut library = Library::open(data).expect("library");
     let added = library
         .add_bytes(
@@ -347,7 +347,7 @@ fn add_script(data: &std::path::Path, name: &str, script: &str) -> JobSample {
             },
         )
         .expect("add sample");
-    JobSample {
+    RunSample {
         sha256: Sha256Hex::try_from(added.sha256).unwrap(),
         size: script.len() as u64,
         kind: "sh".into(),
@@ -415,7 +415,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
     for (round, (name, script, timeout_s)) in jobs.iter().enumerate() {
         let sample = add_script(&data, name, script);
         let sha = sample.sha256.to_string();
-        let spec: JobSpec = serde_json::from_value(serde_json::json!({
+        let spec: RunRequest = serde_json::from_value(serde_json::json!({
             "sample": {"sha256": sha},
             "overrides": {"program": {"run_time_s": timeout_s}},
         }))
@@ -434,10 +434,10 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
             )
             .expect("submit");
         assert_eq!(
-            submitted.job.state,
-            JobState::Queued,
+            submitted.run.state,
+            RunState::Queued,
             "{:?}",
-            submitted.job.failure
+            submitted.run.failure
         );
         let job = store
             .claim_next(&LaneId::new(1), &mut |_| Eligibility::Ready)
@@ -488,7 +488,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
             driven
         });
         let stored = store.get(&job.id).unwrap();
-        let run = stored.run.clone().expect("a run");
+        let run = stored.program.clone().expect("a run");
         println!(
             "job {round} ({name}): {:.1} s, {:?}, state {:?}, run end {:?} exit {:?}, recording {:?}",
             began.elapsed().as_secs_f64(),
@@ -501,7 +501,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
         match *name {
             "ends.sh" => {
                 assert!(matches!(driven, Driven::Collected(_)), "{driven:?}");
-                assert_eq!(stored.state, JobState::Succeeded, "{:?}", stored.warnings);
+                assert_eq!(stored.state, RunState::Succeeded, "{:?}", stored.warnings);
                 assert_eq!(run.end_reason, Some(EndReason::Exited));
                 assert_eq!(run.exit, Some(3));
                 let a = stored.assessment.as_ref().expect("an assessment");
@@ -534,7 +534,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
             }
             "limit.sh" => {
                 assert!(matches!(driven, Driven::Collected(_)), "{driven:?}");
-                assert_eq!(stored.state, JobState::Succeeded, "{:?}", stored.warnings);
+                assert_eq!(stored.state, RunState::Succeeded, "{:?}", stored.warnings);
                 assert_eq!(run.end_reason, Some(EndReason::TimeLimit));
                 println!(
                     "limit.sh label {:?}",
@@ -543,7 +543,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
             }
             _ => {
                 assert!(matches!(driven, Driven::Cancelled), "{driven:?}");
-                assert_eq!(stored.state, JobState::Cancelled);
+                assert_eq!(stored.state, RunState::Cancelled);
                 assert_eq!(run.end_reason, Some(EndReason::Stopped));
             }
         }

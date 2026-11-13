@@ -4,7 +4,7 @@
 use super::*;
 use crate::api::event::{EventBody, MetricsHealth, MetricsRun, MetricsVm};
 
-fn run_one(fx: &Fx) -> JobId {
+fn run_one(fx: &Fx) -> RunId {
     let job = fx.running(1);
     fx.store.begin_stage(&job.id, Stage::Provision).unwrap();
     fx.store.finish(&job.id, Outcome::Succeeded, None).unwrap();
@@ -28,7 +28,7 @@ fn seq_counts_from_one_per_job_and_gseq_never_goes_back() {
     let gseqs: Vec<_> = all.iter().map(|e| e.gseq.unwrap()).collect();
     assert!(gseqs.windows(2).all(|w| w[0] < w[1]), "{gseqs:?}");
     assert_eq!(fx.store.highest_gseq().unwrap(), *gseqs.last().unwrap());
-    assert_eq!(all[0].scope, crate::api::event::EventScope::Job);
+    assert_eq!(all[0].scope, crate::api::event::EventScope::Run);
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn a_reader_resumes_after_any_point_with_no_gap_and_no_duplicate() {
     }
     assert_eq!(seen, all);
     // Unknown job.
-    let missing = JobId::from_parts(1, [0; 10]);
+    let missing = RunId::from_parts(1, [0; 10]);
     assert_eq!(
         fx.store.events_list(&missing, 0, 10).unwrap_err().code,
         ErrorCode::NotFound
@@ -78,8 +78,8 @@ fn the_job_ends_with_job_finished_and_nothing_follows() {
     let fx = Fx::new("finished");
     let id = run_one(&fx);
     let types = kinds(&fx, &id);
-    assert_eq!(types.last().unwrap(), "job.finished");
-    assert_eq!(types.iter().filter(|t| *t == "job.finished").count(), 1);
+    assert_eq!(types.last().unwrap(), "run.finished");
+    assert_eq!(types.iter().filter(|t| *t == "run.finished").count(), 1);
     assert!(fx.store.begin_stage(&id, Stage::Run).is_err());
     assert_eq!(kinds(&fx, &id), types);
 }
@@ -90,15 +90,15 @@ fn subscribers_get_committed_events_and_ephemeral_ones_are_not_stored() {
     let receiver = fx.store.subscribe();
     let job = fx.queued(1);
     let created = receiver.try_recv().unwrap();
-    assert!(matches!(created.body, EventBody::JobCreated { .. }));
+    assert!(matches!(created.body, EventBody::RunCreated { .. }));
     assert_eq!(
-        (created.seq, created.job_id.clone()),
+        (created.seq, created.run_id.clone()),
         (Some(1), Some(job.id.clone()))
     );
     // Ephemeral events are sent with no seq/gseq and never stored.
     fx.store.publish_ephemeral(
         &job.id,
-        EventBody::JobProgress {
+        EventBody::RunProgress {
             stage: Stage::Upload,
             text: "10 MiB".into(),
             fraction: Some(0.5),
@@ -106,7 +106,7 @@ fn subscribers_get_committed_events_and_ephemeral_ones_are_not_stored() {
     );
     fx.store.publish_ephemeral(
         &job.id,
-        EventBody::JobMetrics {
+        EventBody::RunMetrics {
             stage: Stage::Run,
             vm: MetricsVm::default(),
             run: MetricsRun {
@@ -122,7 +122,7 @@ fn subscribers_get_committed_events_and_ephemeral_ones_are_not_stored() {
     let progress = receiver.try_recv().unwrap();
     assert_eq!((progress.seq, progress.gseq), (None, None));
     receiver.try_recv().unwrap();
-    assert_eq!(kinds(&fx, &job.id), ["job.created"]);
+    assert_eq!(kinds(&fx, &job.id), ["run.created"]);
     // A write that fails sends nothing.
     fx.store
         .inject_fault(Fault::BeforeCommit, FaultAction::Fail);
@@ -148,7 +148,7 @@ fn engine_events_have_their_own_sequence_and_are_pruned() {
     assert_eq!(all.len(), 3);
     assert!(
         all.iter()
-            .all(|e| e.job_id.is_none() && e.scope == crate::api::event::EventScope::Engine)
+            .all(|e| e.run_id.is_none() && e.scope == crate::api::event::EventScope::Engine)
     );
     assert_eq!(
         all.iter().map(|e| e.seq.unwrap()).collect::<Vec<_>>(),
@@ -166,12 +166,12 @@ fn engine_events_have_their_own_sequence_and_are_pruned() {
         .unwrap();
     let last = fx.store.events_since(high, 10).unwrap();
     assert_eq!((last[0].seq, last[0].gseq), (Some(1), Some(high + 1)));
-    // Older than 7 days: pruned. Job events are kept.
+    // Older than 7 days: pruned. Run events are kept.
     let job = fx.queued(1);
     fx.clock.advance(7 * 24 * 3600 * 1000 + 1);
     assert_eq!(fx.store.prune_engine_events().unwrap(), 4);
     assert_eq!(fx.store.events_since(0, 100).unwrap().len(), 1);
-    assert_eq!(kinds(&fx, &job.id), ["job.created"]);
+    assert_eq!(kinds(&fx, &job.id), ["run.created"]);
     // gseq still rises past what was deleted.
     assert!(fx.store.highest_gseq().unwrap() > high + 1);
 }

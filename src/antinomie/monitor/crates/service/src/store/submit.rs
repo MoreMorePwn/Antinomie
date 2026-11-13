@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `job.submit` (design 5.3, 5.4.1, 5.6): validate synchronously, then store
+//! `run.submit` (design 5.3, 5.4.1, 5.6): validate synchronously, then store
 //! the job `queued`, or `rejected` with the failure that explains it. A
 //! caller without `runs.submit`, shape errors, an unknown preset, an invalid
 //! value, a reserved preset key and a full queue are errors of the call and
@@ -17,10 +17,10 @@ use crate::{
         error::{ApiError, ErrorCode},
         event::EventBody,
         failure::{Failure, FailureCode},
-        ids::JobId,
-        job::{Job, JobSample, JobState, Outcome, Stage, Submitted},
+        ids::RunId,
         ops::{Caller, Permission},
-        spec::{JobSpec, SampleSource},
+        run::{Outcome, Run, RunSample, RunState, Stage, Submitted},
+        spec::{RunRequest, SampleSource},
     },
     clock::new_job_id,
     config::{LoadedPreset, PresetSet, builtin::DEFAULT_PRESET, service::OnDuplicate},
@@ -59,7 +59,7 @@ pub struct IntakeError {
 
 /// The intake of design 4.2: find or archive the sample and check its size,
 /// type and architecture against the run's preset (`[accepts]`). `actor` is the custody actor
-/// (`local:<uid>`, `web:<user>`, `auto:policy-<name>`).
+/// (`local:<uid>`, `web:<user>`, `auto:preset-<name>`).
 pub trait SampleAdmission: Send + Sync {
     fn admit(
         &self,
@@ -67,7 +67,7 @@ pub trait SampleAdmission: Send + Sync {
         name: Option<&str>,
         preset: &LoadedPreset,
         actor: &str,
-    ) -> Result<JobSample, IntakeError>;
+    ) -> Result<RunSample, IntakeError>;
 }
 
 /// What `submit` needs besides the spec.
@@ -86,15 +86,15 @@ fn invalid(error: crate::api::spec::SpecError) -> ApiError {
 /// A reply for a remote caller carries no host path (design 5.2, 5.5): the
 /// spec's `sample.path`, the recording directory, and every absolute path in
 /// the text of a warning or a failure.
-pub fn redact_remote(job: &mut Job) {
-    job.spec.sample.path = None;
+pub fn redact_remote(job: &mut Run) {
+    job.request.sample.path = None;
     if let Some(recording) = &mut job.recording {
         recording.directory = None;
     }
     for warning in &mut job.warnings {
         warning.text = strip_paths(&warning.text);
     }
-    if let Some(run) = &mut job.run {
+    if let Some(run) = &mut job.program {
         for trigger in &mut run.triggers {
             for dump in [&mut trigger.memory, &mut trigger.core]
                 .into_iter()
@@ -130,20 +130,25 @@ fn strip_paths(text: &str) -> String {
 }
 
 impl Store {
-    /// `job.submit`. Returns the stored job: `queued`, or `rejected` with its
+    /// `run.submit`. Returns the stored job: `queued`, or `rejected` with its
     /// `failure`; `replayed` when an idempotency key returned the original.
-    pub fn submit(&self, caller: &Caller, spec: JobSpec, ctx: &SubmitContext<'_>) -> R<Submitted> {
+    pub fn submit(
+        &self,
+        caller: &Caller,
+        spec: RunRequest,
+        ctx: &SubmitContext<'_>,
+    ) -> R<Submitted> {
         self.submit_with(caller, spec, ctx, None)
     }
 
-    /// `submit` for `job.retry`: the duplicate rule does not apply (a retry
+    /// `submit` for `run.rerun`: the duplicate rule does not apply (a retry
     /// asks to run again) and the new job's `repeat_of` is `retry_of`.
     pub(super) fn submit_with(
         &self,
         caller: &Caller,
-        spec: JobSpec,
+        spec: RunRequest,
         ctx: &SubmitContext<'_>,
-        retry_of: Option<&JobId>,
+        retry_of: Option<&RunId>,
     ) -> R<Submitted> {
         caller.require(Permission::RunsSubmit)?;
         spec.validate_shape().map_err(invalid)?;
@@ -155,13 +160,13 @@ impl Store {
                 "sample.path is local-only; upload the file and submit sample.upload_id",
             ));
         }
-        let preset_name = spec.policy.clone().unwrap_or_else(|| DEFAULT_PRESET.into());
+        let preset_name = spec.preset.clone().unwrap_or_else(|| DEFAULT_PRESET.into());
         let Some(base) = crate::config::PresetLookup::get(ctx.presets, &preset_name) else {
             return Err(ApiError::new(
                 ErrorCode::PresetDenied,
                 format!("there is no preset {preset_name}"),
             )
-            .with_field("policy")
+            .with_field("preset")
             .with_detail("preset", json!(preset_name)));
         };
         let canon = canonical(&spec);
@@ -170,7 +175,7 @@ impl Store {
             let conn = self.conn();
             if let Some(job) = replay(&conn, caller, key, &canon, self.now_ms())? {
                 return Ok(Submitted {
-                    job,
+                    run: job,
                     replayed: true,
                 });
             }
@@ -201,7 +206,7 @@ impl Store {
                 && let Some(job) = replay(&tx.tx, caller, key, &canon, tx.now)?
             {
                 return Ok(Submitted {
-                    job,
+                    run: job,
                     replayed: true,
                 });
             }
@@ -234,19 +239,19 @@ impl Store {
                                     tx, &id, caller, &resolved, &canon, reject, wait_s,
                                 )?;
                                 return Ok(Submitted {
-                                    job: load_job(&tx.tx, id.as_str())?,
+                                    run: load_job(&tx.tx, id.as_str())?,
                                     replayed: false,
                                 });
                             }
                             OnDuplicate::Reuse
                                 if matches!(
                                     earlier.state,
-                                    JobState::Succeeded | JobState::Partial
+                                    RunState::Succeeded | RunState::Partial
                                 ) && (earlier.digest == preset.digest
                                     || preset.preset.duplicates.reuse_across_presets) =>
                             {
                                 return Ok(Submitted {
-                                    job: load_job(&tx.tx, &earlier.id)?,
+                                    run: load_job(&tx.tx, &earlier.id)?,
                                     replayed: true,
                                 });
                             }
@@ -261,13 +266,13 @@ impl Store {
                 }
             }
             Ok(Submitted {
-                job: load_job(&tx.tx, id.as_str())?,
+                run: load_job(&tx.tx, id.as_str())?,
                 replayed: false,
             })
         })
         .inspect(|submitted| {
             if !submitted.replayed {
-                self.write_spec_file(&submitted.job);
+                self.write_spec_file(&submitted.run);
             }
         })
     }
@@ -328,14 +333,14 @@ impl Store {
         Ok(())
     }
 
-    pub(super) fn write_spec_file_for(&self, job: &Job) {
+    pub(super) fn write_spec_file_for(&self, job: &Run) {
         self.write_spec_file(job);
     }
 
-    fn write_spec_file(&self, job: &Job) {
+    fn write_spec_file(&self, job: &Run) {
         let dir = self.job_dir(&job.id);
         let _ = super::mirror::private_dir(&dir);
-        if let Ok(text) = serde_json::to_vec_pretty(&job.spec) {
+        if let Ok(text) = serde_json::to_vec_pretty(&job.request) {
             let _ = super::mirror::write_private(&dir.join("spec.json"), &text);
         }
     }
@@ -365,7 +370,7 @@ fn replay(
     key: &str,
     canon: &str,
     now: u64,
-) -> R<Option<Job>> {
+) -> R<Option<Run>> {
     let found: Option<(String, String, u64)> = conn
         .query_row(
             "SELECT id, canon_json, created_ms FROM jobs WHERE client_id = ?1 AND idempotency_key = ?2",
@@ -392,14 +397,14 @@ fn replay(
             "this idempotency key was used with another spec",
         )
         .with_field("idempotency_key")
-        .with_detail("job_id", json!(id)));
+        .with_detail("run_id", json!(id)));
     }
     load_job(conn, &id).map(Some)
 }
 
 struct Earlier {
     id: String,
-    state: JobState,
+    state: RunState,
     digest: String,
 }
 
@@ -431,14 +436,14 @@ fn latest_finished(tx: &rusqlite::Transaction<'_>, sha256: &str) -> R<Option<Ear
 }
 
 struct NewRow<'a> {
-    id: &'a JobId,
-    state: JobState,
+    id: &'a RunId,
+    state: RunState,
     caller: &'a Caller,
-    spec: &'a JobSpec,
+    spec: &'a RunRequest,
     canon: &'a str,
     preset: &'a LoadedPreset,
     wait_s: u32,
-    sample: Option<&'a JobSample>,
+    sample: Option<&'a RunSample>,
     failure: Option<&'a Failure>,
     repeat_of: Option<&'a str>,
 }
@@ -486,10 +491,10 @@ fn insert(tx: &mut Tx<'_>, row: NewRow<'_>) -> R<()> {
 #[allow(clippy::too_many_arguments)]
 fn insert_queued(
     tx: &mut Tx<'_>,
-    id: &JobId,
+    id: &RunId,
     caller: &Caller,
     resolved: &Resolved,
-    sample: &JobSample,
+    sample: &RunSample,
     canon: &str,
     repeat_of: Option<String>,
     wait_s: u32,
@@ -504,7 +509,7 @@ fn insert_queued(
         tx,
         NewRow {
             id,
-            state: JobState::Queued,
+            state: RunState::Queued,
             caller,
             spec: &spec,
             canon,
@@ -516,13 +521,13 @@ fn insert_queued(
         },
     )?;
     let job = load_job(&tx.tx, id.as_str())?;
-    tx.emit(Some(id), EventBody::JobCreated { job: Box::new(job) })
+    tx.emit(Some(id), EventBody::RunCreated { run: Box::new(job) })
 }
 
 #[allow(clippy::too_many_arguments)]
 fn insert_rejected(
     tx: &mut Tx<'_>,
-    id: &JobId,
+    id: &RunId,
     caller: &Caller,
     resolved: &Resolved,
     canon: &str,
@@ -546,7 +551,7 @@ fn insert_rejected(
         tx,
         NewRow {
             id,
-            state: JobState::Rejected,
+            state: RunState::Rejected,
             caller,
             spec: &resolved.spec,
             canon,
@@ -558,10 +563,10 @@ fn insert_rejected(
         },
     )?;
     let job = load_job(&tx.tx, id.as_str())?;
-    tx.emit(Some(id), EventBody::JobCreated { job: Box::new(job) })?;
+    tx.emit(Some(id), EventBody::RunCreated { run: Box::new(job) })?;
     tx.emit(
         Some(id),
-        EventBody::JobFinished {
+        EventBody::RunFinished {
             outcome: Outcome::Rejected,
             failure: Some(failure),
         },
@@ -578,7 +583,7 @@ pub(crate) fn queued_rows(
     conn: &rusqlite::Connection,
     after: Option<&QueueKey>,
     limit: u32,
-) -> R<Vec<Job>> {
+) -> R<Vec<Run>> {
     let mut statement = conn
         .prepare(&format!(
             "SELECT {JOB_COLUMNS} FROM jobs WHERE state = 'queued'

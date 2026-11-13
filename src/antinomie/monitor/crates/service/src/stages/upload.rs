@@ -10,14 +10,14 @@ use super::{
 use crate::{
     api::{
         failure::{Failure, FailureCode},
-        job::{Job, Stage},
+        run::{Run, Stage},
     },
     engine::Engine,
 };
 
 impl<E: Engine> LaneStages<'_, E> {
     /// The guest path the job's sample takes.
-    pub fn sample_path(&self, job: &Job, prepared: &Prepared) -> Result<String, StageStop> {
+    pub fn sample_path(&self, job: &Run, prepared: &Prepared) -> Result<String, StageStop> {
         let sample = job.sample.as_ref().ok_or_else(|| {
             StageStop::Failed(Failure::new(
                 FailureCode::Internal,
@@ -33,13 +33,13 @@ impl<E: Engine> LaneStages<'_, E> {
         ))
     }
 
-    pub fn upload(&mut self, job: &Job, prepared: &Prepared) -> Result<(), StageStop> {
+    pub fn upload(&mut self, job: &Run, prepared: &Prepared) -> Result<(), StageStop> {
         let destination = self.sample_path(job, prepared)?;
         let sample = job.sample.as_ref().expect("sample_path checked it");
         let store = self.env.store;
         let id = job.id.clone();
         let mut sink = |body: crate::api::event::EventBody| {
-            if matches!(body, crate::api::event::EventBody::JobProgress { .. }) {
+            if matches!(body, crate::api::event::EventBody::RunProgress { .. }) {
                 store.publish_ephemeral(&id, body);
             }
         };

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The dump trigger in headless runs (ANT-T0439): the live judge a launch that
 //! asks for a trigger needs, and what the trigger did, in the words of the job
-//! API (`run exec`'s result, `job.trigger` events, `job.run.triggers`).
+//! API (`run exec`'s result, `run.trigger` events, `job.run.triggers`).
 //!
 //! The recorder judges each call with the Triage rule engine, which the UI
 //! hands to the core at start. A headless process has no UI, so the run lane
 //! registers the same engine (`antinomie_triage::live_judge`) the first time a
 //! launch carries a trigger.
-use crate::api::job::{JobDump, JobTrigger};
+use crate::api::run::{RunDump, RunTrigger};
 use antinomie_monitor_core::{
     RunArtifacts, RunSummary,
     dump_trigger::{self, DumpTrigger, TriggerDump, TriggerRecord},
@@ -33,7 +33,7 @@ pub struct TriggerReport {
     pub armed: Armed,
     /// At least one match took (or tried to take) a dump.
     pub fired: bool,
-    pub records: Vec<JobTrigger>,
+    pub records: Vec<RunTrigger>,
     /// Matches that came too late for a dump (the process or the run was gone).
     pub missed: u64,
     /// Matches over the dump budget or inside the cooldown.
@@ -52,8 +52,8 @@ fn state_name(state: antinomie_monitor_core::RunArtifactState) -> String {
         .unwrap_or_default()
 }
 
-fn dump_of(dump: &TriggerDump) -> JobDump {
-    JobDump {
+fn dump_of(dump: &TriggerDump) -> RunDump {
+    RunDump {
         state: state_name(dump.state),
         size: dump.size,
         capture_id: dump.capture_id.clone(),
@@ -63,8 +63,8 @@ fn dump_of(dump: &TriggerDump) -> JobDump {
 }
 
 /// A trigger record as the job API words it.
-pub fn job_trigger(record: &TriggerRecord) -> JobTrigger {
-    JobTrigger {
+pub fn job_trigger(record: &TriggerRecord) -> RunTrigger {
+    RunTrigger {
         rule: record.finding.rule.clone(),
         tier: tier_name(&record.finding),
         summary: record.finding.summary.clone(),
@@ -77,7 +77,7 @@ pub fn job_trigger(record: &TriggerRecord) -> JobTrigger {
 }
 
 /// The same record with no host path, for an event.
-pub fn without_paths(trigger: &JobTrigger) -> JobTrigger {
+pub fn without_paths(trigger: &RunTrigger) -> RunTrigger {
     let mut copy = trigger.clone();
     for dump in [&mut copy.memory, &mut copy.core].into_iter().flatten() {
         dump.path = None;
@@ -106,7 +106,7 @@ pub fn report(run: &RunSummary, artifacts: Option<&RunArtifacts>) -> Option<Trig
         }
         _ => log.records.iter().collect(),
     };
-    let records: Vec<JobTrigger> = taken.into_iter().map(job_trigger).collect();
+    let records: Vec<RunTrigger> = taken.into_iter().map(job_trigger).collect();
     let mut notes: Vec<String> = run
         .notes
         .iter()

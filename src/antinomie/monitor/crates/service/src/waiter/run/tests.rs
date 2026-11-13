@@ -96,7 +96,7 @@ fn stages(events: &[EventBody]) -> Vec<(Stage, StageStatus)> {
     events
         .iter()
         .filter_map(|event| match event {
-            EventBody::JobStage { stage, status, .. } => Some((*stage, *status)),
+            EventBody::RunStage { stage, status, .. } => Some((*stage, *status)),
             _ => None,
         })
         .collect()
@@ -177,12 +177,12 @@ fn a_program_that_ends_by_itself_is_uploaded_run_collected_and_settled() {
         ]
     );
     assert!(matches!(
-        events.iter().find(|e| matches!(e, EventBody::JobRun { .. })),
-        Some(EventBody::JobRun { run_id, route: Route::Drop, .. }) if run_id == "r1"
+        events.iter().find(|e| matches!(e, EventBody::RunProgram { .. })),
+        Some(EventBody::RunProgram { program_id: run_id, route: Route::Drop, .. }) if run_id == "r1"
     ));
     assert!(matches!(
         events.last(),
-        Some(EventBody::JobFinished {
+        Some(EventBody::RunFinished {
             outcome: Outcome::Succeeded,
             failure: None
         })
@@ -221,7 +221,7 @@ fn the_run_limit_sends_stop_run_once_and_the_run_still_settles() {
     assert!((20_000..24_000).contains(&run_ms), "{run_ms}");
     assert!(events.iter().any(|e| matches!(
         e,
-        EventBody::JobProgress { text, .. } if text.contains("run limit")
+        EventBody::RunProgress { text, .. } if text.contains("run limit")
     )));
 }
 
@@ -294,7 +294,7 @@ fn a_stopped_vm_is_no_vm_unless_it_may_be_started() {
     assert!(sent.lock().unwrap().is_empty(), "nothing was sent");
     assert!(matches!(
         events.last(),
-        Some(EventBody::JobFinished {
+        Some(EventBody::RunFinished {
             outcome: Outcome::Failed,
             ..
         })
@@ -416,7 +416,7 @@ fn upload_notes(events: &[EventBody]) -> Vec<String> {
     events
         .iter()
         .filter_map(|e| match e {
-            EventBody::JobProgress {
+            EventBody::RunProgress {
                 stage: Stage::Upload,
                 text,
                 ..
@@ -632,14 +632,14 @@ fn a_launch_answered_after_the_job_gave_up_is_stopped_and_reported() {
         report.warnings
     );
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, EventBody::JobRun { run_id, .. } if run_id == "r1"))
+        events.iter().any(
+            |e| matches!(e, EventBody::RunProgram { program_id: run_id, .. } if run_id == "r1")
+        )
     );
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, EventBody::JobWarning { code, .. } if code == "late_launch"))
+            .any(|e| matches!(e, EventBody::RunWarning { code, .. } if code == "late_launch"))
     );
 }
 
@@ -871,7 +871,7 @@ fn a_slow_static_analysis_is_left_pending_and_the_run_still_succeeds() {
         clock.now_ms()
     );
     assert!(events.iter().any(|e| matches!(e,
-        EventBody::JobProgress { text, .. } if text.contains("without: analysis"))));
+        EventBody::RunProgress { text, .. } if text.contains("without: analysis"))));
 }
 
 #[test]
@@ -922,11 +922,11 @@ fn partial_evidence_makes_the_outcome_partial_not_failed() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, EventBody::JobWarning { code, .. } if code == "core_failed"))
+            .any(|e| matches!(e, EventBody::RunWarning { code, .. } if code == "core_failed"))
     );
     assert!(matches!(
         events.last(),
-        Some(EventBody::JobFinished {
+        Some(EventBody::RunFinished {
             outcome: Outcome::Partial,
             ..
         })
@@ -1094,7 +1094,7 @@ mod dump_trigger {
         let streamed: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
-                EventBody::JobTrigger { trigger, note } => Some((trigger.clone(), note.clone())),
+                EventBody::RunTrigger { trigger, note } => Some((trigger.clone(), note.clone())),
                 _ => None,
             })
             .collect();
@@ -1146,7 +1146,7 @@ mod dump_trigger {
         assert!(!triggers.fired && triggers.records.is_empty());
         assert_eq!(triggers.notes, [ARMED]);
         assert!(events.iter().any(
-            |e| matches!(e, EventBody::JobTrigger { trigger: None, note: Some(n) } if n == ARMED)
+            |e| matches!(e, EventBody::RunTrigger { trigger: None, note: Some(n) } if n == ARMED)
         ));
     }
 
@@ -1159,7 +1159,7 @@ mod dump_trigger {
         assert!(
             !events
                 .iter()
-                .any(|e| matches!(e, EventBody::JobTrigger { .. }))
+                .any(|e| matches!(e, EventBody::RunTrigger { .. }))
         );
     }
 }

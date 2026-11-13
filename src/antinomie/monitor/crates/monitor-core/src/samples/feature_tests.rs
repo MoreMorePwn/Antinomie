@@ -644,7 +644,7 @@ fn a_run_deleted_by_automation_names_the_automation_actor_in_the_custody_log() {
         &keys(&[]),
         "vm one",
         false,
-        "auto:policy-default",
+        "auto:preset-default",
     )
     .unwrap();
     assert!(!dir.exists());
@@ -653,7 +653,7 @@ fn a_run_deleted_by_automation_names_the_automation_actor_in_the_custody_log() {
         .iter()
         .find(|e| matches!(e.event, CustodyEvent::RunDeleted { .. }))
         .expect("the deletion is in the log");
-    assert_eq!(deleted.by, "auto:policy-default");
+    assert_eq!(deleted.by, "auto:preset-default");
     assert!(rec.library.custody_check(&rec.sha).unwrap().ok());
     fs::remove_dir_all(&rec.root).unwrap();
 }

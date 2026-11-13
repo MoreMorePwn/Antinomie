@@ -44,8 +44,8 @@ pub fn run(service: Arc<Service>) {
     loop {
         match events.recv_timeout(Duration::from_millis(300)) {
             Ok(event) => {
-                if matches!(event.body, EventBody::JobFinished { .. })
-                    && let Some(id) = &event.job_id
+                if matches!(event.body, EventBody::RunFinished { .. })
+                    && let Some(id) = &event.run_id
                 {
                     let _ = delivery(&service, &log, &alert).deliver(id);
                 }

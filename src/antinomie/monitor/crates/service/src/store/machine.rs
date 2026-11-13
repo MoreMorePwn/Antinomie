@@ -2,12 +2,12 @@
 //! The job state machine of design 5.6, as data. Every transition the store
 //! makes is checked against this table; the tests walk every pair of states.
 
-use crate::api::job::JobState::{self, *};
+use crate::api::run::RunState::{self, *};
 
 /// Every edge of the diagram of 5.6 (the two entry edges, `[*] -> queued` and
 /// `[*] -> rejected`, are made by `submit`), plus the shutdown edge of 2.7:
 /// `cancelling -> queued` for a running job put back when the daemon stops.
-pub const EDGES: [(JobState, JobState); 11] = [
+pub const EDGES: [(RunState, RunState); 11] = [
     (Queued, Running),
     (Queued, Cancelled),
     (Queued, Failed),
@@ -22,7 +22,7 @@ pub const EDGES: [(JobState, JobState); 11] = [
 ];
 
 /// Whether `from -> to` is an edge.
-pub fn allowed(from: JobState, to: JobState) -> bool {
+pub fn allowed(from: RunState, to: RunState) -> bool {
     EDGES.contains(&(from, to))
 }
 
@@ -30,7 +30,7 @@ pub fn allowed(from: JobState, to: JobState) -> bool {
 mod tests {
     use super::*;
 
-    const ALL: [JobState; 8] = [
+    const ALL: [RunState; 8] = [
         Queued, Running, Cancelling, Succeeded, Partial, Failed, Cancelled, Rejected,
     ];
 

@@ -17,8 +17,8 @@ use crate::{
     api::{
         error::ApiError,
         event::EventBody,
-        ids::{JobId, LaneId},
-        job::{Job, JobState, Outcome, Stage, WaitingFor},
+        ids::{LaneId, RunId},
+        run::{Outcome, Run, RunState, Stage, WaitingFor},
         status::Owner,
     },
     clock::{ManualClock, SystemClock},
@@ -455,7 +455,7 @@ struct EngineLane<'a> {
     lanes: &'a LaneDir,
     store: &'a Store,
     hold: Duration,
-    ran: &'a Mutex<Vec<(LaneId, JobId)>>,
+    ran: &'a Mutex<Vec<(LaneId, RunId)>>,
     lane_vm: Option<String>,
 }
 
@@ -469,7 +469,7 @@ impl LaneRunner for EngineLane<'_> {
             _ => Eligibility::Wait(WaitingFor::Lane),
         }
     }
-    fn run_job(&mut self, job: &Job, _: &mut dyn FnMut()) -> JobEnd {
+    fn run_job(&mut self, job: &Run, _: &mut dyn FnMut()) -> JobEnd {
         let vm_id = self.lanes.load(&self.lane).unwrap().unwrap().vm_id;
         self.lanes
             .update(&self.lane, |f| f.begin_work(job.id.clone(), job.attempt, 1))
@@ -488,7 +488,7 @@ impl LaneRunner for EngineLane<'_> {
             .unwrap();
         JobEnd::Done
     }
-    fn resume(&mut self, _: &Job) -> JobEnd {
+    fn resume(&mut self, _: &Run) -> JobEnd {
         JobEnd::Done
     }
     fn govern(&mut self, _: u64) {}
@@ -498,7 +498,7 @@ impl LaneRunner for EngineLane<'_> {
     fn profile(&mut self) -> Option<LaneProfile> {
         profile_of(self.lanes, &self.lane, self.waiter.snapshot())
     }
-    fn lane_vm(&self, _: &Job) -> Option<String> {
+    fn lane_vm(&self, _: &Run) -> Option<String> {
         self.lane_vm.clone()
     }
 }
@@ -511,8 +511,8 @@ fn with_lanes(
     bases: &[&str],
     hold: Duration,
     lane_vm: Option<&str>,
-    body: impl FnOnce(&LaneBoard, &Mutex<Vec<(LaneId, JobId)>>),
-) -> (Vec<(LaneId, JobId)>, Vec<Vec<String>>) {
+    body: impl FnOnce(&LaneBoard, &Mutex<Vec<(LaneId, RunId)>>),
+) -> (Vec<(LaneId, RunId)>, Vec<Vec<String>>) {
     let lanes = LaneDir::new(&fx.dir.join("service"));
     let board = LaneBoard::default();
     let controls = Controls::default();
@@ -601,9 +601,9 @@ fn until(what: &str, done: impl Fn() -> bool) {
     }
 }
 
-fn all_done(fx: &Fx, jobs: &[Job]) -> bool {
+fn all_done(fx: &Fx, jobs: &[Run]) -> bool {
     jobs.iter()
-        .all(|job| fx.store.get(&job.id).unwrap().state == JobState::Succeeded)
+        .all(|job| fx.store.get(&job.id).unwrap().state == RunState::Succeeded)
 }
 
 fn spread(lanes: u32) {
@@ -616,7 +616,7 @@ fn spread(lanes: u32) {
         None,
         |board, ran| {
             // As many jobs at once as there are lanes: each goes to another lane.
-            let burst: Vec<Job> = (1..=lanes as u8).map(|n| fx.queued(n)).collect();
+            let burst: Vec<Run> = (1..=lanes as u8).map(|n| fx.queued(n)).collect();
             board.wake_all();
             until("the burst", || all_done(&fx, &burst));
             let first: Vec<LaneId> = ran.lock().unwrap().iter().map(|(l, _)| l.clone()).collect();
@@ -678,7 +678,7 @@ fn a_quarantined_lane_takes_nothing_and_the_others_go_on() {
         Duration::from_millis(100),
         None,
         |board, _| {
-            let batch: Vec<Job> = (1..=6).map(|n| fx.queued(n)).collect();
+            let batch: Vec<Run> = (1..=6).map(|n| fx.queued(n)).collect();
             board.wake_all();
             until("every job", || all_done(&fx, &batch));
         },
@@ -704,7 +704,7 @@ fn a_quarantined_lane_takes_nothing_and_the_others_go_on() {
         .any(|event| {
             matches!(
                 event.body,
-                EventBody::JobState {
+                EventBody::RunState {
                     waiting_for: Some(WaitingFor::LaneQuarantined),
                     ..
                 }
@@ -723,14 +723,14 @@ fn an_arm64_lane_leaves_x86_programs_to_the_x86_lane_and_takes_the_scripts() {
         Duration::from_millis(150),
         None,
         |board, _| {
-            let mut batch: Vec<Job> = (1..=4).map(|n| fx.queued(n)).collect();
+            let mut batch: Vec<Run> = (1..=4).map(|n| fx.queued(n)).collect();
             batch.push(fx.queued(20));
             batch.push(fx.queued(20));
             board.wake_all();
             until("every job", || all_done(&fx, &batch));
         },
     );
-    let elves: Vec<&(LaneId, JobId)> = ran
+    let elves: Vec<&(LaneId, RunId)> = ran
         .iter()
         .filter(|(_, id)| {
             fx.store
@@ -971,7 +971,7 @@ fn lanes_left_out_at_start_are_shown_with_their_reason() {
 }
 
 /// A job claimed by `lane` and brought to `stage`.
-fn on_lane(fx: &Fx, n: u8, lane: u32, stage: Stage) -> Job {
+fn on_lane(fx: &Fx, n: u8, lane: u32, stage: Stage) -> Run {
     fx.clock.advance(1);
     let queued = fx.queued(n);
     let job = fx
@@ -1031,7 +1031,7 @@ fn recovery_puts_every_lanes_jobs_back_and_resumes_the_collected_ones_in_arrival
     // The interrupted jobs are queued again, whatever lane had them, and
     // every lane file is without the dead process's work.
     for job in [&interrupted, &stranded] {
-        assert_eq!(fx.store.get(&job.id).unwrap().state, JobState::Queued);
+        assert_eq!(fx.store.get(&job.id).unwrap().state, RunState::Queued);
     }
     for lane in 1..=4 {
         assert_eq!(
@@ -1111,7 +1111,7 @@ fn caller_with(permissions: Vec<crate::api::ops::Permission>) -> CallContext {
 /// full recording; then the daemon with `n` engines reads them all.
 fn reads_across(n: u32) {
     use crate::{
-        api::{error::ErrorCode, job::JobRecording, ops::Permission},
+        api::{error::ErrorCode, ops::Permission, run::RunRecording},
         query::testing::{Data, add_run, standard},
         store::JobPatch,
     };
@@ -1158,12 +1158,12 @@ fn reads_across(n: u32) {
                 .patch(
                     &job.id,
                     JobPatch {
-                        recording: Some(JobRecording {
+                        recording: Some(RunRecording {
                             vm_id: run.vm.clone(),
                             boot_id: run.boot.clone(),
                             run_id: run.id.clone(),
-                            run_key: run.key().as_str().to_owned(),
-                            phase: crate::api::job::RecordingPhase::Complete,
+                            recording_key: run.key().as_str().to_owned(),
+                            phase: crate::api::run::RecordingPhase::Complete,
                             directory: Some(run.dir.display().to_string()),
                         }),
                         ..JobPatch::default()
@@ -1182,15 +1182,15 @@ fn reads_across(n: u32) {
     let daemon = Daemon::start_lanes(rig.setup(n), engines, Vec::new()).unwrap();
 
     // One list from the daemon holds every lane's runs, each with its job.
-    let listed = op(&daemon, "recording.run.list", json!({})).unwrap();
+    let listed = op(&daemon, "recording.list", json!({})).unwrap();
     let items = listed["items"].as_array().unwrap();
     assert_eq!(items.len(), 2 * n as usize, "{listed}");
     for (lane, job, run) in &made {
         let item = items
             .iter()
-            .find(|i| i["run_key"] == json!(run.key()))
+            .find(|i| i["recording_key"] == json!(run.key()))
             .unwrap_or_else(|| panic!("{lane} {} not listed", run.id));
-        assert_eq!(item["job_id"], json!(job), "{lane}");
+        assert_eq!(item["from_run"], json!(job), "{lane}");
         assert_eq!(item["vm_id"], run.vm.as_str());
         // The job's lane, its VM and the folder its run sits in agree.
         assert_eq!(rig.fx.store.get(job).unwrap().lane.as_ref(), Some(lane));
@@ -1198,11 +1198,16 @@ fn reads_across(n: u32) {
         if *lane != LaneId::new(1) {
             assert!(!run.dir.starts_with(rig.fx.dir.join(vm_of(1))));
         }
-        let got = op(&daemon, "recording.run.get", json!({"run_key": run.key()})).unwrap();
-        assert_eq!(got["value"]["job_id"], json!(job), "{got}");
-        let by_job = op(&daemon, "recording.run.list", json!({"job_id": job})).unwrap();
+        let got = op(
+            &daemon,
+            "recording.get",
+            json!({"recording_key": run.key()}),
+        )
+        .unwrap();
+        assert_eq!(got["value"]["from_run"], json!(job), "{got}");
+        let by_job = op(&daemon, "recording.list", json!({"from_run": job})).unwrap();
         assert_eq!(by_job["items"].as_array().unwrap().len(), 1);
-        assert_eq!(by_job["items"][0]["run_key"], json!(run.key()));
+        assert_eq!(by_job["items"][0]["recording_key"], json!(run.key()));
     }
 
     // T9: the scopes hold for a run of another lane.
@@ -1213,21 +1218,25 @@ fn reads_across(n: u32) {
     let service = daemon.service();
     assert!(
         service
-            .call("recording.artifact.list", json!({"run_key": key}), &reader)
+            .call(
+                "recording.artifact.list",
+                json!({"recording_key": key}),
+                &reader
+            )
             .is_ok()
     );
     for (op_name, params) in [
         (
             "recording.captured.read",
-            json!({"run_key": key, "field": "x", "offset": "0", "len": 4}),
+            json!({"recording_key": key, "field": "x", "offset": "0", "len": 4}),
         ),
         (
             "recording.files.content",
-            json!({"run_key": key, "version_id": "v1", "range": {"offset": 0, "len": 4}}),
+            json!({"recording_key": key, "version_id": "v1", "range": {"offset": 0, "len": 4}}),
         ),
         (
             "recording.network.packet",
-            json!({"run_key": key, "capture_id": "c1", "n": 1}),
+            json!({"recording_key": key, "capture_id": "c1", "n": 1}),
         ),
     ] {
         let error = service.call(op_name, params, &reader).unwrap_err();
@@ -1239,9 +1248,9 @@ fn reads_across(n: u32) {
         );
     }
     for (op_name, params) in [
-        ("recording.run.list", json!({})),
-        ("recording.run.get", json!({"run_key": key})),
-        ("recording.artifact.list", json!({"run_key": key})),
+        ("recording.list", json!({})),
+        ("recording.get", json!({"recording_key": key})),
+        ("recording.artifact.list", json!({"recording_key": key})),
     ] {
         let error = service.call(op_name, params, &nobody).unwrap_err();
         assert_eq!(

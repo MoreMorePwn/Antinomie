@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `Artifact` (design 5.4.4): a file a job produced.
+//! `Artifact` (design 5.4.4): a file a run produced.
 
-use super::ids::{ArtifactId, JobId, Sha256Hex};
+use super::ids::{ArtifactId, RunId, Sha256Hex};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -63,7 +63,7 @@ pub enum MediaType {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Artifact {
     pub id: ArtifactId,
-    pub job_id: JobId,
+    pub run_id: RunId,
     pub kind: ArtifactKind,
     /// Download file name.
     pub name: String,

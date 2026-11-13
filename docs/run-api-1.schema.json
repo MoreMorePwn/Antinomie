@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://antinomie.invalid/schema/job-api-1.schema.json",
-  "title": "Antinomie job and query API, version 1",
+  "$id": "https://antinomie.invalid/schema/run-api-1.schema.json",
+  "title": "Antinomie run and query API, version 1",
   "description": "Generated from the Rust types of the antinomie-service crate. Do not edit.",
   "$defs": {
-    "JobSpec": {
+    "RunRequest": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -18,12 +18,12 @@
           ],
           "description": "File name hint, 1 to 128 bytes, no `/`, no NUL."
         },
-        "policy": {
+        "preset": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The preset's name; default `standard`. (The member keeps its 0.9.0\nname until the run API.)"
+          "description": "The preset's name; default `standard`."
         },
         "priority": {
           "type": [
@@ -56,7 +56,7 @@
       "required": [
         "sample"
       ],
-      "description": "What a caller submits with `job.submit`, and the form a [`Job`] carries\n(the preset's name and the priority filled in, `overrides` reduced to the\nkeys that changed a value; `sample.path` removed for remote callers;\n`sample.sha256` always set after prechecks). The run's resolved options\nare its frozen preset.\n\n[`Job`]: super::job::Job"
+      "description": "What a caller submits with `run.submit`, and the form a [`Run`] carries\n(the preset's name and the priority filled in, `overrides` reduced to the\nkeys that changed a value; `sample.path` removed for remote callers;\n`sample.sha256` always set after prechecks). The run's resolved options\nare its frozen preset.\n\n[`Run`]: super::run::Run"
     },
     "SampleSource": {
       "type": "object",
@@ -92,7 +92,7 @@
           "description": "A finished staged upload (sealed, hashed); expires after 24 hours unused."
         }
       },
-      "description": "The sample of a job. Exactly one member is set ([`SampleSource::validate`])."
+      "description": "The sample of a run. Exactly one member is set ([`SampleSource::validate`])."
     },
     "Sha256Hex": {
       "type": "string",
@@ -109,7 +109,7 @@
       "additionalProperties": true,
       "description": "The per-run overrides: a partial preset, with the same tables and keys as\na preset file (`{\"program\": {\"run_time_s\": 600}}`). Any override that\nchanges a value makes the run Custom (the presets specification, \"The\nCustom rule\"); a stored run keeps the changed keys only."
     },
-    "Job": {
+    "Run": {
       "type": "object",
       "properties": {
         "api_version": {
@@ -118,10 +118,10 @@
           "minimum": 0
         },
         "id": {
-          "$ref": "#/$defs/JobId"
+          "$ref": "#/$defs/RunId"
         },
         "state": {
-          "$ref": "#/$defs/JobState"
+          "$ref": "#/$defs/RunState"
         },
         "stage": {
           "anyOf": [
@@ -199,22 +199,35 @@
         "client_id": {
           "type": "string"
         },
-        "spec": {
-          "$ref": "#/$defs/JobSpec"
+        "request": {
+          "$ref": "#/$defs/RunRequest",
+          "description": "The request as stored: the preset's name and the priority filled in,\n`overrides` reduced to the keys that changed a value."
         },
         "sample": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobSample"
+              "$ref": "#/$defs/RunSample"
             },
             {
               "type": "null"
             }
           ]
         },
-        "policy": {
+        "preset": {
           "$ref": "#/$defs/PresetRef",
-          "description": "The preset (the member keeps its 0.9.0 name until the run API)."
+          "description": "The preset the run froze: its name and digest, or `custom` with the\npreset it was based on and the keys it changed."
+        },
+        "settings": {
+          "description": "Every resolved option of the run (the frozen preset, with the same\ntables and keys as a preset file).",
+          "default": null
+        },
+        "permissions_used": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionUse"
+          },
+          "description": "The permissions the run's options use, beside `runs.submit`, in the\norder of the access specification; checked at submit and again when\nthe run starts.",
+          "default": []
         },
         "lane": {
           "anyOf": [
@@ -229,17 +242,17 @@
         "vm": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobVm"
+              "$ref": "#/$defs/RunVm"
             },
             {
               "type": "null"
             }
           ]
         },
-        "run": {
+        "program": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobRun"
+              "$ref": "#/$defs/RunProgram"
             },
             {
               "type": "null"
@@ -249,7 +262,7 @@
         "recording": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobRecording"
+              "$ref": "#/$defs/RunRecording"
             },
             {
               "type": "null"
@@ -287,12 +300,12 @@
               "type": "null"
             }
           ],
-          "description": "Set when `failed` or `rejected`. Null for `partial`: a partial job\nexplains itself only through `warnings`."
+          "description": "Set when `failed` or `rejected`. Null for `partial`: a partial run\nexplains itself only through `warnings`."
         },
         "repeat_of": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
@@ -310,7 +323,7 @@
           "items": {
             "$ref": "#/$defs/HostItem"
           },
-          "description": "The host work items of the job (pipelined host stages, ANT-T0454):\nempty until `collect` has handed the job to the host work pool.",
+          "description": "The host work items of the run (pipelined host stages, ANT-T0454):\nempty until `collect` has handed the run to the host work pool.",
           "default": []
         }
       },
@@ -322,20 +335,20 @@
         "attempt",
         "max_attempts",
         "client_id",
-        "spec",
-        "policy",
+        "request",
+        "preset",
         "artifacts",
         "warnings",
         "labels"
       ],
-      "description": "The job object returned by `job.get`, `job.submit` and the list."
+      "description": "The run object returned by `run.get`, `run.submit` and `run.list`."
     },
-    "JobId": {
+    "RunId": {
       "type": "string",
-      "pattern": "^j_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
-      "description": "The identifier of a job."
+      "pattern": "^(r|j)_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "description": "The identifier of a run."
     },
-    "JobState": {
+    "RunState": {
       "type": "string",
       "enum": [
         "queued",
@@ -347,7 +360,7 @@
         "cancelled",
         "rejected"
       ],
-      "description": "The job states of design 5.6. `state` and `outcome` are equal once terminal."
+      "description": "The run states of design 5.6. `state` and `outcome` are equal once terminal."
     },
     "Stage": {
       "type": "string",
@@ -365,18 +378,26 @@
       "description": "The pipeline stages (design 4.1), in order."
     },
     "WaitingFor": {
-      "type": "string",
-      "enum": [
-        "lane",
-        "resources",
-        "dependency",
-        "quota",
-        "queue_paused",
-        "layer_pending",
-        "backoff",
-        "lane_quarantined"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "lane",
+            "resources",
+            "dependency",
+            "queue_paused",
+            "layer_pending",
+            "backoff",
+            "lane_quarantined"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "quota",
+          "description": "A limit of the caller: also the caller already has `max_running`\nruns running (the run starts when one of them ends)."
+        }
       ],
-      "description": "Why a `queued` job is not running yet."
+      "description": "Why a `queued` run is not running yet."
     },
     "Outcome": {
       "type": "string",
@@ -389,7 +410,7 @@
       ],
       "description": "A terminal state: the set `outcome` takes."
     },
-    "JobSample": {
+    "RunSample": {
       "type": "object",
       "properties": {
         "sha256": {
@@ -421,7 +442,7 @@
         "type",
         "name"
       ],
-      "description": "The library sample of a job, once archived."
+      "description": "The library sample of a run, once archived."
     },
     "PresetRef": {
       "type": "object",
@@ -472,12 +493,74 @@
       ],
       "description": "The preset a Custom run started from."
     },
+    "PermissionUse": {
+      "type": "object",
+      "properties": {
+        "permission": {
+          "$ref": "#/$defs/Permission"
+        },
+        "field": {
+          "type": "string",
+          "description": "The dotted preset key (`network.route`)."
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "permission",
+        "field",
+        "source"
+      ],
+      "description": "One permission a run's options use: the permission, the preset key that\nuses it, and where the caller's permission came from (`caller`: the\npermission set of the caller, the only source before 0.9.1's roles and\ngrants)."
+    },
+    "Permission": {
+      "type": "string",
+      "enum": [
+        "runs.see_all",
+        "cases.create",
+        "runs.share",
+        "cases.join_any",
+        "evidence.view",
+        "evidence.download",
+        "samples.download",
+        "lookup.online",
+        "samples.add",
+        "runs.submit",
+        "runs.manage_any",
+        "samples.tag",
+        "runs.annotate",
+        "indicators.mark_fp",
+        "runs.delete",
+        "route.internet",
+        "route.nat",
+        "route.tor",
+        "route.vpn",
+        "route.socks5",
+        "route.lan",
+        "route.unfiltered",
+        "run.as_root",
+        "evidence.core_dump",
+        "evidence.memory_dump",
+        "evidence.disk_dump",
+        "run.keep_vm",
+        "interactive.watch",
+        "interactive.control",
+        "presets.manage",
+        "queue.manage",
+        "lanes.reset",
+        "lanes.extend_keep",
+        "custody.verify",
+        "node.manage"
+      ],
+      "description": "A permission the engine checks (the access specification: 37 permissions,\nall but `users.manage` and `audit.read`, which stay in the web). A caller\nholds a set of them; every operation, run option, event and frozen re-check\nasks for one by name. The wire spelling is the dotted key."
+    },
     "LaneId": {
       "type": "string",
       "pattern": "^lane-[0-9]{1,9}$",
       "description": "A lane: `lane-<n>`."
     },
-    "JobVm": {
+    "RunVm": {
       "type": "object",
       "properties": {
         "id": {
@@ -501,7 +584,7 @@
         "name",
         "revert"
       ],
-      "description": "The VM a job ran on."
+      "description": "The VM a run ran on."
     },
     "Revert": {
       "type": "string",
@@ -514,10 +597,10 @@
       ],
       "description": "How the lane VM was made clean (design 4.5)."
     },
-    "JobRun": {
+    "RunProgram": {
       "type": "object",
       "properties": {
-        "run_id": {
+        "id": {
           "type": "string"
         },
         "started_ms": {
@@ -568,7 +651,7 @@
         "triggers": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/JobTrigger"
+            "$ref": "#/$defs/RunTrigger"
           },
           "description": "The dumps the preset's dump trigger took, in order; empty when the\ntrigger is off or took none."
         },
@@ -584,14 +667,14 @@
           "items": {
             "type": "string"
           },
-          "description": "Evidence still being written when the collect wait ended and the\nrecording was saved without it: `analysis` (the guest-side static\nchecks). The job still succeeds. Empty when everything finished."
+          "description": "Evidence still being written when the collect wait ended and the\nrecording was saved without it: `analysis` (the guest-side static\nchecks). The run still succeeds. Empty when everything finished."
         }
       },
       "required": [
-        "run_id",
+        "id",
         "core_dumped"
       ],
-      "description": "The program's run."
+      "description": "The program: the sample's execution inside the run. `id` is the engine's\nid of that execution (the `run_id` of its recording)."
     },
     "EndReason": {
       "type": "string",
@@ -604,7 +687,7 @@
       ],
       "description": "How the program's run ended."
     },
-    "JobTrigger": {
+    "RunTrigger": {
       "type": "object",
       "properties": {
         "rule": {
@@ -634,7 +717,7 @@
         "memory": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobDump"
+              "$ref": "#/$defs/RunDump"
             },
             {
               "type": "null"
@@ -644,7 +727,7 @@
         "core": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobDump"
+              "$ref": "#/$defs/RunDump"
             },
             {
               "type": "null"
@@ -662,7 +745,7 @@
       ],
       "description": "A suspicious-activity match that took a dump: the rule, its tier, the\nprocess and call, and what became of the memory dump and the core."
     },
-    "JobDump": {
+    "RunDump": {
       "type": "object",
       "properties": {
         "state": {
@@ -703,7 +786,7 @@
       ],
       "description": "One dump a dump trigger took (or tried to take)."
     },
-    "JobRecording": {
+    "RunRecording": {
       "type": "object",
       "properties": {
         "vm_id": {
@@ -715,7 +798,7 @@
         "run_id": {
           "type": "string"
         },
-        "run_key": {
+        "recording_key": {
           "type": "string"
         },
         "phase": {
@@ -733,10 +816,10 @@
         "vm_id",
         "boot_id",
         "run_id",
-        "run_key",
+        "recording_key",
         "phase"
       ],
-      "description": "The recording of the job's run. `run_key` is the address of every\n`recording.*` read."
+      "description": "The recording of the run's program. `recording_key` is the address of\nevery `recording.*` read; `vm_id`, `boot_id` and `run_id` are the engine's\nown ids of the recorded execution (`run_id` equals `program.id`)."
     },
     "RecordingPhase": {
       "type": "string",
@@ -985,8 +1068,8 @@
         "id": {
           "$ref": "#/$defs/ArtifactId"
         },
-        "job_id": {
-          "$ref": "#/$defs/JobId"
+        "run_id": {
+          "$ref": "#/$defs/RunId"
         },
         "kind": {
           "$ref": "#/$defs/ArtifactKind"
@@ -1024,7 +1107,7 @@
       },
       "required": [
         "id",
-        "job_id",
+        "run_id",
         "kind",
         "name",
         "size",
@@ -1038,7 +1121,7 @@
     "ArtifactId": {
       "type": "string",
       "pattern": "^a_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
-      "description": "The identifier of a job artifact."
+      "description": "The identifier of a run artifact."
     },
     "ArtifactKind": {
       "type": "string",
@@ -1230,7 +1313,7 @@
         "basis",
         "limit_s"
       ],
-      "description": "One piece of a job's host processing: a static tool (`static:floss`,\n`static:decompilation`, ...), `triage`, `detection`, `assess` (digest and\nlabel) or `report`."
+      "description": "One piece of a run's host processing: a static tool (`static:floss`,\n`static:decompilation`, ...), `triage`, `detection`, `assess` (digest and\nlabel) or `report`."
     },
     "HostItemState": {
       "oneOf": [
@@ -1244,12 +1327,12 @@
         {
           "type": "string",
           "const": "queued",
-          "description": "In the pool's queue (first come, first served by job arrival)."
+          "description": "In the pool's queue (first come, first served by run arrival)."
         },
         {
           "type": "string",
           "const": "failed",
-          "description": "It ended with a problem (a warning of the job, or its failure when the\npreset requires the stage)."
+          "description": "It ended with a problem (a warning of the run, or its failure when the\npreset requires the stage)."
         },
         {
           "type": "string",
@@ -1259,7 +1342,7 @@
         {
           "type": "string",
           "const": "skipped",
-          "description": "Not run: the job ended first (cancelled, failed, past its deadline)."
+          "description": "Not run: the run ended first (cancelled, failed, past its deadline)."
         }
       ],
       "description": "Where a host work item is."
@@ -1273,10 +1356,10 @@
           "minimum": 0
         },
         "id": {
-          "$ref": "#/$defs/JobId"
+          "$ref": "#/$defs/RunId"
         },
         "state": {
-          "$ref": "#/$defs/JobState"
+          "$ref": "#/$defs/RunState"
         },
         "stage": {
           "anyOf": [
@@ -1354,22 +1437,35 @@
         "client_id": {
           "type": "string"
         },
-        "spec": {
-          "$ref": "#/$defs/JobSpec"
+        "request": {
+          "$ref": "#/$defs/RunRequest",
+          "description": "The request as stored: the preset's name and the priority filled in,\n`overrides` reduced to the keys that changed a value."
         },
         "sample": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobSample"
+              "$ref": "#/$defs/RunSample"
             },
             {
               "type": "null"
             }
           ]
         },
-        "policy": {
+        "preset": {
           "$ref": "#/$defs/PresetRef",
-          "description": "The preset (the member keeps its 0.9.0 name until the run API)."
+          "description": "The preset the run froze: its name and digest, or `custom` with the\npreset it was based on and the keys it changed."
+        },
+        "settings": {
+          "description": "Every resolved option of the run (the frozen preset, with the same\ntables and keys as a preset file).",
+          "default": null
+        },
+        "permissions_used": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionUse"
+          },
+          "description": "The permissions the run's options use, beside `runs.submit`, in the\norder of the access specification; checked at submit and again when\nthe run starts.",
+          "default": []
         },
         "lane": {
           "anyOf": [
@@ -1384,17 +1480,17 @@
         "vm": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobVm"
+              "$ref": "#/$defs/RunVm"
             },
             {
               "type": "null"
             }
           ]
         },
-        "run": {
+        "program": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobRun"
+              "$ref": "#/$defs/RunProgram"
             },
             {
               "type": "null"
@@ -1404,7 +1500,7 @@
         "recording": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobRecording"
+              "$ref": "#/$defs/RunRecording"
             },
             {
               "type": "null"
@@ -1442,12 +1538,12 @@
               "type": "null"
             }
           ],
-          "description": "Set when `failed` or `rejected`. Null for `partial`: a partial job\nexplains itself only through `warnings`."
+          "description": "Set when `failed` or `rejected`. Null for `partial`: a partial run\nexplains itself only through `warnings`."
         },
         "repeat_of": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
@@ -1465,7 +1561,7 @@
           "items": {
             "$ref": "#/$defs/HostItem"
           },
-          "description": "The host work items of the job (pipelined host stages, ANT-T0454):\nempty until `collect` has handed the job to the host work pool.",
+          "description": "The host work items of the run (pipelined host stages, ANT-T0454):\nempty until `collect` has handed the run to the host work pool.",
           "default": []
         },
         "replayed": {
@@ -1481,13 +1577,13 @@
         "attempt",
         "max_attempts",
         "client_id",
-        "spec",
-        "policy",
+        "request",
+        "preset",
         "artifacts",
         "warnings",
         "labels"
       ],
-      "description": "The result of `job.submit`: the stored job, plus `replayed` when an\nidempotency key returned the original."
+      "description": "The result of `run.submit`: the stored run, plus `replayed` when an\nidempotency key returned the original."
     },
     "Event": {
       "type": "object",
@@ -1517,10 +1613,10 @@
         "scope": {
           "$ref": "#/$defs/EventScope"
         },
-        "job_id": {
+        "run_id": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
@@ -1538,17 +1634,17 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.created"
+              "const": "run.created"
             },
             "data": {
               "type": "object",
               "properties": {
-                "job": {
-                  "$ref": "#/$defs/Job"
+                "run": {
+                  "$ref": "#/$defs/Run"
                 }
               },
               "required": [
-                "job"
+                "run"
               ]
             }
           },
@@ -1556,20 +1652,20 @@
             "type",
             "data"
           ],
-          "description": "Accepted by `job.submit`."
+          "description": "Accepted by `run.submit`."
         },
         {
           "type": "object",
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.state"
+              "const": "run.state"
             },
             "data": {
               "type": "object",
               "properties": {
                 "state": {
-                  "$ref": "#/$defs/JobState"
+                  "$ref": "#/$defs/RunState"
                 },
                 "stage": {
                   "anyOf": [
@@ -1622,7 +1718,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.stage"
+              "const": "run.stage"
             },
             "data": {
               "type": "object",
@@ -1659,7 +1755,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.progress"
+              "const": "run.progress"
             },
             "data": {
               "type": "object",
@@ -1688,19 +1784,19 @@
             "type",
             "data"
           ],
-          "description": "Ephemeral: not stored, no `seq`. At most 4 per second per job."
+          "description": "Ephemeral: not stored, no `seq`. At most 4 per second per run."
         },
         {
           "type": "object",
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.run"
+              "const": "run.program"
             },
             "data": {
               "type": "object",
               "properties": {
-                "run_id": {
+                "program_id": {
                   "type": "string"
                 },
                 "pid": {
@@ -1716,7 +1812,7 @@
                 }
               },
               "required": [
-                "run_id",
+                "program_id",
                 "route"
               ]
             }
@@ -1725,14 +1821,14 @@
             "type",
             "data"
           ],
-          "description": "The program started."
+          "description": "The program started; `program_id` is the engine's id of its\nexecution (`program.id` of the run)."
         },
         {
           "type": "object",
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.warning"
+              "const": "run.warning"
             },
             "data": {
               "type": "object",
@@ -1760,7 +1856,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.artifact"
+              "const": "run.artifact"
             },
             "data": {
               "type": "object",
@@ -1785,7 +1881,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.trigger"
+              "const": "run.trigger"
             },
             "data": {
               "type": "object",
@@ -1793,7 +1889,7 @@
                 "trigger": {
                   "anyOf": [
                     {
-                      "$ref": "#/$defs/JobTrigger"
+                      "$ref": "#/$defs/RunTrigger"
                     },
                     {
                       "type": "null"
@@ -1820,7 +1916,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.assessment"
+              "const": "run.assessment"
             },
             "data": {
               "type": "object",
@@ -1845,7 +1941,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.requeued"
+              "const": "run.requeued"
             },
             "data": {
               "type": "object",
@@ -1869,14 +1965,14 @@
             "type",
             "data"
           ],
-          "description": "A retry was scheduled; a `job.state` event with `state: queued` follows."
+          "description": "A retry was scheduled; a `run.state` event with `state: queued` follows."
         },
         {
           "type": "object",
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.finished"
+              "const": "run.finished"
             },
             "data": {
               "type": "object",
@@ -1904,7 +2000,7 @@
             "type",
             "data"
           ],
-          "description": "The last event of a job."
+          "description": "The last event of a run."
         },
         {
           "type": "object",
@@ -1922,10 +2018,10 @@
                 "state": {
                   "$ref": "#/$defs/LaneState"
                 },
-                "job_id": {
+                "run_id": {
                   "anyOf": [
                     {
-                      "$ref": "#/$defs/JobId"
+                      "$ref": "#/$defs/RunId"
                     },
                     {
                       "type": "null"
@@ -1985,7 +2081,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "job.metrics"
+              "const": "run.metrics"
             },
             "data": {
               "type": "object",
@@ -2018,12 +2114,12 @@
           "description": "Ephemeral: not stored, no `seq`. While stage is `run`, at most one per\n2 seconds."
         }
       ],
-      "description": "The envelope. `seq` counts within one job (job scope) or one service epoch\n(engine scope) from 1; `gseq` is strictly increasing across the service,\npersisted and never reused. Both are absent on ephemeral events."
+      "description": "The envelope. `seq` counts within one run (run scope) or one service epoch\n(engine scope) from 1; `gseq` is strictly increasing across the service,\npersisted and never reused. Both are absent on ephemeral events."
     },
     "EventScope": {
       "type": "string",
       "enum": [
-        "job",
+        "run",
         "engine"
       ]
     },
@@ -2079,7 +2175,7 @@
           "minimum": 0
         }
       },
-      "description": "Vm figures of `job.metrics`; numbers only. `cpu_percent` is the host QEMU\nprocess figure; the guest figures come from `VmResources.guest`."
+      "description": "Vm figures of `run.metrics`; numbers only. `cpu_percent` is the host QEMU\nprocess figure; the guest figures come from `VmResources.guest`."
     },
     "MetricsRun": {
       "type": "object",
@@ -2183,7 +2279,7 @@
         },
         "truncated": {
           "type": "boolean",
-          "description": "True when the requested resume point is older than the retained\nevents; the client must re-synchronise with `job.list`."
+          "description": "True when the requested resume point is older than the retained\nevents; the client must re-synchronise with `run.list`."
         }
       },
       "required": [
@@ -2281,7 +2377,7 @@
         {
           "type": "string",
           "const": "preset_denied",
-          "description": "The preset (in 0.9.0: the policy) is unknown, retired or not offered\nto the caller; `details.preset` names it."
+          "description": "The preset is unknown, retired or not offered\nto the caller; `details.preset` names it."
         },
         {
           "type": "string",
@@ -2338,10 +2434,10 @@
           "minimum": 0,
           "description": "Runs known to the library."
         },
-        "last_job": {
+        "last_run": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
@@ -2387,7 +2483,7 @@
       "properties": {
         "paused": {
           "type": "boolean",
-          "description": "New jobs are not started."
+          "description": "New runs are not started."
         },
         "pause_reason": {
           "anyOf": [
@@ -2428,7 +2524,7 @@
             "workers": 0,
             "queued": 0,
             "running": 0,
-            "jobs": 0,
+            "runs": 0,
             "waiting_for": null
           }
         }
@@ -2469,10 +2565,10 @@
         "state": {
           "$ref": "#/$defs/LaneState"
         },
-        "job_id": {
+        "run_id": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
@@ -2564,11 +2660,11 @@
           "format": "uint32",
           "minimum": 0
         },
-        "jobs": {
+        "runs": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "description": "Jobs with host work left."
+          "description": "Runs with host work left."
         },
         "waiting_for": {
           "type": [
@@ -2582,7 +2678,7 @@
         "workers",
         "queued",
         "running",
-        "jobs"
+        "runs"
       ],
       "description": "The host work pool: one for every lane, at most `workers` items at once."
     },
@@ -2853,59 +2949,18 @@
       ],
       "description": "`C` needs only the engine; `T` needs the Triage scan and can answer\n`building`."
     },
-    "Permission": {
-      "type": "string",
-      "enum": [
-        "runs.see_all",
-        "cases.create",
-        "runs.share",
-        "cases.join_any",
-        "evidence.view",
-        "evidence.download",
-        "samples.download",
-        "lookup.online",
-        "samples.add",
-        "runs.submit",
-        "runs.manage_any",
-        "samples.tag",
-        "runs.annotate",
-        "indicators.mark_fp",
-        "runs.delete",
-        "route.internet",
-        "route.nat",
-        "route.tor",
-        "route.vpn",
-        "route.socks5",
-        "route.lan",
-        "route.unfiltered",
-        "run.as_root",
-        "evidence.core_dump",
-        "evidence.memory_dump",
-        "evidence.disk_dump",
-        "run.keep_vm",
-        "interactive.watch",
-        "interactive.control",
-        "presets.manage",
-        "queue.manage",
-        "lanes.reset",
-        "lanes.extend_keep",
-        "custody.verify",
-        "node.manage"
-      ],
-      "description": "A permission the engine checks (the access specification: 37 permissions,\nall but `users.manage` and `audit.read`, which stay in the web). A caller\nholds a set of them; every operation, run option, event and frozen re-check\nasks for one by name. The wire spelling is the dotted key."
-    },
     "OpSubject": {
       "oneOf": [
         {
           "type": "string",
           "enum": [
-            "run_key"
+            "recording_key"
           ]
         },
         {
           "type": "string",
-          "const": "job_id_or_run_key",
-          "description": "The analysis operations: a run's analysis, or a job's host-side one."
+          "const": "run_id_or_recording_key",
+          "description": "The analysis operations: a run's analysis, or a run's host-side one."
         },
         {
           "type": "string",
@@ -3296,6 +3351,10 @@
             "type": "string"
           },
           "description": "What this node does not have for it (\"route tor is not set up on\nthis node\"); a run of it is refused `unavailable_on_node`."
+        },
+        "usable": {
+          "type": "boolean",
+          "description": "The caller can run it as it is: nothing `missing`, nothing\n`unavailable`."
         }
       },
       "required": [
@@ -3307,9 +3366,10 @@
         "offered_to",
         "needs",
         "missing",
-        "unavailable"
+        "unavailable",
+        "usable"
       ],
-      "description": "A preset (`policy.list`): what its options need and whether the caller and\nthe node have it."
+      "description": "A preset (`preset.list`): what its options need and whether the caller and\nthe node have it."
     },
     "VmSummary": {
       "type": "object",
@@ -3516,7 +3576,7 @@
         "client_id",
         "permissions"
       ],
-      "description": "Who is asking. The CLI uses the OS user (`local:<uid>`, every\npermission), a watch folder its preset (`auto:policy-<name>`, `runs.submit`\nand the folder's `permissions`); a later web layer fills it from\nauthentication (`web:<user_id>`). The service never trusts a\nclient-supplied value."
+      "description": "Who is asking. The CLI uses the OS user (`local:<uid>`, every\npermission), a watch folder its preset (`auto:preset-<name>`, `runs.submit`\nand the folder's `permissions`); a later web layer fills it from\nauthentication (`web:<user_id>`). The service never trusts a\nclient-supplied value."
     },
     "Limits": {
       "type": "object",
@@ -3695,26 +3755,26 @@
         "expires_ms"
       ]
     },
-    "JobIdParams": {
+    "RunIdParams": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "job_id": {
-          "$ref": "#/$defs/JobId"
+        "run_id": {
+          "$ref": "#/$defs/RunId"
         }
       },
       "required": [
-        "job_id"
+        "run_id"
       ]
     },
-    "JobListParams": {
+    "RunListParams": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "state": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobState"
+              "$ref": "#/$defs/RunState"
             },
             {
               "type": "null"
@@ -3772,13 +3832,13 @@
       },
       "description": "1 to 200, default 50, newest first."
     },
-    "JobList": {
+    "RunList": {
       "type": "object",
       "properties": {
-        "jobs": {
+        "runs": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/Job"
+            "$ref": "#/$defs/Run"
           }
         },
         "next_cursor": {
@@ -3789,15 +3849,15 @@
         }
       },
       "required": [
-        "jobs"
+        "runs"
       ]
     },
-    "JobCancelParams": {
+    "RunCancelParams": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "job_id": {
-          "$ref": "#/$defs/JobId"
+        "run_id": {
+          "$ref": "#/$defs/RunId"
         },
         "reason": {
           "type": [
@@ -3807,15 +3867,22 @@
         }
       },
       "required": [
-        "job_id"
+        "run_id"
       ]
     },
-    "JobRetryParams": {
+    "RunRerunParams": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "job_id": {
-          "$ref": "#/$defs/JobId"
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        },
+        "preset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Another preset, as it is now (default: the run's own options)."
         },
         "overrides": {
           "anyOf": [
@@ -3829,15 +3896,15 @@
         }
       },
       "required": [
-        "job_id"
+        "run_id"
       ]
     },
-    "JobDeleteParams": {
+    "RunDeleteParams": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "job_id": {
-          "$ref": "#/$defs/JobId"
+        "run_id": {
+          "$ref": "#/$defs/RunId"
         },
         "with_recording": {
           "type": [
@@ -3848,7 +3915,7 @@
         }
       },
       "required": [
-        "job_id"
+        "run_id"
       ]
     },
     "Deleted": {
@@ -3866,10 +3933,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "job_id": {
+        "run_id": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
@@ -3883,7 +3950,7 @@
           ],
           "format": "uint64",
           "minimum": 0,
-          "description": "With `job_id`."
+          "description": "With `run_id`."
         },
         "since_gseq": {
           "type": [
@@ -3892,7 +3959,7 @@
           ],
           "format": "uint64",
           "minimum": 0,
-          "description": "Without `job_id`."
+          "description": "Without `run_id`."
         },
         "types": {
           "type": [
@@ -3902,7 +3969,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Event type names (`job.state`, ...)."
+          "description": "Event type names (`run.state`, ...)."
         }
       }
     },
@@ -3910,8 +3977,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "job_id": {
-          "$ref": "#/$defs/JobId"
+        "run_id": {
+          "$ref": "#/$defs/RunId"
         },
         "after_seq": {
           "type": "integer",
@@ -3928,7 +3995,7 @@
         }
       },
       "required": [
-        "job_id",
+        "run_id",
         "after_seq"
       ]
     },
@@ -4013,15 +4080,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "job_id": {
-          "$ref": "#/$defs/JobId"
+        "run_id": {
+          "$ref": "#/$defs/RunId"
         },
         "format": {
           "$ref": "#/$defs/ReportFormat"
         }
       },
       "required": [
-        "job_id",
+        "run_id",
         "format"
       ]
     },
@@ -4215,10 +4282,10 @@
         "tags"
       ]
     },
-    "PolicyList": {
+    "PresetList": {
       "type": "object",
       "properties": {
-        "policies": {
+        "presets": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/PresetSummary"
@@ -4226,9 +4293,43 @@
         }
       },
       "required": [
-        "policies"
+        "presets"
       ],
-      "description": "`policy.list` (named `preset.list` from the run API): every preset."
+      "description": "`preset.list`: every preset, with what its options need."
+    },
+    "PresetGetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "description": "`preset.get`: one preset by name."
+    },
+    "PresetDetail": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "built_in": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "digest",
+        "built_in"
+      ],
+      "additionalProperties": true,
+      "description": "The result of `preset.get`: the whole preset with the same tables and keys\nas its file (`settings`, flattened), beside its name, digest and whether\nit is built in."
     },
     "VmList": {
       "type": "object",
@@ -4282,12 +4383,12 @@
         "upload.begin",
         "upload.put",
         "upload.finish",
-        "job.submit",
-        "job.get",
-        "job.list",
-        "job.cancel",
-        "job.retry",
-        "job.delete",
+        "run.submit",
+        "run.get",
+        "run.list",
+        "run.cancel",
+        "run.rerun",
+        "run.delete",
         "events.subscribe",
         "events.list",
         "artifact.list",
@@ -4298,7 +4399,8 @@
         "sample.add",
         "sample.download",
         "sample.tag",
-        "policy.list",
+        "preset.list",
+        "preset.get",
         "queue.status",
         "queue.pause",
         "queue.resume",
@@ -4383,7 +4485,7 @@
         {
           "type": "string",
           "const": "service_stopping",
-          "description": "`unavailable`: the daemon is stopping; queued jobs stay queued."
+          "description": "`unavailable`: the daemon is stopping; queued runs stay queued."
         },
         {
           "type": "string",
@@ -4444,7 +4546,7 @@
         "items": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/RunInfo"
+            "$ref": "#/$defs/RecordingInfo"
           }
         },
         "next_cursor": {
@@ -4518,11 +4620,11 @@
       ],
       "description": "A page of rows."
     },
-    "RunInfo": {
+    "RecordingInfo": {
       "type": "object",
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "vm_id": {
           "type": "string",
@@ -4571,16 +4673,16 @@
           "type": "string",
           "description": "Guest path of the executable. U"
         },
-        "job_id": {
+        "from_run": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
             }
           ],
-          "description": "The job of this service that made the run; absent for runs made by the\nGUI or a CLI one-shot. N"
+          "description": "The run of this service whose program made the recording; absent for\nrecordings made by the GUI or a CLI one-shot. N"
         },
         "route": {
           "anyOf": [
@@ -4619,7 +4721,7 @@
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "vm_id",
         "boot_id",
         "run_id",
@@ -4627,13 +4729,13 @@
         "phase",
         "program"
       ],
-      "description": "`recording.run.list` item (from `RunSummary` and the library)."
+      "description": "`recording.list` item (from `RunSummary` and the library)."
     },
-    "RunKey": {
+    "RecordingKey": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]+$",
       "maxLength": 512,
-      "description": "Opaque run address. Produced by recording.run.list and Job.recording.run_key; clients never build or parse it."
+      "description": "Opaque run address. Produced by recording.list and Run.recording.recording_key; clients never build or parse it."
     },
     "RunStateName": {
       "type": "string",
@@ -4807,7 +4909,7 @@
         "value": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RunDetail"
+              "$ref": "#/$defs/RecordingDetail"
             },
             {
               "type": "null"
@@ -4848,13 +4950,13 @@
         "generation",
         "phase"
       ],
-      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+      "description": "A single result (`recording.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
     },
-    "RunDetail": {
+    "RecordingDetail": {
       "type": "object",
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "vm_id": {
           "type": "string",
@@ -4903,16 +5005,16 @@
           "type": "string",
           "description": "Guest path of the executable. U"
         },
-        "job_id": {
+        "from_run": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
             }
           ],
-          "description": "The job of this service that made the run; absent for runs made by the\nGUI or a CLI one-shot. N"
+          "description": "The run of this service whose program made the recording; absent for\nrecordings made by the GUI or a CLI one-shot. N"
         },
         "route": {
           "anyOf": [
@@ -5003,7 +5105,7 @@
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "vm_id",
         "boot_id",
         "run_id",
@@ -5016,7 +5118,7 @@
         "owner_state",
         "layer"
       ],
-      "description": "`recording.run.get`: a [`RunInfo`] and more."
+      "description": "`recording.get`: a [`RecordingInfo`] and more."
     },
     "Execution": {
       "type": "object",
@@ -5192,7 +5294,7 @@
         "generation",
         "phase"
       ],
-      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+      "description": "A single result (`recording.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
     },
     "Summary": {
       "type": "object",
@@ -5251,7 +5353,7 @@
         "ioc_dataset_count",
         "basis"
       ],
-      "description": "`recording.summary`: the assessment fields of the JSON report summary (5.4.3\nwithout the preset `label` and `score`, which belong to a job)."
+      "description": "`recording.summary`: the assessment fields of the JSON report summary (5.4.3\nwithout the preset `label` and `score`, which belong to a run)."
     },
     "Page2": {
       "type": "object",
@@ -5559,7 +5661,7 @@
         "generation",
         "phase"
       ],
-      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+      "description": "A single result (`recording.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
     },
     "Invocation": {
       "type": "object",
@@ -5904,7 +6006,7 @@
         "generation",
         "phase"
       ],
-      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+      "description": "A single result (`recording.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
     },
     "BytesReply": {
       "type": "object",
@@ -6410,7 +6512,7 @@
         "generation",
         "phase"
       ],
-      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+      "description": "A single result (`recording.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
     },
     "FindingDetail": {
       "type": "object",
@@ -7219,7 +7321,7 @@
         "generation",
         "phase"
       ],
-      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+      "description": "A single result (`recording.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
     },
     "FileVersions": {
       "type": "object",
@@ -7332,7 +7434,7 @@
         "generation",
         "phase"
       ],
-      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+      "description": "A single result (`recording.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
     },
     "NetworkSummary": {
       "type": "object",
@@ -8422,7 +8524,7 @@
         "generation",
         "phase"
       ],
-      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+      "description": "A single result (`recording.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
     },
     "PacketDetail": {
       "type": "object",
@@ -9434,7 +9536,7 @@
         },
         "by": {
           "type": "string",
-          "description": "`app`, `auto:policy-<name>`, `web:<user>`, `local:<uid>`. U"
+          "description": "`app`, `auto:preset-<name>`, `web:<user>`, `local:<uid>`. U"
         },
         "kind": {
           "type": "string",
@@ -9770,10 +9872,10 @@
             }
           ]
         },
-        "job_id": {
+        "from_run": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
@@ -9813,27 +9915,27 @@
           ]
         }
       },
-      "description": "`recording.run.list`. Newest first; not sortable."
+      "description": "`recording.list`. Newest first; not sortable."
     },
     "RunParams": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         }
       },
       "required": [
-        "run_key"
+        "recording_key"
       ],
-      "description": "`recording.run.get`, `recording.summary`, `recording.network.summary`,\n`recording.network.captures`, `recording.cores.list`,\n`recording.artifact.list`: the run alone."
+      "description": "`recording.get`, `recording.summary`, `recording.network.summary`,\n`recording.network.captures`, `recording.cores.list`,\n`recording.artifact.list`: the run alone."
     },
     "TracePageParams": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "pid": {
           "type": [
@@ -9871,7 +9973,7 @@
         }
       },
       "required": [
-        "run_key"
+        "recording_key"
       ],
       "description": "`recording.trace.page`: raw-file byte offset order, not sortable."
     },
@@ -9879,15 +9981,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "ref": {
           "$ref": "#/$defs/CallRef"
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "ref"
       ],
       "description": "`recording.trace.get`."
@@ -9896,8 +9998,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "field": {
           "type": "string",
@@ -9913,7 +10015,7 @@
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "field",
         "offset",
         "len"
@@ -9924,8 +10026,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "root_pid": {
           "type": [
@@ -9952,7 +10054,7 @@
         }
       },
       "required": [
-        "run_key"
+        "recording_key"
       ],
       "description": "`recording.process.tree`."
     },
@@ -9960,8 +10062,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "tier": {
           "anyOf": [
@@ -10029,7 +10131,7 @@
         }
       },
       "required": [
-        "run_key"
+        "recording_key"
       ],
       "description": "`recording.findings.list`."
     },
@@ -10037,15 +10139,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "finding_id": {
           "type": "string"
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "finding_id"
       ],
       "description": "`recording.findings.get`."
@@ -10054,8 +10156,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "kind": {
           "anyOf": [
@@ -10111,7 +10213,7 @@
         }
       },
       "required": [
-        "run_key"
+        "recording_key"
       ],
       "description": "`recording.indicators.list`."
     },
@@ -10119,8 +10221,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "tab": {
           "$ref": "#/$defs/FileTab"
@@ -10157,7 +10259,7 @@
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "tab"
       ],
       "description": "`recording.files.list`."
@@ -10183,15 +10285,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "file_id": {
           "type": "string"
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "file_id"
       ],
       "description": "`recording.files.versions`."
@@ -10200,8 +10302,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "version_id": {
           "type": "string"
@@ -10218,7 +10320,7 @@
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "version_id"
       ],
       "description": "`recording.files.content`: at most 1 MiB per call. Sensitive."
@@ -10227,8 +10329,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "tab": {
           "$ref": "#/$defs/NetworkTab"
@@ -10265,7 +10367,7 @@
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "tab"
       ],
       "description": "`recording.network.list`."
@@ -10285,8 +10387,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "capture_id": {
           "type": "string"
@@ -10313,7 +10415,7 @@
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "capture_id"
       ],
       "description": "`recording.network.packets`: frame order; `filter` is a Wireshark\ndisplay filter, at most 500 rows per page."
@@ -10322,8 +10424,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "capture_id": {
           "type": "string"
@@ -10335,7 +10437,7 @@
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "capture_id",
         "n"
       ],
@@ -10345,8 +10447,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "from_ms": {
           "type": [
@@ -10386,7 +10488,7 @@
         }
       },
       "required": [
-        "run_key"
+        "recording_key"
       ],
       "description": "`recording.timeline`: `ts_ms` order, not sortable."
     },
@@ -10394,20 +10496,20 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
+        "recording_key": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RunKey"
+              "$ref": "#/$defs/RecordingKey"
             },
             {
               "type": "null"
             }
           ]
         },
-        "job_id": {
+        "run_id": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
@@ -10415,26 +10517,26 @@
           ]
         }
       },
-      "description": "`recording.analysis.list`: exactly one of `run_key` (the analysis linked\nto a run) or `job_id` (the host-side analysis of a job)."
+      "description": "`recording.analysis.list`: exactly one of `recording_key` (the analysis\nlinked to a recording) or `run_id` (the host-side analysis of a run)."
     },
     "AnalysisSectionParams": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
+        "recording_key": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RunKey"
+              "$ref": "#/$defs/RecordingKey"
             },
             {
               "type": "null"
             }
           ]
         },
-        "job_id": {
+        "run_id": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
@@ -10484,20 +10586,20 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
+        "recording_key": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RunKey"
+              "$ref": "#/$defs/RecordingKey"
             },
             {
               "type": "null"
             }
           ]
         },
-        "job_id": {
+        "run_id": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JobId"
+              "$ref": "#/$defs/RunId"
             },
             {
               "type": "null"
@@ -10531,10 +10633,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
+        "recording_key": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RunKey"
+              "$ref": "#/$defs/RecordingKey"
             },
             {
               "type": "null"
@@ -10566,14 +10668,14 @@
           ]
         }
       },
-      "description": "`recording.custody.list`: `sha256` instead of `run_key`, or the run's\nsample when `run_key` is given."
+      "description": "`recording.custody.list`: `sha256` instead of `recording_key`, or the run's\nsample when `recording_key` is given."
     },
     "TerminalReplayParams": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "limit": {
           "type": [
@@ -10591,7 +10693,7 @@
         }
       },
       "required": [
-        "run_key"
+        "recording_key"
       ],
       "description": "`recording.terminal.replay`: at most 256 records; the cursor is a\njournal byte offset."
     },
@@ -10599,8 +10701,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "run_key": {
-          "$ref": "#/$defs/RunKey"
+        "recording_key": {
+          "$ref": "#/$defs/RecordingKey"
         },
         "artifact_id": {
           "$ref": "#/$defs/RecordingArtifactId"
@@ -10617,7 +10719,7 @@
         }
       },
       "required": [
-        "run_key",
+        "recording_key",
         "artifact_id"
       ],
       "description": "`recording.artifact.get`: at most 1 MiB per call; a capture, memory\ndump, core or file copy is sensitive."

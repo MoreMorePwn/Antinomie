@@ -134,7 +134,7 @@ fn op(
 /// Every operation of 5.12.3 in the table's order.
 pub fn definitions() -> Vec<OpDef> {
     use OpClass::{C, T};
-    use OpSubject::{JobIdOrRunKey, RunKey, Sha256};
+    use OpSubject::{RecordingKey, RunIdOrRecordingKey, Sha256};
     use Permission::{EvidenceView as S, RunsSeeAll as N};
     let limits = QueryLimits::default();
     let (row, analysis, packets, terminal) = (
@@ -145,14 +145,14 @@ pub fn definitions() -> Vec<OpDef> {
     );
     let mut defs = vec![
         op(
-            "recording.run.list",
+            "recording.list",
             C,
             N,
-            RunKey,
+            RecordingKey,
             vec![
                 filter("vm_id", FilterType::String),
                 filter("sample_sha256", FilterType::String),
-                filter("job_id", FilterType::String),
+                filter("from_run", FilterType::String),
                 enum_filter(
                     "state",
                     &[
@@ -171,35 +171,35 @@ pub fn definitions() -> Vec<OpDef> {
                 ),
                 filter("since_ms", FilterType::TimeMs),
             ],
-            "started_ms descending, then run_key",
+            "started_ms descending, then recording_key",
             row,
             &[],
         ),
         op(
-            "recording.run.get",
+            "recording.get",
             C,
             N,
-            RunKey,
+            RecordingKey,
             vec![],
             "",
             0,
-            &["run_key"],
+            &["recording_key"],
         ),
         op(
             "recording.summary",
             T,
             N,
-            RunKey,
+            RecordingKey,
             vec![],
             "",
             0,
-            &["run_key"],
+            &["recording_key"],
         ),
         op(
             "recording.trace.page",
             C,
             N,
-            RunKey,
+            RecordingKey,
             vec![
                 filter("pid", FilterType::Integer),
                 filter("q", FilterType::Query),
@@ -213,27 +213,27 @@ pub fn definitions() -> Vec<OpDef> {
             "recording.trace.get",
             C,
             N,
-            RunKey,
+            RecordingKey,
             vec![],
             "",
             0,
-            &["run_key", "ref"],
+            &["recording_key", "ref"],
         ),
         op(
             "recording.captured.read",
             C,
             S,
-            RunKey,
+            RecordingKey,
             vec![],
             "",
             0,
-            &["run_key", "field", "offset", "len"],
+            &["recording_key", "field", "offset", "len"],
         ),
         op(
             "recording.process.tree",
             C,
             N,
-            RunKey,
+            RecordingKey,
             vec![filter("root_pid", FilterType::Integer)],
             "pid ascending",
             row,
@@ -243,7 +243,7 @@ pub fn definitions() -> Vec<OpDef> {
             "recording.findings.list",
             T,
             N,
-            RunKey,
+            RecordingKey,
             vec![
                 enum_filter(
                     "tier",
@@ -286,17 +286,17 @@ pub fn definitions() -> Vec<OpDef> {
             "recording.findings.get",
             T,
             N,
-            RunKey,
+            RecordingKey,
             vec![],
             "",
             0,
-            &["run_key", "finding_id"],
+            &["recording_key", "finding_id"],
         ),
         op(
             "recording.indicators.list",
             T,
             N,
-            RunKey,
+            RecordingKey,
             vec![
                 enum_filter(
                     "kind",
@@ -321,7 +321,7 @@ pub fn definitions() -> Vec<OpDef> {
             "recording.files.list",
             T,
             N,
-            RunKey,
+            RecordingKey,
             vec![
                 enum_filter(
                     "tab",
@@ -350,37 +350,37 @@ pub fn definitions() -> Vec<OpDef> {
             "recording.files.versions",
             T,
             N,
-            RunKey,
+            RecordingKey,
             vec![],
             "",
             0,
-            &["run_key", "file_id"],
+            &["recording_key", "file_id"],
         ),
         op(
             "recording.files.content",
             T,
             S,
-            RunKey,
+            RecordingKey,
             vec![],
             "",
             0,
-            &["run_key", "version_id", "range"],
+            &["recording_key", "version_id", "range"],
         ),
         op(
             "recording.network.summary",
             T,
             N,
-            RunKey,
+            RecordingKey,
             vec![],
             "",
             0,
-            &["run_key"],
+            &["recording_key"],
         ),
         op(
             "recording.network.list",
             T,
             N,
-            RunKey,
+            RecordingKey,
             vec![
                 enum_filter(
                     "tab",
@@ -404,17 +404,17 @@ pub fn definitions() -> Vec<OpDef> {
             "recording.network.captures",
             C,
             N,
-            RunKey,
+            RecordingKey,
             vec![],
             "segment ascending",
             0,
-            &["run_key"],
+            &["recording_key"],
         ),
         op(
             "recording.network.packets",
             C,
             N,
-            RunKey,
+            RecordingKey,
             vec![filter("filter", FilterType::DisplayFilter)],
             "frame number ascending",
             packets,
@@ -424,17 +424,17 @@ pub fn definitions() -> Vec<OpDef> {
             "recording.network.packet",
             C,
             S,
-            RunKey,
+            RecordingKey,
             vec![],
             "",
             0,
-            &["run_key", "capture_id", "n"],
+            &["recording_key", "capture_id", "n"],
         ),
         op(
             "recording.timeline",
             T,
             N,
-            RunKey,
+            RecordingKey,
             vec![
                 filter("from_ms", FilterType::TimeMs),
                 filter("to_ms", FilterType::TimeMs),
@@ -459,27 +459,27 @@ pub fn definitions() -> Vec<OpDef> {
             "recording.cores.list",
             C,
             N,
-            RunKey,
+            RecordingKey,
             vec![],
             "core_id ascending",
             0,
-            &["run_key"],
+            &["recording_key"],
         ),
         op(
             "recording.analysis.list",
             C,
             N,
-            JobIdOrRunKey,
+            RunIdOrRecordingKey,
             vec![],
             "",
             0,
-            &["run_key", "job_id"],
+            &["recording_key", "run_id"],
         ),
         op(
             "recording.analysis.section",
             C,
             N,
-            JobIdOrRunKey,
+            RunIdOrRecordingKey,
             vec![
                 enum_filter(
                     "kind",
@@ -505,17 +505,17 @@ pub fn definitions() -> Vec<OpDef> {
             ],
             "the listing's order",
             analysis,
-            &["run_key", "job_id"],
+            &["recording_key", "run_id"],
         ),
         op(
             "recording.analysis.ghidra",
             C,
             N,
-            JobIdOrRunKey,
+            RunIdOrRecordingKey,
             vec![filter("q", FilterType::Query)],
             "address order",
             analysis,
-            &["run_key", "job_id"],
+            &["recording_key", "run_id"],
         ),
         op(
             "recording.custody.list",
@@ -525,13 +525,13 @@ pub fn definitions() -> Vec<OpDef> {
             vec![],
             "seq ascending",
             row,
-            &["run_key", "sha256"],
+            &["recording_key", "sha256"],
         ),
         op(
             "recording.terminal.replay",
             C,
             N,
-            RunKey,
+            RecordingKey,
             vec![],
             "journal order",
             terminal,
@@ -541,21 +541,21 @@ pub fn definitions() -> Vec<OpDef> {
             "recording.artifact.list",
             C,
             N,
-            RunKey,
+            RecordingKey,
             vec![],
             "name ascending",
             0,
-            &["run_key"],
+            &["recording_key"],
         ),
         op(
             "recording.artifact.get",
             C,
             S,
-            RunKey,
+            RecordingKey,
             vec![],
             "",
             0,
-            &["run_key", "artifact_id", "range"],
+            &["recording_key", "artifact_id", "range"],
         ),
     ];
     // Tables, and the sort each table allows. The Triage lists are sortable by
@@ -663,13 +663,13 @@ mod tests {
         for def in definitions() {
             let op = def.info.op.as_str();
             let props = properties(op);
-            let implied: &[&str] = if op == "recording.run.list" {
+            let implied: &[&str] = if op == "recording.list" {
                 &[]
             } else {
                 match def.info.subject {
-                    OpSubject::RunKey => &["run_key"],
-                    OpSubject::JobIdOrRunKey => &["run_key", "job_id"],
-                    OpSubject::Sha256 => &["run_key", "sha256"],
+                    OpSubject::RecordingKey => &["recording_key"],
+                    OpSubject::RunIdOrRecordingKey => &["recording_key", "run_id"],
+                    OpSubject::Sha256 => &["recording_key", "sha256"],
                 }
             };
             let mut allowed: BTreeSet<String> =
@@ -749,7 +749,7 @@ mod tests {
                 .unwrap()
                 .info
         };
-        assert_eq!(by_op("recording.run.list").max_limit, 500);
+        assert_eq!(by_op("recording.list").max_limit, 500);
         assert_eq!(by_op("recording.network.packets").max_limit, 500);
         assert_eq!(by_op("recording.analysis.section").max_limit, 1024);
         assert_eq!(by_op("recording.analysis.ghidra").max_limit, 1024);
@@ -795,7 +795,7 @@ mod tests {
             }
         }
         for op in [
-            "recording.run.list",
+            "recording.list",
             "recording.summary",
             "recording.files.list",
         ] {
@@ -803,10 +803,10 @@ mod tests {
         }
         assert_eq!(
             by_op("recording.analysis.list").subject,
-            OpSubject::JobIdOrRunKey
+            OpSubject::RunIdOrRecordingKey
         );
         assert_eq!(by_op("recording.custody.list").subject, OpSubject::Sha256);
-        assert_eq!(by_op("recording.run.get").subject, OpSubject::RunKey);
+        assert_eq!(by_op("recording.get").subject, OpSubject::RecordingKey);
     }
 
     #[test]
@@ -824,7 +824,7 @@ mod tests {
             .unwrap();
         assert_eq!(files["class"], "T");
         assert_eq!(files["permission"], "runs.see_all");
-        assert_eq!(files["subject"], "run_key");
+        assert_eq!(files["subject"], "recording_key");
         assert!(
             files["tables"]["changed"]["fields"]
                 .as_array()

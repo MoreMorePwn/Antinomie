@@ -16,10 +16,10 @@ use crate::{
         error::{ApiError, ErrorCode},
         event::EventBody,
         failure::{Failure, FailureCode},
-        ids::{JobId, LaneId, Sha256Hex},
-        job::{Job, JobSample, JobState, Outcome, Stage, Submitted, WaitingFor},
+        ids::{LaneId, RunId, Sha256Hex},
         ops::{Caller, Permission},
-        spec::{JobSpec, SampleSource},
+        run::{Outcome, Run, RunSample, RunState, Stage, Submitted, WaitingFor},
+        spec::{RunRequest, SampleSource},
     },
     clock::ManualClock,
     config::{LoadedPreset, Preset, PresetSet, service::OnDuplicate},
@@ -35,7 +35,7 @@ pub(crate) fn sha(n: u8) -> Sha256Hex {
 
 /// The intake of a test: a table of samples.
 pub(crate) struct FakeIntake {
-    pub samples: BTreeMap<String, JobSample>,
+    pub samples: BTreeMap<String, RunSample>,
 }
 
 impl SampleAdmission for FakeIntake {
@@ -45,7 +45,7 @@ impl SampleAdmission for FakeIntake {
         _name: Option<&str>,
         preset: &LoadedPreset,
         _actor: &str,
-    ) -> Result<JobSample, IntakeError> {
+    ) -> Result<RunSample, IntakeError> {
         let err = |code, message: &str| IntakeError {
             code,
             message: message.into(),
@@ -105,7 +105,7 @@ impl Fx {
         for n in 1..=9u8 {
             samples.insert(
                 sha(n).to_string(),
-                JobSample {
+                RunSample {
                     sha256: sha(n),
                     size: 4096,
                     kind: "elf".into(),
@@ -116,7 +116,7 @@ impl Fx {
         }
         samples.insert(
             sha(20).to_string(),
-            JobSample {
+            RunSample {
                 sha256: sha(20),
                 size: 10,
                 kind: "sh".into(),
@@ -126,7 +126,7 @@ impl Fx {
         );
         samples.insert(
             sha(21).to_string(),
-            JobSample {
+            RunSample {
                 sha256: sha(21),
                 size: 70 << 20,
                 kind: "elf".into(),
@@ -153,30 +153,30 @@ impl Fx {
         }
     }
 
-    pub fn submit(&self, spec: JobSpec) -> Submitted {
+    pub fn submit(&self, spec: RunRequest) -> Submitted {
         self.store.submit(&caller(1000), spec, &self.ctx()).unwrap()
     }
 
-    pub fn submit_as(&self, who: &Caller, spec: JobSpec) -> R<Submitted> {
+    pub fn submit_as(&self, who: &Caller, spec: RunRequest) -> R<Submitted> {
         self.store.submit(who, spec, &self.ctx())
     }
 
     /// A queued job for sample `n`, submitted by the owner (every
     /// permission, so a preset that takes dumps runs).
-    pub fn queued(&self, n: u8) -> Job {
+    pub fn queued(&self, n: u8) -> Run {
         let owner = Caller::with_every_permission("local:1000");
         let submitted = self.submit_as(&owner, spec(n)).unwrap();
         assert_eq!(
-            submitted.job.state,
-            JobState::Queued,
+            submitted.run.state,
+            RunState::Queued,
             "{:?}",
-            submitted.job.failure
+            submitted.run.failure
         );
-        submitted.job
+        submitted.run
     }
 
     /// A job that is `running` on lane-1.
-    pub fn running(&self, n: u8) -> Job {
+    pub fn running(&self, n: u8) -> Run {
         let queued = self.queued(n);
         let started = self
             .store
@@ -225,15 +225,15 @@ pub(crate) fn manager() -> Caller {
     caller
 }
 
-pub(crate) fn spec(n: u8) -> JobSpec {
-    JobSpec {
+pub(crate) fn spec(n: u8) -> RunRequest {
+    RunRequest {
         sample: SampleSource {
             sha256: Some(sha(n)),
             path: None,
             upload_id: None,
         },
         name: None,
-        policy: None,
+        preset: None,
         priority: None,
         labels: BTreeMap::new(),
         idempotency_key: None,
@@ -241,8 +241,8 @@ pub(crate) fn spec(n: u8) -> JobSpec {
     }
 }
 
-pub(crate) fn keyed(n: u8, key: &str) -> JobSpec {
-    JobSpec {
+pub(crate) fn keyed(n: u8, key: &str) -> RunRequest {
+    RunRequest {
         idempotency_key: Some(key.into()),
         ..spec(n)
     }
@@ -253,7 +253,7 @@ pub(crate) fn on_dup(preset: &mut Preset, mode: OnDuplicate) {
 }
 
 /// The event types of a job, in order.
-pub(crate) fn kinds(fx: &Fx, job: &JobId) -> Vec<String> {
+pub(crate) fn kinds(fx: &Fx, job: &RunId) -> Vec<String> {
     let mut events = Vec::new();
     let mut after = 0;
     loop {

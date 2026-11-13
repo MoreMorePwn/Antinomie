@@ -11,7 +11,7 @@ use super::service::OnDuplicate;
 use crate::api::{
     assessment::Label,
     failure::FailureCode,
-    job::{PresetBase, Stage},
+    run::{PresetBase, Stage},
     spec::{ReportFormat, Route, RunIn, StaticCheck},
 };
 use antinomie_monitor_core::{
@@ -836,8 +836,8 @@ impl LoadedPreset {
     }
 
     /// What a run records of its preset.
-    pub fn reference(&self) -> crate::api::job::PresetRef {
-        crate::api::job::PresetRef {
+    pub fn reference(&self) -> crate::api::run::PresetRef {
+        crate::api::run::PresetRef {
             name: self.name.clone(),
             digest: self.digest.clone(),
             based_on: self.based_on.clone(),

@@ -25,7 +25,7 @@ use super::{
     board::{LaneBoard, LaneProfile},
 };
 use crate::{
-    api::{error::ApiError, ids::LaneId, job::Job},
+    api::{error::ApiError, ids::LaneId, run::Run},
     clock::Clock,
     store::{Eligibility, Store},
 };
@@ -62,9 +62,9 @@ pub trait LaneRunner {
     fn eligibility(&mut self) -> Eligibility;
     /// Run a claimed job through the lane and the host stages. `to_host` is
     /// called once, when the lane stages are over and the host stages begin.
-    fn run_job(&mut self, job: &Job, to_host: &mut dyn FnMut()) -> JobEnd;
+    fn run_job(&mut self, job: &Run, to_host: &mut dyn FnMut()) -> JobEnd;
     /// The host stages of a job recovery found collected.
-    fn resume(&mut self, job: &Job) -> JobEnd;
+    fn resume(&mut self, job: &Run) -> JobEnd;
     /// The resource governor (design 4.6.3).
     fn govern(&mut self, now_ms: u64);
     /// A lane command, served while no job runs.
@@ -74,12 +74,12 @@ pub trait LaneRunner {
         None
     }
     /// The lane VM of the job's lane group (`[lanes] vm`).
-    fn lane_vm(&self, _job: &Job) -> Option<String> {
+    fn lane_vm(&self, _job: &Run) -> Option<String> {
         None
     }
     /// How many runs the job's client may have running at once
     /// (`max_running`), as the service reads it now.
-    fn running_cap(&self, _job: &Job) -> Option<u32> {
+    fn running_cap(&self, _job: &Run) -> Option<u32> {
         None
     }
 }
@@ -131,7 +131,7 @@ fn set(phase: &Mutex<Phase>, value: Phase) {
 impl LaneLoop<'_> {
     /// Run until the daemon stops or the engine is gone. Jobs in `resume`
     /// (collected before a crash) run their host stages first.
-    pub fn run(&mut self, runner: &mut dyn LaneRunner, resume: &[Job]) {
+    pub fn run(&mut self, runner: &mut dyn LaneRunner, resume: &[Run]) {
         for job in resume {
             if self.controls.interrupted() {
                 return;
@@ -191,7 +191,7 @@ impl LaneLoop<'_> {
             };
             let claimed = {
                 let runner = &*runner;
-                let cap = |job: &Job| runner.running_cap(job);
+                let cap = |job: &Run| runner.running_cap(job);
                 match self.board {
                     None => self
                         .store

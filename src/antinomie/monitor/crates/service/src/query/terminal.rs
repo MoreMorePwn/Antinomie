@@ -28,7 +28,7 @@ impl QueryService {
             cursor: params.cursor.clone(),
         };
         let limit = request.effective_limit(max, max)? as usize;
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         if !opened.dir.join("terminal.journal").is_file() {
             return Err(ApiError::not_recorded("terminal"));
         }

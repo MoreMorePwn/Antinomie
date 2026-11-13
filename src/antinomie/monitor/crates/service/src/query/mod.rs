@@ -23,7 +23,7 @@ pub mod errors;
 pub mod files;
 /// The `generation` of a recording (5.12.2).
 pub mod generation;
-/// `RunKey`, the opaque address of a run (5.12.1).
+/// `RecordingKey`, the opaque address of a run (5.12.1).
 pub mod key;
 /// Row and byte limits, deadlines (5.12.5, 5.12.6).
 pub mod limits;

@@ -236,7 +236,7 @@ impl QueryService {
         if filter.len() > 4096 {
             return Err(ApiError::invalid_argument("filter", "at most 4096 bytes"));
         }
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let binding = opened.binding(&(&params.capture_id, &filter), &serde_json::Value::Null);
         let start = match &request.cursor {
             Some(text) => Cursor::resume(text, binding)?,
@@ -304,7 +304,7 @@ impl QueryService {
         if params.n == 0 {
             return Err(ApiError::invalid_argument("n", "frames count from 1"));
         }
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let session = self.session(&opened, &params.capture_id, cancel)?;
         let index = session.index("")?;
         if params.n > index.packet_count() {

@@ -88,7 +88,7 @@ impl PresetSet {
         &self.lane_group
     }
 
-    /// `policy.list`: every preset, with the permissions its options need,
+    /// `preset.list`: every preset, with the permissions its options need,
     /// the ones `caller` lacks and what this node does not have. `offered_to`
     /// names roles; 0.9.0 callers have none, so every preset is listed.
     pub fn list_for(&self, caller: &Caller) -> Vec<PresetSummary> {
@@ -100,12 +100,13 @@ impl PresetSet {
                     .map(|used| used.permission)
                     .filter(|p| *p != crate::api::ops::Permission::RunsSubmit)
                     .collect();
-                let missing = needs.iter().copied().filter(|p| !caller.has(*p)).collect();
-                let unavailable =
+                let missing: Vec<_> = needs.iter().copied().filter(|p| !caller.has(*p)).collect();
+                let unavailable: Vec<_> =
                     crate::store::admission::node_refusals(&loaded.preset, &self.lane_group)
                         .into_iter()
                         .map(|refusal| refusal.message)
                         .collect();
+                let usable = missing.is_empty() && unavailable.is_empty();
                 PresetSummary {
                     name: loaded.name.clone(),
                     title: loaded.title().to_owned(),
@@ -116,9 +117,28 @@ impl PresetSet {
                     needs,
                     missing,
                     unavailable,
+                    usable,
                 }
             })
             .collect()
+    }
+}
+
+impl PresetSet {
+    /// `preset.get`: the whole preset with the same tables and keys as its
+    /// file, or `None` for an unknown name.
+    pub fn detail(&self, name: &str) -> Option<crate::api::ops::PresetDetail> {
+        let loaded = self.by_name.get(name)?;
+        let settings = match serde_json::to_value(&loaded.preset) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        Some(crate::api::ops::PresetDetail {
+            name: loaded.name.clone(),
+            digest: loaded.digest.clone(),
+            built_in: loaded.built_in,
+            settings,
+        })
     }
 }
 

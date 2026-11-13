@@ -138,8 +138,8 @@ pub struct Run {
 }
 
 impl Run {
-    pub fn key(&self) -> super::key::RunKey {
-        super::key::RunKey::new(&self.vm, &self.boot, &self.id).unwrap()
+    pub fn key(&self) -> super::key::RecordingKey {
+        super::key::RecordingKey::new(&self.vm, &self.boot, &self.id).unwrap()
     }
 }
 

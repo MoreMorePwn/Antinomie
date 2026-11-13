@@ -24,7 +24,7 @@
 use crate::{
     api::{
         event::EventBody,
-        job::{Job, WaitingFor},
+        run::{Run, WaitingFor},
         status::PauseReason,
     },
     config::{Preset, service::Resources},
@@ -194,7 +194,7 @@ impl ResourceChecks<'_> {
 }
 
 impl HostChecks for ResourceChecks<'_> {
-    fn check(&self, _job: &Job, preset: &Preset) -> Result<(), HostProblem> {
+    fn check(&self, _job: &Run, preset: &Preset) -> Result<(), HostProblem> {
         if let Some(shortage) = self.kvm() {
             return Err(HostProblem::Wait(WaitingFor::Dependency, shortage.words()));
         }

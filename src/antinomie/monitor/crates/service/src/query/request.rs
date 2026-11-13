@@ -4,14 +4,14 @@
 //! dispatches on. Every parameter struct refuses unknown fields.
 
 use super::{
-    key::RunKey,
+    key::RecordingKey,
     page::{Page, Single},
     types::*,
 };
 use crate::api::{
     assessment::Tier,
     error::ApiError,
-    ids::{JobId, Sha256Hex},
+    ids::{RunId, Sha256Hex},
     ops::ByteRange,
 };
 use schemars::JsonSchema;
@@ -49,14 +49,14 @@ macro_rules! params {
 }
 
 params!(
-    /// `recording.run.list`. Newest first; not sortable.
+    /// `recording.list`. Newest first; not sortable.
     RunFilter {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         vm_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sample_sha256: Option<Sha256Hex>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        job_id: Option<JobId>,
+        from_run: Option<RunId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         state: Option<RunStateName>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,18 +69,18 @@ params!(
 );
 
 params!(
-    /// `recording.run.get`, `recording.summary`, `recording.network.summary`,
+    /// `recording.get`, `recording.summary`, `recording.network.summary`,
     /// `recording.network.captures`, `recording.cores.list`,
     /// `recording.artifact.list`: the run alone.
     RunParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
     }
 );
 
 params!(
     /// `recording.trace.page`: raw-file byte offset order, not sortable.
     TracePageParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pid: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,7 +97,7 @@ params!(
 params!(
     /// `recording.trace.get`.
     TraceGetParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         #[serde(rename = "ref")]
         call: CallRef,
     }
@@ -106,7 +106,7 @@ params!(
 params!(
     /// `recording.captured.read`: at most 65 536 bytes. Sensitive.
     CapturedReadParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         /// From `Invocation`.
         field: String,
         offset: U64,
@@ -117,7 +117,7 @@ params!(
 params!(
     /// `recording.process.tree`.
     ProcessTreeParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         /// Default: the run's root `pid`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         root_pid: Option<u32>,
@@ -131,7 +131,7 @@ params!(
 params!(
     /// `recording.findings.list`.
     FindingsListParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tier: Option<Tier>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,7 +154,7 @@ params!(
 params!(
     /// `recording.findings.get`.
     FindingGetParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         finding_id: String,
     }
 );
@@ -162,7 +162,7 @@ params!(
 params!(
     /// `recording.indicators.list`.
     IndicatorsListParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<IndicatorKind>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -183,7 +183,7 @@ params!(
 params!(
     /// `recording.files.list`.
     FilesListParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         tab: FileTab,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         q: Option<String>,
@@ -199,7 +199,7 @@ params!(
 params!(
     /// `recording.files.versions`.
     FileVersionsParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         file_id: String,
     }
 );
@@ -207,7 +207,7 @@ params!(
 params!(
     /// `recording.files.content`: at most 1 MiB per call. Sensitive.
     FileContentParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         version_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         range: Option<ByteRange>,
@@ -217,7 +217,7 @@ params!(
 params!(
     /// `recording.network.list`.
     NetworkListParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         tab: NetworkTab,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         q: Option<String>,
@@ -234,7 +234,7 @@ params!(
     /// `recording.network.packets`: frame order; `filter` is a Wireshark
     /// display filter, at most 500 rows per page.
     NetworkPacketsParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         capture_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filter: Option<String>,
@@ -248,7 +248,7 @@ params!(
 params!(
     /// `recording.network.packet`. Sensitive.
     NetworkPacketParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         capture_id: String,
         n: u64,
     }
@@ -257,7 +257,7 @@ params!(
 params!(
     /// `recording.timeline`: `ts_ms` order, not sortable.
     TimelineParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -272,13 +272,13 @@ params!(
 );
 
 params!(
-    /// `recording.analysis.list`: exactly one of `run_key` (the analysis linked
-    /// to a run) or `job_id` (the host-side analysis of a job).
+    /// `recording.analysis.list`: exactly one of `recording_key` (the analysis
+    /// linked to a recording) or `run_id` (the host-side analysis of a run).
     AnalysisListParams {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        run_key: Option<RunKey>,
+        recording_key: Option<RecordingKey>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        job_id: Option<JobId>,
+        run_id: Option<RunId>,
     }
 );
 
@@ -286,9 +286,9 @@ params!(
     /// `recording.analysis.section`: at most 1024 rows per page.
     AnalysisSectionParams {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        run_key: Option<RunKey>,
+        recording_key: Option<RecordingKey>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        job_id: Option<JobId>,
+        run_id: Option<RunId>,
         kind: AnalysisKindName,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         q: Option<String>,
@@ -305,9 +305,9 @@ params!(
     /// `recording.analysis.ghidra`: address order, not sortable.
     AnalysisGhidraParams {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        run_key: Option<RunKey>,
+        recording_key: Option<RecordingKey>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        job_id: Option<JobId>,
+        run_id: Option<RunId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         q: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -318,11 +318,11 @@ params!(
 );
 
 params!(
-    /// `recording.custody.list`: `sha256` instead of `run_key`, or the run's
-    /// sample when `run_key` is given.
+    /// `recording.custody.list`: `sha256` instead of `recording_key`, or the run's
+    /// sample when `recording_key` is given.
     CustodyListParams {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        run_key: Option<RunKey>,
+        recording_key: Option<RecordingKey>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha256: Option<Sha256Hex>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -336,7 +336,7 @@ params!(
     /// `recording.terminal.replay`: at most 256 records; the cursor is a
     /// journal byte offset.
     TerminalReplayParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -348,31 +348,31 @@ params!(
     /// `recording.artifact.get`: at most 1 MiB per call; a capture, memory
     /// dump, core or file copy is sensitive.
     ArtifactGetParams {
-        run_key: RunKey,
+        recording_key: RecordingKey,
         artifact_id: crate::api::ids::RecordingArtifactId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         range: Option<ByteRange>,
     }
 );
 
-/// What an analysis operation reads: a run's analysis or a job's host-side one.
+/// What an analysis operation reads: a run's analysis or a run's host-side one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AnalysisSubject {
-    Run(RunKey),
-    Job(JobId),
+    Recording(RecordingKey),
+    Run(RunId),
 }
 
-/// Exactly one of `run_key` and `job_id`, else `invalid_argument`.
+/// Exactly one of `recording_key` and `run_id`, else `invalid_argument`.
 pub fn analysis_subject(
-    run_key: &Option<RunKey>,
-    job_id: &Option<JobId>,
+    recording_key: &Option<RecordingKey>,
+    run_id: &Option<RunId>,
 ) -> Result<AnalysisSubject, ApiError> {
-    match (run_key, job_id) {
-        (Some(key), None) => Ok(AnalysisSubject::Run(key.clone())),
-        (None, Some(job)) => Ok(AnalysisSubject::Job(job.clone())),
+    match (recording_key, run_id) {
+        (Some(key), None) => Ok(AnalysisSubject::Recording(key.clone())),
+        (None, Some(run)) => Ok(AnalysisSubject::Run(run.clone())),
         _ => Err(ApiError::invalid_argument(
-            "run_key",
-            "exactly one of run_key or job_id is required",
+            "recording_key",
+            "exactly one of recording_key or run_id is required",
         )),
     }
 }
@@ -411,7 +411,7 @@ pub enum RecordingRead {
 
 /// The names reserved by 5.12.9 and the other reserved namespaces: a binding
 /// must not invent operations in them, and the service answers `unsupported`.
-pub const RESERVED_PREFIXES: [&str; 8] = [
+pub const RESERVED_PREFIXES: [&str; 7] = [
     "recording.memory.",
     "recording.disks.",
     "recording.cores.read",
@@ -419,7 +419,6 @@ pub const RESERVED_PREFIXES: [&str; 8] = [
     "recording.cores.strings",
     "recording.screenshot.",
     "recording.export.",
-    "run.",
 ];
 
 macro_rules! read_ops {
@@ -474,8 +473,8 @@ macro_rules! read_ops {
 }
 
 read_ops!(
-    RunList => "recording.run.list": RunFilter,
-    RunGet => "recording.run.get": RunParams,
+    RunList => "recording.list": RunFilter,
+    RunGet => "recording.get": RunParams,
     Summary => "recording.summary": RunParams,
     TracePage => "recording.trace.page": TracePageParams,
     TraceGet => "recording.trace.get": TraceGetParams,
@@ -507,8 +506,8 @@ read_ops!(
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum RecordingReply {
-    Runs(Page<RunInfo>),
-    Run(Single<RunDetail>),
+    Runs(Page<RecordingInfo>),
+    Run(Single<RecordingDetail>),
     Summary(Single<Summary>),
     Trace(Page<TraceRow>),
     Invocation(Single<Invocation>),
@@ -540,7 +539,7 @@ mod tests {
     use serde_json::json;
 
     fn key() -> String {
-        RunKey::new("vm_1", "b2", "r3").unwrap().to_string()
+        RecordingKey::new("vm_1", "b2", "r3").unwrap().to_string()
     }
 
     #[test]
@@ -548,28 +547,30 @@ mod tests {
         let key = key();
         for op in RecordingRead::OPS {
             let params = match *op {
-                "recording.run.list" => json!({}),
+                "recording.list" => json!({}),
                 "recording.trace.get" => {
-                    json!({"run_key": key, "ref": {"stream": "1", "task": "2", "call": "3"}})
+                    json!({"recording_key": key, "ref": {"stream": "1", "task": "2", "call": "3"}})
                 }
                 "recording.captured.read" => {
-                    json!({"run_key": key, "field": "7:path", "offset": "0", "len": 16})
+                    json!({"recording_key": key, "field": "7:path", "offset": "0", "len": 16})
                 }
-                "recording.findings.get" => json!({"run_key": key, "finding_id": "f"}),
-                "recording.files.list" => json!({"run_key": key, "tab": "changed"}),
-                "recording.files.versions" => json!({"run_key": key, "file_id": "f"}),
-                "recording.files.content" => json!({"run_key": key, "version_id": "v"}),
-                "recording.network.list" => json!({"run_key": key, "tab": "dns"}),
-                "recording.network.packets" => json!({"run_key": key, "capture_id": "c"}),
-                "recording.network.packet" => json!({"run_key": key, "capture_id": "c", "n": 1}),
-                "recording.analysis.list" => json!({"job_id": "j_00000000000000000000000000"}),
-                "recording.analysis.section" => json!({"run_key": key, "kind": "strings"}),
-                "recording.analysis.ghidra" => json!({"run_key": key}),
+                "recording.findings.get" => json!({"recording_key": key, "finding_id": "f"}),
+                "recording.files.list" => json!({"recording_key": key, "tab": "changed"}),
+                "recording.files.versions" => json!({"recording_key": key, "file_id": "f"}),
+                "recording.files.content" => json!({"recording_key": key, "version_id": "v"}),
+                "recording.network.list" => json!({"recording_key": key, "tab": "dns"}),
+                "recording.network.packets" => json!({"recording_key": key, "capture_id": "c"}),
+                "recording.network.packet" => {
+                    json!({"recording_key": key, "capture_id": "c", "n": 1})
+                }
+                "recording.analysis.list" => json!({"run_id": "j_00000000000000000000000000"}),
+                "recording.analysis.section" => json!({"recording_key": key, "kind": "strings"}),
+                "recording.analysis.ghidra" => json!({"recording_key": key}),
                 "recording.custody.list" => json!({"sha256": "a".repeat(64)}),
                 "recording.artifact.get" => {
-                    json!({"run_key": key, "artifact_id": "ra_00000000000000000000000000"})
+                    json!({"recording_key": key, "artifact_id": "ra_00000000000000000000000000"})
                 }
-                _ => json!({"run_key": key}),
+                _ => json!({"recording_key": key}),
             };
             let read =
                 RecordingRead::parse(op, params.clone()).unwrap_or_else(|e| panic!("{op}: {e:?}"));
@@ -581,8 +582,8 @@ mod tests {
     #[test]
     fn unknown_fields_are_invalid_argument() {
         let error = RecordingRead::parse(
-            "recording.run.get",
-            json!({"run_key": key(), "colour": "red"}),
+            "recording.get",
+            json!({"recording_key": key(), "colour": "red"}),
         )
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidArgument);
@@ -591,8 +592,8 @@ mod tests {
 
     #[test]
     fn a_run_key_the_service_did_not_make_is_refused() {
-        let error =
-            RecordingRead::parse("recording.run.get", json!({"run_key": "../../etc"})).unwrap_err();
+        let error = RecordingRead::parse("recording.get", json!({"recording_key": "../../etc"}))
+            .unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidArgument);
     }
 
@@ -602,7 +603,7 @@ mod tests {
             "recording.memory.dumps",
             "recording.export.zip",
             "recording.cores.read",
-            "run.list",
+            "recording.screenshot.list",
         ] {
             let error = RecordingRead::parse(reserved, json!({})).unwrap_err();
             assert_eq!(error.code, ErrorCode::Unsupported, "{reserved}");
@@ -613,16 +614,16 @@ mod tests {
     }
 
     #[test]
-    fn the_analysis_subject_is_exactly_one_of_run_or_job() {
-        let run = RunKey::new("v", "b", "r").ok();
-        let job = Some(JobId::from_parts(1, [0; 10]));
+    fn the_analysis_subject_is_exactly_one_of_recording_or_run() {
+        let run = RecordingKey::new("v", "b", "r").ok();
+        let job = Some(RunId::from_parts(1, [0; 10]));
         assert!(matches!(
             analysis_subject(&run, &None),
-            Ok(AnalysisSubject::Run(_))
+            Ok(AnalysisSubject::Recording(_))
         ));
         assert!(matches!(
             analysis_subject(&None, &job),
-            Ok(AnalysisSubject::Job(_))
+            Ok(AnalysisSubject::Run(_))
         ));
         assert!(analysis_subject(&run, &job).is_err());
         assert!(analysis_subject(&None, &None).is_err());

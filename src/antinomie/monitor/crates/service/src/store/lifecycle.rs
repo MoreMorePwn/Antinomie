@@ -13,9 +13,9 @@ use crate::api::{
     error::{ApiError, ErrorCode},
     event::{EventBody, StageStatus},
     failure::{Failure, FailureCode},
-    ids::{JobId, LaneId},
-    job::{Job, JobState, Outcome, Stage, WaitingFor},
+    ids::{LaneId, RunId},
     ops::{Caller, Permission},
+    run::{Outcome, Run, RunState, Stage, WaitingFor},
 };
 use rusqlite::OptionalExtension;
 
@@ -45,7 +45,7 @@ pub enum RequeueKind {
 
 /// The state of a row, read inside a transaction.
 pub(crate) struct Cur {
-    pub state: JobState,
+    pub state: RunState,
     pub stage: Option<Stage>,
     pub waiting_for: Option<WaitingFor>,
     pub attempt: u32,
@@ -56,7 +56,7 @@ pub(crate) struct Cur {
     pub client_id: String,
 }
 
-pub(crate) fn current(tx: &Tx<'_>, id: &JobId) -> R<Cur> {
+pub(crate) fn current(tx: &Tx<'_>, id: &RunId) -> R<Cur> {
     let row = tx
         .tx
         .query_row(
@@ -79,7 +79,7 @@ pub(crate) fn current(tx: &Tx<'_>, id: &JobId) -> R<Cur> {
         )
         .optional()
         .map_err(db)?
-        .ok_or_else(|| ApiError::not_found("job"))?;
+        .ok_or_else(|| ApiError::not_found("run"))?;
     Ok(Cur {
         state: from_name(&row.0)?,
         stage: row.1.as_deref().map(from_name).transpose()?,
@@ -93,7 +93,7 @@ pub(crate) fn current(tx: &Tx<'_>, id: &JobId) -> R<Cur> {
     })
 }
 
-pub(crate) fn conflict(id: &JobId, from: JobState, wanted: &str) -> ApiError {
+pub(crate) fn conflict(id: &RunId, from: RunState, wanted: &str) -> ApiError {
     ApiError::new(
         ErrorCode::Conflict,
         format!("job {id} is {}; it cannot {wanted}", name_of(&from)),
@@ -101,7 +101,7 @@ pub(crate) fn conflict(id: &JobId, from: JobState, wanted: &str) -> ApiError {
     .with_detail("reason", serde_json::json!("invalid_transition"))
 }
 
-fn require_edge(id: &JobId, from: JobState, to: JobState, wanted: &str) -> R<()> {
+fn require_edge(id: &RunId, from: RunState, to: RunState, wanted: &str) -> R<()> {
     if machine::allowed(from, to) {
         Ok(())
     } else {
@@ -110,8 +110,8 @@ fn require_edge(id: &JobId, from: JobState, to: JobState, wanted: &str) -> R<()>
 }
 
 /// Close the stage that is open for this attempt, with a status; emits
-/// `job.stage`. Does nothing when none is open.
-fn close_stage(tx: &mut Tx<'_>, id: &JobId, cur: &Cur, status: StageStatus) -> R<()> {
+/// `run.stage`. Does nothing when none is open.
+fn close_stage(tx: &mut Tx<'_>, id: &RunId, cur: &Cur, status: StageStatus) -> R<()> {
     let Some(stage) = cur.stage else {
         return Ok(());
     };
@@ -144,7 +144,7 @@ fn close_stage(tx: &mut Tx<'_>, id: &JobId, cur: &Cur, status: StageStatus) -> R
     let duration_ms = tx.now.saturating_sub(started);
     tx.emit(
         Some(id),
-        EventBody::JobStage {
+        EventBody::RunStage {
             stage,
             status,
             duration_ms: Some(duration_ms),
@@ -154,7 +154,7 @@ fn close_stage(tx: &mut Tx<'_>, id: &JobId, cur: &Cur, status: StageStatus) -> R
 
 fn close_attempt(
     tx: &mut Tx<'_>,
-    id: &JobId,
+    id: &RunId,
     cur: &Cur,
     code: Option<FailureCode>,
     detail: Option<&str>,
@@ -180,12 +180,12 @@ fn close_attempt(
 /// the wait expiry and recovery.
 pub(crate) fn terminate(
     tx: &mut Tx<'_>,
-    id: &JobId,
+    id: &RunId,
     cur: &Cur,
     outcome: Outcome,
     failure: Option<Failure>,
 ) -> R<()> {
-    let to = JobState::from(outcome);
+    let to = RunState::from(outcome);
     require_edge(id, cur.state, to, &format!("become {}", name_of(&to)))?;
     let failure = match (outcome, failure) {
         (Outcome::Succeeded | Outcome::Partial, Some(_)) => {
@@ -217,7 +217,7 @@ pub(crate) fn terminate(
         StageStatus::Failed
     };
     close_stage(tx, id, cur, stage_status)?;
-    if cur.state != JobState::Queued {
+    if cur.state != RunState::Queued {
         close_attempt(tx, id, cur, failure.as_ref().map(|f| f.code), None)?;
     }
     tx.tx
@@ -236,7 +236,7 @@ pub(crate) fn terminate(
         .map_err(db)?;
     tx.emit(
         Some(id),
-        EventBody::JobState {
+        EventBody::RunState {
             state: to,
             stage: None,
             waiting_for: None,
@@ -244,10 +244,10 @@ pub(crate) fn terminate(
             queue_position: None,
         },
     )?;
-    tx.emit(Some(id), EventBody::JobFinished { outcome, failure })
+    tx.emit(Some(id), EventBody::RunFinished { outcome, failure })
 }
 
-fn set_waiting(tx: &mut Tx<'_>, id: &JobId, cur: &Cur, wait: Option<WaitingFor>) -> R<()> {
+fn set_waiting(tx: &mut Tx<'_>, id: &RunId, cur: &Cur, wait: Option<WaitingFor>) -> R<()> {
     if cur.waiting_for == wait {
         return Ok(());
     }
@@ -272,8 +272,8 @@ fn set_waiting(tx: &mut Tx<'_>, id: &JobId, cur: &Cur, wait: Option<WaitingFor>)
     let position = queue_position(&tx.tx, id.as_str(), priority, created)?;
     tx.emit(
         Some(id),
-        EventBody::JobState {
-            state: JobState::Queued,
+        EventBody::RunState {
+            state: RunState::Queued,
             stage: None,
             waiting_for: wait,
             attempt: cur.attempt,
@@ -292,10 +292,10 @@ fn claim_in(
     lane: &LaneId,
     paused: bool,
     now: u64,
-    candidates: Vec<Job>,
-    running_cap: &dyn Fn(&Job) -> Option<u32>,
-    eligible: &mut dyn FnMut(&Job) -> Eligibility,
-) -> R<Option<Job>> {
+    candidates: Vec<Run>,
+    running_cap: &dyn Fn(&Run) -> Option<u32>,
+    eligible: &mut dyn FnMut(&Run) -> Eligibility,
+) -> R<Option<Run>> {
     for job in candidates {
         let cur = current(tx, &job.id)?;
         let backoff_until: Option<u64> = tx
@@ -353,8 +353,8 @@ impl Store {
     pub fn claim_next(
         &self,
         lane: &LaneId,
-        eligible: &mut dyn FnMut(&Job) -> Eligibility,
-    ) -> R<Option<Job>> {
+        eligible: &mut dyn FnMut(&Run) -> Eligibility,
+    ) -> R<Option<Run>> {
         self.claim_next_within(lane, &|_| None, eligible)
     }
 
@@ -364,9 +364,9 @@ impl Store {
     pub fn claim_next_within(
         &self,
         lane: &LaneId,
-        running_cap: &dyn Fn(&Job) -> Option<u32>,
-        eligible: &mut dyn FnMut(&Job) -> Eligibility,
-    ) -> R<Option<Job>> {
+        running_cap: &dyn Fn(&Run) -> Option<u32>,
+        eligible: &mut dyn FnMut(&Run) -> Eligibility,
+    ) -> R<Option<Run>> {
         let paused = self.pause_reason()?.is_some();
         self.write(|tx| {
             let now = tx.now;
@@ -395,10 +395,10 @@ impl Store {
     }
 
     /// Enter a stage: the open stage (if any) finishes, the new one starts.
-    pub fn begin_stage(&self, id: &JobId, stage: Stage) -> R<Job> {
+    pub fn begin_stage(&self, id: &RunId, stage: Stage) -> R<Run> {
         self.write(|tx| {
             let cur = current(tx, id)?;
-            if cur.state != JobState::Running {
+            if cur.state != RunState::Running {
                 return Err(conflict(id, cur.state, "start a stage"));
             }
             // A stage may be entered again in the same attempt only if its
@@ -444,8 +444,8 @@ impl Store {
                 .map_err(db)?;
             tx.emit(
                 Some(id),
-                EventBody::JobState {
-                    state: JobState::Running,
+                EventBody::RunState {
+                    state: RunState::Running,
                     stage: Some(stage),
                     waiting_for: None,
                     attempt: cur.attempt,
@@ -459,10 +459,10 @@ impl Store {
 
     /// End the current stage with a status (`finished`, `skipped`, `failed`).
     /// The job keeps naming that stage until the next `begin_stage` or the end.
-    pub fn end_stage(&self, id: &JobId, status: StageStatus) -> R<Job> {
+    pub fn end_stage(&self, id: &RunId, status: StageStatus) -> R<Run> {
         self.write(|tx| {
             let cur = current(tx, id)?;
-            if !matches!(cur.state, JobState::Running | JobState::Cancelling) {
+            if !matches!(cur.state, RunState::Running | RunState::Cancelling) {
                 return Err(conflict(id, cur.state, "end a stage"));
             }
             close_stage(tx, id, &cur, status)?;
@@ -472,7 +472,7 @@ impl Store {
 
     /// End a job: `succeeded` or `partial` from `running`; `failed` from
     /// `queued`, `running` or `cancelling`; `cancelled` from `cancelling`.
-    pub fn finish(&self, id: &JobId, outcome: Outcome, failure: Option<Failure>) -> R<Job> {
+    pub fn finish(&self, id: &RunId, outcome: Outcome, failure: Option<Failure>) -> R<Run> {
         self.write(|tx| {
             let cur = current(tx, id)?;
             terminate(tx, id, &cur, outcome, failure)?;
@@ -480,11 +480,11 @@ impl Store {
         })
     }
 
-    /// `job.cancel`. A queued job is `cancelled` at once; a running one goes to
+    /// `run.cancel`. A queued job is `cancelled` at once; a running one goes to
     /// `cancelling` and the lane unwinds it; a `cancelling` one is returned as
     /// it is; a finished one is a `conflict`. The caller's own job needs
     /// `runs.submit`, anyone's `runs.manage_any` (else `permission_denied`).
-    pub fn cancel(&self, id: &JobId, reason: Option<&str>, caller: &Caller) -> R<Job> {
+    pub fn cancel(&self, id: &RunId, reason: Option<&str>, caller: &Caller) -> R<Run> {
         self.write(|tx| {
             let cur = current(tx, id)?;
             if cur.client_id == caller.client_id {
@@ -494,15 +494,15 @@ impl Store {
             }
             let reason = reason.map(|r| r.chars().take(256).collect::<String>());
             match cur.state {
-                JobState::Queued => {
+                RunState::Queued => {
                     let mut cur = cur;
                     cur.cancel_reason = reason;
                     terminate(tx, id, &cur, Outcome::Cancelled, None)?;
                 }
-                JobState::Running => {
+                RunState::Running => {
                     request_cancel(tx, id, &cur, reason.as_deref(), false)?;
                 }
-                JobState::Cancelling => {
+                RunState::Cancelling => {
                     // A user's request outranks the daemon's own: the job is
                     // cancelled, not put back.
                     if cur.cancel_shutdown {
@@ -523,10 +523,10 @@ impl Store {
     /// The daemon is stopping (2.7, `shutdown = cancel`): `running` becomes
     /// `cancelling`, and [`Self::requeue`] with [`RequeueKind::Shutdown`]
     /// puts it back once the lane has unwound it.
-    pub fn cancel_for_shutdown(&self, id: &JobId) -> R<Job> {
+    pub fn cancel_for_shutdown(&self, id: &RunId) -> R<Run> {
         self.write(|tx| {
             let cur = current(tx, id)?;
-            if cur.state != JobState::Running {
+            if cur.state != RunState::Running {
                 return Err(conflict(id, cur.state, "be stopped for shutdown"));
             }
             request_cancel(tx, id, &cur, Some("service_shutdown"), true)?;
@@ -536,17 +536,17 @@ impl Store {
 
     /// Put a `running` job back in the queue (`running -> queued`), or a job
     /// `cancelling` for shutdown (`cancelling -> queued`). Emits
-    /// `job.requeued` then `job.state`. A [`RequeueKind::Retry`] needs an
+    /// `run.requeued` then `run.state`. A [`RequeueKind::Retry`] needs an
     /// attempt left, else it is a `conflict` and the caller fails the job.
     /// `backoff_s` makes the job wait (`waiting_for: backoff`).
     pub fn requeue(
         &self,
-        id: &JobId,
+        id: &RunId,
         kind: RequeueKind,
         reason: &str,
         failure: Option<&Failure>,
         backoff_s: Option<u32>,
-    ) -> R<Job> {
+    ) -> R<Run> {
         self.write(|tx| {
             let cur = current(tx, id)?;
             requeue_in(tx, id, &cur, kind, reason, failure, backoff_s)?;
@@ -557,7 +557,7 @@ impl Store {
     /// A running job cannot start yet and says why (design 4.1: waits are
     /// `queued` with `waiting_for`, not failures): back to the queue with the
     /// reason, the attempt not counted.
-    pub fn requeue_waiting(&self, id: &JobId, waiting_for: WaitingFor, reason: &str) -> R<Job> {
+    pub fn requeue_waiting(&self, id: &RunId, waiting_for: WaitingFor, reason: &str) -> R<Run> {
         self.write(|tx| {
             let cur = current(tx, id)?;
             requeue_in(
@@ -576,7 +576,7 @@ impl Store {
 
     /// The failure codes of the job's finished attempts, oldest first
     /// (4.7.2: a sample that kills the guest twice is final).
-    pub fn previous_failures(&self, id: &JobId) -> R<Vec<FailureCode>> {
+    pub fn previous_failures(&self, id: &RunId) -> R<Vec<FailureCode>> {
         {
             let conn = self.conn();
             let mut statement = conn
@@ -603,7 +603,7 @@ impl Store {
     /// Whether the cancel the job is `cancelling` for is the daemon's own
     /// shutdown (it goes back to the queue) and not a user's (it ends
     /// `cancelled`).
-    pub fn cancel_is_shutdown(&self, id: &JobId) -> R<bool> {
+    pub fn cancel_is_shutdown(&self, id: &RunId) -> R<bool> {
         self.conn()
             .query_row(
                 "SELECT cancel_shutdown FROM jobs WHERE id = ?1",
@@ -615,7 +615,7 @@ impl Store {
 
     /// Fail queued jobs that waited past `wait_s` for resources, a dependency,
     /// quota or a pending disk layer (5.6). The failure code is the wait's.
-    pub fn expire_waits(&self) -> R<Vec<Job>> {
+    pub fn expire_waits(&self) -> R<Vec<Run>> {
         self.write(|tx| {
             let rows: Vec<(String, String, u64, u64)> = {
                 let mut statement = tx
@@ -638,7 +638,7 @@ impl Store {
                 if tx.now < since.saturating_add(wait_s.saturating_mul(1000)) {
                     continue;
                 }
-                let id = JobId::try_from(id).map_err(internal)?;
+                let id = RunId::try_from(id).map_err(internal)?;
                 let wait: WaitingFor = from_name(&wait)?;
                 let code = match wait {
                     WaitingFor::Dependency => FailureCode::DependencyMissing,
@@ -704,8 +704,8 @@ impl Store {
     }
 }
 
-fn start(tx: &mut Tx<'_>, id: &JobId, cur: &Cur, lane: &LaneId) -> R<()> {
-    require_edge(id, cur.state, JobState::Running, "start")?;
+fn start(tx: &mut Tx<'_>, id: &RunId, cur: &Cur, lane: &LaneId) -> R<()> {
+    require_edge(id, cur.state, RunState::Running, "start")?;
     let attempt = cur.attempt + 1;
     tx.tx
         .execute(
@@ -724,8 +724,8 @@ fn start(tx: &mut Tx<'_>, id: &JobId, cur: &Cur, lane: &LaneId) -> R<()> {
     insert_stage(tx, id, attempt, Stage::Prechecks)?;
     tx.emit(
         Some(id),
-        EventBody::JobState {
-            state: JobState::Running,
+        EventBody::RunState {
+            state: RunState::Running,
             stage: Some(Stage::Prechecks),
             waiting_for: None,
             attempt,
@@ -735,7 +735,7 @@ fn start(tx: &mut Tx<'_>, id: &JobId, cur: &Cur, lane: &LaneId) -> R<()> {
     emit_stage_started(tx, id, Stage::Prechecks)
 }
 
-fn insert_stage(tx: &mut Tx<'_>, id: &JobId, attempt: u32, stage: Stage) -> R<()> {
+fn insert_stage(tx: &mut Tx<'_>, id: &RunId, attempt: u32, stage: Stage) -> R<()> {
     tx.tx
         .execute(
             "INSERT INTO stages(job_id, attempt, stage, status, started_ms)
@@ -746,10 +746,10 @@ fn insert_stage(tx: &mut Tx<'_>, id: &JobId, attempt: u32, stage: Stage) -> R<()
     Ok(())
 }
 
-fn emit_stage_started(tx: &mut Tx<'_>, id: &JobId, stage: Stage) -> R<()> {
+fn emit_stage_started(tx: &mut Tx<'_>, id: &RunId, stage: Stage) -> R<()> {
     tx.emit(
         Some(id),
-        EventBody::JobStage {
+        EventBody::RunStage {
             stage,
             status: StageStatus::Started,
             duration_ms: None,
@@ -759,12 +759,12 @@ fn emit_stage_started(tx: &mut Tx<'_>, id: &JobId, stage: Stage) -> R<()> {
 
 fn request_cancel(
     tx: &mut Tx<'_>,
-    id: &JobId,
+    id: &RunId,
     cur: &Cur,
     reason: Option<&str>,
     shutdown: bool,
 ) -> R<()> {
-    require_edge(id, cur.state, JobState::Cancelling, "be cancelled")?;
+    require_edge(id, cur.state, RunState::Cancelling, "be cancelled")?;
     tx.tx
         .execute(
             "UPDATE jobs SET state = 'cancelling', cancel_reason = ?2, cancel_shutdown = ?3
@@ -774,8 +774,8 @@ fn request_cancel(
         .map_err(db)?;
     tx.emit(
         Some(id),
-        EventBody::JobState {
-            state: JobState::Cancelling,
+        EventBody::RunState {
+            state: RunState::Cancelling,
             stage: cur.stage,
             waiting_for: None,
             attempt: cur.attempt,
@@ -786,15 +786,15 @@ fn request_cancel(
 
 pub(crate) fn requeue_in(
     tx: &mut Tx<'_>,
-    id: &JobId,
+    id: &RunId,
     cur: &Cur,
     kind: RequeueKind,
     reason: &str,
     failure: Option<&Failure>,
     backoff_s: Option<u32>,
 ) -> R<()> {
-    require_edge(id, cur.state, JobState::Queued, "be put back in the queue")?;
-    if cur.state == JobState::Cancelling && !cur.cancel_shutdown {
+    require_edge(id, cur.state, RunState::Queued, "be put back in the queue")?;
+    if cur.state == RunState::Cancelling && !cur.cancel_shutdown {
         // A cancel the user asked for ends in `cancelled`, never in the queue.
         return Err(conflict(id, cur.state, "be put back in the queue"));
     }
@@ -826,7 +826,7 @@ pub(crate) fn requeue_in(
         .map_err(db)?;
     tx.emit(
         Some(id),
-        EventBody::JobRequeued {
+        EventBody::RunRequeued {
             attempt: cur.attempt,
             reason: reason.to_owned(),
         },
@@ -842,8 +842,8 @@ pub(crate) fn requeue_in(
     let position = queue_position(&tx.tx, id.as_str(), priority, created)?;
     tx.emit(
         Some(id),
-        EventBody::JobState {
-            state: JobState::Queued,
+        EventBody::RunState {
+            state: RunState::Queued,
             stage: None,
             waiting_for: wait,
             attempt: cur.attempt,

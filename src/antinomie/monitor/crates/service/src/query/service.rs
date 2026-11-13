@@ -11,7 +11,7 @@ use super::{
     context::ReadContext,
     cursor::{CursorBinding, Generation, stable_hash},
     generation::generation_of,
-    key::RunKey,
+    key::RecordingKey,
     limits::QuerySettings,
     page::{Page, Single},
     phase::{LayerSource, PhaseInfo, detect},
@@ -22,9 +22,9 @@ use super::{
 };
 use crate::api::{
     error::{ApiError, ErrorCode},
-    ids::JobId,
-    job::RecordingPhase,
+    ids::RunId,
     ops::Permission,
+    run::RecordingPhase,
 };
 use crate::daemon::lanes::read_locations;
 use antinomie_monitor_core::{
@@ -39,9 +39,9 @@ use std::{
 /// without one answers `not_found` for a `job_id` and lists runs without jobs.
 pub trait JobIndex: Send + Sync {
     /// The job of this service that made the run.
-    fn job_of_run(&self, vm_id: &str, boot_id: &str, run_id: &str) -> Option<JobId>;
+    fn job_of_run(&self, vm_id: &str, boot_id: &str, run_id: &str) -> Option<RunId>;
     /// The folder of the host-side analysis of a job (`<data>/analyses/<id>`).
-    fn analysis_directory(&self, job: &JobId) -> Option<PathBuf>;
+    fn analysis_directory(&self, job: &RunId) -> Option<PathBuf>;
 }
 
 /// The read-only recording queries.
@@ -49,18 +49,26 @@ pub trait QueryApi: Send + Sync {
     /// One operation of 5.12.3.
     fn read(&self, request: RecordingRead, ctx: &ReadContext) -> Result<RecordingReply, ApiError>;
 
-    /// `recording.run.list`.
-    fn run_list(&self, filter: RunFilter, ctx: &ReadContext) -> Result<Page<RunInfo>, ApiError> {
+    /// `recording.list`.
+    fn run_list(
+        &self,
+        filter: RunFilter,
+        ctx: &ReadContext,
+    ) -> Result<Page<RecordingInfo>, ApiError> {
         match self.read(RecordingRead::RunList(filter), ctx)? {
             RecordingReply::Runs(page) => Ok(page),
             _ => Err(ApiError::new(ErrorCode::Internal, "unexpected reply shape")),
         }
     }
 
-    /// `recording.run.get`.
-    fn run_get(&self, run: &RunKey, ctx: &ReadContext) -> Result<Single<RunDetail>, ApiError> {
+    /// `recording.get`.
+    fn run_get(
+        &self,
+        run: &RecordingKey,
+        ctx: &ReadContext,
+    ) -> Result<Single<RecordingDetail>, ApiError> {
         let request = RecordingRead::RunGet(RunParams {
-            run_key: run.clone(),
+            recording_key: run.clone(),
         });
         match self.read(request, ctx)? {
             RecordingReply::Run(single) => Ok(single),
@@ -137,21 +145,21 @@ impl QueryService {
     }
 
     /// One line for a sensitive read of `run`.
-    pub(super) fn audit_read(&self, ctx: &ReadContext, op: &str, run: &RunKey, size: u64) {
+    pub(super) fn audit_read(&self, ctx: &ReadContext, op: &str, run: &RecordingKey, size: u64) {
         let (vm, boot, id) = run.parts();
         crate::audit::record(
             self.audit.as_ref(),
             &ctx.caller.client_id,
             op,
-            "run",
+            "recording",
             &format!("{vm}:{boot}:{id}"),
             size,
         );
     }
 
     /// Whether a read of the run is open now. Retention (`auto gc`) and
-    /// `job.delete --with-recording` skip such a run.
-    pub fn run_is_open(&self, run: &RunKey) -> bool {
+    /// `run.delete --with-recording` skip such a run.
+    pub fn run_is_open(&self, run: &RecordingKey) -> bool {
         self.leases.held(run)
     }
 
@@ -184,7 +192,7 @@ impl QueryService {
     /// for as long as the result lives. VM and run ids carry 128 random bits,
     /// so a key names one run; a key found in two lanes' folders (a VM folder
     /// copied by hand) is refused, never guessed.
-    pub(super) fn open_run(&self, key: &RunKey) -> Result<Opened, ApiError> {
+    pub(super) fn open_run(&self, key: &RecordingKey) -> Result<Opened, ApiError> {
         let (vm_id, boot_id, run_id) = key.parts();
         let mut found = Vec::new();
         for location in self.locations()? {
@@ -205,7 +213,7 @@ impl QueryService {
                     found.len()
                 ),
             )
-            .with_field("run_key"));
+            .with_field("recording_key"));
         }
         let (location, run) = found.pop().ok_or_else(|| ApiError::not_found("run"))?;
         // Open once, canonical: every later file is opened under this path.
@@ -239,7 +247,7 @@ impl QueryService {
 
 /// One opened run: what every operation on it needs.
 pub struct Opened {
-    pub key: RunKey,
+    pub key: RecordingKey,
     pub run: RunSummary,
     pub location: VmLocations,
     /// The canonical run folder.
@@ -351,7 +359,7 @@ impl QueryApi for QueryService {
                 ctx.require(Permission::EvidenceView)?;
                 let reply = self.pool.run(light, ctx, |c| self.captured_read(&p, c))?;
                 if let Some(bytes) = &reply.value {
-                    self.audit_read(ctx, "recording.captured.read", &p.run_key, bytes.len);
+                    self.audit_read(ctx, "recording.captured.read", &p.recording_key, bytes.len);
                 }
                 Ok(P::Bytes(reply))
             }
@@ -414,7 +422,7 @@ impl QueryApi for QueryService {
                     self.audit_read(
                         ctx,
                         "recording.network.packet",
-                        &p.run_key,
+                        &p.recording_key,
                         u64::from(packet.frame_len),
                     );
                 }
@@ -450,7 +458,7 @@ impl QueryApi for QueryService {
                 ctx.require(Permission::EvidenceView)?;
                 let reply = self.pool.run(heavy, ctx, |_| self.files_content(&p, ctx))?;
                 if let Some(bytes) = &reply.value {
-                    self.audit_read(ctx, "recording.files.content", &p.run_key, bytes.len);
+                    self.audit_read(ctx, "recording.files.content", &p.recording_key, bytes.len);
                 }
                 Ok(P::Bytes(reply))
             }

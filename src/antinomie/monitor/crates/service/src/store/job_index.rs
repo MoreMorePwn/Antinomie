@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The job store as the query reads' job index (design 5.12.1): the job that
-//! made a run, from `jobs.run_key`, which the pipeline sets with the job's
+//! made a run, from `jobs.recording_key`, which the pipeline sets with the job's
 //! `recording`. The daemon and the CLI's direct mode use the same index, so
 //! `run list` shows the same `job_id` and `--job` finds the same runs.
 
 use super::Store;
 use crate::{
-    api::ids::JobId,
-    query::{JobIndex, key::RunKey},
+    api::ids::RunId,
+    query::{JobIndex, key::RecordingKey},
 };
 use std::{
     path::{Path, PathBuf},
@@ -39,8 +39,8 @@ impl StoreJobIndex {
 }
 
 impl JobIndex for StoreJobIndex {
-    fn job_of_run(&self, vm_id: &str, boot_id: &str, run_id: &str) -> Option<JobId> {
-        let key = RunKey::new(vm_id, boot_id, run_id).ok()?;
+    fn job_of_run(&self, vm_id: &str, boot_id: &str, run_id: &str) -> Option<RunId> {
+        let key = RecordingKey::new(vm_id, boot_id, run_id).ok()?;
         let conn = self.store.conn();
         // A run belongs to one attempt; if a repeat ever shares it, the newest
         // job (ids are time-ordered) is the one named.
@@ -51,10 +51,10 @@ impl JobIndex for StoreJobIndex {
                 |row| row.get(0),
             )
             .ok()?;
-        JobId::try_from(id).ok()
+        RunId::try_from(id).ok()
     }
 
-    fn analysis_directory(&self, job: &JobId) -> Option<PathBuf> {
+    fn analysis_directory(&self, job: &RunId) -> Option<PathBuf> {
         let folder = self.store.job_dir(job).join("artifacts");
         folder.is_dir().then_some(folder)
     }

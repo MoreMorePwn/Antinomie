@@ -17,7 +17,7 @@ use crate::{
     api::{
         assessment::Tier,
         error::{ApiError, ErrorCode},
-        job::RecordingPhase,
+        run::RecordingPhase,
     },
     verdict::Facts,
 };
@@ -164,7 +164,7 @@ impl QueryService {
 
     /// `recording.summary`.
     pub(super) fn summary(&self, params: &RunParams) -> Result<Single<Summary>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         match self.triage_scan(&opened)? {
             Err(building) => Ok(Single::building(
                 opened.generation,
@@ -189,7 +189,7 @@ impl QueryService {
     ) -> Result<Page<Finding>, ApiError> {
         tables::check_sort(params.sort.as_ref(), FINDING_FIELDS)?;
         let compiled = tables::compile_q(params.q.as_deref(), FINDING_FIELDS)?;
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let binding = opened.binding(
             &(
                 params.tier,
@@ -253,7 +253,7 @@ impl QueryService {
         &self,
         params: &FindingGetParams,
     ) -> Result<Single<FindingDetail>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let scanned = match self.triage_scan(&opened)? {
             Err(building) => {
                 return Ok(Single::building(
@@ -297,7 +297,7 @@ impl QueryService {
         let fields = ioc_view::FIELDS;
         tables::check_sort(params.sort.as_ref(), fields)?;
         let compiled = tables::compile_q(params.q.as_deref(), fields)?;
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let binding = opened.binding(
             &(params.kind, params.matched, &params.q, params.defang),
             &params.sort,

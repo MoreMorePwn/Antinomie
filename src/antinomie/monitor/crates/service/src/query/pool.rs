@@ -7,10 +7,10 @@
 //! when the deadline passes and the read answers `unavailable/read_timeout`.
 //! A client that goes away sets the same flag; the read answers `unavailable`.
 //!
-//! Also here: the retention lease, so `auto gc` and `job.delete
+//! Also here: the retention lease, so `auto gc` and `run.delete
 //! --with-recording` skip a run that has an open read (5.12.2).
 
-use super::{context::ReadContext, key::RunKey, limits::QuerySettings};
+use super::{context::ReadContext, key::RecordingKey, limits::QuerySettings};
 use crate::api::error::{ApiError, ErrorCode};
 use std::{
     collections::HashMap,
@@ -195,11 +195,11 @@ fn watched<T>(
 /// run (design 5.12.2, "Not while deleting").
 #[derive(Default)]
 pub struct Leases {
-    open: Mutex<HashMap<RunKey, usize>>,
+    open: Mutex<HashMap<RecordingKey, usize>>,
 }
 
 impl Leases {
-    pub fn take(self: &Arc<Self>, key: &RunKey) -> Lease {
+    pub fn take(self: &Arc<Self>, key: &RecordingKey) -> Lease {
         *self
             .open
             .lock()
@@ -213,7 +213,7 @@ impl Leases {
     }
 
     /// Whether a read of the run is open now.
-    pub fn held(&self, key: &RunKey) -> bool {
+    pub fn held(&self, key: &RecordingKey) -> bool {
         self.open
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -225,7 +225,7 @@ impl Leases {
 /// An open read of one run; dropping it ends the lease.
 pub struct Lease {
     leases: Arc<Leases>,
-    key: RunKey,
+    key: RecordingKey,
 }
 
 impl Drop for Lease {
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn a_lease_is_held_while_a_read_is_open() {
         let leases = Arc::new(Leases::default());
-        let key = RunKey::new("vm", "b", "r").unwrap();
+        let key = RecordingKey::new("vm", "b", "r").unwrap();
         assert!(!leases.held(&key));
         let first = leases.take(&key);
         let second = leases.take(&key);

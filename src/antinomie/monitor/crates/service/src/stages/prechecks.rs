@@ -5,7 +5,7 @@ use super::{HostProblem, LaneStages, Prepared, StageStop, plan};
 use crate::{
     api::{
         failure::{Failure, FailureCode},
-        job::{Job, Stage, WaitingFor},
+        run::{Run, Stage, WaitingFor},
     },
     config::Preset,
     engine::Engine,
@@ -45,11 +45,11 @@ impl<E: Engine> LaneStages<'_, E> {
     /// specification, "Checked again when it starts"): a permission its client
     /// lost while the run waited refuses it `permission_denied`. A client the
     /// service does not configure keeps what it was admitted with.
-    fn recheck_permissions(&self, job: &Job, preset: &Preset) -> Result<(), StageStop> {
+    fn recheck_permissions(&self, job: &Run, preset: &Preset) -> Result<(), StageStop> {
         let Some(held) = self
             .env
             .callers
-            .permissions_now(&job.client_id, &job.spec.labels)
+            .permissions_now(&job.client_id, &job.request.labels)
         else {
             return Ok(());
         };
@@ -110,7 +110,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// run froze stays its own: a preset changed or removed since submit
     /// does not change a waiting run); the host has room; the lane is usable
     /// (not quarantined, free, its clean snapshot unchanged).
-    pub fn prechecks(&mut self, job: &Job) -> Result<Prepared, StageStop> {
+    pub fn prechecks(&mut self, job: &Run) -> Result<Prepared, StageStop> {
         let store = self.env.store;
         let frozen = store
             .frozen_preset(&job.id)

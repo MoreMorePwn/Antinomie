@@ -11,7 +11,7 @@ use crate::{
     api::{
         error::ErrorCode,
         failure::{Failure, FailureCode},
-        job::{JobState, Outcome, Stage},
+        run::{Outcome, RunState, Stage},
     },
     config::service::{DeleteAfter, Watch},
     store::{Eligibility, tests::lane},
@@ -51,25 +51,25 @@ fn an_unknown_member_is_refused_by_name_in_every_op_that_takes_a_spec() {
         (json!({"sample": sample, "priority": -1}), "params"),
     ];
     for (params, field) in cases {
-        let error = call(&svc, "job.submit", params.clone()).unwrap_err();
+        let error = call(&svc, "run.submit", params.clone()).unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidArgument, "{params}");
         assert_eq!(error.field.as_deref(), Some(field), "{params}: {error:?}");
     }
     // The same on the other ops that take structured parameters.
     for (op, params) in [
-        ("job.get", json!({"job_id": "j_x", "evil": 1})),
+        ("run.get", json!({"run_id": "j_x", "evil": 1})),
         (
-            "job.retry",
-            json!({"job_id": "j_x", "overrides": {"evil": 1}}),
+            "run.rerun",
+            json!({"run_id": "j_x", "overrides": {"evil": 1}}),
         ),
         ("upload.begin", json!({"size": 3, "evil": 1})),
-        ("job.list", json!({"evil": 1})),
+        ("run.list", json!({"evil": 1})),
     ] {
         let error = call(&svc, op, params).unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidArgument, "{op}");
     }
-    let listed = call(&svc, "job.list", json!({})).unwrap();
-    assert!(listed["jobs"].as_array().unwrap().is_empty(), "{listed}");
+    let listed = call(&svc, "run.list", json!({})).unwrap();
+    assert!(listed["runs"].as_array().unwrap().is_empty(), "{listed}");
 }
 
 fn denied_field(reply: &Value) -> Option<String> {
@@ -115,7 +115,7 @@ fn no_override_climbs_above_the_node_through_submit_retry_or_a_watch() {
     ];
     for (overrides, field) in &escalations {
         let spec = json!({"sample": {"upload_id": id}, "overrides": overrides});
-        match call(&svc, "job.submit", spec) {
+        match call(&svc, "run.submit", spec) {
             Ok(reply) => {
                 assert_eq!(reply["state"], "rejected", "{overrides}: {reply}");
                 assert_eq!(denied_field(&reply).as_deref(), Some(*field), "{reply}");
@@ -136,7 +136,7 @@ fn no_override_climbs_above_the_node_through_submit_retry_or_a_watch() {
     }
 
     // A finished job retried with the same escalations is refused the same way.
-    let first = call(&svc, "job.submit", json!({"sample": {"upload_id": id}})).unwrap();
+    let first = call(&svc, "run.submit", json!({"sample": {"upload_id": id}})).unwrap();
     let store = &svc.service.store;
     let running = store
         .claim_next(&lane(), &mut |_| Eligibility::Ready)
@@ -157,8 +157,8 @@ fn no_override_climbs_above_the_node_through_submit_retry_or_a_watch() {
     for (overrides, field) in &escalations {
         match call(
             &svc,
-            "job.retry",
-            json!({"job_id": first["id"], "overrides": overrides}),
+            "run.rerun",
+            json!({"run_id": first["id"], "overrides": overrides}),
         ) {
             Ok(reply) => {
                 assert_eq!(reply["state"], "rejected", "{overrides}: {reply}");
@@ -176,14 +176,14 @@ fn no_override_climbs_above_the_node_through_submit_retry_or_a_watch() {
             }
         }
     }
-    let queued = call(&svc, "job.list", json!({"state": "queued"})).unwrap();
+    let queued = call(&svc, "run.list", json!({"state": "queued"})).unwrap();
     assert!(
-        queued["jobs"]
+        queued["runs"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|job| job["spec"]["overrides"]["network"].is_null()
-                && job["spec"]["overrides"]["vm"].is_null()),
+            .all(|job| job["request"]["overrides"]["network"].is_null()
+                && job["request"]["overrides"]["vm"].is_null()),
         "{queued}"
     );
 }
@@ -265,8 +265,8 @@ fn hostile_file_names_in_a_watch_folder_stay_data_from_the_folder_to_the_job() {
     assert!(!svc.dir.join("pwned").exists());
     assert!(!folder.join("pwned").exists());
     assert!(!inbox.join("pwned").exists());
-    let listed = call(&svc, "job.list", json!({})).unwrap();
-    let jobs = listed["jobs"].as_array().unwrap();
+    let listed = call(&svc, "run.list", json!({})).unwrap();
+    let jobs = listed["runs"].as_array().unwrap();
     assert_eq!(
         jobs.len() + count(&folder),
         names.len(),
@@ -285,7 +285,7 @@ fn hostile_file_names_in_a_watch_folder_stay_data_from_the_folder_to_the_job() {
         assert!(name.len() <= 128, "{name:?}");
         assert!(!name.contains(['/', '\0']), "{name:?}");
         // The name is data only: it is in no argument or environment entry.
-        let overrides = &job["spec"]["overrides"];
+        let overrides = &job["request"]["overrides"];
         assert!(overrides["args"].is_null() && overrides["env"].is_null());
     }
 }
@@ -307,8 +307,8 @@ fn a_link_or_hard_link_in_a_watch_folder_never_reaches_the_library() {
     fs::hard_link(&outside, folder.join("hard.sh")).unwrap();
     scan(&svc, watch);
 
-    let listed = call(&svc, "job.list", json!({})).unwrap();
-    assert!(listed["jobs"].as_array().unwrap().is_empty(), "{listed}");
+    let listed = call(&svc, "run.list", json!({})).unwrap();
+    assert!(listed["runs"].as_array().unwrap().is_empty(), "{listed}");
     let library = antinomie_monitor_core::samples::Library::open(&svc.dir.join("data")).unwrap();
     assert!(library.list().unwrap().is_empty());
     // Refused entries stay where they are; nothing was moved or deleted.
@@ -340,11 +340,11 @@ fn hostile_text_in_a_spec_never_breaks_the_service_log() {
         json!({"sample": {"sha256": hostile}}),
         json!({hostile: 1}),
     ] {
-        let _ = call(&svc, "job.submit", params);
+        let _ = call(&svc, "run.submit", params);
     }
-    let _ = call(&svc, "job.get", json!({"job_id": hostile}));
+    let _ = call(&svc, "run.get", json!({"run_id": hostile}));
     let _ = call(&svc, hostile, json!({}));
-    let job = call(&svc, "job.list", json!({})).unwrap();
+    let job = call(&svc, "run.list", json!({})).unwrap();
     // Whatever was accepted is returned as JSON text, escaped by the encoder.
     let wire = serde_json::to_string(&job).unwrap();
     assert!(!wire.contains('\n') && !wire.contains('\x1b'), "{wire}");
@@ -355,5 +355,5 @@ fn hostile_text_in_a_spec_never_breaks_the_service_log() {
         );
     }
     assert_eq!(me().client_id, me().client_id);
-    let _ = JobState::Queued;
+    let _ = RunState::Queued;
 }

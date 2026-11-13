@@ -4,7 +4,7 @@
 //!
 //! * the owner on the local socket, `local:<uid>`, holds every permission
 //!   (as it held every scope);
-//! * a watch folder submits as `auto:policy-<preset>` with `runs.submit` and
+//! * a watch folder submits as `auto:preset-<preset>` with `runs.submit` and
 //!   the folder's `permissions` from `service.toml`.
 //!
 //! Prechecks asks [`CallerLookup`] again when a run starts, so a permission
@@ -20,7 +20,7 @@ pub type Labels = BTreeMap<String, String>;
 /// The client id prefix of the owner on the local socket.
 pub const LOCAL_PREFIX: &str = "local:";
 /// The client id prefix of a watch folder.
-pub const WATCH_PREFIX: &str = "auto:policy-";
+pub const WATCH_PREFIX: &str = "auto:preset-";
 
 /// The caller a watch folder acts as: a client named for the preset, with
 /// `runs.submit`, the folder's own `permissions` and its `priority_max`.
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn a_watch_caller_holds_submit_and_its_folder_permissions() {
         let caller = watch_caller("strict", &[Permission::EvidenceCoreDump], Some(3));
-        assert_eq!(caller.client_id, "auto:policy-strict");
+        assert_eq!(caller.client_id, "auto:preset-strict");
         assert!(caller.has(Permission::RunsSubmit));
         assert!(caller.has(Permission::EvidenceCoreDump));
         assert!(!caller.has(Permission::SamplesAdd));
@@ -158,7 +158,7 @@ mod tests {
         let watch = watch_caller("strict", &[], Some(3));
         let kept = with_limits(&config, watch.clone());
         assert_eq!(kept, watch);
-        assert_eq!(max_running_now(&config, "auto:policy-strict"), None);
+        assert_eq!(max_running_now(&config, "auto:preset-strict"), None);
         // Nothing set: no limit of its own.
         let plain = with_limits(
             &ServiceConfig::default(),
@@ -202,19 +202,19 @@ mod tests {
             ),
         ];
         let cores =
-            permissions_now(&config, "auto:policy-default", &labels(Some("cores"))).unwrap();
+            permissions_now(&config, "auto:preset-default", &labels(Some("cores"))).unwrap();
         assert!(cores.contains(&Permission::RunsSubmit));
         assert!(cores.contains(&Permission::EvidenceCoreDump));
         assert!(!cores.contains(&Permission::EvidenceMemoryDump));
         let plain =
-            permissions_now(&config, "auto:policy-default", &labels(Some("plain"))).unwrap();
+            permissions_now(&config, "auto:preset-default", &labels(Some("plain"))).unwrap();
         assert_eq!(plain, [Permission::RunsSubmit].into());
         // Without the label, every folder of the policy counts.
-        let any = permissions_now(&config, "auto:policy-default", &labels(None)).unwrap();
+        let any = permissions_now(&config, "auto:preset-default", &labels(None)).unwrap();
         assert!(any.contains(&Permission::EvidenceCoreDump));
         // The folder lost the permission (a reload): the run no longer holds it.
         config.inbox.watch[0].permissions.clear();
-        let now = permissions_now(&config, "auto:policy-default", &labels(Some("cores"))).unwrap();
+        let now = permissions_now(&config, "auto:preset-default", &labels(Some("cores"))).unwrap();
         assert!(!now.contains(&Permission::EvidenceCoreDump));
     }
 }

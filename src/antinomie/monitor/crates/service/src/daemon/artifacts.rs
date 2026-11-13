@@ -98,7 +98,7 @@ fn served(
     if artifact.sensitive {
         caller.require(Permission::EvidenceDownload)?;
     }
-    let path = resolve(&service.store.job_dir(&artifact.job_id), location)?;
+    let path = resolve(&service.store.job_dir(&artifact.run_id), location)?;
     let mut out = json!({ "artifact": to_value(&artifact)?, "path": path });
     let mut served = if range.is_some() { 0 } else { artifact.size };
     if let Some(range) = range {
@@ -115,8 +115,8 @@ fn served(
             Some(&service.log),
             &caller.client_id,
             "artifact.get",
-            "job",
-            artifact.job_id.as_str(),
+            "run",
+            artifact.run_id.as_str(),
             served,
         );
     }
@@ -152,7 +152,7 @@ pub(super) fn report(
     let wanted = kind_of(request.format);
     let artifact = service
         .store
-        .artifacts(&request.job_id)?
+        .artifacts(&request.run_id)?
         .into_iter()
         .find(|a| a.kind == wanted)
         .ok_or_else(|| ApiError::not_found("report of that format"))?;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `job.submit` against the caller's permissions (ANT-T0489, presets of
+//! `run.submit` against the caller's permissions (ANT-T0489, presets of
 //! ANT-T0490): the check order of the access specification, the codes and
 //! what each refusal names.
 
@@ -23,16 +23,16 @@ fn holding(extra: &[Permission]) -> Caller {
 }
 
 /// A spec of sample 1 with `overrides` (a partial preset).
-pub(super) fn with(overrides: Value) -> JobSpec {
-    JobSpec {
+pub(super) fn with(overrides: Value) -> RunRequest {
+    RunRequest {
         overrides: Overrides(overrides.as_object().cloned().unwrap()),
         ..spec(1)
     }
 }
 
-fn failure_of(fx: &Fx, who: &Caller, spec: JobSpec) -> Failure {
-    let job = fx.submit_as(who, spec).unwrap().job;
-    assert_eq!(job.state, JobState::Rejected, "{:?}", job.failure);
+fn failure_of(fx: &Fx, who: &Caller, spec: RunRequest) -> Failure {
+    let job = fx.submit_as(who, spec).unwrap().run;
+    assert_eq!(job.state, RunState::Rejected, "{:?}", job.failure);
     job.failure.unwrap()
 }
 
@@ -75,7 +75,7 @@ fn permissions_come_before_the_node_and_the_node_before_the_limits() {
         max_run_s: Some(600),
         ..Limits::default()
     };
-    let tor_urgent = JobSpec {
+    let tor_urgent = RunRequest {
         priority: Some(9),
         ..with(json!({"network": {"route": "tor"}}))
     };
@@ -94,7 +94,7 @@ fn permissions_come_before_the_node_and_the_node_before_the_limits() {
     let failure = failure_of(
         &fx,
         &limited,
-        JobSpec {
+        RunRequest {
             priority: Some(9),
             ..spec(1)
         },
@@ -116,14 +116,14 @@ fn permissions_come_before_the_node_and_the_node_before_the_limits() {
     let job = fx
         .submit_as(
             &owner(),
-            JobSpec {
+            RunRequest {
                 priority: Some(9),
                 ..with(json!({"program": {"run_time_s": 1800}}))
             },
         )
         .unwrap()
-        .job;
-    assert_eq!(job.state, JobState::Queued);
+        .run;
+    assert_eq!(job.state, RunState::Queued);
 }
 
 #[test]
@@ -132,14 +132,14 @@ fn an_unknown_preset_is_preset_denied_and_stores_nothing() {
     let error = fx
         .submit_as(
             &owner(),
-            JobSpec {
-                policy: Some("gone".into()),
+            RunRequest {
+                preset: Some("gone".into()),
                 ..with(json!({"network": {"route": "tor"}}))
             },
         )
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::PresetDenied);
-    assert_eq!(error.field.as_deref(), Some("policy"));
+    assert_eq!(error.field.as_deref(), Some("preset"));
     assert_eq!(error.details["preset"], json!("gone"));
     assert_eq!(fx.store.counts().unwrap(), Default::default());
 }
@@ -178,8 +178,8 @@ fn every_live_route_needs_its_own_permission_then_the_node() {
                 with(json!({"network": {"route": route.to_string()}})),
             )
             .unwrap()
-            .job;
-        assert_eq!(job.state, JobState::Queued, "{route:?}");
+            .run;
+        assert_eq!(job.state, RunState::Queued, "{route:?}");
         fx.store.cancel(&job.id, None, &caller(1000)).unwrap();
     }
 }
@@ -203,8 +203,8 @@ fn keeping_the_vm_needs_run_keep_vm_and_then_arrives_with_0_9_1() {
             with(json!({"vm": {"keep_on_failure": false}})),
         )
         .unwrap()
-        .job;
-    assert_eq!(job.state, JobState::Queued);
+        .run;
+    assert_eq!(job.state, RunState::Queued);
 }
 
 #[test]
@@ -219,8 +219,8 @@ fn root_and_an_id_below_1000_need_run_as_root_and_nobody_does_not() {
         let job = fx
             .submit_as(&holding(&[Permission::RunAsRoot]), asked)
             .unwrap()
-            .job;
-        assert_eq!(job.state, JobState::Queued, "{uid}:{gid}");
+            .run;
+        assert_eq!(job.state, RunState::Queued, "{uid}:{gid}");
     }
     let root = with(json!({"program": {"user": "root"}}));
     assert_eq!(
@@ -232,8 +232,8 @@ fn root_and_an_id_below_1000_need_run_as_root_and_nobody_does_not() {
         json!({"program": {"user": "nobody"}}),
     ] {
         assert_eq!(
-            fx.submit_as(&caller(1000), with(plain)).unwrap().job.state,
-            JobState::Queued
+            fx.submit_as(&caller(1000), with(plain)).unwrap().run.state,
+            RunState::Queued
         );
     }
 }
@@ -250,8 +250,8 @@ fn the_run_is_checked_as_it_will_run_with_the_preset_values() {
     let job = fx
         .submit_as(&holding(&[Permission::EvidenceCoreDump]), spec(1))
         .unwrap()
-        .job;
-    assert_eq!(job.state, JobState::Queued);
+        .run;
+    assert_eq!(job.state, RunState::Queued);
     // Turning it off makes the run Custom, and it needs nothing.
     let off = fx
         .submit_as(
@@ -259,9 +259,9 @@ fn the_run_is_checked_as_it_will_run_with_the_preset_values() {
             with(json!({"dumps": {"core_dump_on_exit": false}})),
         )
         .unwrap()
-        .job;
-    assert_eq!(off.state, JobState::Queued);
-    assert_eq!(off.policy.name, "custom");
+        .run;
+    assert_eq!(off.state, RunState::Queued);
+    assert_eq!(off.preset.name, "custom");
 
     // The dump trigger needs the permission of what it takes.
     let fx = Fx::with_policy("perm-trigger", |p| {
@@ -286,8 +286,8 @@ fn the_run_is_checked_as_it_will_run_with_the_preset_values() {
         Permission::LookupOnline,
     ]);
     assert_eq!(
-        fx.submit_as(&all, spec(1)).unwrap().job.state,
-        JobState::Queued
+        fx.submit_as(&all, spec(1)).unwrap().run.state,
+        RunState::Queued
     );
 }
 
@@ -308,8 +308,8 @@ fn a_preset_locks_nothing_only_permissions_do() {
             })),
         )
         .unwrap()
-        .job;
-    assert_eq!(job.state, JobState::Queued, "{:?}", job.failure);
+        .run;
+    assert_eq!(job.state, RunState::Queued, "{:?}", job.failure);
     // Values out of range are invalid_argument and store nothing.
     for (overrides, field) in [
         (
@@ -358,7 +358,7 @@ fn cancel_needs_runs_submit_for_an_own_job_and_runs_manage_any_for_another() {
     assert_eq!(error.details["needs"], json!(["runs.manage_any"]));
     let manager = Caller::new("local:2000", &[Permission::RunsManageAny]);
     let cancelled = fx.store.cancel(&job.id, None, &manager).unwrap();
-    assert_eq!(cancelled.state, JobState::Cancelled);
+    assert_eq!(cancelled.state, RunState::Cancelled);
     let own = fx.queued(2);
     let cancelled = fx
         .store
@@ -368,5 +368,5 @@ fn cancel_needs_runs_submit_for_an_own_job_and_runs_manage_any_for_another() {
             &Caller::new("local:1000", &[Permission::RunsSubmit]),
         )
         .unwrap();
-    assert_eq!(cancelled.state, JobState::Cancelled);
+    assert_eq!(cancelled.state, RunState::Cancelled);
 }

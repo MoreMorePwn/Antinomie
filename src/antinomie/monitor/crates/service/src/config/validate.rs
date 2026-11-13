@@ -12,7 +12,7 @@ use super::{
     preset::{self, LoadedPreset, Preset, ProgramSource, RecordScope, ReportSections, User},
     service::{Lanes, RevertMode, ServiceConfig},
 };
-use crate::api::{job::Stage, spec::RunIn};
+use crate::api::{run::Stage, spec::RunIn};
 use serde::Serialize;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 

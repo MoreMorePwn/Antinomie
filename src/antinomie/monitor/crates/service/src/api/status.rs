@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The state objects around the jobs: `Sample` (5.4.7), `QueueStatus`
+//! The state objects around the runs: `Sample` (5.4.7), `QueueStatus`
 //! (5.4.8), `Capabilities` (5.4.9), `health` (5.3) and the summaries of
 //! presets, VMs and bases.
 
 use super::{
     event::LaneState,
-    ids::{JobId, LaneId, Sha256Hex},
+    ids::{LaneId, RunId, Sha256Hex},
     ops::Permission,
     spec::{ReportFormat, Route, StaticCheck},
 };
@@ -34,7 +34,7 @@ pub struct Sample {
     pub first_seen_ms: u64,
     /// Runs known to the library.
     pub run_count: u64,
-    pub last_job: Option<JobId>,
+    pub last_run: Option<RunId>,
     /// The cached chain check; null when not checked.
     pub custody_ok: Option<bool>,
 }
@@ -72,7 +72,7 @@ pub enum DiskLayer {
 pub struct LaneStatus {
     pub lane: LaneId,
     pub state: LaneState,
-    pub job_id: Option<JobId>,
+    pub run_id: Option<RunId>,
     pub vm_id: Option<String>,
     pub since_ms: u64,
     pub disk_layer: DiskLayer,
@@ -87,7 +87,7 @@ pub struct QueueLimits {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct QueueStatus {
-    /// New jobs are not started.
+    /// New runs are not started.
     pub paused: bool,
     pub pause_reason: Option<PauseReason>,
     pub queued: u32,
@@ -108,8 +108,8 @@ pub struct HostPoolStatus {
     /// Items waiting to start (the queue length).
     pub queued: u32,
     pub running: u32,
-    /// Jobs with host work left.
-    pub jobs: u32,
+    /// Runs with host work left.
+    pub runs: u32,
     /// Why the first queued item does not start, when it waits for memory.
     pub waiting_for: Option<String>,
 }
@@ -197,7 +197,7 @@ pub struct HealthStatus {
     pub engine: EngineHealth,
 }
 
-/// A preset (`policy.list`): what its options need and whether the caller and
+/// A preset (`preset.list`): what its options need and whether the caller and
 /// the node have it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PresetSummary {
@@ -216,6 +216,9 @@ pub struct PresetSummary {
     /// What this node does not have for it ("route tor is not set up on
     /// this node"); a run of it is refused `unavailable_on_node`.
     pub unavailable: Vec<String>,
+    /// The caller can run it as it is: nothing `missing`, nothing
+    /// `unavailable`.
+    pub usable: bool,
 }
 
 /// A VM a preset can use (`vm.list`); lane VMs carry `lane`.

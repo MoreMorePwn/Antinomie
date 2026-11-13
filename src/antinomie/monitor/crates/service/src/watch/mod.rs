@@ -9,7 +9,7 @@
 //! | Links | The folder and every file are opened with `O_NOFOLLOW`, relative to the folder's descriptor; a symbolic link, device, FIFO, socket, directory is refused, and so is a file with more than one hard link |
 //! | Ownership | The folder must be ours and writable by no one else (a group-writable one only with `allow_group_write`; a world-writable one never); a file must belong to the daemon's user (or, with `allow_group_write`, to the folder's group when the daemon is in it) |
 //! | Preset | `preset`, or with `preset_by_dir` the subfolder named after an existing preset (other folders are ignored); never created from a folder name; no sidecar overrides; the preset runs unchanged |
-//! | Actor | The job's client and custody actor is `auto:policy-<preset>`; the label `watch` names the folder |
+//! | Actor | The job's client and custody actor is `auto:preset-<preset>`; the label `watch` names the folder |
 //! | After intake | `move` to `<inbox>/processed/`, `delete`, or `keep` (remembered by device, inode, size and mtime, so a restart does not take it again) |
 //! | Failure | A file that fails intake moves to `<inbox>/rejected/` with `<name>.reason` and is not tried again; a refused entry (link, foreign file) is left alone and shown by `auto watch list` |
 //! | Rate | At most `watch_rate` files a minute per folder; above that the folder pauses for a minute and `engine.alert` `watch_flood` is raised |

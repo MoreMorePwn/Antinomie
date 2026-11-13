@@ -3,8 +3,8 @@
 //! turns a watched file into a job, and the thread that scans the folders.
 //!
 //! A file becomes a job in two steps, both under the actor
-//! `auto:policy-<policy>`: the intake steps of 4.2 on the open descriptor
-//! (type, size, library, custody `Added`), then `job.submit` for the library
+//! `auto:preset-<policy>`: the intake steps of 4.2 on the open descriptor
+//! (type, size, library, custody `Added`), then `run.submit` for the library
 //! sample (so the queue caps, the duplicate rule, the permission checks and
 //! the policy's ceilings apply as for any other caller). The caller holds
 //! `runs.submit` and the folder's `permissions`.
@@ -14,8 +14,8 @@ use crate::config::PresetLookup;
 use crate::{
     api::{
         error::ErrorCode,
-        job::JobState,
-        spec::{JobSpec, SampleSource},
+        run::RunState,
+        spec::{RunRequest, SampleSource},
     },
     watch::{Admission, Admit, Defer, SCAN_EVERY, WatchEnv, Watcher},
 };
@@ -95,13 +95,13 @@ impl WatchEnv for ServiceEnv {
         };
         let mut labels = BTreeMap::new();
         labels.insert("watch".to_owned(), request.folder_label);
-        let spec = JobSpec {
+        let spec = RunRequest {
             sample: SampleSource {
                 sha256: Some(sample.sha256),
                 ..Default::default()
             },
             name: name.map(str::to_owned),
-            policy: Some(request.preset),
+            preset: Some(request.preset),
             priority: None,
             labels,
             idempotency_key: None,
@@ -110,8 +110,8 @@ impl WatchEnv for ServiceEnv {
         let mut context = service.submit_context(&presets);
         context.on_duplicate = request.on_duplicate;
         match service.store.submit(&caller, spec, &context) {
-            Ok(submitted) if submitted.job.state == JobState::Rejected => {
-                let (code, message) = submitted.job.failure.as_ref().map_or_else(
+            Ok(submitted) if submitted.run.state == RunState::Rejected => {
+                let (code, message) = submitted.run.failure.as_ref().map_or_else(
                     || ("rejected".to_owned(), "the job was rejected".to_owned()),
                     |f| (crate::store::Store::wire_name(&f.code), f.message.clone()),
                 );
@@ -120,7 +120,7 @@ impl WatchEnv for ServiceEnv {
             Ok(submitted) => {
                 service.wake_lane();
                 Ok(Admission::Submitted {
-                    job: submitted.job.id.to_string(),
+                    job: submitted.run.id.to_string(),
                 })
             }
             Err(error)

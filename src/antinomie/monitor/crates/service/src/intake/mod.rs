@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Intake (design 4.2, card P3-2b): every entry produces a library sample.
-//! The common steps run inside `job.submit`, or in the watcher before it
+//! The common steps run inside `run.submit`, or in the watcher before it
 //! submits:
 //!
 //! 1. open the staged file with `O_NOFOLLOW`, require a regular file, `fstat`
@@ -21,7 +21,7 @@ pub mod mount;
 pub mod staging;
 
 use crate::{
-    api::{failure::FailureCode, ids::Sha256Hex, job::JobSample, spec::SampleSource},
+    api::{failure::FailureCode, ids::Sha256Hex, run::RunSample, spec::SampleSource},
     config::LoadedPreset,
     store::{IntakeError, SampleAdmission},
 };
@@ -124,7 +124,7 @@ impl Intake {
         &self,
         sha256: &Sha256Hex,
         preset: &LoadedPreset,
-    ) -> Result<JobSample, IntakeError> {
+    ) -> Result<RunSample, IntakeError> {
         let library = self.library()?;
         let record = library
             .get(sha256.as_str())
@@ -140,7 +140,7 @@ impl Intake {
         }
         let arch = (!record.arch.is_empty()).then_some(record.arch.as_str());
         check_type(preset, &record.file_type, arch)?;
-        Ok(JobSample {
+        Ok(RunSample {
             sha256: sha256.clone(),
             size: record.size,
             kind: record.file_type.clone(),
@@ -157,7 +157,7 @@ impl Intake {
         name_hint: Option<&str>,
         preset: &LoadedPreset,
         actor: &str,
-    ) -> Result<JobSample, IntakeError> {
+    ) -> Result<RunSample, IntakeError> {
         let file = open_nofollow(path, false).map_err(|e| {
             deny(
                 FailureCode::SampleMissing,
@@ -177,7 +177,7 @@ impl Intake {
         name_hint: Option<&str>,
         preset: &LoadedPreset,
         actor: &str,
-    ) -> Result<JobSample, IntakeError> {
+    ) -> Result<RunSample, IntakeError> {
         let info = file
             .metadata()
             .map_err(|e| deny(FailureCode::SampleMissing, e.to_string()))?;
@@ -233,7 +233,7 @@ impl Intake {
                     "the sample vanished after it was added",
                 )
             })?;
-        Ok(JobSample {
+        Ok(RunSample {
             sha256: Sha256Hex::try_from(added.sha256)
                 .map_err(|e| deny(FailureCode::SampleMissing, e.to_string()))?,
             size: record.size,
@@ -329,7 +329,7 @@ impl SampleAdmission for Intake {
         name: Option<&str>,
         preset: &LoadedPreset,
         actor: &str,
-    ) -> Result<JobSample, IntakeError> {
+    ) -> Result<RunSample, IntakeError> {
         if let Some(sha256) = &source.sha256 {
             return self.library_sample(sha256, preset);
         }

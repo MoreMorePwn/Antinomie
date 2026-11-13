@@ -3,7 +3,7 @@
 //! (design 7.2: no timing-sensitive asserts) and the service builds ids
 //! without a new crate (design 5.2).
 
-use crate::api::ids::{ArtifactId, JobId, UploadId};
+use crate::api::ids::{ArtifactId, RunId, UploadId};
 use std::{
     io::Read,
     sync::atomic::{AtomicU64, Ordering},
@@ -67,8 +67,8 @@ pub fn random_bytes() -> [u8; 10] {
     bytes
 }
 
-pub fn new_job_id(now_ms: u64) -> JobId {
-    JobId::from_parts(now_ms, random_bytes())
+pub fn new_job_id(now_ms: u64) -> RunId {
+    RunId::from_parts(now_ms, random_bytes())
 }
 
 pub fn new_upload_id(now_ms: u64) -> UploadId {

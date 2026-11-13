@@ -57,7 +57,7 @@ use crate::{
         event::{EventBody, StageStatus},
         failure::Failure,
         ids::LaneId,
-        job::{Job, JobState, Stage, WaitingFor},
+        run::{Run, RunState, Stage, WaitingFor},
     },
     config::{LoadedPreset, callers::CallerLookup, service::RevertMode},
     engine::Engine,
@@ -129,7 +129,7 @@ pub enum HostProblem {
 /// Host resources, dependencies for the job's options and KVM. The service's
 /// real checks with injected probes are card P3-5c; these are the seam.
 pub trait HostChecks {
-    fn check(&self, job: &Job, preset: &crate::config::Preset) -> Result<(), HostProblem>;
+    fn check(&self, job: &Run, preset: &crate::config::Preset) -> Result<(), HostProblem>;
 
     /// The disk floor itself, asked every minute while a program runs. The
     /// words say what is short; `None` means room.
@@ -147,7 +147,7 @@ pub trait HostChecks {
 pub struct NoHostChecks;
 
 impl HostChecks for NoHostChecks {
-    fn check(&self, _: &Job, _: &crate::config::Preset) -> Result<(), HostProblem> {
+    fn check(&self, _: &Run, _: &crate::config::Preset) -> Result<(), HostProblem> {
         Ok(())
     }
 }
@@ -261,10 +261,10 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 
     /// A progress line of `stage` (ephemeral: not stored).
-    pub(crate) fn progress(&self, job: &Job, stage: Stage, text: &str) {
+    pub(crate) fn progress(&self, job: &Run, stage: Stage, text: &str) {
         self.env.store.publish_ephemeral(
             &job.id,
-            EventBody::JobProgress {
+            EventBody::RunProgress {
                 stage,
                 text: text.to_owned(),
                 fraction: None,
@@ -287,24 +287,24 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    pub(crate) fn cancelled(&self, job: &Job) -> bool {
+    pub(crate) fn cancelled(&self, job: &Run) -> bool {
         self.env
             .store
             .get(&job.id)
-            .is_ok_and(|job| job.state == JobState::Cancelling)
+            .is_ok_and(|job| job.state == RunState::Cancelling)
     }
 
     /// Run `prechecks` to `launch` for a job `claim_next` started. Writes the
     /// store's stage records and the lane file's checkpoints around each
     /// stage; a failed stage is ended `failed` and its stop returned. The job
     /// stays `running`: ending it or retrying is the caller's.
-    pub fn run_to_launch(&mut self, job: &Job) -> Result<Launched, StageStop> {
+    pub fn run_to_launch(&mut self, job: &Run) -> Result<Launched, StageStop> {
         self.launch_cycle(job).map(|(_, launched)| launched)
     }
 
     /// [`run_to_launch`](Self::run_to_launch), keeping what `prechecks` settled
     /// for the stages after `launch`.
-    pub(crate) fn launch_cycle(&mut self, job: &Job) -> Result<(Prepared, Launched), StageStop> {
+    pub(crate) fn launch_cycle(&mut self, job: &Run) -> Result<(Prepared, Launched), StageStop> {
         // The engine names the job's caller in the custody entries it writes
         // itself (sent into the guest, run started, run ended). It is the
         // lane's own engine, so each lane names its own job (BH-29).
@@ -319,7 +319,7 @@ impl<E: Engine> LaneStages<'_, E> {
             .emit_engine(EventBody::LaneState {
                 lane: self.lane.clone(),
                 state: crate::api::event::LaneState::Busy,
-                job_id: Some(job.id.clone()),
+                run_id: Some(job.id.clone()),
                 reason: None,
             })
             .map_err(|e| self.store_error(Stage::Provision, e))?;
@@ -338,7 +338,7 @@ impl<E: Engine> LaneStages<'_, E> {
         Ok((prepared, launched))
     }
 
-    pub(crate) fn cancel_point(&self, job: &Job) -> Result<(), StageStop> {
+    pub(crate) fn cancel_point(&self, job: &Run) -> Result<(), StageStop> {
         if self.cancelled(job) {
             Err(StageStop::Cancelled)
         } else {
@@ -350,7 +350,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// already begun by the claim) and the lane checkpoints.
     pub(crate) fn stage<T>(
         &mut self,
-        job: &Job,
+        job: &Run,
         stage: Stage,
         lane_stage: bool,
         run: impl FnOnce(&mut Self) -> Result<T, StageStop>,

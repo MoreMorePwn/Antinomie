@@ -15,11 +15,11 @@
 //! doc comment: **N** normal, **U** untrusted text from the sample or the guest
 //! (5.2), **S** needs `evidence.view`, **L** local socket and CLI only.
 
-use super::key::RunKey;
+use super::key::RecordingKey;
 use crate::api::{
     assessment::{Counts, DetectionHit, KeyBehaviour, Tier},
-    ids::{JobId, RecordingArtifactId, Sha256Hex},
-    job::RecordingPhase,
+    ids::{RecordingArtifactId, RunId, Sha256Hex},
+    run::RecordingPhase,
     spec::Route,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
@@ -111,10 +111,10 @@ pub enum RunExitKind {
     Signaled,
 }
 
-/// `recording.run.list` item (from `RunSummary` and the library).
+/// `recording.list` item (from `RunSummary` and the library).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct RunInfo {
-    pub run_key: RunKey,
+pub struct RecordingInfo {
+    pub recording_key: RecordingKey,
     /// The engine's own ids. N
     pub vm_id: String,
     pub boot_id: String,
@@ -127,9 +127,9 @@ pub struct RunInfo {
     pub sample_sha256: Option<Sha256Hex>,
     /// Guest path of the executable. U
     pub program: String,
-    /// The job of this service that made the run; absent for runs made by the
-    /// GUI or a CLI one-shot. N
-    pub job_id: Option<JobId>,
+    /// The run of this service whose program made the recording; absent for
+    /// recordings made by the GUI or a CLI one-shot. N
+    pub from_run: Option<RunId>,
     /// The route kind (`drop`, `inet_sim`, ...). N
     pub route: Option<Route>,
     pub exit: Option<RunExit>,
@@ -189,11 +189,11 @@ pub enum LayerState {
     Orphaned,
 }
 
-/// `recording.run.get`: a [`RunInfo`] and more.
+/// `recording.get`: a [`RecordingInfo`] and more.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct RunDetail {
+pub struct RecordingDetail {
     #[serde(flatten)]
-    pub info: RunInfo,
+    pub info: RecordingInfo,
     pub execution: Option<Execution>,
     /// U
     pub notes: Vec<String>,
@@ -803,7 +803,7 @@ pub struct TimelineEvent {
 // Summary
 
 /// `recording.summary`: the assessment fields of the JSON report summary (5.4.3
-/// without the preset `label` and `score`, which belong to a job).
+/// without the preset `label` and `score`, which belong to a run).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Summary {
     pub assessment: crate::api::assessment::AssessmentKind,
@@ -980,7 +980,7 @@ pub struct CustodyEntry {
     /// Number in the sample's chain, from 1.
     pub seq: u64,
     pub at_ms: u64,
-    /// `app`, `auto:policy-<name>`, `web:<user>`, `local:<uid>`. U
+    /// `app`, `auto:preset-<name>`, `web:<user>`, `local:<uid>`. U
     pub by: String,
     /// One of the names of `custody::KINDS` (plus `automation`).
     pub kind: String,

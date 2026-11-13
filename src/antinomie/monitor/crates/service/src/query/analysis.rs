@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `recording.analysis.list`, `.section` and `.ghidra` (design 5.12.3): the
-//! static analysis report of a run, or the host-side analysis of a job, read
-//! from its archived report and listings. Exactly one of `run_key` and
-//! `job_id` addresses it. Specimen bytes are not part of any reply.
+//! static analysis report of a recording, or the host-side analysis of a run,
+//! read from its archived report and listings. Exactly one of `recording_key`
+//! and `run_id` addresses it. Specimen bytes are not part of any reply.
 
 use super::{
     cursor::{Cursor, CursorBinding, Generation, stable_hash},
-    key::RunKey,
+    key::RecordingKey,
     limits::fit_in_page,
     page::{Page, PageExtra, PageRequest},
     request::{
@@ -16,7 +16,7 @@ use super::{
     service::{Opened, QueryService},
     types::*,
 };
-use crate::api::{error::ApiError, ids::JobId, job::RecordingPhase};
+use crate::api::{error::ApiError, ids::RunId, run::RecordingPhase};
 use antinomie_monitor_core::analysis::{
     self, AnalysisKind, AnalysisListingPage, ListingSort, StructureField,
 };
@@ -220,11 +220,11 @@ fn analysis_generation(dir: &std::path::Path) -> Generation {
 impl QueryService {
     fn analysis_source(
         &self,
-        run_key: &Option<RunKey>,
-        job_id: &Option<JobId>,
+        recording_key: &Option<RecordingKey>,
+        run_id: &Option<RunId>,
     ) -> Result<Source, ApiError> {
-        match analysis_subject(run_key, job_id)? {
-            AnalysisSubject::Run(key) => {
+        match analysis_subject(recording_key, run_id)? {
+            AnalysisSubject::Recording(key) => {
                 let opened = self.open_run(&key)?;
                 let dir = opened.dir.join("analysis");
                 if !dir.join("report.json").is_file() {
@@ -240,13 +240,13 @@ impl QueryService {
                     _opened: Some(opened),
                 })
             }
-            AnalysisSubject::Job(job) => {
+            AnalysisSubject::Run(job) => {
                 let dir = self
                     .jobs
                     .as_ref()
                     .and_then(|jobs| jobs.analysis_directory(&job))
-                    .ok_or_else(|| ApiError::not_found("job analysis"))?;
-                let dir = fs::canonicalize(dir).map_err(|_| ApiError::not_found("job analysis"))?;
+                    .ok_or_else(|| ApiError::not_found("run analysis"))?;
+                let dir = fs::canonicalize(dir).map_err(|_| ApiError::not_found("run analysis"))?;
                 if !dir.join("report.json").is_file() {
                     return Err(ApiError::not_recorded("static analysis"));
                 }
@@ -279,7 +279,7 @@ impl QueryService {
         &self,
         params: &AnalysisListParams,
     ) -> Result<Page<AnalysisSection>, ApiError> {
-        let source = self.analysis_source(&params.run_key, &params.job_id)?;
+        let source = self.analysis_source(&params.recording_key, &params.run_id)?;
         let report = self.report(&source)?;
         let items: Vec<AnalysisSection> = report.sections.iter().map(section_info).collect();
         let total = items.len() as u64;
@@ -405,7 +405,7 @@ impl QueryService {
         &self,
         params: &AnalysisSectionParams,
     ) -> Result<Page<AnalysisRow>, ApiError> {
-        let source = self.analysis_source(&params.run_key, &params.job_id)?;
+        let source = self.analysis_source(&params.recording_key, &params.run_id)?;
         let request = PageRequest {
             limit: params.limit,
             cursor: params.cursor.clone(),
@@ -425,7 +425,7 @@ impl QueryService {
         &self,
         params: &AnalysisGhidraParams,
     ) -> Result<Page<AnalysisRow>, ApiError> {
-        let source = self.analysis_source(&params.run_key, &params.job_id)?;
+        let source = self.analysis_source(&params.recording_key, &params.run_id)?;
         let request = PageRequest {
             limit: params.limit,
             cursor: params.cursor.clone(),

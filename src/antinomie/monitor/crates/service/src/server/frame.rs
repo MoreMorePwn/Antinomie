@@ -265,10 +265,10 @@ mod tests {
     #[test]
     fn a_well_formed_request_parses() {
         let request =
-            parse_request(br#"{"id": 7, "op": "job.get", "params": {"job_id": "x"}}"#).unwrap();
+            parse_request(br#"{"id": 7, "op": "run.get", "params": {"run_id": "x"}}"#).unwrap();
         assert_eq!(request.id, 7);
-        assert_eq!(request.op, "job.get");
-        assert_eq!(request.params, json!({"job_id": "x"}));
+        assert_eq!(request.op, "run.get");
+        assert_eq!(request.params, json!({"run_id": "x"}));
         let bare = parse_request(br#"{"id":0,"op":"health"}"#).unwrap();
         assert_eq!(bare.params, json!({}));
         let null = parse_request(br#"{"id":1,"op":"health","params":null}"#).unwrap();

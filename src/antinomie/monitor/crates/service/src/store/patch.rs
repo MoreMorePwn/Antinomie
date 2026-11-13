@@ -10,8 +10,8 @@ use super::{
 use crate::api::{
     assessment::Assessment,
     event::EventBody,
-    ids::JobId,
-    job::{Job, JobRecording, JobRun, JobSample, JobState, JobVm, Warning},
+    ids::RunId,
+    run::{Run, RunProgram, RunRecording, RunSample, RunState, RunVm, Warning},
     spec::Route,
 };
 
@@ -22,14 +22,14 @@ pub const MAX_WARNINGS: usize = 1000;
 /// Fields of the job a stage fills in. Absent members stay as they are.
 #[derive(Clone, Debug, Default)]
 pub struct JobPatch {
-    pub sample: Option<JobSample>,
-    pub vm: Option<JobVm>,
-    pub run: Option<JobRun>,
-    pub recording: Option<JobRecording>,
+    pub sample: Option<RunSample>,
+    pub vm: Option<RunVm>,
+    pub run: Option<RunProgram>,
+    pub recording: Option<RunRecording>,
 }
 
-fn live(id: &JobId, state: JobState, what: &str) -> R<()> {
-    if matches!(state, JobState::Running | JobState::Cancelling) {
+fn live(id: &RunId, state: RunState, what: &str) -> R<()> {
+    if matches!(state, RunState::Running | RunState::Cancelling) {
         Ok(())
     } else {
         Err(conflict(id, state, what))
@@ -38,8 +38,8 @@ fn live(id: &JobId, state: JobState, what: &str) -> R<()> {
 
 impl Store {
     /// Record the sample, VM, run or recording of a running job. No event:
-    /// `job.run`, `job.artifact` and the others have their own calls.
-    pub fn patch(&self, id: &JobId, patch: JobPatch) -> R<Job> {
+    /// `run.program`, `run.artifact` and the others have their own calls.
+    pub fn patch(&self, id: &RunId, patch: JobPatch) -> R<Run> {
         self.write(|tx| {
             let cur = current(tx, id)?;
             live(id, cur.state, "be updated")?;
@@ -71,7 +71,11 @@ impl Store {
                 tx.tx
                     .execute(
                         "UPDATE jobs SET recording_json = ?2, run_key = ?3 WHERE id = ?1",
-                        rusqlite::params![id.as_str(), to_json(recording)?, recording.run_key],
+                        rusqlite::params![
+                            id.as_str(),
+                            to_json(recording)?,
+                            recording.recording_key
+                        ],
                     )
                     .map_err(db)?;
                 super::recordings::remember(tx, id, recording)?;
@@ -80,10 +84,10 @@ impl Store {
         })
     }
 
-    /// The program started: `job.run`.
+    /// The program started: `run.program`.
     pub fn emit_run_started(
         &self,
-        id: &JobId,
+        id: &RunId,
         run_id: &str,
         pid: Option<u32>,
         route: Route,
@@ -93,8 +97,8 @@ impl Store {
             live(id, cur.state, "start a run")?;
             tx.emit(
                 Some(id),
-                EventBody::JobRun {
-                    run_id: run_id.to_owned(),
+                EventBody::RunProgram {
+                    program_id: run_id.to_owned(),
                     pid,
                     route,
                 },
@@ -102,11 +106,11 @@ impl Store {
         })
     }
 
-    /// What the run's dump trigger did: one `job.trigger` event per dump and
+    /// What the run's dump trigger did: one `run.trigger` event per dump and
     /// one per note (no host paths).
     pub fn emit_triggers(
         &self,
-        id: &JobId,
+        id: &RunId,
         report: &crate::waiter::trigger::TriggerReport,
     ) -> R<()> {
         self.write(|tx| {
@@ -115,7 +119,7 @@ impl Store {
             for record in &report.records {
                 tx.emit(
                     Some(id),
-                    EventBody::JobTrigger {
+                    EventBody::RunTrigger {
                         trigger: Some(Box::new(crate::waiter::trigger::without_paths(record))),
                         note: None,
                     },
@@ -124,7 +128,7 @@ impl Store {
             for note in &report.notes {
                 tx.emit(
                     Some(id),
-                    EventBody::JobTrigger {
+                    EventBody::RunTrigger {
                         trigger: None,
                         note: Some(note.clone()),
                     },
@@ -134,8 +138,8 @@ impl Store {
         })
     }
 
-    /// A non-fatal note: appended to `warnings` and sent as `job.warning`.
-    pub fn add_warning(&self, id: &JobId, code: &str, text: &str) -> R<()> {
+    /// A non-fatal note: appended to `warnings` and sent as `run.warning`.
+    pub fn add_warning(&self, id: &RunId, code: &str, text: &str) -> R<()> {
         self.write(|tx| {
             let cur = current(tx, id)?;
             live(id, cur.state, "take a warning")?;
@@ -171,7 +175,7 @@ impl Store {
                 .map_err(db)?;
             tx.emit(
                 Some(id),
-                EventBody::JobWarning {
+                EventBody::RunWarning {
                     code: warning.code,
                     text: warning.text,
                 },
@@ -179,8 +183,8 @@ impl Store {
         })
     }
 
-    /// Triage finished: store the assessment and send `job.assessment`.
-    pub fn set_assessment(&self, id: &JobId, assessment: &Assessment) -> R<Job> {
+    /// Triage finished: store the assessment and send `run.assessment`.
+    pub fn set_assessment(&self, id: &RunId, assessment: &Assessment) -> R<Run> {
         self.write(|tx| {
             let cur = current(tx, id)?;
             live(id, cur.state, "take an assessment")?;
@@ -192,7 +196,7 @@ impl Store {
                 .map_err(db)?;
             tx.emit(
                 Some(id),
-                EventBody::JobAssessment {
+                EventBody::RunAssessment {
                     assessment: Box::new(assessment.clone()),
                 },
             )?;

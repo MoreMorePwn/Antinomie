@@ -8,10 +8,10 @@ use crate::{
     api::spec::Route,
     api::{
         failure::{Failure, FailureCode},
-        job::{Job, JobRecording, JobRun, RecordingPhase, Stage},
+        run::{RecordingPhase, Run, RunProgram, RunRecording, Stage},
     },
     engine::Engine,
-    query::key::RunKey,
+    query::key::RecordingKey,
     store::JobPatch,
     waiter::{Phase, phase, route_of},
 };
@@ -29,7 +29,7 @@ fn fail(message: &str, detail: Option<&str>) -> StageStop {
 impl<E: Engine> LaneStages<'_, E> {
     pub fn launch(
         &mut self,
-        job: &Job,
+        job: &Run,
         prepared: &Prepared,
         provisioned: &Provisioned,
     ) -> Result<Launched, StageStop> {
@@ -83,7 +83,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// A launch given up as silent that started the program after all (the
     /// lane has stopped the VM since, which ended it): the job names the run
     /// and says what happened, instead of leaving the recording unreported.
-    pub(super) fn link_late_launch(&mut self, job: &Job) {
+    pub(super) fn link_late_launch(&mut self, job: &Run) {
         let Some(run) = self.waiter.late_launch() else {
             return;
         };
@@ -96,14 +96,14 @@ impl<E: Engine> LaneStages<'_, E> {
     /// Record `run` as the job's run and recording, and say so on the stream.
     fn link_run(
         &mut self,
-        job: &Job,
+        job: &Run,
         run: &RunSummary,
         route: Route,
         phase: RecordingPhase,
     ) -> Result<(), StageStop> {
         let store = self.env.store;
         let now = self.waiter.now_ms();
-        let key = RunKey::new(&run.vm_id, &run.boot_id, &run.id).map_err(|e| {
+        let key = RecordingKey::new(&run.vm_id, &run.boot_id, &run.id).map_err(|e| {
             self.internal(
                 FailureCode::Internal,
                 Stage::Launch,
@@ -115,8 +115,8 @@ impl<E: Engine> LaneStages<'_, E> {
             .patch(
                 &job.id,
                 JobPatch {
-                    run: Some(JobRun {
-                        run_id: run.id.clone(),
+                    run: Some(RunProgram {
+                        id: run.id.clone(),
                         started_ms: Some(run.started_ms.unwrap_or(now)),
                         ended_ms: None,
                         end_reason: None,
@@ -127,11 +127,11 @@ impl<E: Engine> LaneStages<'_, E> {
                         trigger_notes: Vec::new(),
                         pending: Vec::new(),
                     }),
-                    recording: Some(JobRecording {
+                    recording: Some(RunRecording {
                         vm_id: run.vm_id.clone(),
                         boot_id: run.boot_id.clone(),
                         run_id: run.id.clone(),
-                        run_key: key.as_str().to_owned(),
+                        recording_key: key.as_str().to_owned(),
                         phase,
                         directory: Some(run.directory.display().to_string()),
                     }),

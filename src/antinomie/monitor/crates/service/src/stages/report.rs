@@ -7,7 +7,7 @@
 //! and defang choice. The writer's own names (`antinomie-report-<run8>-<time>`)
 //! are replaced by the design's stable ones: `report-<sha8>.<suffix>` and
 //! `report-<sha8>-bundle.zip`, in `jobs/<id>/artifacts/`. Each file is hashed
-//! and recorded as an artifact (`job.artifact`). Reports go in the job
+//! and recorded as an artifact (`run.artifact`). Reports go in the job
 //! directory and never into the recording (decided B-H19).
 //!
 //! Without a Triage scan (it failed, and the policy does not require
@@ -22,7 +22,7 @@ use crate::{
         artifact::{Artifact, ArtifactKind, MediaType},
         failure::{Failure, FailureCode},
         ids::Sha256Hex,
-        job::{Job, Stage},
+        run::{Run, Stage},
     },
     engine::Engine,
     store::NewArtifact,
@@ -85,7 +85,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// The `report` stage: the files and their artifacts.
     pub fn report(
         &mut self,
-        job: &Job,
+        job: &Run,
         plan: &HostPlan,
         scanned: Option<&(SavedRun, ArchiveScan)>,
         limit: Duration,

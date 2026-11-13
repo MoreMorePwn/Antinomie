@@ -6,8 +6,8 @@ use super::*;
 use crate::api::{
     event::EventBody,
     failure::Failure,
-    ids::JobId,
-    job::{Job, JobState, Outcome, Stage, WaitingFor},
+    ids::RunId,
+    run::{Outcome, Run, RunState, Stage, WaitingFor},
 };
 use crate::store::{machine, mirror::job_events};
 use std::collections::HashMap;
@@ -37,18 +37,18 @@ const STAGES: [Stage; 8] = [
     Stage::Cleanup,
 ];
 
-fn check_invariants(fx: &Fx, seen: &mut HashMap<JobId, JobState>) {
+fn check_invariants(fx: &Fx, seen: &mut HashMap<RunId, RunState>) {
     let all = fx
         .store
         .list(
-            &crate::api::ops::JobListParams {
+            &crate::api::ops::RunListParams {
                 limit: Some(200),
                 ..Default::default()
             },
             None,
         )
         .unwrap()
-        .jobs;
+        .runs;
     for job in &all {
         // State and outcome agree.
         assert_eq!(job.outcome, job.state.outcome(), "{:?}", job.state);
@@ -56,19 +56,19 @@ fn check_invariants(fx: &Fx, seen: &mut HashMap<JobId, JobState>) {
         // A stage only while a lane works on it; a wait only while queued.
         assert_eq!(
             job.stage.is_some(),
-            matches!(job.state, JobState::Running | JobState::Cancelling),
+            matches!(job.state, RunState::Running | RunState::Cancelling),
             "{:?} {:?}",
             job.state,
             job.stage
         );
         if job.waiting_for.is_some() {
-            assert_eq!(job.state, JobState::Queued);
+            assert_eq!(job.state, RunState::Queued);
         }
-        assert_eq!(job.queue_position.is_some(), job.state == JobState::Queued);
+        assert_eq!(job.queue_position.is_some(), job.state == RunState::Queued);
         // Failed and rejected explain themselves; partial does not.
         match job.state {
-            JobState::Failed | JobState::Rejected => assert!(job.failure.is_some()),
-            JobState::Partial | JobState::Succeeded => assert!(job.failure.is_none()),
+            RunState::Failed | RunState::Rejected => assert!(job.failure.is_some()),
+            RunState::Partial | RunState::Succeeded => assert!(job.failure.is_none()),
             _ => {}
         }
         // Every observed change is an edge of the diagram.
@@ -77,7 +77,7 @@ fn check_invariants(fx: &Fx, seen: &mut HashMap<JobId, JobState>) {
         {
             assert!(
                 machine::allowed(before, job.state)
-                    || (before == JobState::Queued && job.state == JobState::Queued),
+                    || (before == RunState::Queued && job.state == RunState::Queued),
                 "{before:?} -> {:?}",
                 job.state
             );
@@ -91,10 +91,10 @@ fn check_invariants(fx: &Fx, seen: &mut HashMap<JobId, JobState>) {
             "gap in {}",
             job.id
         );
-        assert!(matches!(events[0].body, EventBody::JobCreated { .. }));
+        assert!(matches!(events[0].body, EventBody::RunCreated { .. }));
         let finished = events
             .iter()
-            .filter(|e| matches!(e.body, EventBody::JobFinished { .. }))
+            .filter(|e| matches!(e.body, EventBody::RunFinished { .. }))
             .count();
         assert_eq!(
             finished,
@@ -105,7 +105,7 @@ fn check_invariants(fx: &Fx, seen: &mut HashMap<JobId, JobState>) {
         if job.state.is_terminal() {
             assert!(matches!(
                 events.last().unwrap().body,
-                EventBody::JobFinished { .. }
+                EventBody::RunFinished { .. }
             ));
         }
     }
@@ -128,10 +128,10 @@ fn one_run(seed: u64) {
         wait_s: 50,
     };
     let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-    let mut jobs: Vec<Job> = Vec::new();
+    let mut jobs: Vec<Run> = Vec::new();
     let mut seen = HashMap::new();
     for step in 0..120 {
-        let pick = |rng: &mut Rng, jobs: &[Job]| {
+        let pick = |rng: &mut Rng, jobs: &[Run]| {
             jobs.get(rng.below(jobs.len().max(1))).map(|j| j.id.clone())
         };
         match rng.below(12) {
@@ -143,7 +143,7 @@ fn one_run(seed: u64) {
                     fx.store
                         .submit(&caller(1000 + rng.below(3) as u32), s, &fx.ctx())
                 {
-                    jobs.push(submitted.job);
+                    jobs.push(submitted.run);
                 }
             }
             3 | 4 => {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The result drop (design 4.9.3, card P4-4): when `[results] dir` is set,
-//! every job that ends leaves `<dir>/<yyyy-mm-dd>/<sha8>-<jobid>/` with a
+//! every run that ends leaves `<dir>/<yyyy-mm-dd>/<sha8>-<runid>/` with a
 //! copy of `job.json` and its reports, for consumers that poll a folder.
 //!
 //! A drop is written under a hidden name and renamed into place, so a
@@ -15,7 +15,7 @@
 
 use super::calendar::date_of;
 use crate::{
-    api::{artifact::ArtifactKind, job::Job},
+    api::{artifact::ArtifactKind, run::Run},
     config::service::ResultsMode,
     daemon::artifacts::resolve,
     store::{Store, mirror::write_private},
@@ -91,8 +91,8 @@ fn safe_name(name: &str) -> String {
     }
 }
 
-/// The name of a drop folder: `<sha8>-<jobid>`.
-pub fn drop_name(job: &Job) -> String {
+/// The name of a drop folder: `<sha8>-<runid>`.
+pub fn drop_name(job: &Run) -> String {
     let sha8 = job
         .sample
         .as_ref()
@@ -103,7 +103,7 @@ pub fn drop_name(job: &Job) -> String {
 /// Write the drop of `job`. Returns its folder.
 pub fn write(
     store: &Store,
-    job: &Job,
+    job: &Run,
     root: &Path,
     mode: ResultsMode,
     now_ms: u64,
@@ -136,7 +136,7 @@ pub fn write(
     Ok(target)
 }
 
-fn fill(store: &Store, job: &Job, staging: &Path, mode: ResultsMode) -> Result<(), String> {
+fn fill(store: &Store, job: &Run, staging: &Path, mode: ResultsMode) -> Result<(), String> {
     let job_dir = store.job_dir(&job.id);
     let json = serde_json::to_vec_pretty(job).map_err(|e| e.to_string())?;
     let job_json = staging.join("job.json");

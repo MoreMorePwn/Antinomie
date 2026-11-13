@@ -13,7 +13,7 @@ mod tests;
 use crate::{
     api::{
         assessment::{Assessment, AssessmentKind, Counts, DetectionHit, KeyBehaviour, Label, Tier},
-        job::EndReason,
+        run::EndReason,
     },
     config::preset::{VerdictMapping, VerdictSettings},
 };

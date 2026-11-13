@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `Failure` (design 5.4.5): why a job failed or was rejected. The code table
+//! `Failure` (design 5.4.5): why a run failed or was rejected. The code table
 //! is one enum; its stage and default retry hint are data on the enum.
 
-use super::job::Stage;
+use super::run::Stage;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -33,7 +33,7 @@ pub enum FailureCode {
     GuestLost,
     RecordingFailed,
     AnalysisFailed,
-    // The job's host stages passed their deadline (ANT-T0471): the running
+    // The run's host stages passed their deadline (ANT-T0471): the running
     // items were stopped (`timed_out`), the queued ones never started. (A
     // plain comment: a doc comment would make the schema's enum a `oneOf`.)
     DeadlineExceeded,

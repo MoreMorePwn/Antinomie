@@ -10,7 +10,7 @@
 //!
 //! | Variable | Value |
 //! |---|---|
-//! | `ANTINOMIE_JOB_ID` | the job id (`j_` and 26 characters) |
+//! | `ANTINOMIE_RUN_ID` | the run id (`r_` and 26 characters) |
 //! | `ANTINOMIE_STATE` | `succeeded`, `partial`, `failed`, `cancelled` or `rejected` |
 //! | `ANTINOMIE_LABEL` | `clean_observed`, `suspicious`, `malicious`, `inconclusive`, or empty |
 //! | `ANTINOMIE_SHA256` | the sample's SHA-256, or empty |

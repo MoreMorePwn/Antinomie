@@ -32,8 +32,8 @@
 use crate::{
     api::{
         failure::Failure,
-        ids::JobId,
-        job::{HostItem, HostItemState, Job},
+        ids::RunId,
+        run::{HostItem, HostItemState, Run},
     },
     stages::items::{ItemKind, ItemSpec, JobWork, PhaseEnd},
     waiter::WaitError,
@@ -61,7 +61,7 @@ pub enum JobPhase {
 }
 
 pub struct PoolJob {
-    pub job: Job,
+    pub job: Run,
     pub items: Vec<ItemSpec>,
     pub views: Vec<HostItem>,
     pub work: Arc<Mutex<JobWork>>,
@@ -121,7 +121,7 @@ impl PoolJob {
 #[derive(Clone, Debug)]
 pub enum Task {
     Item {
-        job: JobId,
+        job: RunId,
         index: usize,
         kind: ItemKind,
         /// The item's limit, cut to the time left before the job's deadline.
@@ -133,11 +133,11 @@ pub enum Task {
         begin_analyse: bool,
     },
     /// Every `analyse` item has ended.
-    EndAnalyse(JobId),
+    EndAnalyse(RunId),
     /// The report has ended (or there is none): `report`'s end and `cleanup`.
-    Conclude(JobId),
+    Conclude(RunId),
     /// End a job whose host work stopped.
-    Settle(JobId, PoolStop),
+    Settle(RunId, PoolStop),
 }
 
 /// How a `Conclude` task ended.
@@ -152,7 +152,7 @@ pub enum Concluded {
 pub struct PoolState {
     pub workers: usize,
     pub running: usize,
-    pub jobs: BTreeMap<(u64, JobId), PoolJob>,
+    pub jobs: BTreeMap<(u64, RunId), PoolJob>,
     /// Why the head waits, when it waits for memory.
     pub waiting_for: Option<String>,
 }
@@ -165,25 +165,25 @@ impl PoolState {
         }
     }
 
-    pub fn key(job: &Job) -> (u64, JobId) {
+    pub fn key(job: &Run) -> (u64, RunId) {
         (job.created_ms, job.id.clone())
     }
 
-    pub fn get_mut(&mut self, id: &JobId) -> Option<&mut PoolJob> {
+    pub fn get_mut(&mut self, id: &RunId) -> Option<&mut PoolJob> {
         self.jobs.values_mut().find(|j| &j.job.id == id)
     }
 
-    pub fn get(&self, id: &JobId) -> Option<&PoolJob> {
+    pub fn get(&self, id: &RunId) -> Option<&PoolJob> {
         self.jobs.values().find(|j| &j.job.id == id)
     }
 
-    pub fn remove(&mut self, id: &JobId) -> Option<PoolJob> {
+    pub fn remove(&mut self, id: &RunId) -> Option<PoolJob> {
         let key = self.jobs.iter().find(|(_, j)| &j.job.id == id)?.0.clone();
         self.jobs.remove(&key)
     }
 
     /// Expected seconds of every item not ended yet, of jobs older than `key`.
-    pub fn ahead_s(&self, key: &(u64, JobId)) -> u64 {
+    pub fn ahead_s(&self, key: &(u64, RunId)) -> u64 {
         self.jobs
             .range(..key.clone())
             .map(|(_, j)| j.remaining_s())
@@ -227,11 +227,11 @@ impl PoolState {
         &mut self,
         now_ms: u64,
         memory: &mut dyn FnMut() -> Option<String>,
-        deadline: &dyn Fn(&Job, &[HostItem]) -> Failure,
+        deadline: &dyn Fn(&Run, &[HostItem]) -> Failure,
     ) -> Option<Task> {
         let free = self.running < self.workers;
         let mut head_seen = false;
-        let mut start: Option<((u64, JobId), usize)> = None;
+        let mut start: Option<((u64, RunId), usize)> = None;
         self.waiting_for = None;
         for (key, job) in self.jobs.iter_mut() {
             let has_queued = job.views.iter().any(|v| v.state == HostItemState::Queued);
@@ -317,7 +317,7 @@ impl PoolState {
     /// An item ended (`Err`: it stopped the job's host work).
     pub fn item_ended(
         &mut self,
-        id: &JobId,
+        id: &RunId,
         index: usize,
         now_ms: u64,
         result: Result<(HostItemState, Option<String>), PoolStop>,
@@ -367,7 +367,7 @@ impl PoolState {
     }
 
     /// The end of `analyse` was decided.
-    pub fn analyse_ended(&mut self, id: &JobId, result: Result<PhaseEnd, PoolStop>) {
+    pub fn analyse_ended(&mut self, id: &RunId, result: Result<PhaseEnd, PoolStop>) {
         let Some(job) = self.get_mut(id) else {
             return;
         };
@@ -380,7 +380,7 @@ impl PoolState {
     }
 
     /// The end of `report` and `cleanup`; a finished job leaves the pool.
-    pub fn concluded(&mut self, id: &JobId, result: Concluded) -> Option<PoolJob> {
+    pub fn concluded(&mut self, id: &RunId, result: Concluded) -> Option<PoolJob> {
         let job = self.get_mut(id)?;
         job.busy = false;
         match result {

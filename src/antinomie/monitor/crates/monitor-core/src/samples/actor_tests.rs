@@ -33,11 +33,11 @@ fn the_caller_is_the_actor_of_an_intake() {
     let (root, mut library) = setup("intake");
     let bytes = b"#!/bin/sh\necho actor\n";
     let added = library
-        .add_bytes_as(bytes, sample("actor.sh"), "auto:policy-default")
+        .add_bytes_as(bytes, sample("actor.sh"), "auto:preset-default")
         .unwrap();
     assert_eq!(
         entries(&library, &added.sha256),
-        [("added".to_owned(), "auto:policy-default".to_owned())]
+        [("added".to_owned(), "auto:preset-default".to_owned())]
     );
     // The same bytes again by another caller: an origin, under that caller.
     library
@@ -50,7 +50,7 @@ fn the_caller_is_the_actor_of_an_intake() {
         .into_iter()
         .map(|e| e.1)
         .collect();
-    assert_eq!(by, ["auto:policy-default", "web:alice", "local:1000"]);
+    assert_eq!(by, ["auto:preset-default", "web:alice", "local:1000"]);
     // The GUI's calls still say `app`.
     library.add_bytes(bytes, sample("actor.sh")).unwrap();
     assert_eq!(entries(&library, &added.sha256).last().unwrap().1, "app");
@@ -73,7 +73,7 @@ fn a_name_the_log_does_not_accept_writes_nothing() {
 #[test]
 fn events_the_library_writes_for_a_job_carry_its_actor() {
     let (root, library) = setup("events");
-    let mut library = library.with_actor("auto:policy-ci").unwrap();
+    let mut library = library.with_actor("auto:preset-ci").unwrap();
     let sha = library.add_bytes(b"data", sample("d")).unwrap().sha256;
     library
         .record_push(
@@ -90,8 +90,8 @@ fn events_the_library_writes_for_a_job_carry_its_actor() {
     assert_eq!(
         by,
         [
-            ("added".to_owned(), "auto:policy-ci".to_owned()),
-            ("sent".to_owned(), "auto:policy-ci".to_owned())
+            ("added".to_owned(), "auto:preset-ci".to_owned()),
+            ("sent".to_owned(), "auto:preset-ci".to_owned())
         ]
     );
     let _ = fs::remove_dir_all(root);
@@ -105,7 +105,7 @@ fn a_run_log_names_the_caller_for_the_program_and_the_analyst_for_the_person() {
         sha256: sha.clone(),
         name: "d".into(),
     };
-    let mut log = RunLog::with_actor(&root, &reference, "r1", "vm", "auto:policy-ci");
+    let mut log = RunLog::with_actor(&root, &reference, "r1", "vm", "auto:preset-ci");
     log.started("setup".into());
     log.typed(b"ls\n");
     log.ended("done".into());
@@ -113,9 +113,9 @@ fn a_run_log_names_the_caller_for_the_program_and_the_analyst_for_the_person() {
     assert_eq!(
         kinds,
         [
-            ("run_started".to_owned(), "auto:policy-ci".to_owned()),
+            ("run_started".to_owned(), "auto:preset-ci".to_owned()),
             ("terminal_input".to_owned(), "analyst".to_owned()),
-            ("run_ended".to_owned(), "auto:policy-ci".to_owned()),
+            ("run_ended".to_owned(), "auto:preset-ci".to_owned()),
         ]
     );
     let _ = fs::remove_dir_all(root);
@@ -134,7 +134,7 @@ fn a_push_record_names_the_actor_it_is_given() {
         at_ms: 0,
     };
     record_push_later(&root, &sha, push("/tmp/a"), "local:1000");
-    record_push_later(&root, &sha, push("/tmp/b"), "auto:policy-ci");
+    record_push_later(&root, &sha, push("/tmp/b"), "auto:preset-ci");
     let lanes = [actor::ActorSlot::new(), actor::ActorSlot::new()];
     lanes[0].set(Some("web:alice")).unwrap();
     record_push_later(&root, &sha, push("/tmp/c"), &lanes[0].get());
@@ -144,7 +144,7 @@ fn a_push_record_names_the_actor_it_is_given() {
         .skip(1)
         .map(|e| e.1)
         .collect();
-    assert_eq!(by, ["local:1000", "auto:policy-ci", "web:alice", "app"]);
+    assert_eq!(by, ["local:1000", "auto:preset-ci", "web:alice", "app"]);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -192,13 +192,13 @@ fn an_automation_entry_chains_exports_and_verifies_everywhere() {
         .unwrap()
         .sha256;
     library
-        .record_event(&sha, "auto:policy-default", automation())
+        .record_event(&sha, "auto:preset-default", automation())
         .unwrap();
     let rows = library.events(&sha).unwrap();
     assert!(
         matches!(&rows.last().unwrap().event, CustodyEvent::Automation { route, .. } if route == "drop")
     );
-    assert_eq!(rows.last().unwrap().by, "auto:policy-default");
+    assert_eq!(rows.last().unwrap().by, "auto:preset-default");
     assert!(library.custody_check(&sha).unwrap().ok());
 
     let dest = root.join("out").join("record.json");

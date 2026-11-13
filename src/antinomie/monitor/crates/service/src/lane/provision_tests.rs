@@ -9,7 +9,7 @@ use super::{
     tests::{CLEAN, VM, checkpoint, file, healthy, vm_config},
 };
 use crate::{
-    api::{error::ErrorCode, failure::FailureCode, ids::JobId},
+    api::{error::ErrorCode, failure::FailureCode, ids::RunId},
     clock::ManualClock,
     engine::FakeEngine,
     store::tests::{T0, lane},
@@ -166,7 +166,7 @@ fn an_existing_lane_or_vm_name_is_refused_and_nothing_is_sent() {
     // A lane with a job is not replaced.
     let mut busy = file();
     busy.begin_work(
-        JobId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap(),
+        RunId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap(),
         1,
         T0,
     );
@@ -439,7 +439,7 @@ fn a_failed_reset_keeps_the_quarantine_and_a_busy_lane_is_not_touched() {
 
     let mut busy = file();
     busy.begin_work(
-        JobId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap(),
+        RunId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap(),
         1,
         T0,
     );

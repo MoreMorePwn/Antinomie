@@ -254,7 +254,7 @@ impl QueryService {
         let fields = fields_of(params.tab);
         tables::check_sort(params.sort.as_ref(), fields)?;
         let compiled = tables::compile_q(params.q.as_deref(), fields)?;
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let binding = opened.binding(&(params.tab, &params.q), &params.sort);
         let scanned = match self.triage_scan(&opened)? {
             Err(building) => {
@@ -310,7 +310,7 @@ impl QueryService {
         &self,
         params: &RunParams,
     ) -> Result<Single<NetworkSummary>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let scanned = match self.triage_scan(&opened)? {
             Err(building) => {
                 return Ok(Single::building(

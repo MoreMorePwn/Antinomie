@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The items of a job's host work (ANT-T0454): one row per job in
 //! `host_work`, the items of its current attempt as JSON. The pool writes
-//! the row at every change, so `job.get` shows which items are queued,
+//! the row at every change, so `run.get` shows which items are queued,
 //! running and done, and a restarted daemon finds them again.
 use super::{
     R, Store, db,
     model::{from_json, to_json},
 };
-use crate::api::{ids::JobId, job::HostItem};
+use crate::api::{ids::RunId, run::HostItem};
 use rusqlite::{Connection, OptionalExtension};
 
 /// The items of the job's current attempt (none for an older attempt's row).
@@ -26,8 +26,8 @@ pub(crate) fn items_of(conn: &Connection, job: &str) -> R<Vec<HostItem>> {
 
 impl Store {
     /// Store the items of `id`'s current attempt. No event: the items are
-    /// state, read with the job (`job.progress` lines tell a watcher).
-    pub fn set_host_work(&self, id: &JobId, items: &[HostItem]) -> R<()> {
+    /// state, read with the job (`run.progress` lines tell a watcher).
+    pub fn set_host_work(&self, id: &RunId, items: &[HostItem]) -> R<()> {
         self.write(|tx| {
             let attempt: Option<u32> = tx
                 .tx
@@ -39,7 +39,7 @@ impl Store {
                 .optional()
                 .map_err(db)?;
             let Some(attempt) = attempt else {
-                return Err(crate::api::error::ApiError::not_found("job"));
+                return Err(crate::api::error::ApiError::not_found("run"));
             };
             tx.tx
                 .execute(

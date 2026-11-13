@@ -2,15 +2,15 @@
 //! Every run a job recorded: one row per run in `job_recordings`, written
 //! with the job's `recording`. An attempt that launched and was then retried
 //! (a lost guest, a stop, a restart) leaves a run of its own; the job then
-//! names only the last one, and retention and `job.delete` find the earlier
+//! names only the last one, and retention and `run.delete` find the earlier
 //! ones here.
 use super::{
     R, Store, Tx, db, internal,
     model::{from_json, to_json},
 };
 use crate::api::{
-    ids::{JobId, LaneId},
-    job::JobRecording,
+    ids::{LaneId, RunId},
+    run::RunRecording,
 };
 
 /// A run an earlier attempt of a job recorded, and the lane it ran on.
@@ -18,12 +18,12 @@ use crate::api::{
 pub struct EarlierRecording {
     pub attempt: u32,
     pub lane: Option<LaneId>,
-    pub recording: JobRecording,
+    pub recording: RunRecording,
 }
 
 /// Remember `recording` as a run of `id`'s current attempt, on its lane; the
 /// attempt's row names the run too.
-pub(crate) fn remember(tx: &mut Tx<'_>, id: &JobId, recording: &JobRecording) -> R<()> {
+pub(crate) fn remember(tx: &mut Tx<'_>, id: &RunId, recording: &RunRecording) -> R<()> {
     let (attempt, lane): (u32, Option<String>) = tx
         .tx
         .query_row(
@@ -39,7 +39,7 @@ pub(crate) fn remember(tx: &mut Tx<'_>, id: &JobId, recording: &JobRecording) ->
              ON CONFLICT(job_id, run_key) DO UPDATE SET recording_json = ?5",
             rusqlite::params![
                 id.as_str(),
-                recording.run_key,
+                recording.recording_key,
                 attempt,
                 lane,
                 to_json(recording)?
@@ -58,7 +58,7 @@ pub(crate) fn remember(tx: &mut Tx<'_>, id: &JobId, recording: &JobRecording) ->
 impl Store {
     /// The runs `id`'s earlier attempts recorded, other than the one the job
     /// names now, oldest attempt first.
-    pub fn earlier_recordings(&self, id: &JobId) -> R<Vec<EarlierRecording>> {
+    pub fn earlier_recordings(&self, id: &RunId) -> R<Vec<EarlierRecording>> {
         let conn = self.conn();
         let mut statement = conn
             .prepare(

@@ -12,8 +12,8 @@ use crate::{
     api::{
         event::{EventBody, LaneState},
         failure::FailureCode,
-        ids::JobId,
-        job::{Job, JobState, Revert, Stage, WaitingFor},
+        ids::RunId,
+        run::{Revert, Run, RunState, Stage, WaitingFor},
     },
     clock::Clock,
     engine::{FakeEngine, fake::Unscripted},
@@ -63,7 +63,7 @@ pub(super) type EvidenceFn =
 pub(super) struct TagLog(pub(super) std::sync::Mutex<Vec<(String, String)>>);
 
 impl super::host::SampleTags for TagLog {
-    fn add_tag(&self, job: &Job, tag: &str) -> Result<bool, String> {
+    fn add_tag(&self, job: &Run, tag: &str) -> Result<bool, String> {
         let sha = job.sample.as_ref().map(|s| s.sha256.to_string());
         self.0
             .lock()
@@ -165,7 +165,7 @@ impl W {
         }
     }
 
-    pub(super) fn prepared(&self, job: &Job) -> Prepared {
+    pub(super) fn prepared(&self, job: &Run) -> Prepared {
         let frozen = self.fx.store.frozen_preset(&job.id).unwrap();
         Prepared {
             effective: plan::effective(&frozen.preset, self.revert),
@@ -178,7 +178,7 @@ impl W {
         self.lanes.load(&lane()).unwrap().unwrap()
     }
 
-    pub(super) fn job(&self, id: &JobId) -> Job {
+    pub(super) fn job(&self, id: &RunId) -> Run {
         self.fx.store.get(id).unwrap()
     }
 
@@ -442,10 +442,10 @@ fn prechecks_refuse_a_run_whose_client_lost_a_permission_it_uses() {
     let queued =
         w.fx.submit_as(&who, crate::store::tests::spec(1))
             .unwrap()
-            .job;
+            .run;
     assert_eq!(
         queued.state,
-        crate::api::job::JobState::Queued,
+        crate::api::run::RunState::Queued,
         "{:?}",
         queued.failure
     );
@@ -486,7 +486,7 @@ fn prechecks_refuse_a_run_whose_client_lost_a_permission_it_uses() {
 pub(super) struct Host(pub(super) Option<HostProblem>);
 
 impl HostChecks for Host {
-    fn check(&self, _: &Job, _: &crate::config::Preset) -> Result<(), HostProblem> {
+    fn check(&self, _: &Run, _: &crate::config::Preset) -> Result<(), HostProblem> {
         self.0.clone().map_or(Ok(()), Err)
     }
 }
@@ -538,7 +538,7 @@ fn a_quarantined_busy_or_running_lane_makes_the_job_wait() {
         WaitingFor::LaneQuarantined
     );
     w.lanes.update(&lane(), |f| f.unquarantine(2)).unwrap();
-    let other = JobId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap();
+    let other = RunId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap();
     w.lanes
         .update(&lane(), |f| f.begin_work(other, 1, 3))
         .unwrap();
@@ -703,7 +703,7 @@ fn the_scheduler_asks_the_lane_whether_it_can_take_a_job() {
         .update(&lane(), |f| {
             f.unquarantine(2);
             f.begin_work(
-                JobId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap(),
+                RunId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap(),
                 1,
                 3,
             );
@@ -716,7 +716,7 @@ fn the_scheduler_asks_the_lane_whether_it_can_take_a_job() {
 
 // ---- provision ----------------------------------------------------------
 
-fn provision(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Job) -> Result<Provisioned, StageStop> {
+fn provision(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Run) -> Result<Provisioned, StageStop> {
     let prepared = w.prepared(job);
     w.stages(waiter).provision(job, &prepared)
 }
@@ -1160,7 +1160,7 @@ fn a_dead_engine_aborts_instead_of_failing_the_job() {
 
 // ---- upload -------------------------------------------------------------
 
-fn upload(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Job) -> Result<(), StageStop> {
+fn upload(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Run) -> Result<(), StageStop> {
     let prepared = w.prepared(job);
     w.stages(waiter).upload(job, &prepared)
 }
@@ -1264,7 +1264,7 @@ fn a_silent_engine_and_a_wrong_size_are_told_apart() {
 
 // ---- launch -------------------------------------------------------------
 
-fn launch(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Job) -> Result<super::Launched, StageStop> {
+fn launch(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Run) -> Result<super::Launched, StageStop> {
     let prepared = w.prepared(job);
     let provisioned = Provisioned {
         vm_id: VM.into(),
@@ -1304,13 +1304,13 @@ fn launch_sends_the_exact_request_and_records_the_run() {
     }
     assert!(!detail.contains("analysis: AnalysisSelection { enabled: true"));
     let stored = w.job(&job.id);
-    assert_eq!(stored.run.unwrap().run_id, "r1");
+    assert_eq!(stored.program.unwrap().id, "r1");
     let recording = stored.recording.unwrap();
     assert_eq!(
         (recording.vm_id.as_str(), recording.boot_id.as_str()),
         (VM, "b2")
     );
-    assert!(kinds(&w.fx, &job.id).contains(&"job.run".to_owned()));
+    assert!(kinds(&w.fx, &job.id).contains(&"run.program".to_owned()));
 }
 
 /// ANT-T0476 (P5): a guest whose kernel crashed while it booted (a clean
@@ -1448,10 +1448,10 @@ fn the_five_stages_run_in_order_with_their_records() {
     );
     // The store: stage events in order, the job still running at launch.
     let kinds = kinds(&w.fx, &job.id);
-    let stage_events = kinds.iter().filter(|k| *k == "job.stage").count();
+    let stage_events = kinds.iter().filter(|k| *k == "run.stage").count();
     assert!(stage_events >= 8, "the stage records: {stage_events}");
     let stored = w.job(&job.id);
-    assert_eq!(stored.state, JobState::Running);
+    assert_eq!(stored.state, RunState::Running);
     assert_eq!(stored.stage, Some(Stage::Launch));
     assert_eq!(stored.vm.as_ref().unwrap().id, VM);
     // The lane file: this job, at launch, finished.
@@ -1460,7 +1460,7 @@ fn the_five_stages_run_in_order_with_their_records() {
         (work.job_id, work.stage, work.checkpoint),
         (job.id.clone(), Stage::Launch, Checkpoint::Finished)
     );
-    assert!(w.engine_events().iter().any(|e| matches!(e, EventBody::LaneState { state: LaneState::Busy, job_id: Some(id), .. } if *id == job.id)));
+    assert!(w.engine_events().iter().any(|e| matches!(e, EventBody::LaneState { state: LaneState::Busy, run_id: Some(id), .. } if *id == job.id)));
 }
 
 #[test]
@@ -1480,7 +1480,7 @@ fn a_failed_stage_is_recorded_failed_and_the_lane_remembers_where() {
     );
     assert_eq!(
         w.job(&job.id).state,
-        JobState::Running,
+        RunState::Running,
         "ending or retrying the job is the caller's"
     );
     assert!(
@@ -1565,7 +1565,7 @@ fn a_crash_in_the_middle_of_a_cycle_is_one_recovery_puts_right() {
     )
     .unwrap();
     assert_eq!(report.jobs.requeued, std::slice::from_ref(&job.id));
-    assert_eq!(w.job(&job.id).state, JobState::Queued);
+    assert_eq!(w.job(&job.id).state, RunState::Queued);
     let lane_report = &report.lanes[0];
     assert_eq!(lane_report.qemu, crate::lane::QemuOutcome::Killed(900));
     let work = lane_report.interrupted.as_ref().unwrap();

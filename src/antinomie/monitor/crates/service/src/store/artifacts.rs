@@ -11,8 +11,8 @@ use crate::{
         artifact::{Artifact, ArtifactKind, MediaType},
         error::ApiError,
         event::EventBody,
-        ids::{ArtifactId, JobId, Sha256Hex},
-        job::JobState,
+        ids::{ArtifactId, RunId, Sha256Hex},
+        run::RunState,
     },
     clock::new_artifact_id,
 };
@@ -32,14 +32,14 @@ pub struct NewArtifact {
 }
 
 impl Store {
-    /// Record an artifact of a running job and send `job.artifact`. A row of
+    /// Record an artifact of a running job and send `run.artifact`. A row of
     /// the job at the same `location` is replaced: its file was written over
     /// (a job resumed at `analyse` writes its report again under the same
     /// names), so its hash and size no longer hold (BH-22).
-    pub fn add_artifact(&self, id: &JobId, new: NewArtifact) -> R<Artifact> {
+    pub fn add_artifact(&self, id: &RunId, new: NewArtifact) -> R<Artifact> {
         self.write(|tx| {
             let cur = current(tx, id)?;
-            if !matches!(cur.state, JobState::Running | JobState::Cancelling) {
+            if !matches!(cur.state, RunState::Running | RunState::Cancelling) {
                 return Err(conflict(id, cur.state, "take an artifact"));
             }
             tx.tx
@@ -71,7 +71,7 @@ impl Store {
                 .map_err(db)?;
             let artifact = Artifact {
                 id: artifact_id,
-                job_id: id.clone(),
+                run_id: id.clone(),
                 kind: new.kind,
                 name: new.name,
                 size: new.size,
@@ -83,7 +83,7 @@ impl Store {
             };
             tx.emit(
                 Some(id),
-                EventBody::JobArtifact {
+                EventBody::RunArtifact {
                     artifact: artifact.clone(),
                 },
             )?;
@@ -92,7 +92,7 @@ impl Store {
     }
 
     /// `artifact.list`.
-    pub fn artifacts(&self, id: &JobId) -> R<Vec<Artifact>> {
+    pub fn artifacts(&self, id: &RunId) -> R<Vec<Artifact>> {
         let conn = self.conn();
         exists(&conn, id)?;
         artifacts_of(&conn, id.as_str())
@@ -118,12 +118,12 @@ impl Store {
     }
 }
 
-fn exists(conn: &rusqlite::Connection, id: &JobId) -> R<()> {
+fn exists(conn: &rusqlite::Connection, id: &RunId) -> R<()> {
     let found: Option<i64> = conn
         .query_row("SELECT 1 FROM jobs WHERE id = ?1", [id.as_str()], |r| {
             r.get(0)
         })
         .optional()
         .map_err(db)?;
-    found.map(|_| ()).ok_or_else(|| ApiError::not_found("job"))
+    found.map(|_| ()).ok_or_else(|| ApiError::not_found("run"))
 }

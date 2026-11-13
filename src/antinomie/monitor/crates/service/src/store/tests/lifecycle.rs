@@ -3,7 +3,7 @@
 //! forbidden edge, `waiting_for`, retries and cancellation.
 
 use super::*;
-use crate::api::{event::StageStatus, ops::JobListParams, status::PauseReason};
+use crate::api::{event::StageStatus, ops::RunListParams, status::PauseReason};
 use crate::store::machine;
 
 fn fail(code: FailureCode, stage: Stage) -> Failure {
@@ -16,18 +16,18 @@ fn claim_order_is_priority_then_age() {
     let low = fx.queued(1);
     fx.clock.advance(10);
     let older_high = fx
-        .submit(JobSpec {
+        .submit(RunRequest {
             priority: Some(5),
             ..spec(2)
         })
-        .job;
+        .run;
     fx.clock.advance(10);
     let urgent = fx
-        .submit(JobSpec {
+        .submit(RunRequest {
             priority: Some(5),
             ..spec(3)
         })
-        .job;
+        .run;
     // All default priority 5: oldest first.
     assert_eq!(fx.store.get(&low.id).unwrap().queue_position, Some(0));
     assert_eq!(
@@ -40,11 +40,11 @@ fn claim_order_is_priority_then_age() {
     let a = fx2.queued(1);
     fx2.clock.advance(5);
     let b = fx2
-        .submit(JobSpec {
+        .submit(RunRequest {
             priority: Some(9),
             ..spec(2)
         })
-        .job;
+        .run;
     let first = fx2
         .store
         .claim_next(&lane(), &mut |_| Eligibility::Ready)
@@ -58,7 +58,7 @@ fn claim_order_is_priority_then_age() {
 fn claiming_starts_attempt_one_at_prechecks() {
     let fx = Fx::new("claim");
     let job = fx.running(1);
-    assert_eq!(job.state, JobState::Running);
+    assert_eq!(job.state, RunState::Running);
     assert_eq!(job.stage, Some(Stage::Prechecks));
     assert_eq!(job.attempt, 1);
     assert_eq!(job.started_ms, Some(T0));
@@ -67,7 +67,7 @@ fn claiming_starts_attempt_one_at_prechecks() {
     assert_eq!(job.queue_position, None);
     assert_eq!(
         kinds(&fx, &job.id),
-        ["job.created", "job.state", "job.stage"]
+        ["run.created", "run.state", "run.stage"]
     );
     // Nothing else to claim.
     assert!(
@@ -102,7 +102,7 @@ fn stages_follow_each_other_and_the_job_succeeds() {
     fx.store.end_stage(&job.id, StageStatus::Skipped).unwrap();
     fx.clock.advance(100);
     let done = fx.store.finish(&job.id, Outcome::Succeeded, None).unwrap();
-    assert_eq!(done.state, JobState::Succeeded);
+    assert_eq!(done.state, RunState::Succeeded);
     assert_eq!(done.outcome, Some(Outcome::Succeeded));
     assert_eq!(done.stage, None);
     assert_eq!(done.finished_ms, Some(T0 + 700));
@@ -111,7 +111,7 @@ fn stages_follow_each_other_and_the_job_succeeds() {
     let last = events.last().unwrap();
     assert!(matches!(
         last.body,
-        EventBody::JobFinished {
+        EventBody::RunFinished {
             outcome: Outcome::Succeeded,
             ..
         }
@@ -119,7 +119,7 @@ fn stages_follow_each_other_and_the_job_succeeds() {
     let stage_events: Vec<_> = events
         .iter()
         .filter_map(|e| match &e.body {
-            EventBody::JobStage {
+            EventBody::RunStage {
                 stage,
                 status,
                 duration_ms,
@@ -156,7 +156,7 @@ fn partial_and_failed_endings() {
     let partial = fx.store.finish(&a.id, Outcome::Partial, None).unwrap();
     assert_eq!(
         (partial.state, partial.failure.clone()),
-        (JobState::Partial, None)
+        (RunState::Partial, None)
     );
     let b = fx.running(2);
     let failed = fx
@@ -192,7 +192,7 @@ fn cancelling_a_queued_job_ends_it_at_once() {
         .store
         .cancel(&job.id, Some("not needed"), &caller(1000))
         .unwrap();
-    assert_eq!(cancelled.state, JobState::Cancelled);
+    assert_eq!(cancelled.state, RunState::Cancelled);
     assert_eq!(cancelled.finished_ms, Some(T0));
     let failure = cancelled.failure.unwrap();
     assert_eq!(
@@ -201,7 +201,7 @@ fn cancelling_a_queued_job_ends_it_at_once() {
     );
     assert_eq!(
         kinds(&fx, &job.id),
-        ["job.created", "job.state", "job.finished"]
+        ["run.created", "run.state", "run.finished"]
     );
     // Cancelling again is a conflict.
     assert_eq!(
@@ -222,16 +222,16 @@ fn cancelling_a_running_job_goes_through_cancelling() {
         .store
         .cancel(&job.id, Some("stop"), &caller(1000))
         .unwrap();
-    assert_eq!(cancelling.state, JobState::Cancelling);
+    assert_eq!(cancelling.state, RunState::Cancelling);
     assert_eq!(cancelling.stage, Some(Stage::Run));
     // Idempotent while it unwinds.
     assert_eq!(
         fx.store.cancel(&job.id, None, &caller(1000)).unwrap().state,
-        JobState::Cancelling
+        RunState::Cancelling
     );
     // Cancelling ends in cancelled ...
     let done = fx.store.finish(&job.id, Outcome::Cancelled, None).unwrap();
-    assert_eq!(done.state, JobState::Cancelled);
+    assert_eq!(done.state, RunState::Cancelled);
     assert_eq!(done.failure.unwrap().message, "stop");
     // ... or in failed when cleanup fails.
     let other = fx.running(2);
@@ -244,7 +244,7 @@ fn cancelling_a_running_job_goes_through_cancelling() {
             Some(fail(FailureCode::RevertFailed, Stage::Cleanup)),
         )
         .unwrap();
-    assert_eq!(failed.state, JobState::Failed);
+    assert_eq!(failed.state, RunState::Failed);
     assert_eq!(failed.failure.unwrap().code, FailureCode::RevertFailed);
 }
 
@@ -254,10 +254,10 @@ fn only_the_owner_or_a_manager_may_cancel() {
     let job = fx.queued(1);
     let error = fx.store.cancel(&job.id, None, &caller(2000)).unwrap_err();
     assert_eq!(error.code, ErrorCode::PermissionDenied);
-    assert_eq!(fx.store.get(&job.id).unwrap().state, JobState::Queued);
+    assert_eq!(fx.store.get(&job.id).unwrap().state, RunState::Queued);
     assert_eq!(
         fx.store.cancel(&job.id, None, &manager()).unwrap().state,
-        JobState::Cancelled
+        RunState::Cancelled
     );
 }
 
@@ -278,12 +278,12 @@ fn a_retryable_failure_requeues_with_backoff_until_attempts_run_out() {
         .unwrap();
     assert_eq!(
         (queued.state, queued.waiting_for, queued.stage, queued.lane),
-        (JobState::Queued, Some(WaitingFor::Backoff), None, None)
+        (RunState::Queued, Some(WaitingFor::Backoff), None, None)
     );
     assert_eq!(queued.attempt, 1);
     assert_eq!(
         kinds(&fx, &job.id)[kinds(&fx, &job.id).len() - 2..],
-        ["job.requeued", "job.state"]
+        ["run.requeued", "run.state"]
     );
     // Not started during the backoff; says why.
     assert!(
@@ -316,7 +316,7 @@ fn a_retryable_failure_requeues_with_backoff_until_attempts_run_out() {
         .requeue(&job.id, RequeueKind::Retry, "again", Some(&failure), None)
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
-    assert_eq!(fx.store.get(&job.id).unwrap().state, JobState::Running);
+    assert_eq!(fx.store.get(&job.id).unwrap().state, RunState::Running);
     // The attempt rows keep the first failure.
     let (code, detail): (String, String) = fx
         .store
@@ -338,7 +338,7 @@ fn a_shutdown_puts_the_job_back_without_counting_the_attempt() {
     let fx = Fx::new("shutdown");
     let job = fx.running(1);
     let cancelling = fx.store.cancel_for_shutdown(&job.id).unwrap();
-    assert_eq!(cancelling.state, JobState::Cancelling);
+    assert_eq!(cancelling.state, RunState::Cancelling);
     let queued = fx
         .store
         .requeue(
@@ -349,7 +349,7 @@ fn a_shutdown_puts_the_job_back_without_counting_the_attempt() {
             None,
         )
         .unwrap();
-    assert_eq!((queued.state, queued.waiting_for), (JobState::Queued, None));
+    assert_eq!((queued.state, queued.waiting_for), (RunState::Queued, None));
     let again = fx
         .store
         .claim_next(&lane(), &mut |_| Eligibility::Ready)
@@ -387,7 +387,7 @@ fn a_shutdown_puts_the_job_back_without_counting_the_attempt() {
             .finish(&other.id, Outcome::Cancelled, None)
             .unwrap()
             .state,
-        JobState::Cancelled
+        RunState::Cancelled
     );
 }
 
@@ -416,7 +416,7 @@ fn waiting_for_is_set_changed_and_cleared() {
     fx.store.claim_next(&lane(), &mut |_| why).unwrap();
     assert_eq!(
         kinds(&fx, &job.id),
-        ["job.created", "job.state", "job.state"]
+        ["run.created", "run.state", "run.state"]
     );
     // Ready clears it.
     let started = fx
@@ -496,11 +496,11 @@ fn a_job_that_waits_too_long_fails_with_the_code_of_the_wait() {
     assert_eq!(failed.len(), 4);
     for (at, (_, code)) in cases.iter().enumerate() {
         let job = failed.iter().find(|j| j.id == ids[at]).unwrap();
-        assert_eq!(job.state, JobState::Failed);
+        assert_eq!(job.state, RunState::Failed);
         let failure = job.failure.as_ref().unwrap();
         assert_eq!((failure.code, failure.stage), (*code, Stage::Prechecks));
     }
-    assert_eq!(fx.store.get(&lane_wait.id).unwrap().state, JobState::Queued);
+    assert_eq!(fx.store.get(&lane_wait.id).unwrap().state, RunState::Queued);
     // A lane wait does not time out.
     fx.clock.advance(1_000_000);
     assert!(fx.store.expire_waits().unwrap().is_empty());
@@ -598,7 +598,7 @@ fn artifacts_warnings_and_assessment_belong_to_a_running_job() {
     assert_eq!(job.warnings[999].text, "warning 999");
     assert_eq!(job.warnings[1000].code, "warnings_truncated");
     let types = kinds(&fx, &job.id);
-    assert_eq!(types.iter().filter(|t| *t == "job.warning").count(), 1001);
+    assert_eq!(types.iter().filter(|t| *t == "run.warning").count(), 1001);
     // After the end nothing more is taken.
     fx.store.finish(&job.id, Outcome::Succeeded, None).unwrap();
     assert_eq!(
@@ -611,15 +611,15 @@ fn artifacts_warnings_and_assessment_belong_to_a_running_job() {
 /// operation works exactly when the state machine has the edge.
 #[test]
 fn every_forbidden_edge_is_refused_and_changes_nothing() {
-    const STATES: [JobState; 8] = [
-        JobState::Queued,
-        JobState::Running,
-        JobState::Cancelling,
-        JobState::Succeeded,
-        JobState::Partial,
-        JobState::Failed,
-        JobState::Cancelled,
-        JobState::Rejected,
+    const STATES: [RunState; 8] = [
+        RunState::Queued,
+        RunState::Running,
+        RunState::Cancelling,
+        RunState::Succeeded,
+        RunState::Partial,
+        RunState::Failed,
+        RunState::Cancelled,
+        RunState::Rejected,
     ];
     let failure = || fail(FailureCode::Internal, Stage::Run);
     for from in STATES {
@@ -629,28 +629,28 @@ fn every_forbidden_edge_is_refused_and_changes_nothing() {
             let id = job_in(&fx, from);
             let before = fx.store.get(&id).unwrap();
             let events_before = kinds(&fx, &id);
-            let result: R<Job> = match to {
-                JobState::Running => fx
+            let result: R<Run> = match to {
+                RunState::Running => fx
                     .store
                     .claim_next(&lane(), &mut |_| Eligibility::Ready)
                     .and_then(|job| match job {
                         Some(job) if job.id == id => Ok(job),
                         _ => Err(ApiError::new(ErrorCode::Conflict, "not claimed")),
                     }),
-                JobState::Cancelling => fx.store.cancel_for_shutdown(&id),
-                JobState::Queued => fx
+                RunState::Cancelling => fx.store.cancel_for_shutdown(&id),
+                RunState::Queued => fx
                     .store
                     .requeue(&id, RequeueKind::Shutdown, "x", None, None),
-                JobState::Succeeded => fx.store.finish(&id, Outcome::Succeeded, None),
-                JobState::Partial => fx.store.finish(&id, Outcome::Partial, None),
-                JobState::Failed => fx.store.finish(&id, Outcome::Failed, Some(failure())),
-                JobState::Cancelled => fx.store.finish(&id, Outcome::Cancelled, None),
-                JobState::Rejected => fx.store.finish(&id, Outcome::Rejected, None),
+                RunState::Succeeded => fx.store.finish(&id, Outcome::Succeeded, None),
+                RunState::Partial => fx.store.finish(&id, Outcome::Partial, None),
+                RunState::Failed => fx.store.finish(&id, Outcome::Failed, Some(failure())),
+                RunState::Cancelled => fx.store.finish(&id, Outcome::Cancelled, None),
+                RunState::Rejected => fx.store.finish(&id, Outcome::Rejected, None),
             };
             // `requeue` from `cancelling` needs a shutdown cancel; the table's
             // edge exists, and the helper above made this job a user cancel.
             let expected = machine::allowed(from, to)
-                && !(from == JobState::Cancelling && to == JobState::Queued);
+                && !(from == RunState::Cancelling && to == RunState::Queued);
             assert_eq!(
                 result.is_ok(),
                 expected,
@@ -671,22 +671,22 @@ fn every_forbidden_edge_is_refused_and_changes_nothing() {
 }
 
 /// A job in the given state, made through the public operations.
-fn job_in(fx: &Fx, state: JobState) -> JobId {
+fn job_in(fx: &Fx, state: RunState) -> RunId {
     match state {
-        JobState::Queued => fx.queued(1).id,
-        JobState::Rejected => fx.submit(spec(99)).job.id,
-        JobState::Running => fx.running(1).id,
-        JobState::Cancelling => {
+        RunState::Queued => fx.queued(1).id,
+        RunState::Rejected => fx.submit(spec(99)).run.id,
+        RunState::Running => fx.running(1).id,
+        RunState::Cancelling => {
             let id = fx.running(1).id;
             fx.store.cancel(&id, None, &caller(1000)).unwrap();
             id
         }
-        JobState::Succeeded | JobState::Partial | JobState::Failed | JobState::Cancelled => {
+        RunState::Succeeded | RunState::Partial | RunState::Failed | RunState::Cancelled => {
             let id = fx.running(1).id;
             match state {
-                JobState::Succeeded => fx.store.finish(&id, Outcome::Succeeded, None),
-                JobState::Partial => fx.store.finish(&id, Outcome::Partial, None),
-                JobState::Failed => fx.store.finish(
+                RunState::Succeeded => fx.store.finish(&id, Outcome::Succeeded, None),
+                RunState::Partial => fx.store.finish(&id, Outcome::Partial, None),
+                RunState::Failed => fx.store.finish(
                     &id,
                     Outcome::Failed,
                     Some(fail(FailureCode::Internal, Stage::Run)),
@@ -706,7 +706,7 @@ fn job_in(fx: &Fx, state: JobState) -> JobId {
 fn queued_jobs_can_fail_and_every_edge_in_the_table_is_reachable() {
     // queued -> failed, running -> queued, cancelling -> queued are in the table
     // and exercised above; check the table size against the diagram.
-    assert!(machine::allowed(JobState::Queued, JobState::Failed));
+    assert!(machine::allowed(RunState::Queued, RunState::Failed));
     let fx = Fx::new("edge-queued-failed");
     let id = fx.queued(1).id;
     let failed = fx
@@ -717,7 +717,7 @@ fn queued_jobs_can_fail_and_every_edge_in_the_table_is_reachable() {
             Some(fail(FailureCode::HostResources, Stage::Prechecks)),
         )
         .unwrap();
-    assert_eq!(failed.state, JobState::Failed);
+    assert_eq!(failed.state, RunState::Failed);
 }
 
 #[test]
@@ -730,7 +730,7 @@ fn listing_pages_newest_first_and_filters() {
         if n % 2 == 0 {
             s.labels.insert("ci".into(), "yes".into());
         }
-        ids.push(fx.submit(s).job.id);
+        ids.push(fx.submit(s).run.id);
     }
     let done = fx
         .store
@@ -743,20 +743,20 @@ fn listing_pages_newest_first_and_filters() {
     let page = fx
         .store
         .list(
-            &JobListParams {
+            &RunListParams {
                 limit: Some(3),
                 ..Default::default()
             },
             None,
         )
         .unwrap();
-    let listed: Vec<_> = page.jobs.iter().map(|j| j.id.clone()).collect();
+    let listed: Vec<_> = page.runs.iter().map(|j| j.id.clone()).collect();
     assert_eq!(listed, [ids[6].clone(), ids[5].clone(), ids[4].clone()]);
     let cursor = page.next_cursor.unwrap();
     let second = fx
         .store
         .list(
-            &JobListParams {
+            &RunListParams {
                 limit: Some(3),
                 cursor: Some(cursor),
                 ..Default::default()
@@ -765,13 +765,13 @@ fn listing_pages_newest_first_and_filters() {
         )
         .unwrap();
     assert_eq!(
-        second.jobs.iter().map(|j| j.id.clone()).collect::<Vec<_>>(),
+        second.runs.iter().map(|j| j.id.clone()).collect::<Vec<_>>(),
         [ids[3].clone(), ids[2].clone(), ids[1].clone()]
     );
     let third = fx
         .store
         .list(
-            &JobListParams {
+            &RunListParams {
                 limit: Some(3),
                 cursor: second.next_cursor,
                 ..Default::default()
@@ -779,10 +779,10 @@ fn listing_pages_newest_first_and_filters() {
             None,
         )
         .unwrap();
-    assert_eq!(third.jobs.len(), 1);
+    assert_eq!(third.runs.len(), 1);
     assert_eq!(third.next_cursor, None);
 
-    use crate::api::ops::JobListParams as P;
+    use crate::api::ops::RunListParams as P;
     let finished = fx
         .store
         .list(
@@ -793,18 +793,18 @@ fn listing_pages_newest_first_and_filters() {
             None,
         )
         .unwrap();
-    assert_eq!(finished.jobs.len(), 1);
+    assert_eq!(finished.runs.len(), 1);
     let queued = fx
         .store
         .list(
             &P {
-                state: Some(JobState::Queued),
+                state: Some(RunState::Queued),
                 ..Default::default()
             },
             None,
         )
         .unwrap();
-    assert_eq!(queued.jobs.len(), 6);
+    assert_eq!(queued.runs.len(), 6);
     let labelled = fx
         .store
         .list(
@@ -815,7 +815,7 @@ fn listing_pages_newest_first_and_filters() {
             None,
         )
         .unwrap();
-    assert_eq!(labelled.jobs.len(), 3);
+    assert_eq!(labelled.runs.len(), 3);
     let any_value = fx
         .store
         .list(
@@ -826,7 +826,7 @@ fn listing_pages_newest_first_and_filters() {
             None,
         )
         .unwrap();
-    assert_eq!(any_value.jobs.len(), 3);
+    assert_eq!(any_value.runs.len(), 3);
     let by_sha = fx
         .store
         .list(
@@ -837,7 +837,7 @@ fn listing_pages_newest_first_and_filters() {
             None,
         )
         .unwrap();
-    assert_eq!(by_sha.jobs.len(), 1);
+    assert_eq!(by_sha.runs.len(), 1);
     let since = fx
         .store
         .list(
@@ -848,9 +848,9 @@ fn listing_pages_newest_first_and_filters() {
             None,
         )
         .unwrap();
-    assert_eq!(since.jobs.len(), 3);
+    assert_eq!(since.runs.len(), 3);
     let own = fx.store.list(&P::default(), Some("local:4242")).unwrap();
-    assert!(own.jobs.is_empty());
+    assert!(own.runs.is_empty());
 
     for bad in [Some(0), Some(201)] {
         assert_eq!(
@@ -904,7 +904,7 @@ fn a_label_filter_pages_past_non_matching_jobs() {
                 &fx.ctx(),
             )
             .unwrap()
-            .job;
+            .run;
         if n == 0 || n == 100 || n == 249 {
             labelled.push(job.id);
         }
@@ -912,7 +912,7 @@ fn a_label_filter_pages_past_non_matching_jobs() {
     let page = fx
         .store
         .list(
-            &JobListParams {
+            &RunListParams {
                 label: Some("pick".into()),
                 limit: Some(2),
                 ..Default::default()
@@ -921,13 +921,13 @@ fn a_label_filter_pages_past_non_matching_jobs() {
         )
         .unwrap();
     assert_eq!(
-        page.jobs.iter().map(|j| j.id.clone()).collect::<Vec<_>>(),
+        page.runs.iter().map(|j| j.id.clone()).collect::<Vec<_>>(),
         [labelled[2].clone(), labelled[1].clone()]
     );
     let rest = fx
         .store
         .list(
-            &JobListParams {
+            &RunListParams {
                 label: Some("pick".into()),
                 limit: Some(2),
                 cursor: page.next_cursor,
@@ -936,8 +936,8 @@ fn a_label_filter_pages_past_non_matching_jobs() {
             None,
         )
         .unwrap();
-    assert_eq!(rest.jobs.len(), 1);
-    assert_eq!(rest.jobs[0].id, labelled[0]);
+    assert_eq!(rest.runs.len(), 1);
+    assert_eq!(rest.runs[0].id, labelled[0]);
 }
 
 /// BH-01 (bug hunt 0.9.0): a lane that can run a job must find it even when

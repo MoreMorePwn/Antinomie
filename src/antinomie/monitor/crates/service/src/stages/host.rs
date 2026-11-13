@@ -8,7 +8,7 @@
 //! [`RealTriage`]; a test can wrap it and replace one step (a scan that never
 //! ends, a report that cannot be written). [`SampleTags`] is the seam to the
 //! library for the one thing the service writes there on its own.
-use crate::{api::job::Job, custody};
+use crate::{api::run::Run, custody};
 use antinomie_monitor_core::{
     BackendOptions,
     analysis::detection::Engine,
@@ -46,7 +46,7 @@ impl Built {
 
 pub trait HostTriage: Send + Sync {
     /// The saved run of the job's recording, read without writing into it.
-    fn open_run(&self, job: &Job) -> Result<SavedRun, String>;
+    fn open_run(&self, job: &Run) -> Result<SavedRun, String>;
     /// Index the whole run (the GUI's scan).
     fn index(&self, saved: &SavedRun, cancel: &Arc<AtomicBool>) -> Result<ArchiveScan, String>;
     /// Run the engines over the run and keep their results in the recording.
@@ -73,7 +73,7 @@ pub trait HostTriage: Send + Sync {
     /// make.
     fn ensure_digest(
         &self,
-        _job: &Job,
+        _job: &Run,
         _cancel: &Arc<AtomicBool>,
     ) -> Result<Option<String>, String> {
         Ok(None)
@@ -124,7 +124,7 @@ impl RealTriage {
 
     /// The options of the data folder that holds `job`'s run: its lane's,
     /// else lane 1's.
-    pub fn options_for(&self, job: &Job) -> &BackendOptions {
+    pub fn options_for(&self, job: &Run) -> &BackendOptions {
         job.lane
             .as_ref()
             .and_then(|lane| self.lanes.iter().find(|(id, _)| id == lane))
@@ -141,7 +141,7 @@ impl RealTriage {
 }
 
 impl HostTriage for RealTriage {
-    fn open_run(&self, job: &Job) -> Result<SavedRun, String> {
+    fn open_run(&self, job: &Run) -> Result<SavedRun, String> {
         let recording = job
             .recording
             .as_ref()
@@ -189,7 +189,7 @@ impl HostTriage for RealTriage {
         detection::save_digest(saved, scan, &settings, outcomes)
     }
 
-    fn ensure_digest(&self, job: &Job, cancel: &Arc<AtomicBool>) -> Result<Option<String>, String> {
+    fn ensure_digest(&self, job: &Run, cancel: &Arc<AtomicBool>) -> Result<Option<String>, String> {
         use antinomie_triage::digest_job::{self, Built};
         let saved = self.open_run(job)?;
         let built = digest_job::queue().build_blocking(
@@ -249,7 +249,7 @@ pub fn now_ms() -> u64 {
 pub trait SampleTags: Send + Sync {
     /// Add `tag` to the sample of `job`, under `actor` in the custody log.
     /// Returns whether it was added (false: it was there already).
-    fn add_tag(&self, job: &Job, tag: &str) -> Result<bool, String>;
+    fn add_tag(&self, job: &Run, tag: &str) -> Result<bool, String>;
 }
 
 /// The library of a data directory.
@@ -258,7 +258,7 @@ pub struct LibraryTags {
 }
 
 impl SampleTags for LibraryTags {
-    fn add_tag(&self, job: &Job, tag: &str) -> Result<bool, String> {
+    fn add_tag(&self, job: &Run, tag: &str) -> Result<bool, String> {
         let sample = job.sample.as_ref().ok_or("the job has no sample")?;
         let mut library =
             Library::open_patient(&self.data_dir)?.with_actor(&custody::automation_actor(job))?;
@@ -270,7 +270,7 @@ impl SampleTags for LibraryTags {
 pub struct NoTags;
 
 impl SampleTags for NoTags {
-    fn add_tag(&self, _: &Job, _: &str) -> Result<bool, String> {
+    fn add_tag(&self, _: &Run, _: &str) -> Result<bool, String> {
         Ok(false)
     }
 }

@@ -5,7 +5,7 @@ use super::*;
 use crate::{
     api::{
         assessment::{AssessmentKind, Counts, DetectionHit, Label, Tier},
-        job::EndReason,
+        run::EndReason,
     },
     config::preset::{VerdictMapping, VerdictRule, VerdictSettings},
 };

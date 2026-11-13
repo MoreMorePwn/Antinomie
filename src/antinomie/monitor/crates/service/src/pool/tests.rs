@@ -6,8 +6,8 @@ use super::state::{Concluded, JobPhase, PoolJob, PoolState, PoolStop, Task};
 use crate::{
     api::{
         failure::{Failure, FailureCode},
-        ids::JobId,
-        job::{HostItem, HostItemState, Job, Outcome, Stage},
+        ids::RunId,
+        run::{HostItem, HostItemState, Outcome, Run, Stage},
     },
     stages::{
         items::{ItemKind, JobWork, PhaseEnd, host_item, items_for},
@@ -42,19 +42,19 @@ pub(super) fn plan(statics: &[AnalysisKind], engines: bool) -> HostPlan {
     }
 }
 
-pub(super) fn job(n: u8, created_ms: u64) -> Job {
-    let id = JobId::from_parts(1_794_000_000_000 + u64::from(n), [n; 10]);
+pub(super) fn job(n: u8, created_ms: u64) -> Run {
+    let id = RunId::from_parts(1_794_000_000_000 + u64::from(n), [n; 10]);
     serde_json::from_value(serde_json::json!({
         "api_version": 1, "id": id, "state": "running", "created_ms": created_ms,
         "attempt": 1, "max_attempts": 1, "client_id": "local:1000",
-        "spec": {"sample": {"sha256": "ab".repeat(32)}},
-        "policy": {"name": "default", "digest": "d"},
+        "request": {"sample": {"sha256": "ab".repeat(32)}},
+        "preset": {"name": "default", "digest": "d"},
         "artifacts": [], "warnings": [], "labels": {},
     }))
     .unwrap()
 }
 
-fn pool_job(job: Job, plan: HostPlan, deadline_ms: u64) -> PoolJob {
+fn pool_job(job: Run, plan: HostPlan, deadline_ms: u64) -> PoolJob {
     let items = items_for(&plan);
     let timing = Timing::default();
     let inputs = Inputs {
@@ -80,7 +80,7 @@ fn pool_job(job: Job, plan: HostPlan, deadline_ms: u64) -> PoolJob {
     }
 }
 
-fn add(state: &mut PoolState, job: Job, plan: HostPlan) -> JobId {
+fn add(state: &mut PoolState, job: Run, plan: HostPlan) -> RunId {
     let id = job.id.clone();
     state
         .jobs
@@ -88,7 +88,7 @@ fn add(state: &mut PoolState, job: Job, plan: HostPlan) -> JobId {
     id
 }
 
-fn no_deadline(_: &Job, _: &[HostItem]) -> Failure {
+fn no_deadline(_: &Run, _: &[HostItem]) -> Failure {
     Failure::new(FailureCode::Internal, Stage::Analyse, "late", None)
 }
 
@@ -96,7 +96,7 @@ fn next(state: &mut PoolState) -> Option<Task> {
     state.next(1_000, &mut || None, &no_deadline)
 }
 
-fn item(task: &Option<Task>) -> (JobId, String) {
+fn item(task: &Option<Task>) -> (RunId, String) {
     match task {
         Some(Task::Item { job, kind, .. }) => (job.clone(), kind.name()),
         other => panic!("not an item: {other:?}"),

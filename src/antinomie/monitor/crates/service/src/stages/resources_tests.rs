@@ -4,7 +4,7 @@ use crate::{
     api::{
         event::EventBody,
         failure::FailureCode,
-        job::{EndReason, Job, JobState, Outcome, WaitingFor},
+        run::{EndReason, Outcome, Run, RunState, WaitingFor},
         status::PauseReason,
     },
     config::{Preset, service::Resources},
@@ -93,7 +93,7 @@ fn checks(machine: &Arc<Machine>, require_kvm: bool) -> ResourceChecks<'static> 
     }
 }
 
-fn job(fx: &Fx) -> Job {
+fn job(fx: &Fx) -> Run {
     fx.queued(1)
 }
 
@@ -388,7 +388,7 @@ fn a_job_below_a_floor_stays_queued_with_its_reason_and_runs_when_the_floor_is_m
     let stored = w.fx.store.get(&job.id).unwrap();
     assert_eq!(
         (stored.state, stored.waiting_for),
-        (JobState::Queued, Some(WaitingFor::Resources))
+        (RunState::Queued, Some(WaitingFor::Resources))
     );
     assert_eq!(stored.attempt, 0, "no attempt was used");
     // The memory comes back: the same job is claimed.
@@ -452,7 +452,7 @@ fn a_floor_that_fails_after_the_claim_sends_the_job_back_to_the_queue() {
         other => panic!("{other:?}"),
     }
     let stored = w.fx.store.get(&job.id).unwrap();
-    assert_eq!(stored.state, JobState::Queued);
+    assert_eq!(stored.state, RunState::Queued);
     assert_eq!(stored.waiting_for, Some(WaitingFor::Resources));
     assert!(
         waiter.engine_mut().sent_names().is_empty(),
@@ -466,7 +466,7 @@ fn a_floor_that_fails_after_the_claim_sends_the_job_back_to_the_queue() {
 struct Draining(Arc<AtomicBool>);
 
 impl HostChecks for Draining {
-    fn check(&self, _: &Job, _: &Preset) -> Result<(), HostProblem> {
+    fn check(&self, _: &Run, _: &Preset) -> Result<(), HostProblem> {
         Ok(())
     }
     fn low_disk(&self) -> Option<String> {
@@ -499,7 +499,7 @@ fn a_disk_that_falls_below_the_floor_stops_the_run_pauses_the_queue_and_ends_the
     };
     assert_eq!(end.outcome, Outcome::Partial);
     let stored = w.fx.store.get(&job.id).unwrap();
-    let run = stored.run.unwrap();
+    let run = stored.program.unwrap();
     assert_eq!(
         run.end_reason,
         Some(EndReason::Stopped),
@@ -589,7 +589,7 @@ fn a_full_disk_in_the_run_stage_pauses_the_queue_and_the_job_ends_partial_when_r
     assert_eq!(end.outcome, Outcome::Partial);
     assert!((300..400).contains(&took), "{took} s");
     let stored = w.fx.store.get(&job.id).unwrap();
-    assert_eq!(stored.run.unwrap().end_reason, Some(EndReason::Stopped));
+    assert_eq!(stored.program.unwrap().end_reason, Some(EndReason::Stopped));
     assert!(
         stored.warnings.iter().any(|x| x.code == "low_disk"),
         "{:?}",
@@ -653,7 +653,7 @@ fn a_recording_the_engine_cannot_finish_on_a_full_disk_does_not_hold_the_lane_fo
     assert!(file.current.is_none() && file.qemu.is_none());
     assert!(matches!(
         w.job(&job.id).state,
-        JobState::Queued | JobState::Failed
+        RunState::Queued | RunState::Failed
     ));
     assert_eq!(
         crate::stages::prechecks::lane_eligibility(&file, waiter.snapshot()),
@@ -684,7 +684,7 @@ fn a_full_disk_at_the_end_of_a_job_waits_for_room_instead_of_leaving_it_running(
     );
     let stored = w.job(&job.id);
     assert!(
-        matches!(stored.state, JobState::Failed | JobState::Queued),
+        matches!(stored.state, RunState::Failed | RunState::Queued),
         "{:?}",
         stored.state
     );

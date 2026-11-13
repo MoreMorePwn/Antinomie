@@ -26,7 +26,7 @@ use super::{Engine, WaitError, Waiter, settled_after_stop};
 use crate::api::{
     event::{EventBody, StageStatus},
     failure::{Failure, FailureCode},
-    job::{Outcome, Stage},
+    run::{Outcome, Stage},
     spec::Route,
 };
 use antinomie_monitor_core::{
@@ -375,12 +375,12 @@ impl<E: Engine> Waiter<E> {
             report.outcome = Outcome::Partial;
         }
         for warning in &report.warnings {
-            sink(EventBody::JobWarning {
+            sink(EventBody::RunWarning {
                 code: warning.code.clone(),
                 text: warning.text.clone(),
             });
         }
-        sink(EventBody::JobFinished {
+        sink(EventBody::RunFinished {
             outcome: report.outcome,
             failure: report.failure.clone(),
         });
@@ -402,7 +402,7 @@ impl<E: Engine> Waiter<E> {
             self.report_late_launch(plan, report, sink);
             return Ok(());
         }
-        sink(EventBody::JobProgress {
+        sink(EventBody::RunProgress {
             stage: Stage::Collect,
             text: "stopping the VM".into(),
             fraction: None,
@@ -433,8 +433,8 @@ impl<E: Engine> Waiter<E> {
         let Some(run) = self.late_launch() else {
             return;
         };
-        sink(EventBody::JobRun {
-            run_id: run.id.clone(),
+        sink(EventBody::RunProgram {
+            program_id: run.id.clone(),
             pid: Some(run.pid).filter(|pid| *pid != 0),
             route: route_of(&plan.request, &run),
         });
@@ -450,7 +450,7 @@ impl<E: Engine> Waiter<E> {
         sink: &mut dyn FnMut(EventBody),
     ) -> u64 {
         let took = self.now_ms().saturating_sub(began_ms);
-        sink(EventBody::JobStage {
+        sink(EventBody::RunStage {
             stage,
             status,
             duration_ms: (status != StageStatus::Started).then_some(took),
@@ -466,7 +466,7 @@ impl<E: Engine> Waiter<E> {
         report: &mut RunReport,
     ) -> Result<(), Stop> {
         let progress = |sink: &mut dyn FnMut(EventBody), stage, text: &str| {
-            sink(EventBody::JobProgress {
+            sink(EventBody::RunProgress {
                 stage,
                 text: text.to_owned(),
                 fraction: None,
@@ -528,8 +528,8 @@ impl<E: Engine> Waiter<E> {
             sink,
         ));
         let run = launched?;
-        sink(EventBody::JobRun {
-            run_id: run.id.clone(),
+        sink(EventBody::RunProgram {
+            program_id: run.id.clone(),
             pid: Some(run.pid).filter(|pid| *pid != 0),
             route: route_of(&plan.request, &run),
         });
@@ -601,7 +601,7 @@ impl<E: Engine> Waiter<E> {
                 )),
                 other => Stop::Abort(other),
             })?;
-            sink(EventBody::JobProgress {
+            sink(EventBody::RunProgress {
                 stage: Stage::Provision,
                 text: "starting the VM".into(),
                 fraction: None,
@@ -682,7 +682,7 @@ impl<E: Engine> Waiter<E> {
                         now.saturating_sub(at) >= super::millis(NOT_READY_NOTE_EVERY)
                     }) {
                         noted_ms = Some(now);
-                        sink(EventBody::JobProgress {
+                        sink(EventBody::RunProgress {
                             stage: Stage::Upload,
                             text: not_ready_text(tries),
                             fraction: None,
@@ -844,7 +844,7 @@ impl<E: Engine> Waiter<E> {
             let elapsed = self.now_ms().saturating_sub(begun);
             if !stop_sent && elapsed >= limit_ms {
                 stop_sent = true;
-                sink(EventBody::JobProgress {
+                sink(EventBody::RunProgress {
                     stage: Stage::Run,
                     text: "the run limit is reached; stopping the run".into(),
                     fraction: None,
@@ -919,13 +919,13 @@ impl<E: Engine> Waiter<E> {
                     .extend(incomplete_parts(&run, artifacts.as_ref()));
                 if let Some(triggers) = super::trigger::report(&run, artifacts.as_ref()) {
                     for record in &triggers.records {
-                        sink(EventBody::JobTrigger {
+                        sink(EventBody::RunTrigger {
                             trigger: Some(Box::new(super::trigger::without_paths(record))),
                             note: None,
                         });
                     }
                     for note in &triggers.notes {
-                        sink(EventBody::JobTrigger {
+                        sink(EventBody::RunTrigger {
                             trigger: None,
                             note: Some(note.clone()),
                         });
@@ -947,7 +947,7 @@ impl<E: Engine> Waiter<E> {
             self.pump(Duration::from_millis(100))?;
         }
         if !report.pending.is_empty() {
-            sink(EventBody::JobProgress {
+            sink(EventBody::RunProgress {
                 stage: Stage::Collect,
                 text: format!(
                     "saving the recording without: {} (still running after the collect wait)",
@@ -956,7 +956,7 @@ impl<E: Engine> Waiter<E> {
                 fraction: None,
             });
         }
-        sink(EventBody::JobProgress {
+        sink(EventBody::RunProgress {
             stage: Stage::Collect,
             text: "stopping the VM and saving the recording".into(),
             fraction: None,
@@ -982,7 +982,7 @@ impl<E: Engine> Waiter<E> {
     }
 }
 
-/// The route the run used, for the `job.run` event: the one asked for, else
+/// The route the run used, for the `run.program` event: the one asked for, else
 /// the one the engine recorded, else the default (nothing leaves the VM).
 pub(crate) fn route_of(request: &ExecRequest, run: &RunSummary) -> Route {
     let kind = request

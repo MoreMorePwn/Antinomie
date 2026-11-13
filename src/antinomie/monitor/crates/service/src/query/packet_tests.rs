@@ -35,11 +35,11 @@ fn tools_present() -> bool {
     ready
 }
 
-fn capture_id(service: &QueryService, key: &super::key::RunKey) -> String {
+fn capture_id(service: &QueryService, key: &super::key::RecordingKey) -> String {
     match call(
         service,
         "recording.network.captures",
-        json!({"run_key": key}),
+        json!({"recording_key": key}),
         &ctx(),
     )
     .unwrap()
@@ -72,7 +72,7 @@ fn packet_rows_have_tsharks_columns_and_no_payload_bytes() {
         packets!(call(
             &service,
             "recording.network.packets",
-            json!({"run_key": key, "capture_id": capture}),
+            json!({"recording_key": key, "capture_id": capture}),
             &plain_ctx()
         ))
     };
@@ -111,14 +111,14 @@ fn packet_rows_have_tsharks_columns_and_no_payload_bytes() {
     let two = packets!(call(
         &service,
         "recording.network.packets",
-        json!({"run_key": key, "capture_id": capture, "limit": 2}),
+        json!({"recording_key": key, "capture_id": capture, "limit": 2}),
         &plain_ctx()
     ));
     assert_eq!(two.items.len(), 2);
     let rest = packets!(call(
         &service,
         "recording.network.packets",
-        json!({"run_key": key, "capture_id": capture, "limit": 2, "cursor": two.next_cursor.unwrap()}),
+        json!({"recording_key": key, "capture_id": capture, "limit": 2, "cursor": two.next_cursor.unwrap()}),
         &plain_ctx()
     ));
     assert_eq!(rest.items.iter().map(|p| p.n).collect::<Vec<_>>(), [3]);
@@ -137,7 +137,7 @@ fn a_display_filter_selects_frames_and_a_bad_one_is_invalid_argument() {
     let page = packets!(call(
         &service,
         "recording.network.packets",
-        json!({"run_key": key, "capture_id": capture, "filter": "udp.dstport == 8888"}),
+        json!({"recording_key": key, "capture_id": capture, "filter": "udp.dstport == 8888"}),
         &ctx()
     ));
     assert_eq!(page.items.iter().map(|p| p.n).collect::<Vec<_>>(), [3]);
@@ -146,13 +146,13 @@ fn a_display_filter_selects_frames_and_a_bad_one_is_invalid_argument() {
     let two = packets!(call(
         &service,
         "recording.network.packets",
-        json!({"run_key": key, "capture_id": capture, "limit": 1}),
+        json!({"recording_key": key, "capture_id": capture, "limit": 1}),
         &ctx()
     ));
     let error = call(
         &service,
         "recording.network.packets",
-        json!({"run_key": key, "capture_id": capture, "limit": 1, "filter": "udp", "cursor": two.next_cursor.unwrap()}),
+        json!({"recording_key": key, "capture_id": capture, "limit": 1, "filter": "udp", "cursor": two.next_cursor.unwrap()}),
         &ctx(),
     )
     .unwrap_err();
@@ -161,7 +161,7 @@ fn a_display_filter_selects_frames_and_a_bad_one_is_invalid_argument() {
         let error = call(
             &service,
             "recording.network.packets",
-            json!({"run_key": key, "capture_id": capture, "filter": bad}),
+            json!({"recording_key": key, "capture_id": capture, "filter": bad}),
             &ctx(),
         )
         .unwrap_err();
@@ -177,7 +177,7 @@ fn a_display_filter_selects_frames_and_a_bad_one_is_invalid_argument() {
     let again = packets!(call(
         &service,
         "recording.network.packets",
-        json!({"run_key": key, "capture_id": capture, "filter": "udp"}),
+        json!({"recording_key": key, "capture_id": capture, "filter": "udp"}),
         &ctx()
     ));
     assert_eq!(again.items.len(), 3);
@@ -193,7 +193,7 @@ fn a_decoded_packet_needs_the_sensitive_scope() {
     let service = data.service();
     let key = run.key();
     let capture = capture_id(&service, &key);
-    let params = json!({"run_key": key, "capture_id": capture, "n": 1});
+    let params = json!({"recording_key": key, "capture_id": capture, "n": 1});
     let error = call(
         &service,
         "recording.network.packet",
@@ -221,7 +221,7 @@ fn a_decoded_packet_needs_the_sensitive_scope() {
         let error = call(
             &service,
             "recording.network.packet",
-            json!({"run_key": key, "capture_id": capture, "n": n}),
+            json!({"recording_key": key, "capture_id": capture, "n": n}),
             &ctx(),
         )
         .unwrap_err();
@@ -230,7 +230,7 @@ fn a_decoded_packet_needs_the_sensitive_scope() {
     let error = call(
         &service,
         "recording.network.packets",
-        json!({"run_key": key, "capture_id": "nope"}),
+        json!({"recording_key": key, "capture_id": "nope"}),
         &ctx(),
     )
     .unwrap_err();
@@ -239,7 +239,7 @@ fn a_decoded_packet_needs_the_sensitive_scope() {
     let other = match call(
         &service,
         "recording.artifact.list",
-        json!({"run_key": key}),
+        json!({"recording_key": key}),
         &ctx(),
     )
     .unwrap()
@@ -256,7 +256,7 @@ fn a_decoded_packet_needs_the_sensitive_scope() {
     let error = call(
         &service,
         "recording.network.packets",
-        json!({"run_key": key, "capture_id": other}),
+        json!({"recording_key": key, "capture_id": other}),
         &ctx(),
     )
     .unwrap_err();
@@ -277,13 +277,13 @@ fn packet_reads_write_nothing_under_the_data_directory() {
     packets!(call(
         &service,
         "recording.network.packets",
-        json!({"run_key": key, "capture_id": capture, "filter": "udp"}),
+        json!({"recording_key": key, "capture_id": capture, "filter": "udp"}),
         &ctx()
     ));
     call(
         &service,
         "recording.network.packet",
-        json!({"run_key": key, "capture_id": capture, "n": 2}),
+        json!({"recording_key": key, "capture_id": capture, "n": 2}),
         &ctx(),
     )
     .unwrap();
@@ -314,7 +314,7 @@ fn a_capture_segment_says_which_run_started_it_and_which_were_live() {
     let page = match call(
         &service,
         "recording.network.captures",
-        json!({"run_key": key}),
+        json!({"recording_key": key}),
         &ctx(),
     )
     .unwrap()

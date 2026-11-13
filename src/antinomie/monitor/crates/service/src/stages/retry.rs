@@ -20,7 +20,7 @@
 //! plus or minus 20 percent. The jitter comes from the job id and the attempt,
 //! so it is spread across jobs and repeatable in a test.
 use crate::{
-    api::{failure::Failure, failure::FailureCode, ids::JobId},
+    api::{failure::Failure, failure::FailureCode, ids::RunId},
     config::preset::Retry,
 };
 use std::hash::{Hash, Hasher};
@@ -100,7 +100,7 @@ pub fn transient_launch(failure: &Failure) -> bool {
 }
 
 /// `history` is the codes of the job's earlier failed attempts, oldest first.
-pub fn decide(failure: &Failure, policy: &Retry, history: &[FailureCode], job: &JobId) -> Decision {
+pub fn decide(failure: &Failure, policy: &Retry, history: &[FailureCode], job: &RunId) -> Decision {
     let code = failure.code;
     if permanent(code) {
         return Decision::Final(FinalReason::Permanent);
@@ -120,7 +120,7 @@ pub fn decide(failure: &Failure, policy: &Retry, history: &[FailureCode], job: &
 }
 
 /// The wait before the next attempt after the `failures`-th failure.
-pub fn backoff(policy: &Retry, failures: usize, job: &JobId) -> u32 {
+pub fn backoff(policy: &Retry, failures: usize, job: &RunId) -> u32 {
     let Some(last) = policy.backoff_s.len().checked_sub(1) else {
         return 0;
     };
@@ -136,14 +136,14 @@ pub fn backoff(policy: &Retry, failures: usize, job: &JobId) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::job::Stage;
+    use crate::api::run::Stage;
 
     fn failure(code: FailureCode) -> Failure {
         Failure::new(code, Stage::Run, "x", None)
     }
 
-    fn job() -> JobId {
-        JobId::from_parts(1, [0; 10])
+    fn job() -> RunId {
+        RunId::from_parts(1, [0; 10])
     }
 
     #[test]
@@ -292,7 +292,7 @@ mod tests {
         };
         let mut seen = std::collections::BTreeSet::new();
         for n in 0..40u8 {
-            let id = JobId::from_parts(u64::from(n), [n; 10]);
+            let id = RunId::from_parts(u64::from(n), [n; 10]);
             let a = backoff(&policy, 1, &id);
             assert_eq!(a, backoff(&policy, 1, &id));
             assert!((800..=1200).contains(&a));

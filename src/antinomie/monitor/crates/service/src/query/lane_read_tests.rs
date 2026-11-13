@@ -15,7 +15,7 @@ use super::{
 use crate::{
     api::{
         error::{ApiError, ErrorCode},
-        ids::{JobId, LaneId},
+        ids::{LaneId, RunId},
     },
     daemon::lanes::read_lanes,
 };
@@ -32,7 +32,7 @@ fn call(
 }
 
 fn listed(service: &QueryService, params: Value) -> Vec<Value> {
-    match call(service, "recording.run.list", params, &ctx()).unwrap() {
+    match call(service, "recording.list", params, &ctx()).unwrap() {
         RecordingReply::Runs(page) => page
             .items
             .iter()
@@ -45,8 +45,8 @@ fn listed(service: &QueryService, params: Value) -> Vec<Value> {
 fn detail(service: &QueryService, run: &Run) -> Result<Value, ApiError> {
     match call(
         service,
-        "recording.run.get",
-        json!({"run_key": run.key()}),
+        "recording.get",
+        json!({"recording_key": run.key()}),
         &ctx(),
     )? {
         RecordingReply::Run(single) => Ok(serde_json::to_value(single.value).unwrap()),
@@ -55,23 +55,23 @@ fn detail(service: &QueryService, run: &Run) -> Result<Value, ApiError> {
 }
 
 /// The job store's answer for the runs the test names.
-struct Jobs(Vec<(String, JobId)>);
+struct Jobs(Vec<(String, RunId)>);
 
 impl JobIndex for Jobs {
-    fn job_of_run(&self, vm_id: &str, _boot: &str, run_id: &str) -> Option<JobId> {
+    fn job_of_run(&self, vm_id: &str, _boot: &str, run_id: &str) -> Option<RunId> {
         let wanted = format!("{vm_id}/{run_id}");
         self.0
             .iter()
             .find(|(run, _)| *run == wanted)
             .map(|(_, job)| job.clone())
     }
-    fn analysis_directory(&self, _job: &JobId) -> Option<PathBuf> {
+    fn analysis_directory(&self, _job: &RunId) -> Option<PathBuf> {
         None
     }
 }
 
-fn job(n: u8) -> JobId {
-    JobId::from_parts(1_700_000_000_000 + u64::from(n), [n; 10])
+fn job(n: u8) -> RunId {
+    RunId::from_parts(1_700_000_000_000 + u64::from(n), [n; 10])
 }
 
 /// Lane 1 and `lanes` more lanes, each with one VM (`vm-N`) and a run of the
@@ -122,7 +122,7 @@ fn every_lane_is_read(count: u32) {
         let found = detail(&service, run).unwrap();
         assert_eq!(found["vm_id"], run.vm.as_str(), "{}", run.id);
         assert_eq!(found["run_id"], run.id.as_str());
-        assert_eq!(found["job_id"], json!(job(index as u8 + 1)));
+        assert_eq!(found["from_run"], json!(job(index as u8 + 1)));
         // The run stays in its own lane's folder: lane 1's in the data
         // folder, lane N's under lanes/N, named as such without host paths.
         let lane = run.vm.trim_start_matches("vm-");
@@ -146,7 +146,7 @@ fn every_lane_is_read(count: u32) {
     }
     // The job filter and the VM filter find a lane's run.
     let last = runs.len() as u8;
-    let by_job = listed(&service, json!({"job_id": job(last)}));
+    let by_job = listed(&service, json!({"from_run": job(last)}));
     assert_eq!(by_job.len(), 1);
     assert_eq!(by_job[0]["run_id"], runs.last().unwrap().id.as_str());
     let by_vm = listed(&service, json!({"vm_id": "vm-2"}));
@@ -224,7 +224,7 @@ fn one_lane_reads_as_before_beside_folders_that_are_not_lanes() {
     let service = first.service();
     let items = listed(&service, json!({}));
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["run_key"], json!(run.key()));
+    assert_eq!(items[0]["recording_key"], json!(run.key()));
     assert_eq!(read_lanes(&first.options()).len(), 1);
 }
 
@@ -244,7 +244,7 @@ fn t9_the_bytes_of_a_lane_run_need_the_sensitive_scope_and_are_audited() {
     let RecordingReply::Invocation(single) = call(
         &service,
         "recording.trace.get",
-        json!({"run_key": key, "ref": {"stream": "9", "task": "10", "call": "2"}}),
+        json!({"recording_key": key, "ref": {"stream": "9", "task": "10", "call": "2"}}),
         &ctx(),
     )
     .unwrap() else {
@@ -258,15 +258,15 @@ fn t9_the_bytes_of_a_lane_run_need_the_sensitive_scope_and_are_audited() {
     for (op, params) in [
         (
             "recording.captured.read",
-            json!({"run_key": key, "field": field, "offset": "0", "len": 4}),
+            json!({"recording_key": key, "field": field, "offset": "0", "len": 4}),
         ),
         (
             "recording.files.content",
-            json!({"run_key": key, "version_id": "v1", "range": {"offset": 0, "len": 4}}),
+            json!({"recording_key": key, "version_id": "v1", "range": {"offset": 0, "len": 4}}),
         ),
         (
             "recording.network.packet",
-            json!({"run_key": key, "capture_id": "c1", "n": 1}),
+            json!({"recording_key": key, "capture_id": "c1", "n": 1}),
         ),
     ] {
         let error = call(&service, op, params, &plain_ctx()).unwrap_err();
@@ -282,7 +282,7 @@ fn t9_the_bytes_of_a_lane_run_need_the_sensitive_scope_and_are_audited() {
     let RecordingReply::Bytes(_) = call(
         &service,
         "recording.captured.read",
-        json!({"run_key": key, "field": field, "offset": "0", "len": 11}),
+        json!({"recording_key": key, "field": field, "offset": "0", "len": 11}),
         &ctx(),
     )
     .unwrap() else {
@@ -291,7 +291,7 @@ fn t9_the_bytes_of_a_lane_run_need_the_sensitive_scope_and_are_audited() {
     let seen = lines.lock().unwrap().clone();
     assert_eq!(seen.len(), 1, "{seen:?}");
     assert!(
-        seen[0].ends_with(" op=recording.captured.read run=vm-2:boot-1:run-1 size=11"),
+        seen[0].ends_with(" op=recording.captured.read recording=vm-2:boot-1:run-1 size=11"),
         "{}",
         seen[0]
     );
@@ -308,13 +308,13 @@ fn t9_a_read_of_a_lane_run_writes_nothing_in_any_lane() {
     let before = first.snapshot();
     let service = first.service();
     for (op, params) in [
-        ("recording.run.list", json!({})),
-        ("recording.run.get", json!({"run_key": key})),
-        ("recording.trace.page", json!({"run_key": key})),
-        ("recording.terminal.replay", json!({"run_key": key})),
-        ("recording.artifact.list", json!({"run_key": key})),
-        ("recording.cores.list", json!({"run_key": key})),
-        ("recording.network.captures", json!({"run_key": key})),
+        ("recording.list", json!({})),
+        ("recording.get", json!({"recording_key": key})),
+        ("recording.trace.page", json!({"recording_key": key})),
+        ("recording.terminal.replay", json!({"recording_key": key})),
+        ("recording.artifact.list", json!({"recording_key": key})),
+        ("recording.cores.list", json!({"recording_key": key})),
+        ("recording.network.captures", json!({"recording_key": key})),
     ] {
         assert!(call(&service, op, params, &ctx()).is_ok(), "{op}");
     }

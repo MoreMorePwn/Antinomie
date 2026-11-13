@@ -15,7 +15,7 @@
 //! | Order | First come, first served by job arrival; within a job, list (dependency) order, but an item whose dependencies have ended starts while an earlier one waits for its own (ANT-T0464); no item of a newer job starts before every item of the older one has ([`state`]) |
 //! | Memory | Before an item starts, `MemAvailable` must be at least [`ITEM_FLOOR_MIB`]; below it the head waits (`status` names the wait) |
 //! | Limits | Each item has an expected time and a limit of `daemon.host_time_factor` x that ([`crate::stages::timing`]); time in the queue does not count |
-//! | Job deadline | `host_time_factor` x (the expected time of the items ahead of it when it arrived + its own), at least the work ahead plus its own items' limits. A running item's limit ends at the deadline at the latest; at the deadline running items are stopped (SIGTERM, `stop_grace_s`, SIGKILL) and end `timed_out`, queued ones are `skipped`, and the job fails `deadline_exceeded` (ANT-T0471) |
+//! | Run deadline | `host_time_factor` x (the expected time of the items ahead of it when it arrived + its own), at least the work ahead plus its own items' limits. A running item's limit ends at the deadline at the latest; at the deadline running items are stopped (SIGTERM, `stop_grace_s`, SIGKILL) and end `timed_out`, queued ones are `skipped`, and the job fails `deadline_exceeded` (ANT-T0471) |
 //! | Stops | An item past its limit is stopped gracefully: its cancel flag, SIGTERM to a sandboxed tool, SIGKILL after `daemon.stop_grace_s` (30 s) |
 //! | Engine | Each worker has its own waiter on the shared engine ([`crate::engine::mux`]): `AnalyzeSample` results come back to the worker that asked |
 //! | Cancel | A cancelled job's queued items are skipped, its running ones stop at their next wait; the job ends `cancelled` (or back in the queue at a shutdown cancel) |
@@ -29,8 +29,8 @@ mod tests;
 use crate::{
     api::{
         failure::{Failure, FailureCode},
-        ids::{JobId, LaneId},
-        job::{HostItem, HostItemState, Job, JobState, Outcome, Stage},
+        ids::{LaneId, RunId},
+        run::{HostItem, HostItemState, Outcome, Run, RunState, Stage},
         status::HostPoolStatus,
     },
     clock::Clock,
@@ -114,7 +114,7 @@ fn stage_stop(stop: PoolStop) -> StageStop {
 
 /// The failure of a job past its host-stage deadline (ANT-T0471): the
 /// detail names the items the deadline stopped and those that never started.
-pub(crate) fn deadline_failure(job: &Job, items: &[HostItem]) -> Failure {
+pub(crate) fn deadline_failure(job: &Run, items: &[HostItem]) -> Failure {
     let names = |state: HostItemState| {
         items
             .iter()
@@ -187,7 +187,7 @@ impl HostPool {
 
     /// A job whose `collect` finished: its items join the queue. `outcome`
     /// is what `collect` found. `kept` are items a restart found finished.
-    fn enter(&self, job: &Job, outcome: Outcome, kept: &[HostItem]) {
+    fn enter(&self, job: &Run, outcome: Outcome, kept: &[HostItem]) {
         let job = self.env.store.get(&job.id).unwrap_or_else(|_| job.clone());
         let frozen = match self.env.store.frozen_preset(&job.id) {
             Ok(frozen) => frozen,
@@ -273,13 +273,13 @@ impl HostPool {
     }
 
     /// A job the lane collected.
-    pub fn admit(&self, job: &Job, outcome: Outcome) {
+    pub fn admit(&self, job: &Run, outcome: Outcome) {
         self.enter(job, outcome, &[]);
     }
 
     /// A job recovery found collected: the outcome is read again from the
     /// run's evidence, and its finished static items are kept.
-    pub fn resume<E: Engine>(&self, job: &Job, waiter: &mut Waiter<E>) {
+    pub fn resume<E: Engine>(&self, job: &Run, waiter: &mut Waiter<E>) {
         let fresh = self.env.store.get(&job.id).unwrap_or_else(|_| job.clone());
         let procs = ProcFs;
         let lane = fresh.lane.clone().unwrap_or_else(|| LaneId::new(1));
@@ -296,7 +296,7 @@ impl HostPool {
             workers: self.workers(),
             queued,
             running,
-            jobs: state.jobs.len() as u32,
+            runs: state.jobs.len() as u32,
             waiting_for: state.waiting_for.clone(),
         }
     }
@@ -307,7 +307,7 @@ impl HostPool {
     }
 
     /// The jobs in the pool, oldest first.
-    pub fn jobs(&self) -> Vec<JobId> {
+    pub fn jobs(&self) -> Vec<RunId> {
         lock(&self.state)
             .jobs
             .values()
@@ -324,7 +324,7 @@ impl HostPool {
         self.wake.notify_all();
     }
 
-    fn store_view(&self, id: &JobId, view: Option<Vec<HostItem>>) {
+    fn store_view(&self, id: &RunId, view: Option<Vec<HostItem>>) {
         if let Some(view) = view
             && let Err(error) = self.env.store.set_host_work(id, &view)
         {
@@ -335,7 +335,7 @@ impl HostPool {
     }
 
     /// Change the state and store the job's items, in the order of changes.
-    fn change<T>(&self, id: &JobId, edit: impl FnOnce(&mut PoolState) -> T) -> T {
+    fn change<T>(&self, id: &RunId, edit: impl FnOnce(&mut PoolState) -> T) -> T {
         let _order = lock(&self.persist);
         let (out, view) = {
             let mut state = lock(&self.state);
@@ -349,7 +349,7 @@ impl HostPool {
 
     /// Jobs cancelled while their items waited.
     fn mark_cancels(&self) {
-        let ids: Vec<JobId> = {
+        let ids: Vec<RunId> = {
             let state = lock(&self.state);
             state
                 .jobs
@@ -363,7 +363,7 @@ impl HostPool {
                 .env
                 .store
                 .get(&id)
-                .is_ok_and(|job| job.state == JobState::Cancelling)
+                .is_ok_and(|job| job.state == RunState::Cancelling)
             {
                 let mut state = lock(&self.state);
                 if let Some(job) = state.get_mut(&id)
@@ -386,7 +386,7 @@ impl HostPool {
                 format!("memory: {available} MiB are available, an item needs {floor} MiB")
             })
         };
-        let deadline = |job: &Job, items: &[HostItem]| deadline_failure(job, items);
+        let deadline = |job: &Run, items: &[HostItem]| deadline_failure(job, items);
         let task = state.next(self.env.clock.now_ms(), &mut memory, &deadline)?;
         let id = match &task {
             Task::Item { job, .. }
@@ -440,7 +440,7 @@ impl HostPool {
         self.wake.notify_all();
     }
 
-    fn job_of(&self, id: &JobId) -> Option<(Job, Arc<Mutex<JobWork>>)> {
+    fn job_of(&self, id: &RunId) -> Option<(Run, Arc<Mutex<JobWork>>)> {
         let state = lock(&self.state);
         state.get(id).map(|j| (j.job.clone(), Arc::clone(&j.work)))
     }

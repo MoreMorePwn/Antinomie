@@ -7,7 +7,7 @@
 //! [`crate::server::frame::fuzz_entry`].
 
 use crate::{
-    api::spec::JobSpec,
+    api::spec::RunRequest,
     config::validate,
     intake::staging::valid_name,
     verdict::{Expr, Facts},
@@ -15,15 +15,15 @@ use crate::{
 };
 use std::{ffi::OsStr, os::unix::ffi::OsStrExt, path::Path};
 
-/// `JobSpec` JSON as a socket client or the CLI sends it: parse, check the
+/// `RunRequest` JSON as a socket client or the CLI sends it: parse, check the
 /// shape, and a spec that parsed must survive a round trip unchanged.
 pub fn job_spec(data: &[u8]) {
-    let Ok(spec) = serde_json::from_slice::<JobSpec>(data) else {
+    let Ok(spec) = serde_json::from_slice::<RunRequest>(data) else {
         return;
     };
     let _ = spec.validate_shape();
     let text = serde_json::to_vec(&spec).expect("a spec encodes");
-    let again: JobSpec = serde_json::from_slice(&text).expect("an encoded spec parses");
+    let again: RunRequest = serde_json::from_slice(&text).expect("an encoded spec parses");
     assert_eq!(again, spec);
 }
 

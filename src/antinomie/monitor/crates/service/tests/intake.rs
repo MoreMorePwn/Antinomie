@@ -12,9 +12,9 @@ use antinomie_service::{
         error::ErrorCode,
         failure::FailureCode,
         ids::{Sha256Hex, UploadId},
-        job::JobState,
         ops::{Caller, Permission, UploadBeginParams},
-        spec::{JobSpec, SampleSource},
+        run::RunState,
+        spec::{RunRequest, SampleSource},
     },
     clock::ManualClock,
     config::{LoadedPreset, Preset, PresetSet},
@@ -430,14 +430,14 @@ fn staging_refuses_a_separate_volume_that_can_execute() {
 fn a_staged_elf_becomes_a_library_sample_with_its_origin_and_actor() {
     let fx = Fx::new("admit");
     let bytes = elf(0x3e, 1000);
-    let id = fx.upload("auto:policy-default", Some("evil.bin"), &bytes);
+    let id = fx.upload("auto:preset-default", Some("evil.bin"), &bytes);
     let sample = fx
         .intake()
         .admit(
             &source_upload(&id),
             None,
             &policy(|_| {}),
-            "auto:policy-default",
+            "auto:preset-default",
         )
         .unwrap();
     assert_eq!(sample.sha256.as_str(), sha_of(&bytes));
@@ -460,7 +460,7 @@ fn a_staged_elf_becomes_a_library_sample_with_its_origin_and_actor() {
     // The custody entry says who.
     let entries = library.events(sample.sha256.as_str()).unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].by, "auto:policy-default");
+    assert_eq!(entries[0].by, "auto:preset-default");
     assert!(
         matches!(&entries[0].event, CustodyEvent::Added { origin } if origin.contains("Automation"))
     );
@@ -492,7 +492,7 @@ fn a_staged_elf_becomes_a_library_sample_with_its_origin_and_actor() {
         .into_iter()
         .map(|e| e.by)
         .collect();
-    assert_eq!(by, ["auto:policy-default", "web:bob"]);
+    assert_eq!(by, ["auto:preset-default", "web:bob"]);
 }
 
 #[test]
@@ -787,36 +787,36 @@ fn submit_with_an_upload_id_queues_a_job_and_uses_up_the_upload() {
     };
     let me = Caller::new(ME, &[Permission::SamplesAdd, Permission::RunsSubmit]);
     let id = fx.upload(ME, Some("run-me"), &elf(0x3e, 64));
-    let spec = JobSpec {
+    let spec = RunRequest {
         sample: source_upload(&id),
         name: None,
-        policy: None,
+        preset: None,
         priority: None,
         labels: Default::default(),
         idempotency_key: None,
         overrides: Default::default(),
     };
-    let job = store.submit(&me, spec.clone(), &ctx).unwrap().job;
-    assert_eq!(job.state, JobState::Queued);
+    let job = store.submit(&me, spec.clone(), &ctx).unwrap().run;
+    assert_eq!(job.state, RunState::Queued);
     assert_eq!(
-        job.spec.sample.sha256.as_ref(),
+        job.request.sample.sha256.as_ref(),
         Some(&job.sample.as_ref().unwrap().sha256)
     );
-    assert_eq!(job.spec.sample.upload_id, None);
+    assert_eq!(job.request.sample.upload_id, None);
     assert!(!fx.data.join("inbox/uploads").join(id.as_str()).exists());
     // The upload is gone, so the same spec is a rejected job: sample_missing.
-    let again = store.submit(&me, spec, &ctx).unwrap().job;
-    assert_eq!(again.state, JobState::Rejected);
+    let again = store.submit(&me, spec, &ctx).unwrap().run;
+    assert_eq!(again.state, RunState::Rejected);
     assert_eq!(again.failure.unwrap().code, FailureCode::SampleMissing);
     // A type the policy denies is a rejected job with the code, and no library entry.
     let script = fx.upload(ME, None, b"#!/bin/sh\n");
     let denied_job = store
         .submit(
             &me,
-            JobSpec {
+            RunRequest {
                 sample: source_upload(&script),
                 name: None,
-                policy: None,
+                preset: None,
                 priority: None,
                 labels: Default::default(),
                 idempotency_key: None,
@@ -825,7 +825,7 @@ fn submit_with_an_upload_id_queues_a_job_and_uses_up_the_upload() {
             &ctx,
         )
         .unwrap()
-        .job;
+        .run;
     assert_eq!(
         denied_job.failure.unwrap().code,
         FailureCode::SampleTypeDenied

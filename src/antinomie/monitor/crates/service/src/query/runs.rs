@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `recording.run.list` and `recording.run.get` (design 5.12.3, `RunInfo`,
-//! `RunDetail`): the recorded runs of every VM of the data directory, newest
+//! `recording.list` and `recording.get` (design 5.12.3, `RecordingInfo`,
+//! `RecordingDetail`): the recorded runs of every VM of the data directory, newest
 //! first, read without the lock and without writing into a run folder.
 
 use super::{
     cursor::{Cursor, CursorBinding, Generation, stable_hash},
-    key::RunKey,
+    key::RecordingKey,
     page::{Page, Single},
     phase::detect,
     request::{RunFilter, RunParams},
     service::{Opened, QueryService, state_name},
     types::*,
 };
-use crate::api::{error::ApiError, ids::Sha256Hex, job::RecordingPhase, spec::Route};
+use crate::api::{error::ApiError, ids::Sha256Hex, run::RecordingPhase, spec::Route};
 use antinomie_monitor_core::{
     RunState, RunSummary, WaitStatus,
     recording::{list_runs_read_only, run_filter_facts},
@@ -21,7 +21,7 @@ use antinomie_monitor_core::{
 
 /// One run of the listing, before its page is cut.
 struct Row {
-    key: RunKey,
+    key: RecordingKey,
     run: RunSummary,
     phase: RecordingPhase,
     state: RunStateName,
@@ -52,18 +52,18 @@ fn exit_of(status: &WaitStatus) -> RunExit {
 }
 
 impl QueryService {
-    /// The `RunInfo` of a run in `phase`. `ended_ms` is read from the run's
+    /// The `RecordingInfo` of a run in `phase`. `ended_ms` is read from the run's
     /// manifest, which costs a file read, so the list does it per page item.
     fn run_info(
         &self,
-        key: &RunKey,
+        key: &RecordingKey,
         run: &RunSummary,
         phase: RecordingPhase,
         state: RunStateName,
-    ) -> RunInfo {
+    ) -> RecordingInfo {
         let facts = run_filter_facts(&run.directory, &run.id, &run.vm_id, &run.boot_id).ok();
-        RunInfo {
-            run_key: key.clone(),
+        RecordingInfo {
+            recording_key: key.clone(),
             vm_id: run.vm_id.clone(),
             boot_id: run.boot_id.clone(),
             run_id: run.id.clone(),
@@ -77,7 +77,7 @@ impl QueryService {
                 .as_ref()
                 .and_then(|sample| Sha256Hex::try_from(sample.sha256.clone()).ok()),
             program: self.scrub.text(&run.request.path),
-            job_id: self
+            from_run: self
                 .jobs
                 .as_ref()
                 .and_then(|jobs| jobs.job_of_run(&run.vm_id, &run.boot_id, &run.id)),
@@ -112,7 +112,7 @@ impl QueryService {
                 continue;
             };
             for run in runs {
-                let Ok(key) = RunKey::new(&run.vm_id, &run.boot_id, &run.id) else {
+                let Ok(key) = RecordingKey::new(&run.vm_id, &run.boot_id, &run.id) else {
                     continue;
                 };
                 let phase = detect(
@@ -160,7 +160,7 @@ impl QueryService {
         {
             return false;
         }
-        if let Some(job) = &filter.job_id {
+        if let Some(job) = &filter.from_run {
             let found = self
                 .jobs
                 .as_ref()
@@ -172,8 +172,11 @@ impl QueryService {
         true
     }
 
-    /// `recording.run.list`.
-    pub(super) fn run_list_page(&self, filter: &RunFilter) -> Result<Page<RunInfo>, ApiError> {
+    /// `recording.list`.
+    pub(super) fn run_list_page(
+        &self,
+        filter: &RunFilter,
+    ) -> Result<Page<RecordingInfo>, ApiError> {
         let (default, max) = self.settings.rows();
         let request = super::page::PageRequest {
             limit: filter.limit,
@@ -202,7 +205,7 @@ impl QueryService {
         };
         let total = rows.len();
         let end = (start + limit).min(total);
-        let items: Vec<RunInfo> = rows
+        let items: Vec<RecordingInfo> = rows
             .get(start..end)
             .unwrap_or_default()
             .iter()
@@ -228,14 +231,17 @@ impl QueryService {
         Ok(page)
     }
 
-    /// `recording.run.get`.
-    pub(super) fn run_detail(&self, params: &RunParams) -> Result<Single<RunDetail>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+    /// `recording.get`.
+    pub(super) fn run_detail(
+        &self,
+        params: &RunParams,
+    ) -> Result<Single<RecordingDetail>, ApiError> {
+        let opened = self.open_run(&params.recording_key)?;
         let detail = self.detail_of(&opened);
         Ok(opened.single(detail, true))
     }
 
-    fn detail_of(&self, opened: &Opened) -> RunDetail {
+    fn detail_of(&self, opened: &Opened) -> RecordingDetail {
         let run = &opened.run;
         let info = self.run_info(&opened.key, run, opened.phase.phase, opened.state());
         let scrubbed = |value: Option<serde_json::Value>| {
@@ -245,7 +251,7 @@ impl QueryService {
             })
         };
         let artifacts = artifact_states(&opened.dir);
-        RunDetail {
+        RecordingDetail {
             info,
             execution: run.execution.as_ref().map(|execution| Execution {
                 live_task_count: execution.live_task_count,

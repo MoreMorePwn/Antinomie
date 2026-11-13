@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The daemon's side of retention and the watch folders' operations (cards
-//! P4-2, P4-3): the hourly pass, `gc.run`, `job.delete`, `watch.list` and
+//! P4-2, P4-3): the hourly pass, `gc.run`, `run.delete`, `watch.list` and
 //! `watch.scan`. These are additions to the operations of 5.3 (which has no
 //! operation for `auto gc` or `auto watch`), named like the lane operations.
 
@@ -8,7 +8,7 @@ use super::service::{Service, params, to_value};
 use crate::{
     api::{
         error::ApiError,
-        ops::{Deleted, JobDeleteParams, Permission},
+        ops::{Deleted, Permission, RunDeleteParams},
     },
     clock::{Clock, SystemClock},
     retention::{self, GcReport, RealRuns, Retention},
@@ -58,7 +58,7 @@ impl Service {
     }
 
     pub(super) fn job_delete(&self, value: Value) -> Result<Value, ApiError> {
-        let request: JobDeleteParams = params(value)?;
+        let request: RunDeleteParams = params(value)?;
         let _one_at_a_time = crate::store::lock(&self.gc_lock);
         let runs = RealRuns {
             options: &self.options,
@@ -68,7 +68,7 @@ impl Service {
         retention::delete_job(
             &self.store,
             &runs,
-            &request.job_id,
+            &request.run_id,
             request.with_recording.unwrap_or(false),
             &log,
         )?;

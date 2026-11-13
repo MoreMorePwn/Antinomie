@@ -6,8 +6,8 @@ use super::{GcReport, REJECTED_DAYS, RealRuns, Retention, RunState, Runs, delete
 use crate::{
     api::{
         failure::{Failure, FailureCode},
-        ids::JobId,
-        job::{Job, JobRecording, Outcome, RecordingPhase, Stage},
+        ids::RunId,
+        run::{Outcome, RecordingPhase, Run, RunRecording, Stage},
     },
     config::service::Retention as Config,
     store::{JobPatch, tests::Fx},
@@ -32,12 +32,12 @@ struct FakeRuns {
 }
 
 /// The fake's name of `job`'s run: the job id for the run every test job
-/// names (`run_key` "key"), the id and the key for another (an earlier
+/// names (`recording_key` "key"), the id and the key for another (an earlier
 /// attempt's run).
-fn key(job: &Job) -> String {
+fn key(job: &Run) -> String {
     match &job.recording {
-        Some(recording) if recording.run_key != "key" => {
-            format!("{}/{}", job.id, recording.run_key)
+        Some(recording) if recording.recording_key != "key" => {
+            format!("{}/{}", job.id, recording.recording_key)
         }
         _ => job.id.to_string(),
     }
@@ -50,7 +50,7 @@ impl FakeRuns {
             .unwrap()
             .insert(key.to_owned(), (bytes, false));
     }
-    fn put(&self, job: &JobId, bytes: u64, in_progress: bool) {
+    fn put(&self, job: &RunId, bytes: u64, in_progress: bool) {
         self.runs
             .lock()
             .unwrap()
@@ -67,7 +67,7 @@ impl FakeRuns {
 }
 
 impl Runs for FakeRuns {
-    fn inspect(&self, job: &Job) -> Result<RunState, String> {
+    fn inspect(&self, job: &Run) -> Result<RunState, String> {
         if self.unreadable.lock().unwrap().contains(&key(job)) {
             return Err("permission denied".into());
         }
@@ -79,10 +79,10 @@ impl Runs for FakeRuns {
             None => RunState::Gone,
         })
     }
-    fn is_open(&self, job: &Job) -> bool {
+    fn is_open(&self, job: &Run) -> bool {
         self.open.lock().unwrap().contains(&key(job))
     }
-    fn delete(&self, job: &Job, actor: &str) -> Result<u64, String> {
+    fn delete(&self, job: &Run, actor: &str) -> Result<u64, String> {
         if self.fail_for.lock().unwrap().contains(&key(job)) {
             return Err("the engine refused".into());
         }
@@ -112,7 +112,7 @@ impl Rig {
 
     /// An ended job that finished at `finished_ms` with a recording of
     /// `bytes` (none: no recording).
-    fn ended(&self, outcome: Outcome, finished_ms: u64, bytes: Option<u64>) -> JobId {
+    fn ended(&self, outcome: Outcome, finished_ms: u64, bytes: Option<u64>) -> RunId {
         self.fx.clock.set(finished_ms.saturating_sub(1000));
         let job = self.fx.running(1);
         if let Some(bytes) = bytes {
@@ -123,11 +123,11 @@ impl Rig {
                 .patch(
                     &job.id,
                     JobPatch {
-                        recording: Some(JobRecording {
+                        recording: Some(RunRecording {
                             vm_id: "vm".into(),
                             boot_id: "boot".into(),
                             run_id: format!("r-{}", &job.id.as_str()[job.id.as_str().len() - 4..]),
-                            run_key: "key".into(),
+                            recording_key: "key".into(),
                             phase: RecordingPhase::Complete,
                             directory: Some(dir.display().to_string()),
                         }),
@@ -169,7 +169,7 @@ impl Rig {
         self.run_with(self.config(), dry_run)
     }
 
-    fn exists(&self, id: &JobId) -> bool {
+    fn exists(&self, id: &RunId) -> bool {
         self.fx.store.get(id).is_ok()
     }
 }
@@ -212,7 +212,7 @@ fn the_custody_actor_of_a_deletion_is_the_automation_actor_of_the_policy() {
     rig.run(false);
     assert_eq!(
         rig.runs.deleted.lock().unwrap()[0].1,
-        "auto:policy-standard"
+        "auto:preset-standard"
     );
 }
 
@@ -232,7 +232,7 @@ fn a_dry_run_changes_nothing_and_says_what_it_would_do() {
         "{k:?}"
     );
     assert!(
-        k.contains(&("job".into(), Some(ancient.to_string()))),
+        k.contains(&("run".into(), Some(ancient.to_string()))),
         "{k:?}"
     );
     assert!(
@@ -257,11 +257,11 @@ fn a_job_that_has_not_ended_is_never_touched() {
         .patch(
             &running.id,
             JobPatch {
-                recording: Some(JobRecording {
+                recording: Some(RunRecording {
                     vm_id: "vm".into(),
                     boot_id: "boot".into(),
                     run_id: "r-live".into(),
-                    run_key: "key".into(),
+                    recording_key: "key".into(),
                     phase: RecordingPhase::Live,
                     directory: None,
                 }),
@@ -327,7 +327,7 @@ fn a_failed_jobs_recording_is_kept_until_the_job_record_goes() {
         k,
         [
             ("recording".to_owned(), Some(failed2.to_string())),
-            ("job".to_owned(), Some(failed2.to_string()))
+            ("run".to_owned(), Some(failed2.to_string()))
         ]
     );
     assert!(!rig.exists(&failed2));
@@ -385,7 +385,7 @@ fn a_job_record_goes_after_ninety_days_with_its_folder_and_events() {
     fs::create_dir_all(&folder).unwrap();
     fs::write(folder.join("job.json"), b"{}").unwrap();
     let report = rig.run(false);
-    assert_eq!(kinds(&report), [("job".to_owned(), Some(old.to_string()))]);
+    assert_eq!(kinds(&report), [("run".to_owned(), Some(old.to_string()))]);
     assert!(!rig.exists(&old));
     assert!(!folder.exists());
     assert!(rig.exists(&young));
@@ -402,7 +402,7 @@ fn a_job_whose_recording_cannot_go_stays() {
     rig.runs.open.lock().unwrap().insert(old.to_string());
     let report = rig.run(false);
     assert!(rig.exists(&old));
-    assert!(report.skipped.iter().any(|s| s.kind == "job"));
+    assert!(report.skipped.iter().any(|s| s.kind == "run"));
     assert!(rig.runs.deleted_jobs().is_empty());
 }
 
@@ -563,7 +563,7 @@ fn job_delete_removes_an_ended_job_and_refuses_a_running_one() {
     let error = delete_job(&rig.fx.store, &rig.runs, &running.id, true, &log).unwrap_err();
     assert_eq!(error.code, crate::api::error::ErrorCode::Conflict);
     assert!(rig.exists(&running.id));
-    let missing = JobId::try_from("j_01M6YKYH8ND7M6F3PB0X0D5VH9".to_owned()).unwrap();
+    let missing = RunId::try_from("j_01M6YKYH8ND7M6F3PB0X0D5VH9".to_owned()).unwrap();
     assert_eq!(
         delete_job(&rig.fx.store, &rig.runs, &missing, false, &log)
             .unwrap_err()
@@ -591,18 +591,18 @@ fn job_delete_with_recording_deletes_it_first_and_respects_open_reads() {
 }
 
 /// A finished job whose recording is said to be in `directory`.
-fn job_with_folder(rig: &Rig, directory: &std::path::Path, run_id: &str) -> Job {
+fn job_with_folder(rig: &Rig, directory: &std::path::Path, run_id: &str) -> Run {
     let job = rig.fx.running(1);
     rig.fx
         .store
         .patch(
             &job.id,
             JobPatch {
-                recording: Some(JobRecording {
+                recording: Some(RunRecording {
                     vm_id: "vm".into(),
                     boot_id: "boot".into(),
                     run_id: run_id.into(),
-                    run_key: "key".into(),
+                    recording_key: "key".into(),
                     phase: RecordingPhase::Complete,
                     directory: Some(directory.display().to_string()),
                 }),
@@ -680,7 +680,7 @@ fn the_real_runs_only_trust_a_plain_run_folder_inside_the_data_folder() {
 #[test]
 fn the_real_runs_delete_a_lane_jobs_recording_in_its_own_lane_folder() {
     // ANT-T0455 card D: a job that lane-2 ran recorded its run in
-    // `<data>/lanes/2/`; retention and `job.delete --with-recording` delete it
+    // `<data>/lanes/2/`; retention and `run.delete --with-recording` delete it
     // there (with its custody entry), and leave lane 1's run of the same id.
     use crate::{api::ids::LaneId, query::testing};
     use antinomie_monitor_core::{
@@ -734,7 +734,7 @@ fn the_real_runs_delete_a_lane_jobs_recording_in_its_own_lane_folder() {
     job.recording.as_mut().unwrap().boot_id = gone.boot.clone();
     job.sample.as_mut().unwrap().sha256 = added.sha256.clone().try_into().unwrap();
     assert!(matches!(runs.inspect(&job), Ok(RunState::Present { .. })));
-    runs.delete(&job, "auto:policy-default").unwrap();
+    runs.delete(&job, "auto:preset-default").unwrap();
     assert!(!gone.dir.exists(), "the lane's run is deleted");
     assert!(kept.dir.join("run.json").is_file(), "lane 1's run stays");
     assert_eq!(runs.inspect(&job), Ok(RunState::Gone));
@@ -746,27 +746,27 @@ fn the_real_runs_delete_a_lane_jobs_recording_in_its_own_lane_folder() {
             &e.event,
             antinomie_monitor_core::samples::CustodyEvent::RunDeleted { vm, run, .. }
                 if vm == "vm-2" && run == "run-1"
-        ) && e.by == "auto:policy-default"),
+        ) && e.by == "auto:preset-default"),
         "{events:?}"
     );
 }
 
 /// BH-02: an attempt that launched and was retried left a run of its own; the
-/// job names only the last one. Retention and `job.delete` delete both.
-fn with_earlier_run(rig: &Rig, finished_ms: u64) -> JobId {
+/// job names only the last one. Retention and `run.delete` delete both.
+fn with_earlier_run(rig: &Rig, finished_ms: u64) -> RunId {
     rig.fx.clock.set(finished_ms.saturating_sub(2000));
     let job = rig.fx.running(1);
-    for (run_key, run_id) in [("key-1", "r-first"), ("key", "r-second")] {
+    for (recording_key, run_id) in [("key-1", "r-first"), ("key", "r-second")] {
         rig.fx
             .store
             .patch(
                 &job.id,
                 JobPatch {
-                    recording: Some(JobRecording {
+                    recording: Some(RunRecording {
                         vm_id: "vm".into(),
                         boot_id: "boot".into(),
                         run_id: run_id.into(),
-                        run_key: run_key.into(),
+                        recording_key: recording_key.into(),
                         phase: RecordingPhase::Complete,
                         directory: None,
                     }),
@@ -803,7 +803,7 @@ fn every_attempts_recording_goes_with_retention_and_the_record_waits_for_all() {
     rig.runs.open.lock().unwrap().insert(format!("{old}/key-1"));
     let report = rig.run(false);
     assert!(rig.exists(&old));
-    assert!(report.skipped.iter().any(|s| s.kind == "job"));
+    assert!(report.skipped.iter().any(|s| s.kind == "run"));
     rig.runs.open.lock().unwrap().clear();
     rig.run(false);
     assert!(!rig.exists(&old));
@@ -845,7 +845,7 @@ fn a_job_whose_recording_cannot_be_read_keeps_its_record() {
         report
             .skipped
             .iter()
-            .any(|s| s.kind == "job" && s.why.contains("could not be read")),
+            .any(|s| s.kind == "run" && s.why.contains("could not be read")),
         "{report:?}"
     );
 }

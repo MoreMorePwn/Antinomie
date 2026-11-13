@@ -44,6 +44,8 @@ mod notify_thread;
 mod p4_tests;
 #[cfg(test)]
 mod read_tests;
+#[cfg(test)]
+mod run_api_tests;
 pub mod runner;
 pub mod service;
 #[cfg(test)]
@@ -55,7 +57,7 @@ mod watch_env;
 use crate::{
     api::{
         error::ApiError,
-        ids::{JobId, LaneId},
+        ids::{LaneId, RunId},
         status::{Accelerator, Owner, ReadGaps},
     },
     clock::{Clock, SystemClock},
@@ -99,10 +101,10 @@ pub enum Phase {
     #[default]
     Idle,
     /// `prechecks` to `collect`: the VM is in use.
-    Lane(JobId),
+    Lane(RunId),
     /// `analyse` to `cleanup` on the lane's own thread (the sequential form,
     /// without a host work pool).
-    Host(JobId),
+    Host(RunId),
     /// A lane command (`lane.reset`, ...).
     Command(String),
 }
@@ -271,7 +273,7 @@ pub struct Daemon<E: Engine + Send + 'static> {
 #[derive(Debug, Default)]
 pub struct Stopping {
     pub since: Option<Instant>,
-    pub cancelled: HashSet<JobId>,
+    pub cancelled: HashSet<RunId>,
     /// When the first job in its lane stages was cancelled for shutdown.
     pub lanes_cancelled_at: Option<Instant>,
     pub interrupted: bool,
@@ -1013,7 +1015,7 @@ fn lane_main<E: Engine>(
     service: &Service,
     waiter: Waiter<E>,
     run: LaneRun,
-    resume: &[crate::api::job::Job],
+    resume: &[crate::api::run::Run],
     wake: &mpsc::Receiver<()>,
     commands: &mpsc::Receiver<lane::LaneCommand>,
     log: &(dyn Fn(&str) + Send + Sync),

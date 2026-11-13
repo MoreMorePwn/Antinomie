@@ -573,7 +573,7 @@ pub fn delete(
 }
 
 /// [`delete`] with the custody actor that is named in the run's `RunDeleted`
-/// entry (`analyst` for a person; `auto:policy-<name>` for retention).
+/// entry (`analyst` for a person; `auto:preset-<name>` for retention).
 pub fn delete_as(
     options: &BackendOptions,
     plan_before: &RunPlan,

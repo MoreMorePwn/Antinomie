@@ -108,7 +108,7 @@ impl QueryService {
             cursor: params.cursor.clone(),
         };
         let mut limit = request.effective_limit(default, max)? as usize;
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let recording = self.trace_recording(&opened.dir)?;
         let mut hide = params.hide_groups.clone();
         hide.sort();
@@ -278,7 +278,7 @@ impl QueryService {
         params: &TraceGetParams,
         cancel: &AtomicBool,
     ) -> Result<Single<Invocation>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let recording = self.trace_recording(&opened.dir)?;
         let identity = (params.call.stream.0, params.call.task.0, params.call.call.0);
         let call = self.find_call(&recording, identity, cancel)?;
@@ -302,7 +302,7 @@ impl QueryService {
         }
         let named = parse_field_id(&params.field)
             .ok_or_else(|| ApiError::invalid_argument("field", "not a field this service made"))?;
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let recording = self.trace_recording(&opened.dir)?;
         let call = self.find_call(&recording, named.call, cancel)?;
         let field = find_event(&call, named.event_seq)

@@ -23,7 +23,7 @@ use super::{LaneStages, Launched, STOP_WAIT, StageStop, cleanup::Stopped};
 use crate::{
     api::{
         failure::{Failure, FailureCode},
-        job::{Job, Outcome, RecordingPhase, Stage},
+        run::{Outcome, RecordingPhase, Run, Stage},
     },
     engine::Engine,
     waiter::{EVIDENCE_WAIT, Warning, incomplete_parts, may_stay_pending, pending_parts, trigger},
@@ -52,7 +52,7 @@ fn fail(code: FailureCode, message: &str, detail: Option<&str>) -> StageStop {
 impl<E: Engine> LaneStages<'_, E> {
     /// What the policy's dump trigger did goes into the job's run and on the
     /// event stream (best effort: the evidence itself is already kept).
-    fn record_triggers(&self, job: &Job, run_id: &str, artifacts: Option<&RunArtifacts>) {
+    fn record_triggers(&self, job: &Run, run_id: &str, artifacts: Option<&RunArtifacts>) {
         let Some(run) = self.waiter.run_of(run_id) else {
             return;
         };
@@ -66,7 +66,7 @@ impl<E: Engine> LaneStages<'_, E> {
         let _ = self.env.store.emit_triggers(&job.id, &report);
     }
 
-    pub fn collect(&mut self, job: &Job, launched: &Launched) -> Result<CollectEnd, StageStop> {
+    pub fn collect(&mut self, job: &Run, launched: &Launched) -> Result<CollectEnd, StageStop> {
         let run_id = launched.run.id.clone();
         let vm = launched.run.vm_id.clone();
         self.waiter.set_cancel_interrupts(false);

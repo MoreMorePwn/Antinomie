@@ -178,13 +178,13 @@ put("tool_text", "release", bytes([1]) + b'{"tag_name":"v0.8.0","html_url":"http
 put("tool_text", "progress", bytes([1]) + b"    (12.34/100%)")
 
 # The daemon's socket framing: request lines as a client writes them.
-put("socket_frames", "requests", b'{"frame":"engine.hello"}\n{"id":1,"op":"health"}\n{"id":2,"op":"job.get","params":{"job_id":"j_01ARZ3NDEKTSV4RRFFQ69G5FAV"}}\n{"id":2,"op":"cancel"}\n')
+put("socket_frames", "requests", b'{"frame":"engine.hello"}\n{"id":1,"op":"health"}\n{"id":2,"op":"run.get","params":{"run_id":"r_01ARZ3NDEKTSV4RRFFQ69G5FAV"}}\n{"id":2,"op":"cancel"}\n')
 put("socket_frames", "upload", b'{"id":3,"op":"upload.put","params":{"upload_id":"u_01ARZ3NDEKTSV4RRFFQ69G5FAV","offset":0,"data":"IyEvYmluL3NoCmVjaG8gaGkK"}}\n')
-put("socket_frames", "subscribe", b'{"id":4,"op":"events.subscribe","params":{"since_gseq":17,"types":["job.state"]}}\n')
+put("socket_frames", "subscribe", b'{"id":4,"op":"events.subscribe","params":{"since_gseq":17,"types":["run.state"]}}\n')
 
 # JobSpec JSON: a minimal spec, a full one, and one with an unknown member.
 put("job_spec", "minimal", b'{"sample":{"sha256":"' + b"ab" * 32 + b'"}}')
-put("job_spec", "full", json.dumps({"sample": {"upload_id": "u_01ARZ3NDEKTSV4RRFFQ69G5FAV"}, "name": "a.sh", "policy": "default", "priority": 7,
+put("job_spec", "full", json.dumps({"sample": {"upload_id": "u_01ARZ3NDEKTSV4RRFFQ69G5FAV"}, "name": "a.sh", "preset": "standard", "priority": 7,
     "labels": {"case": "42", "src.x": "y"}, "idempotency_key": "k-1",
     "overrides": {"timeout_s": 60, "args": ["-v"], "env": ["A=1"], "route": "inet_sim", "memory_dump": True}}).encode())
 put("job_spec", "unknown", b'{"sample":{"path":"/tmp/x"},"evil":1}')

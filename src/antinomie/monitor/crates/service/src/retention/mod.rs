@@ -5,7 +5,7 @@
 //! |---|---|
 //! | Recordings of auto jobs | Each run a job's attempts recorded (an attempt retried after its launch leaves one too). After `recordings_days` (14), through the engine's own deletion (`samples::delete_run` with a plan, as the window does); a failed job keeps its recording until `jobs_days` while `keep_failed` is set |
 //! | Size cap | Above `max_recordings_gib` (200) the oldest recordings go first (those `keep_failed` protects last) |
-//! | Job records and artifacts | After `jobs_days` (90): the rows, the events and the job's folder; a job whose recording is still there loses the recording first, or stays; so does a job whose recording cannot be read |
+//! | Run records and artifacts | After `jobs_days` (90): the rows, the events and the job's folder; a job whose recording is still there loses the recording first, or stays; so does a job whose recording cannot be read |
 //! | Staged uploads | 24 hours (the staging store's own expiry) |
 //! | Rejected inbox files | 7 days |
 //! | Processed inbox files | `[inbox] processed_keep_days` (7): plain files of `inbox/processed/` older than that |
@@ -33,8 +33,8 @@ pub use runs::{RealRuns, RunState, Runs};
 use crate::{
     api::{
         error::{ApiError, ErrorCode},
-        ids::JobId,
-        job::{Job, Outcome},
+        ids::RunId,
+        run::{Outcome, Run},
     },
     config::service::Retention as RetentionConfig,
     store::Store,
@@ -52,9 +52,14 @@ pub const REJECTED_DAYS: u64 = 7;
 /// What a pass did or would do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Action {
-    /// `recording`, `job`, `upload`, `rejected_file`, `processed_file`.
+    /// `recording`, `run` (the run's record), `upload`, `rejected_file`,
+    /// `processed_file`.
     pub kind: String,
+    /// The run (`r_...`).
+    #[serde(rename = "run")]
     pub job: Option<String>,
+    /// The recording (`vm:boot:run`).
+    #[serde(rename = "recording")]
     pub run: Option<String>,
     pub detail: String,
     pub bytes: u64,
@@ -65,6 +70,7 @@ pub struct Action {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Skip {
     pub kind: String,
+    #[serde(rename = "run")]
     pub job: Option<String>,
     pub why: String,
 }
@@ -81,7 +87,7 @@ pub struct GcReport {
 }
 
 impl GcReport {
-    fn skip(&mut self, kind: &str, job: &JobId, why: impl Into<String>) {
+    fn skip(&mut self, kind: &str, job: &RunId, why: impl Into<String>) {
         self.skipped.push(Skip {
             kind: kind.into(),
             job: Some(job.to_string()),
@@ -123,12 +129,12 @@ impl Uploads for crate::intake::staging::StagingStore {
 }
 
 /// The custody actor of what retention does.
-pub fn actor_for(job: &Job) -> String {
+pub fn actor_for(job: &Run) -> String {
     crate::custody::automation_actor(job)
 }
 
 struct Held {
-    job: Job,
+    job: Run,
     bytes: u64,
     kept: bool,
     finished_ms: u64,
@@ -165,7 +171,7 @@ impl Retention<'_> {
         let mut by_age: Vec<usize> = Vec::new();
         // Jobs with a recording that could not be read: their records stay
         // (rule 3), or the recording would be left with nothing naming it.
-        let mut unreadable: Vec<JobId> = Vec::new();
+        let mut unreadable: Vec<RunId> = Vec::new();
         for (id, finished_ms) in &finished {
             let Ok(job) = self.store.get(id) else {
                 continue;
@@ -256,7 +262,7 @@ impl Retention<'_> {
             }
             if unreadable.contains(id) {
                 report.skip(
-                    "job",
+                    "run",
                     id,
                     "its recording could not be read, so the record stays with it",
                 );
@@ -275,7 +281,7 @@ impl Retention<'_> {
                 }
             }
             if stays {
-                report.skip("job", id, "its recording is still there");
+                report.skip("run", id, "its recording is still there");
                 continue;
             }
             self.remove_job(&job, &mut report);
@@ -322,7 +328,7 @@ impl Retention<'_> {
     /// The recordings of `job` as jobs [`Runs`] can read: the job itself
     /// for the run it names, and one copy for each run an earlier attempt
     /// recorded ([`earlier_runs`]).
-    fn recordings_of(&self, job: &Job, report: &mut GcReport) -> Vec<Job> {
+    fn recordings_of(&self, job: &Run, report: &mut GcReport) -> Vec<Run> {
         let mut runs = Vec::new();
         if job.recording.is_some() {
             runs.push(job.clone());
@@ -404,10 +410,10 @@ impl Retention<'_> {
         }
     }
 
-    fn remove_job(&self, job: &Job, report: &mut GcReport) {
+    fn remove_job(&self, job: &Run, report: &mut GcReport) {
         let dir_bytes = crate::store::remove::folder_bytes(&self.store.job_dir(&job.id));
         let mut action = Action {
-            kind: "job".into(),
+            kind: "run".into(),
             job: Some(job.id.to_string()),
             run: None,
             detail: format!("finished more than {} days ago", self.config.jobs_days),
@@ -499,7 +505,7 @@ impl Retention<'_> {
 /// `job` once for each run an earlier attempt recorded (BH-02): the copy
 /// names that run as its recording, and the lane it ran on, so [`Runs`]
 /// inspects and deletes it like the job's own.
-pub fn earlier_runs(store: &Store, job: &Job) -> Result<Vec<Job>, ApiError> {
+pub fn earlier_runs(store: &Store, job: &Run) -> Result<Vec<Run>, ApiError> {
     Ok(store
         .earlier_recordings(&job.id)?
         .into_iter()
@@ -523,13 +529,13 @@ fn clean(text: &str) -> String {
         .collect()
 }
 
-/// `job.delete`: remove an ended job and, when asked, its recording first. A
+/// `run.delete`: remove an ended job and, when asked, its recording first. A
 /// recording with an open read, or still being written, is a `conflict` and
 /// nothing is removed.
 pub fn delete_job(
     store: &Store,
     runs: &dyn Runs,
-    id: &JobId,
+    id: &RunId,
     with_recording: bool,
     log: &dyn Fn(&str),
 ) -> Result<(), ApiError> {

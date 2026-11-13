@@ -24,7 +24,7 @@ use super::{LaneStages, Launched, Prepared, StageStop};
 use crate::{
     api::{
         failure::{Failure, FailureCode},
-        job::{EndReason, Job, JobRun, RecordingPhase, Stage},
+        run::{EndReason, RecordingPhase, Run, RunProgram, Stage},
     },
     engine::Engine,
     store::JobPatch,
@@ -84,7 +84,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     pub fn run(
         &mut self,
-        job: &Job,
+        job: &Run,
         prepared: &Prepared,
         launched: &Launched,
     ) -> Result<RunEnd, StageStop> {
@@ -299,7 +299,7 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 
     /// `guest_lost` for a VM that ended under the program.
-    fn vm_lost(&self, job: &Job) -> StageStop {
+    fn vm_lost(&self, job: &Run) -> StageStop {
         let detail = self.waiter.snapshot().last_error.clone();
         self.mark_run_lost(job);
         fail(
@@ -310,10 +310,10 @@ impl<E: Engine> LaneStages<'_, E> {
         )
     }
 
-    /// `job.run` gets its end, and the recording leaves `live`. On a full
+    /// `run.program` gets its end, and the recording leaves `live`. On a full
     /// disk this waits for room (the run is over; the job's limit still
     /// holds), so a run stopped for the disk floor keeps its end.
-    fn record_run_end(&mut self, job: &Job, end: &RunEnd) -> Result<(), StageStop> {
+    fn record_run_end(&mut self, job: &Run, end: &RunEnd) -> Result<(), StageStop> {
         let now = self.waiter.now_ms();
         let written = self.until_written(job, "the run's end", |this| {
             this.patch_run(job, |run| {
@@ -330,7 +330,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     /// The program is gone with the guest: say so in the job's run record
     /// (best effort: the failure is the caller's).
-    fn mark_run_lost(&self, job: &Job) {
+    fn mark_run_lost(&self, job: &Run) {
         let now = self.waiter.now_ms();
         let _ = self.patch_run(job, |run| {
             run.ended_ms = Some(now);
@@ -341,11 +341,11 @@ impl<E: Engine> LaneStages<'_, E> {
 
     pub(super) fn patch_run(
         &self,
-        job: &Job,
-        change: impl FnOnce(&mut JobRun),
+        job: &Run,
+        change: impl FnOnce(&mut RunProgram),
     ) -> Result<(), crate::api::error::ApiError> {
         let store = self.env.store;
-        let Some(mut run) = store.get(&job.id)?.run else {
+        let Some(mut run) = store.get(&job.id)?.program else {
             return Ok(());
         };
         change(&mut run);
@@ -361,7 +361,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     pub(crate) fn set_recording_phase(
         &self,
-        job: &Job,
+        job: &Run,
         phase: RecordingPhase,
     ) -> Result<(), crate::api::error::ApiError> {
         let store = self.env.store;
@@ -380,7 +380,7 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 
     /// A progress warning of the watchdog (one per quiet period).
-    pub(crate) fn warn(&self, job: &Job, code: &str, text: &str) {
+    pub(crate) fn warn(&self, job: &Run, code: &str, text: &str) {
         let _ = self.env.store.add_warning(&job.id, code, text);
     }
 }

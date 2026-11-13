@@ -166,7 +166,7 @@ impl QueryService {
             cursor: params.cursor.clone(),
         };
         let limit = request.effective_limit(default, max)? as usize;
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let binding = opened.binding(&params.root_pid, &serde_json::Value::Null);
         let start = match &request.cursor {
             Some(text) => Cursor::resume(text, binding)? as usize,

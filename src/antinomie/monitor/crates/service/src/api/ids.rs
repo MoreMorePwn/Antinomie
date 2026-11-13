@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Identifiers of the job API (design 5.2): an opaque string that is safe as a
+//! Identifiers of the run API (design 5.2): an opaque string that is safe as a
 //! path component, a prefix and 26 Crockford base32 characters in the shape of
 //! a ULID (time-ordered, built locally; no new crate).
 //!
-//! `j_` job, `a_` artifact, `u_` upload, `ra_` recording artifact. Lane ids
+//! `r_` run (a `j_` id of a store written before the run API still
+//! resolves), `a_` artifact, `u_` upload, `ra_` recording artifact. Lane ids
 //! are `lane-<n>` ([`LaneId`]). Sample identity is the lowercase SHA-256
 //! ([`Sha256Hex`]).
 
@@ -44,6 +45,12 @@ fn valid_ulid(text: &str) -> bool {
 
 macro_rules! prefixed_id {
     ($name:ident, $prefix:literal, $what:literal) => {
+        prefixed_id!($name, $prefix, $what, $prefix, concat!("^", $prefix, "_"));
+    };
+    ($name:ident, $prefix:literal, $what:literal, $legacy:literal) => {
+        prefixed_id!($name, $prefix, $what, $legacy, concat!("^(", $prefix, "|", $legacy, ")_"));
+    };
+    ($name:ident, $prefix:literal, $what:literal, $legacy:literal, $start:expr) => {
         #[doc = concat!("The identifier of ", $what, ": `", $prefix, "_` and 26 base32 characters.")]
         #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
         #[serde(try_from = "String", into = "String")]
@@ -66,7 +73,10 @@ macro_rules! prefixed_id {
         impl TryFrom<String> for $name {
             type Error = IdError;
             fn try_from(text: String) -> Result<Self, IdError> {
-                match text.strip_prefix(Self::PREFIX) {
+                let rest = text
+                    .strip_prefix(Self::PREFIX)
+                    .or_else(|| text.strip_prefix(concat!($legacy, "_")));
+                match rest {
                     Some(rest) if valid_ulid(rest) => Ok(Self(text)),
                     _ => Err(IdError(format!(
                         "not {}: expected `{}` and 26 base32 characters",
@@ -96,7 +106,7 @@ macro_rules! prefixed_id {
             fn json_schema(_: &mut SchemaGenerator) -> Schema {
                 json_schema!({
                     "type": "string",
-                    "pattern": concat!("^", $prefix, "_[0-7][0-9A-HJKMNP-TV-Z]{25}$"),
+                    "pattern": format!("{}[0-7][0-9A-HJKMNP-TV-Z]{{25}}$", $start),
                     "description": concat!("The identifier of ", $what, ".")
                 })
             }
@@ -104,8 +114,8 @@ macro_rules! prefixed_id {
     };
 }
 
-prefixed_id!(JobId, "j", "a job");
-prefixed_id!(ArtifactId, "a", "a job artifact");
+prefixed_id!(RunId, "r", "a run", "j");
+prefixed_id!(ArtifactId, "a", "a run artifact");
 prefixed_id!(UploadId, "u", "a staged upload");
 prefixed_id!(RecordingArtifactId, "ra", "a file of a recording");
 
@@ -211,23 +221,28 @@ mod tests {
 
     #[test]
     fn ids_have_a_prefix_and_26_base32_characters() {
-        let id = JobId::from_parts(1_794_000_000_000, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        assert!(id.as_str().starts_with("j_"));
+        let id = RunId::from_parts(1_794_000_000_000, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert!(id.as_str().starts_with("r_"));
         assert_eq!(id.as_str().len(), 28);
-        assert_eq!(JobId::try_from(id.to_string()).unwrap(), id);
+        assert_eq!(RunId::try_from(id.to_string()).unwrap(), id);
         assert!(ArtifactId::try_from(id.to_string()).is_err());
-        assert!(JobId::try_from("j_short".to_owned()).is_err());
-        assert!(JobId::try_from(format!("j_{}", "I".repeat(26))).is_err());
-        assert!(JobId::try_from(format!("j_8{}", "0".repeat(25))).is_err());
+        assert!(RunId::try_from("r_short".to_owned()).is_err());
+        assert!(RunId::try_from(format!("r_{}", "I".repeat(26))).is_err());
+        assert!(RunId::try_from(format!("r_8{}", "0".repeat(25))).is_err());
+        // A job id of a store written before the run API still resolves.
+        let old = format!("j_{}", &id.as_str()[2..]);
+        assert_eq!(RunId::try_from(old.clone()).unwrap().as_str(), old);
+        assert!(RunId::try_from("x_".to_owned() + &id.as_str()[2..]).is_err());
+        assert!(ArtifactId::try_from(format!("j_{}", &id.as_str()[2..])).is_err());
     }
 
     #[test]
     fn later_ids_sort_after_earlier_ones() {
-        let a = JobId::from_parts(1_000, [255; 10]);
-        let b = JobId::from_parts(1_001, [0; 10]);
+        let a = RunId::from_parts(1_000, [255; 10]);
+        let b = RunId::from_parts(1_001, [0; 10]);
         assert!(a < b);
-        let max = JobId::from_parts(0xFFFF_FFFF_FFFF, [255; 10]);
-        assert_eq!(max.as_str(), "j_7ZZZZZZZZZZZZZZZZZZZZZZZZZ");
+        let max = RunId::from_parts(0xFFFF_FFFF_FFFF, [255; 10]);
+        assert_eq!(max.as_str(), "r_7ZZZZZZZZZZZZZZZZZZZZZZZZZ");
     }
 
     #[test]

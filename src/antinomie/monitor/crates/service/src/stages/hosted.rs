@@ -33,7 +33,7 @@ use crate::{
     api::{
         event::StageStatus,
         failure::{Failure, FailureCode},
-        job::{Job, Outcome, Stage},
+        run::{Outcome, Run, Stage},
     },
     engine::Engine,
     store::{RequeueKind, lock},
@@ -45,11 +45,11 @@ use std::{sync::Mutex, time::Duration};
 #[derive(Debug)]
 pub enum Hosted {
     /// The job is terminal (`succeeded` or `partial`).
-    Finished(Box<Job>),
+    Finished(Box<Run>),
     /// The job ended `failed`.
-    Failed(Box<Job>),
+    Failed(Box<Run>),
     /// The job ended `cancelled`.
-    Cancelled(Box<Job>),
+    Cancelled(Box<Run>),
     /// A shutdown cancel: the job is queued again.
     Requeued,
     /// A signal or a dead engine: nothing was changed.
@@ -58,7 +58,7 @@ pub enum Hosted {
 
 impl<E: Engine> LaneStages<'_, E> {
     /// Run the host stages of a job `drive` collected.
-    pub fn host(&mut self, job: &Job, end: &CollectEnd) -> Hosted {
+    pub fn host(&mut self, job: &Run, end: &CollectEnd) -> Hosted {
         match self.fresh(job) {
             Ok(job) => self.host_from(&job, end.outcome),
             Err(stop) => self.settle_host(job, Err(stop)),
@@ -67,7 +67,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     /// The job as the store has it now: the one a caller holds was claimed
     /// before the lane stages filled in its sample, run and recording.
-    fn fresh(&self, job: &Job) -> Result<Job, StageStop> {
+    fn fresh(&self, job: &Run) -> Result<Run, StageStop> {
         self.env
             .store
             .get(&job.id)
@@ -78,7 +78,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// has it `collected`, `recover` lists it in `resume`), so the host stages
     /// run again from `analyse`. The outcome `collect` found is read again
     /// from the run's evidence; its warnings are already in the job.
-    pub fn resume_host(&mut self, job: &Job) -> Hosted {
+    pub fn resume_host(&mut self, job: &Run) -> Hosted {
         let job = &match self.fresh(job) {
             Ok(job) => job,
             Err(stop) => return self.settle_host(job, Err(stop)),
@@ -89,7 +89,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     /// The outcome `collect` found for a job resumed after a restart, read
     /// again from the run's evidence.
-    pub(crate) fn resumed_outcome(&self, job: &Job) -> Outcome {
+    pub(crate) fn resumed_outcome(&self, job: &Run) -> Outcome {
         self.env
             .triage
             .open_run(job)
@@ -107,7 +107,7 @@ impl<E: Engine> LaneStages<'_, E> {
             .unwrap_or(Outcome::Succeeded)
     }
 
-    fn host_from(&mut self, job: &Job, outcome: Outcome) -> Hosted {
+    fn host_from(&mut self, job: &Run, outcome: Outcome) -> Hosted {
         self.cancel_hook(job);
         let result = self.host_stages(job, outcome);
         self.waiter.clear_cancel();
@@ -118,9 +118,9 @@ impl<E: Engine> LaneStages<'_, E> {
     /// the host work pool's order for a single job ([`super::items`]).
     fn host_stages(
         &mut self,
-        job: &Job,
+        job: &Run,
         outcome: Outcome,
-    ) -> Result<(Job, Option<String>), StageStop> {
+    ) -> Result<(Run, Option<String>), StageStop> {
         self.cancel_point(job)?;
         let store = self.env.store;
         let frozen = store
@@ -163,9 +163,9 @@ impl<E: Engine> LaneStages<'_, E> {
     /// 4.9.3): the sample gets the library tags `auto:label=<label>` and
     /// `auto:preset=<name>` (the preset a Custom run was based on), written
     /// under the automation actor
-    /// (`auto:policy-<name>`) in its custody chain. A tag that cannot be
+    /// (`auto:preset-<name>`) in its custody chain. A tag that cannot be
     /// written is a warning; the job does not fail for it.
-    pub(super) fn tag_library(&mut self, job: &Job, frozen: &crate::config::LoadedPreset) {
+    pub(super) fn tag_library(&mut self, job: &Run, frozen: &crate::config::LoadedPreset) {
         if !frozen.preset.verdict.tag_library {
             return;
         }
@@ -191,7 +191,7 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    pub(super) fn skip_stage(&mut self, job: &Job, stage: Stage) -> Result<(), StageStop> {
+    pub(super) fn skip_stage(&mut self, job: &Run, stage: Stage) -> Result<(), StageStop> {
         let store = self.env.store;
         store
             .begin_stage(&job.id, stage)
@@ -202,8 +202,8 @@ impl<E: Engine> LaneStages<'_, E> {
 
     pub(crate) fn settle_host(
         &mut self,
-        job: &Job,
-        result: Result<(Job, Option<String>), StageStop>,
+        job: &Run,
+        result: Result<(Run, Option<String>), StageStop>,
     ) -> Hosted {
         let store = self.env.store;
         let stop = match result {
@@ -262,7 +262,7 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    fn host_stage(&self, job: &Job) -> Stage {
+    fn host_stage(&self, job: &Run) -> Stage {
         self.env
             .store
             .get(&job.id)
@@ -271,7 +271,7 @@ impl<E: Engine> LaneStages<'_, E> {
             .unwrap_or(Stage::Analyse)
     }
 
-    fn fail_host(&mut self, job: &Job, failure: Failure) -> Hosted {
+    fn fail_host(&mut self, job: &Run, failure: Failure) -> Hosted {
         match self.end_job(job, Outcome::Failed, Some(failure)) {
             Ok((done, _)) => Hosted::Failed(Box::new(done)),
             Err(StageStop::Abort(error)) => Hosted::Aborted(error),

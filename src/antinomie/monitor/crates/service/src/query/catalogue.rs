@@ -20,9 +20,9 @@ pub enum OpClass {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OpSubject {
-    RunKey,
-    /// The analysis operations: a run's analysis, or a job's host-side one.
-    JobIdOrRunKey,
+    RecordingKey,
+    /// The analysis operations: a run's analysis, or a run's host-side one.
+    RunIdOrRecordingKey,
     /// Custody, instead of a run.
     Sha256,
 }

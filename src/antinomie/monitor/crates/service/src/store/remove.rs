@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Removing finished jobs (`job.delete`, retention; card P4-3): the rows of
+//! Removing finished jobs (`run.delete`, retention; card P4-3): the rows of
 //! the job, its events and artifacts, and its folder under `jobs/`. Only a
 //! job that has ended can go, and nothing outside its own folder is touched.
 
 use super::{R, Store, db, internal, lifecycle::current};
 use crate::api::{
     error::{ApiError, ErrorCode},
-    ids::JobId,
+    ids::RunId,
 };
 use std::path::Path;
 
@@ -47,7 +47,7 @@ pub fn folder_bytes(path: &Path) -> u64 {
 impl Store {
     /// The jobs that have ended, oldest first: `(id, finished_ms)`. Never a
     /// queued, running or cancelling job.
-    pub fn finished_jobs(&self) -> R<Vec<(JobId, u64)>> {
+    pub fn finished_jobs(&self) -> R<Vec<(RunId, u64)>> {
         let conn = self.conn();
         let mut statement = conn
             .prepare(
@@ -64,7 +64,7 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (id, finished) = row.map_err(db)?;
-            out.push((JobId::try_from(id).map_err(internal)?, finished));
+            out.push((RunId::try_from(id).map_err(internal)?, finished));
         }
         Ok(out)
     }
@@ -72,7 +72,7 @@ impl Store {
     /// Remove an ended job: its rows and events in one transaction, then its
     /// folder (a real folder inside `jobs/`, never through a link). A job
     /// that has not ended is a `conflict` and nothing changes.
-    pub fn delete_job(&self, id: &JobId) -> R<Removed> {
+    pub fn delete_job(&self, id: &RunId) -> R<Removed> {
         if self.read_only_store() {
             return Err(internal("this store is open for reading only"));
         }

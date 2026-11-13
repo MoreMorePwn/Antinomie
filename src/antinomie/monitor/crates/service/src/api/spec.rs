@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `JobSpec` (design 5.4.1): what a caller asks for. Every field but the
+//! `RunRequest` (design 5.4.1): what a caller asks for. Every field but the
 //! sample is optional; the preset (default `standard`) gives every run
 //! option, and `overrides` (a partial preset) changes them. An unknown field fails (`deny_unknown_fields`), as the
 //! contract says: no silent ignore.
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-/// The sample of a job. Exactly one member is set ([`SampleSource::validate`]).
+/// The sample of a run. Exactly one member is set ([`SampleSource::validate`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SampleSource {
@@ -221,24 +221,23 @@ impl Overrides {
     }
 }
 
-/// What a caller submits with `job.submit`, and the form a [`Job`] carries
+/// What a caller submits with `run.submit`, and the form a [`Run`] carries
 /// (the preset's name and the priority filled in, `overrides` reduced to the
 /// keys that changed a value; `sample.path` removed for remote callers;
 /// `sample.sha256` always set after prechecks). The run's resolved options
 /// are its frozen preset.
 ///
-/// [`Job`]: super::job::Job
+/// [`Run`]: super::run::Run
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct JobSpec {
+pub struct RunRequest {
     pub sample: SampleSource,
     /// File name hint, 1 to 128 bytes, no `/`, no NUL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// The preset's name; default `standard`. (The member keeps its 0.9.0
-    /// name until the run API.)
+    /// The preset's name; default `standard`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy: Option<String>,
+    pub preset: Option<String>,
     /// 0 to 9, higher starts first; default 5; the caller's limit sets a
     /// ceiling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,7 +262,7 @@ fn bad(field: &str, message: &str) -> SpecError {
     }
 }
 
-impl JobSpec {
+impl RunRequest {
     /// The checks of 5.4.1 that need no preset: shape and bounds. A failure
     /// is `invalid_argument` naming the field. Ceilings, presence of the
     /// sample, quotas and the preset itself are the service's checks.

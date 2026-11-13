@@ -12,7 +12,7 @@ use crate::{
     api::{
         event::EventBody,
         failure::FailureCode,
-        job::{EndReason, Job, JobState, Outcome, RecordingPhase, Stage, WaitingFor},
+        run::{EndReason, Outcome, RecordingPhase, Run, RunState, Stage, WaitingFor},
     },
     engine::FakeEngine,
     lane::{
@@ -26,7 +26,9 @@ use crate::{
     },
     waiter::Waiter,
 };
-use antinomie_monitor_core::{RunArtifactState, RunArtifacts, RunState, VmState, WaitStatus};
+use antinomie_monitor_core::{
+    RunArtifactState, RunArtifacts, RunState as CoreRunState, VmState, WaitStatus,
+};
 use std::sync::{Arc, Mutex, mpsc};
 
 fn exited(code: u8) -> Option<WaitStatus> {
@@ -43,11 +45,11 @@ fn attempt(fake: &mut FakeEngine, run: u32) {
     stop_ok(fake);
 }
 
-fn drive(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Job) -> Driven {
+fn drive(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Run) -> Driven {
     w.stages(waiter).drive(job)
 }
 
-fn claim(w: &W) -> Option<Job> {
+fn claim(w: &W) -> Option<Run> {
     w.fx.store
         .claim_next(&lane(), &mut |_| Eligibility::Ready)
         .unwrap()
@@ -105,7 +107,7 @@ fn with_action<R>(
 }
 
 /// [`with_action`] where the action is a user's cancel of `job`.
-fn with_canceller<R>(w: &W, job: &Job, body: impl FnOnce(Arc<dyn Fn() + Send + Sync>) -> R) -> R {
+fn with_canceller<R>(w: &W, job: &Run, body: impl FnOnce(Arc<dyn Fn() + Send + Sync>) -> R) -> R {
     let store = &w.fx.store;
     let id = &job.id;
     with_action(
@@ -148,21 +150,21 @@ fn a_job_runs_from_prechecks_to_collect_and_the_lane_is_free() {
     let stored = w.job(&job.id);
     assert_eq!(
         (stored.state, stored.stage),
-        (JobState::Running, Some(Stage::Collect))
+        (RunState::Running, Some(Stage::Collect))
     );
     let file = w.lane_file();
     assert_eq!(file.current, None);
     assert_eq!(file.collected.len(), 1);
     assert_eq!(file.collected[0].job_id, job.id);
     assert_eq!(file.qemu, None, "the VM is gone");
-    assert_eq!(stored.run.unwrap().exit, Some(0));
+    assert_eq!(stored.program.unwrap().exit, Some(0));
     assert_eq!(stored.recording.unwrap().phase, RecordingPhase::Complete);
     let kinds = kinds(&w.fx, &job.id);
-    assert!(kinds.contains(&"job.run".to_owned()));
+    assert!(kinds.contains(&"run.program".to_owned()));
 
     // Until the host stages exist the job is ended from here.
     let done = w.stages(&mut waiter).finish_collected(&job, &end).unwrap();
-    assert_eq!(done.state, JobState::Succeeded);
+    assert_eq!(done.state, RunState::Succeeded);
     assert!(w.lane_file().collected.is_empty());
     assert!(!waiter.cancel_requested(), "the hooks were taken off");
 }
@@ -195,7 +197,7 @@ fn bh_29_the_engine_names_the_jobs_caller_while_it_sends_and_launches() {
             )
             .unwrap();
         let claimed = claim(&second).unwrap();
-        assert_eq!(claimed.id, submitted.job.id);
+        assert_eq!(claimed.id, submitted.run.id);
         claimed
     };
     let mut lane_a = first.engine(|fake| attempt(fake, 6));
@@ -252,7 +254,7 @@ fn the_run_limit_is_not_a_failure_for_the_job() {
         panic!("collected");
     };
     assert_eq!(end.outcome, Outcome::Succeeded);
-    let run = w.job(&job.id).run.unwrap();
+    let run = w.job(&job.id).program.unwrap();
     assert_eq!(run.end_reason, Some(EndReason::TimeLimit));
 }
 
@@ -273,7 +275,7 @@ fn partial_evidence_ends_the_job_partial() {
         panic!("collected");
     };
     let done = w.stages(&mut waiter).finish_collected(&job, &end).unwrap();
-    assert_eq!(done.state, JobState::Partial);
+    assert_eq!(done.state, RunState::Partial);
 }
 
 // ---- retry and the permanent errors -------------------------------------
@@ -300,9 +302,9 @@ fn a_transient_failure_requeues_the_job_after_a_backoff_and_the_next_attempt_wor
     let queued = w.job(&job.id);
     assert_eq!(
         (queued.state, queued.waiting_for),
-        (JobState::Queued, Some(WaitingFor::Backoff))
+        (RunState::Queued, Some(WaitingFor::Backoff))
     );
-    assert!(kinds(&w.fx, &job.id).contains(&"job.requeued".to_owned()));
+    assert!(kinds(&w.fx, &job.id).contains(&"run.requeued".to_owned()));
     assert!(claim(&w).is_none(), "not before the backoff");
     w.fx.clock.advance(60_000);
     let second = claim(&w).expect("claimed after the backoff");
@@ -340,7 +342,7 @@ fn a_job_with_no_attempt_left_fails_with_the_last_failure() {
     assert_eq!(failure_of(&last), FailureCode::UploadFailed);
     assert!(matches!(last, Driven::Failed(_)));
     let stored = w.job(&job.id);
-    assert_eq!(stored.state, JobState::Failed);
+    assert_eq!(stored.state, RunState::Failed);
     assert_eq!(stored.failure.unwrap().code, FailureCode::UploadFailed);
     lane_is_free(&w);
 }
@@ -364,7 +366,7 @@ fn a_permanent_error_is_not_retried_even_with_attempts_left() {
     assert!(matches!(driven, Driven::Failed(_)), "{driven:?}");
     assert_eq!(failure_of(&driven), FailureCode::LaunchFailed);
     let stored = w.job(&job.id);
-    assert_eq!(stored.state, JobState::Failed);
+    assert_eq!(stored.state, RunState::Failed);
     assert_eq!(stored.attempt, 1);
     assert_eq!(
         waiter.snapshot().state,
@@ -381,7 +383,7 @@ fn a_failure_the_policy_does_not_list_is_final() {
     let mut waiter = w.engine(attempt_upload_refused);
     let driven = drive(&w, &mut waiter, &job);
     assert!(matches!(driven, Driven::Failed(_)), "{driven:?}");
-    assert_eq!(w.job(&job.id).state, JobState::Failed);
+    assert_eq!(w.job(&job.id).state, RunState::Failed);
 }
 
 #[test]
@@ -404,9 +406,9 @@ fn a_qemu_killed_in_the_run_stage_is_guest_lost_and_retried() {
     assert!(matches!(first, Driven::Retried { .. }), "{first:?}");
     assert_eq!(failure_of(&first), FailureCode::GuestLost);
     let stored = w.job(&job.id);
-    assert_eq!(stored.state, JobState::Queued);
+    assert_eq!(stored.state, RunState::Queued);
     assert!(
-        kinds(&w.fx, &job.id).contains(&"job.requeued".to_owned()),
+        kinds(&w.fx, &job.id).contains(&"run.requeued".to_owned()),
         "{:?}",
         kinds(&w.fx, &job.id)
     );
@@ -428,7 +430,7 @@ fn a_sample_that_ends_the_guest_twice_is_final_and_says_so() {
                     s.runs.push(run);
                 })
                 .then(4 * SECOND, |s| {
-                    s.runs.last_mut().unwrap().state = RunState::Interrupted
+                    s.runs.last_mut().unwrap().state = CoreRunState::Interrupted
                 })
                 .ok("launched");
             stop_ok(fake);
@@ -494,7 +496,7 @@ fn a_launch_answered_after_the_lane_gave_up_is_stopped_and_named_by_the_job() {
     assert_eq!(waiter.snapshot().state, VmState::Stopped);
     let stored = w.job(&job.id);
     assert_eq!(
-        stored.run.as_ref().map(|run| run.run_id.as_str()),
+        stored.program.as_ref().map(|run| run.id.as_str()),
         Some("r1"),
         "{driven:?}"
     );
@@ -510,7 +512,7 @@ fn a_launch_answered_after_the_lane_gave_up_is_stopped_and_named_by_the_job() {
         "{:?}",
         stored.warnings
     );
-    assert!(kinds(&w.fx, &job.id).contains(&"job.run".to_owned()));
+    assert!(kinds(&w.fx, &job.id).contains(&"run.program".to_owned()));
     lane_is_free(&w);
 }
 
@@ -544,7 +546,7 @@ fn a_hung_stop_is_killed_and_a_recording_failure_is_retried_once() {
     let second = claim(&w).unwrap();
     let last = drive(&w, &mut waiter, &second);
     assert!(matches!(last, Driven::Failed(_)), "once only: {last:?}");
-    assert_eq!(w.job(&job.id).state, JobState::Failed);
+    assert_eq!(w.job(&job.id).state, RunState::Failed);
 }
 
 // ---- quarantine ---------------------------------------------------------
@@ -607,7 +609,7 @@ fn three_guests_that_never_answer_quarantine_the_lane_and_the_job_waits() {
     let queued = w.job(&job.id);
     assert_eq!(
         (queued.state, queued.waiting_for),
-        (JobState::Queued, Some(WaitingFor::LaneQuarantined))
+        (RunState::Queued, Some(WaitingFor::LaneQuarantined))
     );
 }
 
@@ -626,7 +628,7 @@ fn a_revert_that_fails_twice_quarantines_and_is_never_retried() {
     assert!(matches!(driven, Driven::Failed(_)), "{driven:?}");
     assert_eq!(failure_of(&driven), FailureCode::RevertFailed);
     assert!(w.lane_file().quarantine.is_some());
-    assert_eq!(w.job(&job.id).state, JobState::Failed);
+    assert_eq!(w.job(&job.id).state, RunState::Failed);
 }
 
 // ---- waits and aborts ---------------------------------------------------
@@ -654,7 +656,7 @@ fn a_host_that_cannot_take_the_job_yet_puts_it_back_without_using_an_attempt() {
     let stored = w.job(&job.id);
     assert_eq!(
         (stored.state, stored.waiting_for),
-        (JobState::Queued, Some(WaitingFor::Resources))
+        (RunState::Queued, Some(WaitingFor::Resources))
     );
     assert!(w.fx.store.previous_failures(&job.id).unwrap().is_empty());
     assert!(waiter.engine_mut().sent().is_empty());
@@ -673,7 +675,7 @@ fn a_dead_engine_leaves_the_job_and_the_lane_for_recovery() {
     });
     let driven = drive(&w, &mut waiter, &job);
     assert!(matches!(driven, Driven::Aborted(_)), "{driven:?}");
-    assert_eq!(w.job(&job.id).state, JobState::Running);
+    assert_eq!(w.job(&job.id).state, RunState::Running);
     let work = w
         .lane_file()
         .current
@@ -695,7 +697,7 @@ fn a_job_cancelled_before_it_starts_ends_cancelled_without_a_command() {
     let mut waiter = w.engine(|fake| attempt(fake, 3));
     let driven = drive(&w, &mut waiter, &job);
     assert!(matches!(driven, Driven::Cancelled), "{driven:?}");
-    assert_eq!(w.job(&job.id).state, JobState::Cancelled);
+    assert_eq!(w.job(&job.id).state, RunState::Cancelled);
     assert!(waiter.engine_mut().sent().is_empty());
     lane_is_free(&w);
 }
@@ -707,7 +709,7 @@ fn a_shutdown_cancel_puts_the_job_back_in_the_queue() {
     w.fx.store.cancel_for_shutdown(&job.id).unwrap();
     let mut waiter = w.engine(|fake| attempt(fake, 3));
     assert!(matches!(drive(&w, &mut waiter, &job), Driven::Requeued));
-    assert_eq!(w.job(&job.id).state, JobState::Queued);
+    assert_eq!(w.job(&job.id).state, RunState::Queued);
 }
 
 #[test]
@@ -734,7 +736,7 @@ fn a_cancel_during_the_revert_stops_the_wait_and_the_vm_the_engine_started() {
     // The restore was waited for to its end, then the VM it started was stopped.
     assert_eq!(names, ["RestoreVmSnapshot", "Stop"]);
     assert_eq!(state, VmState::Stopped);
-    assert_eq!(w.job(&job.id).state, JobState::Cancelled);
+    assert_eq!(w.job(&job.id).state, RunState::Cancelled);
     lane_is_free(&w);
 }
 
@@ -757,7 +759,7 @@ fn a_cancel_during_the_upload_wait_ends_the_job_and_stops_the_vm() {
     // The pause before the retry sees the cancel: no second upload, the VM
     // stopped.
     assert_eq!(names, ["RestoreVmSnapshot", "UploadSample", "Stop"]);
-    assert_eq!(w.job(&job.id).state, JobState::Cancelled);
+    assert_eq!(w.job(&job.id).state, RunState::Cancelled);
     lane_is_free(&w);
 }
 
@@ -792,8 +794,8 @@ fn a_cancel_while_the_program_runs_stops_it_stops_the_vm_and_keeps_the_recording
         ]
     );
     let stored = w.job(&job.id);
-    assert_eq!(stored.state, JobState::Cancelled);
-    assert_eq!(stored.run.unwrap().end_reason, Some(EndReason::Stopped));
+    assert_eq!(stored.state, RunState::Cancelled);
+    assert_eq!(stored.program.unwrap().end_reason, Some(EndReason::Stopped));
     assert_eq!(
         stored.recording.map(|r| r.phase),
         Some(RecordingPhase::Complete),
@@ -830,7 +832,7 @@ fn a_cancel_while_collect_waits_for_evidence_still_stops_the_vm() {
     assert_eq!(names.last().map(String::as_str), Some("Stop"));
     assert_eq!(state, VmState::Stopped);
     let stored = w.job(&job.id);
-    assert_eq!(stored.state, JobState::Cancelled);
+    assert_eq!(stored.state, RunState::Cancelled);
     assert_eq!(stored.recording.unwrap().phase, RecordingPhase::Complete);
     lane_is_free(&w);
 }
@@ -856,7 +858,7 @@ fn a_cancel_while_the_vm_stops_finishes_the_stop_and_ends_cancelled() {
         drive(&w, &mut waiter, &job)
     });
     assert!(matches!(driven, Driven::Cancelled), "{driven:?}");
-    assert_eq!(w.job(&job.id).state, JobState::Cancelled);
+    assert_eq!(w.job(&job.id).state, RunState::Cancelled);
     lane_is_free(&w);
 }
 
@@ -901,7 +903,7 @@ fn the_job_limit_stops_a_job_that_is_still_in_a_stage_and_fails_it_with_the_watc
     assert_eq!(failure.stage, Stage::Provision);
     // Never retried, whatever the policy lists; the VM was stopped.
     let stored = w.job(&job.id);
-    assert_eq!(stored.state, JobState::Failed);
+    assert_eq!(stored.state, RunState::Failed);
     assert_eq!(stored.attempt, 1);
     assert_eq!(waiter.snapshot().state, VmState::Stopped);
     lane_is_free(&w);
@@ -910,7 +912,7 @@ fn the_job_limit_stops_a_job_that_is_still_in_a_stage_and_fails_it_with_the_watc
 // ---- crash points of the new checkpoints --------------------------------
 
 /// Run a job to the point just before `collect` finishes, in `waiter`.
-fn up_to_collect(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Job) -> super::Launched {
+fn up_to_collect(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Run) -> super::Launched {
     let ready = super::run_tests::launched(w, waiter, job);
     w.stages(waiter).run(job, &ready.0, &ready.1).unwrap();
     ready.1
@@ -931,7 +933,7 @@ fn recover(w: &mut W) -> crate::lane::StartupRecovery {
 
 /// `collect` with a lane-file fault armed when `Stop` is sent: between the
 /// `collect started` write and the `collected` write.
-fn collect_with_fault(w: &W, fault: WriteFault, job: &Job) -> Result<super::CollectEnd, StageStop> {
+fn collect_with_fault(w: &W, fault: WriteFault, job: &Run) -> Result<super::CollectEnd, StageStop> {
     let lanes = &w.lanes;
     with_action(
         || lanes.inject_fault(fault),
@@ -971,7 +973,7 @@ fn a_crash_before_the_collected_rename_makes_a_new_attempt() {
     assert!(w.lane_file().collected.is_empty());
     let report = recover(&mut w);
     assert_eq!(report.jobs.requeued, std::slice::from_ref(&job.id));
-    assert_eq!(w.job(&job.id).state, JobState::Queued);
+    assert_eq!(w.job(&job.id).state, RunState::Queued);
     let lane_report = &report.lanes[0];
     assert!(lane_report.resume.is_empty());
     assert_eq!(
@@ -997,14 +999,14 @@ fn a_crash_after_the_collected_rename_resumes_the_job_at_analyse() {
     let file = w.lane_file();
     assert_eq!(file.current, None);
     assert_eq!(file.collected.len(), 1);
-    assert_eq!(w.job(&job.id).state, JobState::Running);
+    assert_eq!(w.job(&job.id).state, RunState::Running);
     let report = recover(&mut w);
     assert!(report.jobs.requeued.is_empty(), "{:?}", report.jobs);
     assert_eq!(report.lanes[0].resume, std::slice::from_ref(&job.id));
     let kept = w.job(&job.id);
     assert_eq!(
         (kept.state, kept.stage),
-        (JobState::Running, Some(Stage::Collect))
+        (RunState::Running, Some(Stage::Collect))
     );
 }
 
@@ -1027,14 +1029,14 @@ fn a_crash_while_the_program_runs_makes_a_new_attempt() {
     );
     let report = recover(&mut w);
     assert_eq!(report.jobs.requeued, std::slice::from_ref(&job.id));
-    assert_eq!(w.job(&job.id).state, JobState::Queued);
+    assert_eq!(w.job(&job.id).state, RunState::Queued);
 }
 
 // ---- a stop that never settles -----------------------------------------
 
 /// Everything up to a `Stop` that nobody answers and that leaves the engine
 /// in `Failed` after the forced kill.
-fn wedged(w: &W, second_stop: impl FnOnce(&mut FakeEngine)) -> (Job, Waiter<FakeEngine>) {
+fn wedged(w: &W, second_stop: impl FnOnce(&mut FakeEngine)) -> (Run, Waiter<FakeEngine>) {
     qemu(w, 900, 5);
     let job = w.fx.running(1);
     let waiter = w.engine(|fake| {

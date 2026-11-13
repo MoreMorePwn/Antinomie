@@ -218,7 +218,7 @@ impl Timing {
 }
 
 /// The sizes the estimates read: the sample's, and the recording folder's.
-pub fn inputs_of(job: &crate::api::job::Job, load: f64) -> Inputs {
+pub fn inputs_of(job: &crate::api::run::Run, load: f64) -> Inputs {
     let recording_bytes = job
         .recording
         .as_ref()

@@ -17,7 +17,7 @@ use crate::{
         error::{ApiError, ErrorCode, ErrorReason},
         event::{Hello, HelloOwner, LaneState},
         ops::*,
-        spec::{JobSpec, ReportFormat, Route, StaticCheck},
+        spec::{ReportFormat, Route, RunRequest, StaticCheck},
         status::*,
     },
     config::{ServiceConfig, SharedPresets},
@@ -88,7 +88,7 @@ pub struct Service {
     pub controls: Arc<Controls>,
     pub accelerator: Accelerator,
     pub watch: crate::watch::WatchHub,
-    /// One retention pass or `job.delete` at a time.
+    /// One retention pass or `run.delete` at a time.
     pub gc_lock: Mutex<()>,
     pub log: Arc<dyn Fn(&str) + Send + Sync>,
     /// The host work pool (ANT-T0454); `None` in tests that run no lane.
@@ -118,19 +118,29 @@ pub(crate) fn to_value(value: &impl Serialize) -> Result<Value, ApiError> {
         .map_err(|e| ApiError::new(ErrorCode::Internal, format!("reply: {e}")))
 }
 
-/// The names 5.11 reserves for a later contract version.
+/// The names reserved for a later contract version: the rest of the `run.*`
+/// and `preset.*` namespaces (`run.end`, `run.annotate`, `run.share`,
+/// `preset.put`, `preset.retire` arrive with 0.9.1) and the namespaces of
+/// 5.11. Checked after the served operations.
 fn reserved(op: &str) -> bool {
-    ["run.", "terminal.", "rule.", "settings.", "vm.", "base."]
-        .iter()
-        .any(|prefix| op.starts_with(prefix))
-        && !matches!(op, "vm.list" | "base.list")
+    [
+        "run.",
+        "preset.",
+        "terminal.",
+        "rule.",
+        "settings.",
+        "vm.",
+        "base.",
+    ]
+    .iter()
+    .any(|prefix| op.starts_with(prefix))
 }
 
 /// Ops that start work: refused while the daemon stops.
 fn starts_work(op: Op) -> bool {
     matches!(
         op,
-        Op::JobSubmit | Op::JobRetry | Op::UploadBegin | Op::UploadPut | Op::UploadFinish
+        Op::RunSubmit | Op::RunRerun | Op::UploadBegin | Op::UploadPut | Op::UploadFinish
     )
 }
 
@@ -201,7 +211,7 @@ impl Service {
     }
 
     fn submit(&self, value: Value, ctx: &CallContext) -> Result<Value, ApiError> {
-        let spec: JobSpec = params(value)?;
+        let spec: RunRequest = params(value)?;
         if spec.sample.path.is_some() && ctx.transport == Transport::Socket {
             return Err(ApiError::invalid_argument(
                 "sample.path",
@@ -218,12 +228,13 @@ impl Service {
     }
 
     fn retry(&self, value: Value, ctx: &CallContext) -> Result<Value, ApiError> {
-        let request: JobRetryParams = params(value)?;
+        let request: RunRerunParams = params(value)?;
         let presets = self.presets.snapshot();
         let caller = self.caller_with_limits(&ctx.caller);
-        let submitted = self.store.retry(
+        let submitted = self.store.rerun(
             &caller,
-            &request.job_id,
+            &request.run_id,
+            request.preset.as_deref(),
             request.overrides.as_ref(),
             &self.submit_context(&presets),
         )?;
@@ -282,7 +293,7 @@ impl Service {
             out.push(LaneStatus {
                 lane,
                 state,
-                job_id,
+                run_id: job_id,
                 vm_id,
                 since_ms: view.since_ms,
                 disk_layer: if pending {
@@ -559,27 +570,27 @@ impl Service {
                         .finish(&caller.client_id, &request.upload_id)?,
                 )
             }
-            Op::JobSubmit => self.submit(value, ctx),
-            Op::JobGet => {
-                let request: JobIdParams = params(value)?;
-                to_value(&self.store.get(&request.job_id)?)
+            Op::RunSubmit => self.submit(value, ctx),
+            Op::RunGet => {
+                let request: RunIdParams = params(value)?;
+                to_value(&self.store.get(&request.run_id)?)
             }
-            Op::JobList => {
-                let request: JobListParams = params(value)?;
+            Op::RunList => {
+                let request: RunListParams = params(value)?;
                 to_value(&self.store.list(&request, None)?)
             }
-            Op::JobCancel => {
-                let request: JobCancelParams = params(value)?;
+            Op::RunCancel => {
+                let request: RunCancelParams = params(value)?;
                 let job = self
                     .store
-                    .cancel(&request.job_id, request.reason.as_deref(), caller)?;
+                    .cancel(&request.run_id, request.reason.as_deref(), caller)?;
                 to_value(&job)
             }
-            Op::JobRetry => self.retry(value, ctx),
+            Op::RunRerun => self.retry(value, ctx),
             Op::EventsList => {
                 let request: EventsListParams = params(value)?;
                 let (events, next_seq) = self.store.events_list(
-                    &request.job_id,
+                    &request.run_id,
                     request.after_seq,
                     request.limit.unwrap_or(500).clamp(1, 1000),
                 )?;
@@ -594,9 +605,9 @@ impl Service {
                 "events.subscribe is a stream; it is served on the socket only",
             )),
             Op::ArtifactList => {
-                let request: JobIdParams = params(value)?;
+                let request: RunIdParams = params(value)?;
                 to_value(&ArtifactList {
-                    artifacts: self.store.artifacts(&request.job_id)?,
+                    artifacts: self.store.artifacts(&request.run_id)?,
                 })
             }
             Op::ArtifactGet => {
@@ -607,13 +618,22 @@ impl Service {
                 let request: ReportGetParams = params(value)?;
                 artifacts::report(self, &request, caller)
             }
-            Op::PolicyList => to_value(&PolicyList {
-                policies: self.presets.snapshot().list_for(caller),
+            Op::PresetGet => {
+                let request: PresetGetParams = params(value)?;
+                let detail = self
+                    .presets
+                    .snapshot()
+                    .detail(&request.name)
+                    .ok_or_else(|| ApiError::not_found("preset").with_field("name"))?;
+                to_value(&detail)
+            }
+            Op::PresetList => to_value(&PresetList {
+                presets: self.presets.snapshot().list_for(caller),
             }),
             Op::QueueStatus => to_value(&self.queue_status()?),
             Op::QueuePause => self.queue_pause(true),
             Op::QueueResume => self.queue_pause(false),
-            Op::JobDelete => self.job_delete(value),
+            Op::RunDelete => self.job_delete(value),
             Op::SampleList
             | Op::SampleGet
             | Op::SampleAdd
@@ -656,15 +676,19 @@ impl Handler for Service {
         if let Some(answer) = super::housekeeping::call(self, op, value.clone(), ctx) {
             return answer;
         }
-        if reserved(op) {
-            return Err(ApiError::new(
-                ErrorCode::Unsupported,
-                format!("{op} is reserved for a later version of the contract"),
-            )
-            .with_field("op"));
-        }
-        let parsed: Op = serde_json::from_value(Value::String(op.to_owned()))
-            .map_err(|_| ApiError::invalid_argument("op", format!("unknown operation {op:?}")))?;
+        let Ok(parsed) = serde_json::from_value::<Op>(Value::String(op.to_owned())) else {
+            if reserved(op) {
+                return Err(ApiError::new(
+                    ErrorCode::Unsupported,
+                    format!("{op} is reserved for a later version of the contract"),
+                )
+                .with_field("op"));
+            }
+            return Err(ApiError::invalid_argument(
+                "op",
+                format!("unknown operation {op:?}"),
+            ));
+        };
         ctx.caller.require_any(parsed.needs())?;
         if starts_work(parsed) && self.controls.stopping() {
             return Err(

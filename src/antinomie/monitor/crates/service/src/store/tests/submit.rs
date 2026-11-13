@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `job.submit`: synchronous validation, `rejected`, idempotency, quotas and
+//! `run.submit`: synchronous validation, `rejected`, idempotency, quotas and
 //! duplicates.
 
 use super::permissions::with;
@@ -12,29 +12,29 @@ fn an_accepted_job_is_queued_with_the_preset_filled_in() {
     let fx = Fx::new("accepted");
     let submitted = fx.submit(spec(1));
     assert!(!submitted.replayed);
-    let job = submitted.job;
-    assert_eq!(job.state, JobState::Queued);
+    let job = submitted.run;
+    assert_eq!(job.state, RunState::Queued);
     assert_eq!(job.outcome, None);
     assert_eq!(job.queue_position, Some(0));
     assert_eq!(job.client_id, "local:1000");
     assert_eq!(job.created_ms, T0);
     assert_eq!(job.attempt, 0);
     assert_eq!(job.max_attempts, 2);
-    assert_eq!(job.policy.name, "standard");
-    assert_eq!(job.policy.digest, "digest-of-standard-300");
-    assert_eq!(job.policy.based_on, None);
-    assert!(job.policy.changes.is_empty());
+    assert_eq!(job.preset.name, "standard");
+    assert_eq!(job.preset.digest, "digest-of-standard-300");
+    assert_eq!(job.preset.based_on, None);
+    assert!(job.preset.changes.is_empty());
     assert_eq!(job.sample.as_ref().unwrap().sha256, sha(1));
     // The stored spec: the preset's name, the priority, the sample by hash
     // and no overrides; the options are the frozen preset.
-    assert_eq!(job.spec.sample.sha256, Some(sha(1)));
-    assert_eq!(job.spec.policy.as_deref(), Some("standard"));
-    assert_eq!(job.spec.priority, Some(5));
-    assert!(job.spec.overrides.is_empty());
+    assert_eq!(job.request.sample.sha256, Some(sha(1)));
+    assert_eq!(job.request.preset.as_deref(), Some("standard"));
+    assert_eq!(job.request.priority, Some(5));
+    assert!(job.request.overrides.is_empty());
     let frozen = fx.store.frozen_preset(&job.id).unwrap();
     assert_eq!(frozen.preset.program.run_time_s, 300);
     assert_eq!(frozen.preset.network.route, crate::api::spec::Route::Drop);
-    assert_eq!(kinds(&fx, &job.id), ["job.created"]);
+    assert_eq!(kinds(&fx, &job.id), ["run.created"]);
     // The spec is also written to the job directory.
     assert!(
         fx.dir
@@ -48,9 +48,9 @@ fn an_accepted_job_is_queued_with_the_preset_filled_in() {
 #[test]
 fn shape_errors_an_unknown_preset_and_reserved_keys_are_errors_not_jobs() {
     let fx = Fx::new("errors");
-    let call = |spec: JobSpec| fx.submit_as(&caller(1000), spec).unwrap_err();
+    let call = |spec: RunRequest| fx.submit_as(&caller(1000), spec).unwrap_err();
 
-    let error = call(JobSpec {
+    let error = call(RunRequest {
         priority: Some(10),
         ..spec(1)
     });
@@ -58,13 +58,13 @@ fn shape_errors_an_unknown_preset_and_reserved_keys_are_errors_not_jobs() {
         (error.code, error.field.as_deref()),
         (ErrorCode::InvalidArgument, Some("priority"))
     );
-    let error = call(JobSpec {
+    let error = call(RunRequest {
         name: Some("a/b".into()),
         ..spec(1)
     });
     assert_eq!(error.field.as_deref(), Some("name"));
-    let error = call(JobSpec {
-        policy: Some("nope".into()),
+    let error = call(RunRequest {
+        preset: Some("nope".into()),
         ..spec(1)
     });
     assert_eq!(error.code, ErrorCode::PresetDenied);
@@ -156,15 +156,15 @@ fn shape_errors_an_unknown_preset_and_reserved_keys_are_errors_not_jobs() {
             with(json!({"program": {"run_in": "app_terminal"}})),
         )
         .unwrap();
-    assert_eq!(fine.job.state, JobState::Queued);
-    fx.store.cancel(&fine.job.id, None, &caller(1000)).unwrap();
+    assert_eq!(fine.run.state, RunState::Queued);
+    fx.store.cancel(&fine.run.id, None, &caller(1000)).unwrap();
 
     // sample.path is local-only.
     let remote = Caller {
         client_id: "web:alice".into(),
         ..caller(0)
     };
-    let by_path = JobSpec {
+    let by_path = RunRequest {
         sample: SampleSource {
             path: Some("/tmp/x".into()),
             ..Default::default()
@@ -192,12 +192,12 @@ fn a_spec_that_fails_a_check_or_intake_is_stored_rejected() {
         max_run_s: Some(600),
         ..Limits::default()
     };
-    let cases: Vec<(JobSpec, FailureCode, &str)> = vec![
+    let cases: Vec<(RunRequest, FailureCode, &str)> = vec![
         (spec(99), FailureCode::SampleMissing, "sample"),
         (spec(20), FailureCode::SampleTypeDenied, "sample"),
         (spec(21), FailureCode::SampleTooLarge, "sample"),
         (
-            JobSpec {
+            RunRequest {
                 priority: Some(9),
                 ..spec(1)
             },
@@ -236,8 +236,8 @@ fn a_spec_that_fails_a_check_or_intake_is_stored_rejected() {
         ),
     ];
     for (spec, code, field) in cases {
-        let job = fx.submit_as(&limited, spec).unwrap().job;
-        assert_eq!(job.state, JobState::Rejected, "{code:?}");
+        let job = fx.submit_as(&limited, spec).unwrap().run;
+        assert_eq!(job.state, RunState::Rejected, "{code:?}");
         assert_eq!(job.outcome, Some(Outcome::Rejected));
         assert_eq!(job.finished_ms, Some(T0));
         let failure = job.failure.clone().unwrap();
@@ -246,10 +246,10 @@ fn a_spec_that_fails_a_check_or_intake_is_stored_rejected() {
         assert!(!failure.retryable);
         assert!(failure.detail.unwrap().contains(field), "{field}");
         assert_eq!(failure.field.as_deref(), Some(field));
-        assert_eq!(kinds(&fx, &job.id), ["job.created", "job.finished"]);
+        assert_eq!(kinds(&fx, &job.id), ["run.created", "run.finished"]);
         // It consumes no lane time: it is never queued.
         assert_eq!(job.queue_position, None);
-        assert_eq!(fx.store.get(&job.id).unwrap().state, JobState::Rejected);
+        assert_eq!(fx.store.get(&job.id).unwrap().state, RunState::Rejected);
     }
     assert_eq!(fx.store.counts().unwrap().queued, 0);
 }
@@ -261,18 +261,18 @@ fn a_rejected_custom_run_names_the_preset_it_was_based_on() {
         .submit(with(
             json!({"network": {"route": "tor"}, "program": {"run_time_s": 600}}),
         ))
-        .job;
-    assert_eq!(job.state, JobState::Rejected);
-    assert_eq!(job.policy.name, "custom");
-    assert_eq!(job.policy.based_on.as_ref().unwrap().name, "standard");
-    assert_eq!(job.policy.changes, ["network.route", "program.run_time_s"]);
+        .run;
+    assert_eq!(job.state, RunState::Rejected);
+    assert_eq!(job.preset.name, "custom");
+    assert_eq!(job.preset.based_on.as_ref().unwrap().name, "standard");
+    assert_eq!(job.preset.changes, ["network.route", "program.run_time_s"]);
 }
 
 #[test]
 fn a_change_makes_the_run_custom_and_an_equal_value_does_not() {
     let fx = Fx::new("custom");
     let owner = Caller::with_every_permission("local:1000");
-    let spec = JobSpec {
+    let spec = RunRequest {
         priority: Some(9),
         ..with(json!({
             "program": {"run_time_s": 1800, "user": "root", "environment": ["A=1"]},
@@ -281,17 +281,17 @@ fn a_change_makes_the_run_custom_and_an_equal_value_does_not() {
             "report": {"defang": true}
         }))
     };
-    let job = fx.submit_as(&owner, spec).unwrap().job;
-    assert_eq!(job.state, JobState::Queued, "{:?}", job.failure);
-    assert_eq!(job.policy.name, "custom");
-    assert_eq!(job.policy.digest.len(), 64);
-    let base = job.policy.based_on.clone().unwrap();
+    let job = fx.submit_as(&owner, spec).unwrap().run;
+    assert_eq!(job.state, RunState::Queued, "{:?}", job.failure);
+    assert_eq!(job.preset.name, "custom");
+    assert_eq!(job.preset.digest.len(), 64);
+    let base = job.preset.based_on.clone().unwrap();
     assert_eq!(
         (base.name.as_str(), base.digest.as_str()),
         ("standard", "digest-of-standard-300")
     );
     assert_eq!(
-        job.policy.changes,
+        job.preset.changes,
         [
             "dumps.memory_dump_on_exit",
             "network.route",
@@ -302,26 +302,26 @@ fn a_change_makes_the_run_custom_and_an_equal_value_does_not() {
     );
     // The stored spec keeps the changes only (report.defang was already on).
     assert_eq!(
-        serde_json::to_value(&job.spec.overrides).unwrap(),
+        serde_json::to_value(&job.request.overrides).unwrap(),
         json!({
             "dumps": {"memory_dump_on_exit": true},
             "network": {"route": "inet_sim"},
             "program": {"environment": ["A=1"], "run_time_s": 1800, "user": "root"}
         })
     );
-    assert_eq!(job.spec.policy.as_deref(), Some("standard"));
-    assert_eq!(job.spec.priority, Some(9));
+    assert_eq!(job.request.preset.as_deref(), Some("standard"));
+    assert_eq!(job.request.priority, Some(9));
     let frozen = fx.store.frozen_preset(&job.id).unwrap();
     assert_eq!(frozen.preset.program.run_time_s, 1800);
-    assert_eq!(frozen.digest, job.policy.digest);
+    assert_eq!(frozen.digest, job.preset.digest);
     // An override equal to the preset's value leaves the preset as it is.
     let same = fx
         .submit(with(
             json!({"program": {"run_time_s": 300}, "detection": {"yara": true}}),
         ))
-        .job;
-    assert_eq!(same.policy.name, "standard");
-    assert!(same.spec.overrides.is_empty());
+        .run;
+    assert_eq!(same.preset.name, "standard");
+    assert!(same.request.overrides.is_empty());
 }
 
 #[test]
@@ -331,24 +331,24 @@ fn the_same_key_and_spec_replay_the_job() {
     assert!(!first.replayed);
     let again = fx.submit(keyed(1, "k1"));
     assert!(again.replayed);
-    assert_eq!(again.job.id, first.job.id);
+    assert_eq!(again.run.id, first.run.id);
     // Another order of the same fields is the same spec.
     let mut labels = BTreeMap::new();
     labels.insert("b".to_owned(), "2".to_owned());
     labels.insert("a".to_owned(), "1".to_owned());
-    let one = fx.submit(JobSpec {
+    let one = fx.submit(RunRequest {
         labels: labels.clone(),
         ..keyed(2, "k2")
     });
-    let two = fx.submit(JobSpec {
+    let two = fx.submit(RunRequest {
         labels,
         ..keyed(2, "k2")
     });
     assert!(two.replayed);
-    assert_eq!(two.job.id, one.job.id);
+    assert_eq!(two.run.id, one.run.id);
     assert_eq!(fx.store.counts().unwrap().queued, 2);
     // A replay writes no event.
-    assert_eq!(kinds(&fx, &first.job.id), ["job.created"]);
+    assert_eq!(kinds(&fx, &first.run.id), ["run.created"]);
 }
 
 #[test]
@@ -357,13 +357,13 @@ fn the_same_key_with_another_spec_is_a_conflict() {
     let first = fx.submit(keyed(1, "k"));
     let error = fx.submit_as(&caller(1000), keyed(2, "k")).unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
-    assert_eq!(error.details["job_id"], first.job.id.as_str());
+    assert_eq!(error.details["run_id"], first.run.id.as_str());
     // The key is scoped to the client.
     let other = fx.submit_as(&caller(1001), keyed(2, "k")).unwrap();
     assert!(!other.replayed);
     // A rejected job keeps its key too.
     let rejected = fx.submit(keyed(99, "r"));
-    assert_eq!(rejected.job.state, JobState::Rejected);
+    assert_eq!(rejected.run.state, RunState::Rejected);
     assert!(fx.submit(keyed(99, "r")).replayed);
 }
 
@@ -377,7 +377,7 @@ fn a_key_is_free_again_after_24_hours() {
     // Even a different spec now: the key is free, a new job is made.
     let second = fx.submit(keyed(2, "k"));
     assert!(!second.replayed);
-    assert_ne!(second.job.id, first.job.id);
+    assert_ne!(second.run.id, first.run.id);
     // The janitor clears keys that nobody asked for again.
     let third = fx.submit(keyed(3, "j"));
     fx.clock.advance(24 * 3600 * 1000);
@@ -387,7 +387,7 @@ fn a_key_is_free_again_after_24_hours() {
         .conn()
         .query_row(
             "SELECT idempotency_key FROM jobs WHERE id = ?1",
-            [third.job.id.as_str()],
+            [third.run.id.as_str()],
             |r| r.get(0),
         )
         .unwrap();
@@ -406,8 +406,8 @@ fn the_queue_and_client_caps_are_enforced() {
     capped.limits.max_queued = Some(3);
     for n in 1..=3 {
         assert_eq!(
-            fx.submit_as(&capped, spec(n)).unwrap().job.state,
-            JobState::Queued
+            fx.submit_as(&capped, spec(n)).unwrap().run.state,
+            RunState::Queued
         );
     }
     // The caller's cap (3) is the smaller one.
@@ -438,18 +438,18 @@ fn duplicates_follow_the_preset() {
     fx.store
         .finish(&first.id, Outcome::Succeeded, None)
         .unwrap();
-    let again = fx.submit(spec(1)).job;
-    assert_eq!(again.state, JobState::Queued);
+    let again = fx.submit(spec(1)).run;
+    assert_eq!(again.state, RunState::Queued);
     assert_eq!(again.repeat_of, Some(first.id.clone()));
     // A queued or running earlier job is not "finished": no repeat_of.
-    assert_eq!(fx.submit(spec(2)).job.repeat_of, None);
+    assert_eq!(fx.submit(spec(2)).run.repeat_of, None);
 
     // reject
     let fx = Fx::with_policy("dup-reject", |p| on_dup(p, OnDuplicate::Reject));
     let first = fx.running(1);
     fx.store.finish(&first.id, Outcome::Partial, None).unwrap();
-    let denied = fx.submit(spec(1)).job;
-    assert_eq!(denied.state, JobState::Rejected);
+    let denied = fx.submit(spec(1)).run;
+    assert_eq!(denied.state, RunState::Rejected);
     assert_eq!(denied.failure.unwrap().code, FailureCode::DuplicateDenied);
 
     // reuse: the earlier job is the result, no new job.
@@ -460,8 +460,8 @@ fn duplicates_follow_the_preset() {
         .unwrap();
     let reused = fx.submit(spec(1));
     assert!(reused.replayed);
-    assert_eq!(reused.job.id, first.id);
-    assert_eq!(fx.store.count_state(JobState::Queued).unwrap(), 0);
+    assert_eq!(reused.run.id, first.id);
+    assert_eq!(fx.store.count_state(RunState::Queued).unwrap(), 0);
 
     // reuse of a failed job runs again; reuse across another preset digest needs the flag.
     let fx = Fx::with_policy("dup-reuse-failed", |p| on_dup(p, OnDuplicate::Reuse));
@@ -475,7 +475,7 @@ fn duplicates_follow_the_preset() {
         .unwrap();
     let again = fx.submit(spec(1));
     assert!(!again.replayed);
-    assert_eq!(again.job.repeat_of, Some(first.id));
+    assert_eq!(again.run.repeat_of, Some(first.id));
 }
 
 #[test]
@@ -490,17 +490,17 @@ fn remote_replies_carry_no_host_path() {
         )
         .unwrap();
     let mut job = fx.store.get(&job.id).unwrap();
-    job.spec.sample.path = Some("/home/user/x".into());
-    job.recording = Some(crate::api::job::JobRecording {
+    job.request.sample.path = Some("/home/user/x".into());
+    job.recording = Some(crate::api::run::RunRecording {
         vm_id: "v".into(),
         boot_id: "b".into(),
         run_id: "r".into(),
-        run_key: "k".into(),
-        phase: crate::api::job::RecordingPhase::Live,
+        recording_key: "k".into(),
+        phase: crate::api::run::RecordingPhase::Live,
         directory: Some("/mnt/rec".into()),
     });
     redact_remote(&mut job);
-    assert_eq!(job.spec.sample.path, None);
+    assert_eq!(job.request.sample.path, None);
     assert_eq!(job.recording.unwrap().directory, None);
     assert_eq!(job.warnings[0].text, "cannot open <path>: no such file");
 }

@@ -10,9 +10,9 @@ use antinomie_service::{
     api::{
         failure::FailureCode,
         ids::Sha256Hex,
-        job::{JobSample, JobState},
         ops::{Caller, Permission},
-        spec::{JobSpec, Overrides, Route, SampleSource},
+        run::{RunSample, RunState},
+        spec::{Overrides, Route, RunRequest, SampleSource},
     },
     clock::ManualClock,
     config::{NoVms, SharedPresets, builtin::STANDARD},
@@ -21,7 +21,7 @@ use antinomie_service::{
 };
 use std::{fs, path::PathBuf, sync::Arc};
 
-struct Fixed(JobSample);
+struct Fixed(RunSample);
 
 impl SampleAdmission for Fixed {
     fn admit(
@@ -30,7 +30,7 @@ impl SampleAdmission for Fixed {
         _: Option<&str>,
         _: &antinomie_service::config::LoadedPreset,
         _: &str,
-    ) -> Result<JobSample, IntakeError> {
+    ) -> Result<RunSample, IntakeError> {
         Ok(self.0.clone())
     }
 }
@@ -42,14 +42,14 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-fn spec(sha: &Sha256Hex) -> JobSpec {
-    JobSpec {
+fn spec(sha: &Sha256Hex) -> RunRequest {
+    RunRequest {
         sample: SampleSource {
             sha256: Some(sha.clone()),
             ..Default::default()
         },
         name: None,
-        policy: Some("mine".into()),
+        preset: Some("mine".into()),
         priority: None,
         labels: Default::default(),
         idempotency_key: None,
@@ -70,7 +70,7 @@ fn a_reload_changes_new_jobs_and_never_a_stored_one() {
     presets.reload(&dir, &NoVms).unwrap();
 
     let sha = Sha256Hex::try_from("ab".repeat(32)).unwrap();
-    let intake = Fixed(JobSample {
+    let intake = Fixed(RunSample {
         sha256: sha.clone(),
         size: 10,
         kind: "elf".into(),
@@ -92,8 +92,8 @@ fn a_reload_changes_new_jobs_and_never_a_stored_one() {
     let first = store
         .submit(&caller("local:1000"), spec(&sha), &ctx)
         .unwrap()
-        .job;
-    let first_digest = first.policy.digest.clone();
+        .run;
+    let first_digest = first.preset.digest.clone();
     assert_eq!(
         store
             .frozen_preset(&first.id)
@@ -123,8 +123,8 @@ fn a_reload_changes_new_jobs_and_never_a_stored_one() {
     let second = store
         .submit(&caller("local:1000"), spec(&sha), &ctx)
         .unwrap()
-        .job;
-    assert_ne!(second.policy.digest, first_digest);
+        .run;
+    assert_ne!(second.preset.digest, first_digest);
     assert_eq!(
         store
             .frozen_preset(&second.id)
@@ -136,7 +136,7 @@ fn a_reload_changes_new_jobs_and_never_a_stored_one() {
     );
     // The first job keeps the preset it froze: digest and content.
     let again = store.get(&first.id).unwrap();
-    assert_eq!(again.policy.digest, first_digest);
+    assert_eq!(again.preset.digest, first_digest);
     let frozen = store.frozen_preset(&first.id).unwrap();
     assert_eq!(frozen.digest, first_digest);
     assert_eq!(frozen.preset.program.run_time_s, 300);
@@ -192,7 +192,7 @@ fn a_job_writes_one_automation_entry_under_its_caller() {
                 name: "job.sh".into(),
                 ..Default::default()
             },
-            "auto:policy-default",
+            "auto:preset-default",
         )
         .unwrap()
         .sha256;
@@ -201,7 +201,7 @@ fn a_job_writes_one_automation_entry_under_its_caller() {
     let presets = SharedPresets::new(Default::default());
     presets.reload(&dir, &NoVms).unwrap();
     let set = presets.snapshot();
-    let intake = Fixed(JobSample {
+    let intake = Fixed(RunSample {
         sha256: sha.clone(),
         size: 19,
         kind: "sh".into(),
@@ -222,14 +222,14 @@ fn a_job_writes_one_automation_entry_under_its_caller() {
             .cloned()
             .unwrap(),
     );
-    let job = store.submit(&caller("web:alice"), s, &ctx).unwrap().job;
-    assert_eq!(job.state, JobState::Queued, "{:?}", job.failure);
+    let job = store.submit(&caller("web:alice"), s, &ctx).unwrap().run;
+    assert_eq!(job.state, RunState::Queued, "{:?}", job.failure);
     assert_eq!(actor_of(&job), "web:alice");
     // A Custom run: the automation actor is the preset it was based on.
-    assert_eq!(job.policy.name, "custom");
+    assert_eq!(job.preset.name, "custom");
     assert_eq!(
         antinomie_service::custody::automation_actor(&job),
-        "auto:policy-mine"
+        "auto:preset-mine"
     );
 
     let route = store.frozen_preset(&job.id).unwrap().preset.network.route;
@@ -252,7 +252,7 @@ fn a_job_writes_one_automation_entry_under_its_caller() {
                 (policy.as_str(), route.as_str(), submitted_by.as_str()),
                 ("custom", "inet_sim", "web:alice")
             );
-            assert_eq!(policy_digest, &job.policy.digest);
+            assert_eq!(policy_digest, &job.preset.digest);
         }
         other => panic!("{other:?}"),
     }

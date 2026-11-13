@@ -785,7 +785,7 @@ fn add_tag_keeps_the_other_tags_and_writes_the_custody_entry_under_the_actor() {
     let root = temp("add-tag");
     let mut library = Library::open(&root)
         .unwrap()
-        .with_actor("auto:policy-default")
+        .with_actor("auto:preset-default")
         .unwrap();
     let hash = library
         .add_bytes(SCRIPT, added_from("/x/a"))
@@ -809,7 +809,7 @@ fn add_tag_keeps_the_other_tags_and_writes_the_custody_entry_under_the_actor() {
     assert_eq!(values, ["auto:crashes-guest", "mine"]);
     let events = library.events(&hash).unwrap();
     assert_eq!(events.len(), before + 1);
-    assert_eq!(events.last().unwrap().by, "auto:policy-default");
+    assert_eq!(events.last().unwrap().by, "auto:preset-default");
     // Again: nothing is added and nothing is written.
     assert!(
         !library

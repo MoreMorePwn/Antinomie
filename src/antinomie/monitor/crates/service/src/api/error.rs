@@ -17,7 +17,7 @@ pub enum ErrorCode {
     Forbidden,
     /// The caller lacks a permission; `details.needs` names it.
     PermissionDenied,
-    /// The preset (in 0.9.0: the policy) is unknown, retired or not offered
+    /// The preset is unknown, retired or not offered
     /// to the caller; `details.preset` names it.
     PresetDenied,
     /// A value is above the caller's limit; `details.field` and
@@ -111,7 +111,7 @@ pub enum ErrorReason {
     TooManyConnections,
     /// `quota_exceeded`: 64 subscriptions of this client or 256 in all (A18).
     TooManySubscriptions,
-    /// `unavailable`: the daemon is stopping; queued jobs stay queued.
+    /// `unavailable`: the daemon is stopping; queued runs stay queued.
     ServiceStopping,
     /// `unavailable`: a request was cancelled by `{"op": "cancel"}` or by the
     /// connection closing.

@@ -51,10 +51,16 @@ mod tests {
 
     #[test]
     fn a_line_has_the_four_facts_and_stays_on_one_line() {
-        let text = line("local:1000", "recording.files.content", "run", "abc", 42);
+        let text = line(
+            "local:1000",
+            "recording.files.content",
+            "recording",
+            "abc",
+            42,
+        );
         assert_eq!(
             text,
-            "sensitive read: caller=local:1000 op=recording.files.content run=abc size=42"
+            "sensitive read: caller=local:1000 op=recording.files.content recording=abc size=42"
         );
         let odd = line("a\nb c", "op", "run", "x\ty", 1);
         assert!(!odd.contains('\n') && !odd.contains('\t'));

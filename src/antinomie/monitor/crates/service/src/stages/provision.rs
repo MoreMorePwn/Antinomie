@@ -22,7 +22,7 @@ use super::{
 use crate::{
     api::{
         failure::{Failure, FailureCode},
-        job::{Job, Revert, Stage},
+        run::{Revert, Run, Stage},
     },
     config::service::RevertMode,
     engine::Engine,
@@ -37,7 +37,7 @@ fn fail(code: FailureCode, message: &str, detail: Option<&str>) -> StageStop {
 }
 
 impl<E: Engine> LaneStages<'_, E> {
-    pub fn provision(&mut self, job: &Job, prepared: &Prepared) -> Result<Provisioned, StageStop> {
+    pub fn provision(&mut self, job: &Run, prepared: &Prepared) -> Result<Provisioned, StageStop> {
         let file = self.lane_file()?;
         let vm = file.vm_id.clone();
 
@@ -226,7 +226,7 @@ impl<E: Engine> LaneStages<'_, E> {
             .patch(
                 &job.id,
                 JobPatch {
-                    vm: Some(crate::api::job::JobVm {
+                    vm: Some(crate::api::run::RunVm {
                         id: vm.clone(),
                         name,
                         base_identity: Some(file.base_identity.clone()),
@@ -247,7 +247,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// restore boots the VM inside the command, so `BOOT_WAIT` is a silence
     /// limit as for `Start` (the engine's note of the slow TCG boot restarts
     /// it; `START_HARD_WAIT` bounds it).
-    fn revert_with(&mut self, job: &Job, command: Command) -> Result<(), StageStop> {
+    fn revert_with(&mut self, job: &Run, command: Command) -> Result<(), StageStop> {
         let mut last = String::new();
         for attempt in 1..=2 {
             match self.waiter.start_command(command.clone(), BOOT_WAIT) {
@@ -322,7 +322,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     /// Record the VM's QEMU process in the lane file. A VM whose process
     /// cannot be told apart is a warning, not a failure.
-    fn record_qemu(&mut self, job: &Job, vm: &str) -> Result<(), StageStop> {
+    fn record_qemu(&mut self, job: &Run, vm: &str) -> Result<(), StageStop> {
         let marker = self
             .waiter
             .snapshot()

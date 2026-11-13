@@ -238,7 +238,7 @@ impl QueryService {
         &self,
         params: &TimelineParams,
     ) -> Result<Page<TimelineEvent>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         if (params.from_ms.is_some() || params.to_ms.is_some()) && opened.run.clock_anchor.is_none()
         {
             return Err(ApiError::new(

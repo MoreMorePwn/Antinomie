@@ -14,7 +14,7 @@
 //! manual clock past each limit. The job deadline is enforced through the
 //! waiter ([`crate::waiter::Waiter::deadline_in`]) so that it also ends the
 //! waits of the stages that have no loop of their own.
-use crate::api::job::Stage;
+use crate::api::run::Stage;
 use std::time::Duration;
 
 /// `job_hard_s` is the run limit plus this (design 4.7.1).

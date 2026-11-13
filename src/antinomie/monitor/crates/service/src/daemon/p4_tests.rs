@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The daemon side of watch folders, retention and delivery (cards P4-2 to
 //! P4-4): a watched file becomes a job of the policy's actor, the operations
-//! `watch.list`, `watch.scan`, `gc.run` and `job.delete` and their scopes.
+//! `watch.list`, `watch.scan`, `gc.run` and `run.delete` and their scopes.
 
 use super::{
     tests::{SCRIPT, call, me, socket_ctx, submit_upload, svc},
@@ -10,8 +10,8 @@ use super::{
 use crate::{
     api::{
         error::ErrorCode,
-        job::{JobState, Outcome},
         ops::Caller,
+        run::{Outcome, RunState},
     },
     config::service::{DeleteAfter, OnDuplicate, Watch},
     server::{CallContext, Handler, Transport},
@@ -69,12 +69,12 @@ fn a_watched_file_becomes_a_queued_job_of_the_presets_actor() {
     watcher.configure(&[watch]);
     settle(&mut watcher, &env);
 
-    let listed = call(&svc, "job.list", json!({})).unwrap();
-    let jobs = listed["jobs"].as_array().unwrap();
+    let listed = call(&svc, "run.list", json!({})).unwrap();
+    let jobs = listed["runs"].as_array().unwrap();
     assert_eq!(jobs.len(), 1, "{listed}");
     let job = &jobs[0];
     assert_eq!(job["state"], "queued");
-    assert_eq!(job["client_id"], "auto:policy-standard");
+    assert_eq!(job["client_id"], "auto:preset-standard");
     assert_eq!(job["labels"]["watch"], "drop-here");
     assert_eq!(job["sample"]["type"], "sh");
     assert_eq!(job["sample"]["name"], "hello.sh");
@@ -88,7 +88,7 @@ fn a_watched_file_becomes_a_queued_job_of_the_presets_actor() {
     let sha = job["sample"]["sha256"].as_str().unwrap();
     let events = library.events(sha).unwrap();
     let added = events.first().expect("an Added entry");
-    assert_eq!(added.by, "auto:policy-standard");
+    assert_eq!(added.by, "auto:preset-standard");
     let text = format!("{:?}", added.event);
     assert!(
         text.contains("Automation") && !text.contains("drop-here"),
@@ -112,7 +112,7 @@ fn a_file_the_policy_does_not_accept_is_rejected_and_never_reaches_the_library()
     let text = fs::read_to_string(svc.dir.join("data/inbox/rejected").join(reason)).unwrap();
     assert!(text.starts_with("sample_type_denied:"), "{text}");
     assert_eq!(
-        call(&svc, "job.list", json!({})).unwrap()["jobs"]
+        call(&svc, "run.list", json!({})).unwrap()["runs"]
             .as_array()
             .unwrap()
             .len(),
@@ -199,7 +199,7 @@ fn a_full_queue_holds_the_watched_files() {
 #[test]
 fn the_watch_caller_holds_runs_submit_and_its_folder_permissions() {
     let caller = watch_caller("strict", &[], None);
-    assert_eq!(caller.client_id, "auto:policy-strict");
+    assert_eq!(caller.client_id, "auto:preset-strict");
     assert_eq!(
         caller.permissions,
         [crate::api::ops::Permission::RunsSubmit].into()
@@ -220,9 +220,9 @@ fn watch_and_gc_operations_check_their_permissions() {
         cancel: Default::default(),
         transport: Transport::Socket,
     };
-    for op in ["watch.scan", "gc.run", "job.delete"] {
-        let params = if op == "job.delete" {
-            json!({"job_id": "j_01ARZ3NDEKTSV4RRFFQ69G5FAV"})
+    for op in ["watch.scan", "gc.run", "run.delete"] {
+        let params = if op == "run.delete" {
+            json!({"run_id": "j_01ARZ3NDEKTSV4RRFFQ69G5FAV"})
         } else {
             json!({})
         };
@@ -254,13 +254,13 @@ fn gc_run_answers_a_plan_and_job_delete_refuses_what_has_not_ended() {
         "unknown member"
     );
 
-    let error = call(&svc, "job.delete", json!({"job_id": queued.id})).unwrap_err();
+    let error = call(&svc, "run.delete", json!({"run_id": queued.id})).unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
     let cancelled = svc.service.store.cancel(&queued.id, None, &me()).unwrap();
-    assert_eq!(cancelled.state, JobState::Cancelled);
-    let deleted = call(&svc, "job.delete", json!({"job_id": queued.id})).unwrap();
+    assert_eq!(cancelled.state, RunState::Cancelled);
+    let deleted = call(&svc, "run.delete", json!({"run_id": queued.id})).unwrap();
     assert_eq!(deleted["deleted"], true);
-    let error = call(&svc, "job.get", json!({"job_id": queued.id})).unwrap_err();
+    let error = call(&svc, "run.get", json!({"run_id": queued.id})).unwrap_err();
     assert_eq!(error.code, ErrorCode::NotFound);
 }
 
@@ -293,7 +293,7 @@ fn the_owner_takes_its_limits_from_service_toml_as_it_reads_now() {
         let id = super::tests::upload(svc, SCRIPT);
         call(
             svc,
-            "job.submit",
+            "run.submit",
             json!({"sample": {"upload_id": id}, "priority": priority}),
         )
         .unwrap()
@@ -336,10 +336,10 @@ fn a_watch_folders_priority_max_caps_the_priority_of_its_runs() {
     let mut watcher = Watcher::new(&svc.dir.join("data").join("inbox"));
     watcher.configure(&[watch]);
     settle(&mut watcher, &env);
-    let listed = call(&svc, "job.list", json!({})).unwrap();
-    let jobs = listed["jobs"].as_array().unwrap();
+    let listed = call(&svc, "run.list", json!({})).unwrap();
+    let jobs = listed["runs"].as_array().unwrap();
     assert_eq!(jobs.len(), 1, "{listed}");
     assert_eq!(jobs[0]["state"], "queued");
     // The default priority (5) is lowered to the folder's ceiling.
-    assert_eq!(jobs[0]["spec"]["priority"], 2);
+    assert_eq!(jobs[0]["request"]["priority"], 2);
 }

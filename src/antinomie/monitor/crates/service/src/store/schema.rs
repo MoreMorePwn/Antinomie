@@ -12,9 +12,9 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// that do not count (4.7.3); the `host_work` table the items of the host work
 /// pool (ANT-T0454, one row per job, added without a version change: it is
 /// created when missing); the `job_recordings` table every run a job's
-/// attempts recorded, so retention and `job.delete` reach the earlier ones
+/// attempts recorded, so retention and `run.delete` reach the earlier ones
 /// too (added the same way); `cancel_reason`/`cancel_shutdown` the cancel
-/// request; the `*_json` columns the parts of the `Job` object (5.4.2) that
+/// request; the `*_json` columns the parts of the `Run` object (5.4.2) that
 /// have no column in the table of 4.3.
 pub const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS meta(

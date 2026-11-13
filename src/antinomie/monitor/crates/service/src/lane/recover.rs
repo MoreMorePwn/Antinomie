@@ -33,8 +33,8 @@ use crate::{
         error::ApiError,
         event::{EventBody, LaneState},
         failure::FailureCode,
-        ids::{JobId, LaneId},
-        job::{JobState, Stage},
+        ids::{LaneId, RunId},
+        run::{RunState, Stage},
     },
     engine::Engine,
     store::{Store, recover::RecoveryReport},
@@ -102,9 +102,9 @@ pub struct LaneRecovery {
     /// Set when this lane is quarantined (before or by this recovery).
     pub quarantined: Option<FailureCode>,
     /// Jobs whose lane stages were finished and that resume at `analyse`.
-    pub resume: Vec<JobId>,
+    pub resume: Vec<RunId>,
     /// `collected` entries whose job no longer needs them.
-    pub dropped: Vec<JobId>,
+    pub dropped: Vec<RunId>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -134,8 +134,8 @@ impl From<ApiError> for RecoverError {
 pub struct PendingLane {
     pub lane: LaneId,
     file: Result<Option<LaneFile>, LaneStateError>,
-    resume: Vec<JobId>,
-    dropped: Vec<JobId>,
+    resume: Vec<RunId>,
+    dropped: Vec<RunId>,
 }
 
 /// The store's part of recovery, done once for every lane ([`recover_store`]).
@@ -299,7 +299,7 @@ pub fn recover_startup<E: Engine>(
 /// `collect`, in the attempt that collected.
 fn still_needed(store: &Store, entry: &Collected) -> bool {
     store.get(&entry.job_id).is_ok_and(|job| {
-        job.state == JobState::Running
+        job.state == RunState::Running
             && job.attempt == entry.attempt
             && job.stage.is_some_and(|stage| stage >= Stage::Collect)
     })
@@ -313,8 +313,8 @@ fn recover_lane<E: Engine>(
     procs: &dyn Processes,
     options: &RecoverOptions,
     mut file: LaneFile,
-    resume: Vec<JobId>,
-    dropped: Vec<JobId>,
+    resume: Vec<RunId>,
+    dropped: Vec<RunId>,
 ) -> Result<LaneRecovery, RecoverError> {
     let now = waiter.now_ms();
     let was_quarantined = file.is_quarantined();
@@ -376,7 +376,7 @@ fn recover_lane<E: Engine>(
         store.emit_engine(EventBody::LaneState {
             lane: file.lane.clone(),
             state: LaneState::Idle,
-            job_id: interrupted.as_ref().map(|w| w.job_id.clone()),
+            run_id: interrupted.as_ref().map(|w| w.job_id.clone()),
             reason: Some("service_restart".into()),
         })?;
     }
@@ -428,7 +428,7 @@ fn end_recorded_qemu(procs: &dyn Processes, file: &mut LaneFile, now: u64) -> Qe
 pub(crate) fn announce_quarantine(
     store: &Store,
     file: &LaneFile,
-    job_id: Option<JobId>,
+    job_id: Option<RunId>,
 ) -> Result<(), ApiError> {
     let Some(quarantine) = &file.quarantine else {
         return Ok(());
@@ -440,7 +440,7 @@ pub(crate) fn announce_quarantine(
     store.emit_engine(EventBody::LaneState {
         lane: file.lane.clone(),
         state: LaneState::Quarantined,
-        job_id,
+        run_id: job_id,
         reason: Some(reason),
     })?;
     store.emit_engine(EventBody::EngineAlert {

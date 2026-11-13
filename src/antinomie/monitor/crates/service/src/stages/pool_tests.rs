@@ -14,7 +14,7 @@ use super::{
 use crate::{
     api::{
         ids::LaneId,
-        job::{EndReason, HostItemState, Job, JobState, Outcome},
+        run::{EndReason, HostItemState, Outcome, Run, RunState},
     },
     clock::Clock,
     daemon::Controls,
@@ -129,11 +129,11 @@ impl Rig {
         }
     }
 
-    fn job(&self, job: &Job) -> Job {
+    fn job(&self, job: &Run) -> Run {
         self.store.get(&job.id).unwrap()
     }
 
-    fn terminal(&self, job: &Job) -> bool {
+    fn terminal(&self, job: &Run) -> bool {
         self.job(job).state.is_terminal()
     }
 
@@ -148,7 +148,7 @@ impl Rig {
 
 /// A collected job that arrived 1 ms after the one before it: arrival
 /// (`created_ms`) is the pool's order, and the fixture's clock stands still.
-fn arrived(w: &W, n: u8) -> Job {
+fn arrived(w: &W, n: u8) -> Run {
     w.fx.clock.advance(1);
     collected(w, n)
 }
@@ -175,8 +175,8 @@ fn queued_jobs_go_through_the_pool_oldest_first_and_every_item_is_shown() {
     });
     let a = rig.job(&first);
     let b = rig.job(&second);
-    assert_eq!(a.state, JobState::Succeeded, "{:?}", a.warnings);
-    assert_eq!(b.state, JobState::Succeeded, "{:?}", b.warnings);
+    assert_eq!(a.state, RunState::Succeeded, "{:?}", a.warnings);
+    assert_eq!(b.state, RunState::Succeeded, "{:?}", b.warnings);
     for job in [&a, &b] {
         let names: Vec<&str> = job.host_work.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, ["triage", "assess", "report"]);
@@ -199,14 +199,14 @@ fn queued_jobs_go_through_the_pool_oldest_first_and_every_item_is_shown() {
         .unwrap();
     assert!(last_a <= first_b, "{last_a} > {first_b}");
     // A job is terminal in the store a moment before it leaves the pool.
-    rig.until("both jobs to leave the pool", |r| r.pool.status().jobs == 0);
+    rig.until("both jobs to leave the pool", |r| r.pool.status().runs == 0);
     rig.stop();
 }
 
 /// A collected job of lane `n`, 1 ms after the one before it; lane `n` has
 /// its own lane file with the entry `collect` leaves (several lanes, ANT-T0455
 /// card C).
-fn arrived_on(w: &W, job: u8, n: u32) -> Job {
+fn arrived_on(w: &W, job: u8, n: u32) -> Run {
     let on = LaneId::new(n);
     if w.lanes.load(&on).unwrap().is_none() {
         let mut file = crate::lane::tests::file();
@@ -248,12 +248,12 @@ fn jobs_of_several_lanes_share_one_pool_in_arrival_order() {
     for index in [2, 0, 1] {
         rig.pool.admit(&jobs[index], Outcome::Succeeded);
     }
-    assert_eq!(rig.pool.status().jobs, 3);
+    assert_eq!(rig.pool.status().runs, 3);
     rig.start();
     rig.until("the jobs to end", |r| jobs.iter().all(|j| r.terminal(j)));
     for job in &jobs {
         let done = rig.job(job);
-        assert_eq!(done.state, JobState::Succeeded, "{:?}", done.warnings);
+        assert_eq!(done.state, RunState::Succeeded, "{:?}", done.warnings);
         assert_eq!(done.lane, job.lane, "a job keeps its lane");
         assert!(
             done.host_work
@@ -279,14 +279,14 @@ fn jobs_of_several_lanes_share_one_pool_in_arrival_order() {
                 .is_empty()
         })
     });
-    rig.until("the jobs to leave the pool", |r| r.pool.status().jobs == 0);
+    rig.until("the jobs to leave the pool", |r| r.pool.status().runs == 0);
     rig.stop();
 }
 
 #[test]
 fn no_more_items_run_than_the_pool_has_workers() {
     let w = world("pool-limit");
-    let jobs: Vec<Job> = (1..=3).map(|n| arrived(&w, n)).collect();
+    let jobs: Vec<Run> = (1..=3).map(|n| arrived(&w, n)).collect();
     let mut triage = hooked(&w);
     let running = Arc::new(AtomicU64::new(0));
     let most = Arc::new(AtomicU64::new(0));
@@ -320,7 +320,7 @@ fn the_head_waits_for_memory_and_starts_when_there_is_room() {
     });
     std::thread::sleep(Duration::from_millis(100));
     let waiting = rig.job(&job);
-    assert_eq!(waiting.state, JobState::Running);
+    assert_eq!(waiting.state, RunState::Running);
     assert!(
         waiting
             .host_work
@@ -331,7 +331,7 @@ fn the_head_waits_for_memory_and_starts_when_there_is_room() {
     assert_eq!(rig.pool.status().queued, 3);
     rig.memory.0.store(4096, Ordering::SeqCst);
     rig.until("the job to end", |r| r.terminal(&job));
-    assert_eq!(rig.job(&job).state, JobState::Succeeded);
+    assert_eq!(rig.job(&job).state, RunState::Succeeded);
     rig.stop();
 }
 
@@ -356,7 +356,7 @@ fn a_cancel_mid_host_work_ends_the_job_cancelled_and_skips_the_rest() {
     rig.store.cancel(&job.id, Some("test"), &manager()).unwrap();
     rig.until("the job to end", |r| r.terminal(&job));
     let done = rig.job(&job);
-    assert_eq!(done.state, JobState::Cancelled);
+    assert_eq!(done.state, RunState::Cancelled);
     assert!(done.artifacts.is_empty());
     assert!(
         done.host_work[1..]
@@ -398,7 +398,7 @@ fn a_stop_mid_host_work_leaves_the_jobs_and_a_restart_resumes_them_in_order() {
     rig.stop();
     for job in [&first, &second] {
         let left = store.get(&job.id).unwrap();
-        assert_eq!(left.state, JobState::Running, "left for the next start");
+        assert_eq!(left.state, RunState::Running, "left for the next start");
     }
     assert_eq!(w.lane_file().collected.len(), 2, "the entries stay");
     let queued = store.get(&second.id).unwrap();
@@ -429,7 +429,7 @@ fn a_stop_mid_host_work_leaves_the_jobs_and_a_restart_resumes_them_in_order() {
     let b = rig.job(&second);
     assert_eq!(
         (a.state, b.state),
-        (JobState::Succeeded, JobState::Succeeded)
+        (RunState::Succeeded, RunState::Succeeded)
     );
     let last_a = a
         .host_work

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Events and frames (design 5.5). One envelope for every event, stored per
-//! job and engine-wide. `engine.hello` and `engine.ping` are frames, not
+//! run and engine-wide. `engine.hello` and `engine.ping` are frames, not
 //! events.
 
 use super::{
     artifact::Artifact,
     assessment::Assessment,
     failure::Failure,
-    ids::{JobId, LaneId},
-    job::{Job, JobState, Outcome, Stage, WaitingFor},
+    ids::{LaneId, RunId},
     ops::Permission,
+    run::{Outcome, Run, RunState, Stage, WaitingFor},
     spec::Route,
 };
 use schemars::JsonSchema;
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EventScope {
-    Job,
+    Run,
     Engine,
 }
 
@@ -31,7 +31,7 @@ pub enum StageStatus {
     Failed,
 }
 
-/// Vm figures of `job.metrics`; numbers only. `cpu_percent` is the host QEMU
+/// Vm figures of `run.metrics`; numbers only. `cpu_percent` is the host QEMU
 /// process figure; the guest figures come from `VmResources.guest`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MetricsVm {
@@ -68,17 +68,17 @@ pub enum LaneState {
 }
 
 /// The type and `data` of an event. The wire form is
-/// `{"type": "job.state", "data": {...}}` beside the envelope's other fields.
+/// `{"type": "run.state", "data": {...}}` beside the envelope's other fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "data")]
 pub enum EventBody {
-    /// Accepted by `job.submit`.
-    #[serde(rename = "job.created")]
-    JobCreated { job: Box<Job> },
+    /// Accepted by `run.submit`.
+    #[serde(rename = "run.created")]
+    RunCreated { run: Box<Run> },
     /// Any change of state, stage or `waiting_for`.
-    #[serde(rename = "job.state")]
-    JobState {
-        state: JobState,
+    #[serde(rename = "run.state")]
+    RunState {
+        state: RunState,
         stage: Option<Stage>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         waiting_for: Option<WaitingFor>,
@@ -87,52 +87,53 @@ pub enum EventBody {
         queue_position: Option<u32>,
     },
     /// Per stage.
-    #[serde(rename = "job.stage")]
-    JobStage {
+    #[serde(rename = "run.stage")]
+    RunStage {
         stage: Stage,
         status: StageStatus,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
     },
-    /// Ephemeral: not stored, no `seq`. At most 4 per second per job.
-    #[serde(rename = "job.progress")]
-    JobProgress {
+    /// Ephemeral: not stored, no `seq`. At most 4 per second per run.
+    #[serde(rename = "run.progress")]
+    RunProgress {
         stage: Stage,
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fraction: Option<f64>,
     },
-    /// The program started.
-    #[serde(rename = "job.run")]
-    JobRun {
-        run_id: String,
+    /// The program started; `program_id` is the engine's id of its
+    /// execution (`program.id` of the run).
+    #[serde(rename = "run.program")]
+    RunProgram {
+        program_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pid: Option<u32>,
         route: Route,
     },
-    #[serde(rename = "job.warning")]
-    JobWarning { code: String, text: String },
+    #[serde(rename = "run.warning")]
+    RunWarning { code: String, text: String },
     /// An artifact became available.
-    #[serde(rename = "job.artifact")]
-    JobArtifact { artifact: Artifact },
+    #[serde(rename = "run.artifact")]
+    RunArtifact { artifact: Artifact },
     /// The run's dump trigger matched and took a dump, or did nothing
     /// (`trigger` absent, `note` says why). No host paths.
-    #[serde(rename = "job.trigger")]
-    JobTrigger {
+    #[serde(rename = "run.trigger")]
+    RunTrigger {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        trigger: Option<Box<super::job::JobTrigger>>,
+        trigger: Option<Box<super::run::RunTrigger>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
     /// Triage finished.
-    #[serde(rename = "job.assessment")]
-    JobAssessment { assessment: Box<Assessment> },
-    /// A retry was scheduled; a `job.state` event with `state: queued` follows.
-    #[serde(rename = "job.requeued")]
-    JobRequeued { attempt: u32, reason: String },
-    /// The last event of a job.
-    #[serde(rename = "job.finished")]
-    JobFinished {
+    #[serde(rename = "run.assessment")]
+    RunAssessment { assessment: Box<Assessment> },
+    /// A retry was scheduled; a `run.state` event with `state: queued` follows.
+    #[serde(rename = "run.requeued")]
+    RunRequeued { attempt: u32, reason: String },
+    /// The last event of a run.
+    #[serde(rename = "run.finished")]
+    RunFinished {
         outcome: Outcome,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failure: Option<Failure>,
@@ -143,7 +144,7 @@ pub enum EventBody {
         lane: LaneId,
         state: LaneState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        job_id: Option<JobId>,
+        run_id: Option<RunId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
@@ -153,8 +154,8 @@ pub enum EventBody {
     EngineAlert { code: String, text: String },
     /// Ephemeral: not stored, no `seq`. While stage is `run`, at most one per
     /// 2 seconds.
-    #[serde(rename = "job.metrics")]
-    JobMetrics {
+    #[serde(rename = "run.metrics")]
+    RunMetrics {
         stage: Stage,
         vm: MetricsVm,
         run: MetricsRun,
@@ -163,16 +164,16 @@ pub enum EventBody {
 }
 
 impl EventBody {
-    /// `job.progress` and `job.metrics` are not stored and carry no `seq`.
+    /// `run.progress` and `run.metrics` are not stored and carry no `seq`.
     pub fn is_ephemeral(&self) -> bool {
-        matches!(self, Self::JobProgress { .. } | Self::JobMetrics { .. })
+        matches!(self, Self::RunProgress { .. } | Self::RunMetrics { .. })
     }
 
     /// The scope the type belongs to.
     pub fn scope(&self) -> EventScope {
         match self {
             Self::LaneState { .. } | Self::EngineAlert { .. } => EventScope::Engine,
-            _ => EventScope::Job,
+            _ => EventScope::Run,
         }
     }
 
@@ -182,25 +183,25 @@ impl EventBody {
     /// `evidence.view` and `evidence.download` on their own reads.
     pub fn permission(&self) -> Permission {
         match self {
-            Self::JobCreated { .. }
-            | Self::JobState { .. }
-            | Self::JobStage { .. }
-            | Self::JobProgress { .. }
-            | Self::JobRun { .. }
-            | Self::JobWarning { .. }
-            | Self::JobArtifact { .. }
-            | Self::JobTrigger { .. }
-            | Self::JobAssessment { .. }
-            | Self::JobRequeued { .. }
-            | Self::JobFinished { .. }
-            | Self::JobMetrics { .. }
+            Self::RunCreated { .. }
+            | Self::RunState { .. }
+            | Self::RunStage { .. }
+            | Self::RunProgress { .. }
+            | Self::RunProgram { .. }
+            | Self::RunWarning { .. }
+            | Self::RunArtifact { .. }
+            | Self::RunTrigger { .. }
+            | Self::RunAssessment { .. }
+            | Self::RunRequeued { .. }
+            | Self::RunFinished { .. }
+            | Self::RunMetrics { .. }
             | Self::LaneState { .. }
             | Self::EngineAlert { .. } => Permission::RunsSeeAll,
         }
     }
 }
 
-/// The envelope. `seq` counts within one job (job scope) or one service epoch
+/// The envelope. `seq` counts within one run (run scope) or one service epoch
 /// (engine scope) from 1; `gseq` is strictly increasing across the service,
 /// persisted and never reused. Both are absent on ephemeral events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -212,7 +213,7 @@ pub struct Event {
     /// The time the service recorded it.
     pub ts_ms: u64,
     pub scope: EventScope,
-    pub job_id: Option<JobId>,
+    pub run_id: Option<RunId>,
     #[serde(flatten)]
     pub body: EventBody,
 }
@@ -237,7 +238,7 @@ pub struct Hello {
     /// The highest stored `gseq`.
     pub gseq: u64,
     /// True when the requested resume point is older than the retained
-    /// events; the client must re-synchronise with `job.list`.
+    /// events; the client must re-synchronise with `run.list`.
     pub truncated: bool,
 }
 

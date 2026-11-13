@@ -4,7 +4,7 @@
 //! and, on recovery, any line missing for a stored row is appended again.
 
 use super::{Fault, R, Store, db, internal, model::from_json};
-use crate::api::{event::Event, ids::JobId};
+use crate::api::{event::Event, ids::RunId};
 use rusqlite::Connection;
 use std::{
     fs::{self, OpenOptions},
@@ -46,7 +46,7 @@ impl Store {
     /// state is committed and recovery repairs the mirror.
     pub(super) fn mirror(&self, events: &[Event]) -> R<()> {
         for event in events {
-            let Some(job) = &event.job_id else { continue };
+            let Some(job) = &event.run_id else { continue };
             let dir = self.job_dir(job);
             if private_dir(&dir).is_err() {
                 continue;
@@ -76,7 +76,7 @@ impl Store {
     /// Make `events.ndjson` of a job equal to its stored events: keep the
     /// longest run of lines that match, cut a torn last line, append the rest.
     /// Returns the number of lines added.
-    pub(crate) fn repair_mirror(&self, conn: &Connection, job: &JobId) -> R<usize> {
+    pub(crate) fn repair_mirror(&self, conn: &Connection, job: &RunId) -> R<usize> {
         let stored = job_events(conn, job)?;
         let wanted: Vec<String> = stored.iter().map(line_of).collect::<R<_>>()?;
         let dir = self.job_dir(job);
@@ -116,7 +116,7 @@ impl Store {
 }
 
 /// The stored events of a job in `seq` order.
-pub(crate) fn job_events(conn: &Connection, job: &JobId) -> R<Vec<Event>> {
+pub(crate) fn job_events(conn: &Connection, job: &RunId) -> R<Vec<Event>> {
     let mut statement = conn
         .prepare(
             "SELECT gseq, seq, ts_ms, type, data_json FROM events WHERE job_id = ?1 ORDER BY seq",
@@ -154,7 +154,7 @@ pub(crate) fn event_from_parts(
     ts_ms: u64,
     kind: &str,
     data: &str,
-    job_id: Option<JobId>,
+    job_id: Option<RunId>,
 ) -> R<Event> {
     let value = serde_json::json!({"type": kind, "data": from_json::<serde_json::Value>(data)?});
     let body: crate::api::event::EventBody = serde_json::from_value(value)
@@ -164,7 +164,7 @@ pub(crate) fn event_from_parts(
         gseq: Some(gseq),
         ts_ms,
         scope: body.scope(),
-        job_id,
+        run_id: job_id,
         body,
     })
 }

@@ -16,8 +16,8 @@ use crate::{
     api::{
         event::{EventBody, LaneState},
         failure::FailureCode,
-        ids::{JobId, LaneId},
-        job::{Job, JobState, Stage},
+        ids::{LaneId, RunId},
+        run::{Run, RunState, Stage},
     },
     clock::{Clock, ManualClock},
     engine::FakeEngine,
@@ -56,7 +56,7 @@ fn a_lane_file_round_trips_and_is_private() {
     assert_eq!(dir.load(&lane()).unwrap(), None);
     let mut lane_file = file();
     lane_file.begin_work(
-        JobId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap(),
+        RunId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap(),
         2,
         T0 + 5,
     );
@@ -184,7 +184,7 @@ fn update_changes_one_lane_and_refuses_a_missing_one() {
 #[test]
 fn work_moves_through_checkpoints_to_collected_and_is_released() {
     let mut f = file();
-    let job = JobId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap();
+    let job = RunId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap();
     assert!(
         !f.checkpoint(Stage::Upload, Checkpoint::Started, T0),
         "no work yet"
@@ -314,11 +314,11 @@ fn each_problem_is_named_with_its_code_or_its_wait() {
     );
     assert_eq!(
         problems[2].waiting_for(),
-        Some(crate::api::job::WaitingFor::LayerPending)
+        Some(crate::api::run::WaitingFor::LayerPending)
     );
     assert_eq!(
         problems[0].waiting_for(),
-        Some(crate::api::job::WaitingFor::LaneQuarantined)
+        Some(crate::api::run::WaitingFor::LaneQuarantined)
     );
 
     let mut gone = Snapshot::default();
@@ -451,13 +451,13 @@ impl World {
         .unwrap()
     }
 
-    fn job(&self, id: &JobId) -> Job {
+    fn job(&self, id: &RunId) -> Run {
         self.fx.store.get(id).unwrap()
     }
 }
 
 /// A job `running` at `stage`, with the lane file saying the lane is on it.
-fn crashed_at(world: &World, stage: Stage, checkpoint: Checkpoint) -> (JobId, LaneFile) {
+fn crashed_at(world: &World, stage: Stage, checkpoint: Checkpoint) -> (RunId, LaneFile) {
     let job = world.fx.running(1);
     // The store's stages begin at prechecks; the lane stages follow.
     for next in [
@@ -509,9 +509,9 @@ fn a_crash_at_every_stage_boundary_requeues_the_job_and_frees_the_lane() {
             let at = format!("{stage:?}/{checkpoint:?}");
             // The job: a new attempt, by the state machine's edge running -> queued.
             assert_eq!(report.jobs.requeued, std::slice::from_ref(&job), "{at}");
-            assert_eq!(world.job(&job).state, JobState::Queued, "{at}");
+            assert_eq!(world.job(&job).state, RunState::Queued, "{at}");
             assert!(
-                kinds(&world.fx, &job).contains(&"job.requeued".to_owned()),
+                kinds(&world.fx, &job).contains(&"run.requeued".to_owned()),
                 "{at}"
             );
             // The lane: the process is gone, the work is cleared, the file is whole.
@@ -547,7 +547,7 @@ fn a_crash_at_every_stage_boundary_requeues_the_job_and_frees_the_lane() {
             assert_eq!(again.jobs.requeued, [], "{at}");
             assert_eq!(again.lanes[0].interrupted, None, "{at}");
             assert_eq!(again.lanes[0].qemu, QemuOutcome::NotRecorded, "{at}");
-            assert_eq!(world.job(&job).state, JobState::Queued, "{at}");
+            assert_eq!(world.job(&job).state, RunState::Queued, "{at}");
         }
     }
 }
@@ -567,7 +567,7 @@ fn a_crash_before_the_first_checkpoint_of_a_new_job_is_the_same() {
         report.lanes[0].interrupted.as_ref().unwrap().stage,
         Stage::Provision
     );
-    assert_eq!(world.job(&job.id).state, JobState::Queued);
+    assert_eq!(world.job(&job.id).state, RunState::Queued);
 }
 
 #[test]
@@ -585,7 +585,7 @@ fn a_job_whose_collect_finished_resumes_at_analyse_and_the_vm_is_not_run_again()
     assert_eq!(lane_report.resume, std::slice::from_ref(&job));
     assert_eq!(lane_report.interrupted, None);
     // Still running, so the host worker can move it to analyse.
-    assert_eq!(world.job(&job).state, JobState::Running);
+    assert_eq!(world.job(&job).state, RunState::Running);
     world.fx.store.begin_stage(&job, Stage::Analyse).unwrap();
     // The entry stays until the host stage releases it.
     assert_eq!(
@@ -601,7 +601,7 @@ fn a_job_whose_collect_finished_resumes_at_analyse_and_the_vm_is_not_run_again()
     let mut waiter = world.engine(|_| {});
     let report = world.recover(&mut waiter, &Table::new());
     assert_eq!(report.jobs.requeued, std::slice::from_ref(&job));
-    assert_eq!(world.job(&job).state, JobState::Queued);
+    assert_eq!(world.job(&job).state, RunState::Queued);
 }
 
 #[test]
@@ -622,7 +622,7 @@ fn a_collected_entry_for_a_job_that_moved_on_is_dropped_not_resumed() {
     assert_eq!(report.jobs.kept, []);
     assert_eq!(report.lanes[0].resume, []);
     assert_eq!(report.lanes[0].dropped, std::slice::from_ref(&job));
-    assert_eq!(world.job(&job).state, JobState::Cancelled);
+    assert_eq!(world.job(&job).state, RunState::Cancelled);
     assert!(
         world
             .lanes
@@ -658,7 +658,7 @@ fn a_second_crash_of_the_same_job_counts_against_its_attempts() {
     let report = world.recover(&mut waiter, &Table::new());
     // Not free this time: a requeue by retry, or the end if no attempt is left.
     assert!(report.jobs.requeued.contains(&job) || report.jobs.failed.contains(&job));
-    assert_ne!(world.job(&job).state, JobState::Running);
+    assert_ne!(world.job(&job).state, RunState::Running);
 }
 
 #[test]
@@ -674,12 +674,12 @@ fn a_job_the_user_cancelled_during_the_crash_ends_cancelled() {
             &crate::store::tests::manager(),
         )
         .unwrap();
-    assert_eq!(world.job(&job).state, JobState::Cancelling);
+    assert_eq!(world.job(&job).state, RunState::Cancelling);
     world.restart();
     let mut waiter = world.engine(|_| {});
     let report = world.recover(&mut waiter, &Table::new().qemu(321));
     assert_eq!(report.jobs.cancelled, std::slice::from_ref(&job));
-    assert_eq!(world.job(&job).state, JobState::Cancelled);
+    assert_eq!(world.job(&job).state, RunState::Cancelled);
     assert_eq!(report.lanes[0].qemu, QemuOutcome::Killed(321));
 }
 
@@ -927,7 +927,7 @@ fn an_unreadable_lane_file_stops_that_lane_only() {
     let two = LaneId::new(2);
     let mut f2 = LaneFile::new(two.clone(), "auto-2", CLEAN, "b", T0);
     f2.begin_work(
-        JobId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap(),
+        RunId::try_from("j_01HZZZZZZZZZZZZZZZZZZZZZZZ".to_owned()).unwrap(),
         1,
         T0,
     );
@@ -991,9 +991,9 @@ fn an_engine_that_dies_during_recovery_is_an_error_and_the_file_is_not_rewritten
     // The job was put right by the store already; the next start repeats the rest.
     assert_eq!(
         world
-            .job(&world.fx.store.list(&Default::default(), None).unwrap().jobs[0].id)
+            .job(&world.fx.store.list(&Default::default(), None).unwrap().runs[0].id)
             .state,
-        JobState::Queued
+        RunState::Queued
     );
 }
 

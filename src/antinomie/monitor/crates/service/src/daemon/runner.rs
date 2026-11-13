@@ -7,7 +7,7 @@ use crate::{
     api::{
         error::{ApiError, ErrorCode},
         ids::LaneId,
-        job::Job,
+        run::Run,
     },
     engine::Engine,
     lane::{LaneDir, Processes, provision},
@@ -111,7 +111,7 @@ impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
         self.stages().eligibility()
     }
 
-    fn run_job(&mut self, job: &Job, to_host: &mut dyn FnMut()) -> JobEnd {
+    fn run_job(&mut self, job: &Run, to_host: &mut dyn FnMut()) -> JobEnd {
         let pool = self.pool;
         let mut stages = self.stages();
         match stages.drive(job) {
@@ -130,7 +130,7 @@ impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
         }
     }
 
-    fn resume(&mut self, job: &Job) -> JobEnd {
+    fn resume(&mut self, job: &Run) -> JobEnd {
         match self.pool {
             Some(pool) => {
                 pool.resume(job, &mut self.waiter);
@@ -152,11 +152,11 @@ impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
         profile_of(self.env.lanes, &self.lane, self.waiter.snapshot())
     }
 
-    fn lane_vm(&self, _job: &Job) -> Option<String> {
+    fn lane_vm(&self, _job: &Run) -> Option<String> {
         Some(self.env.lane_setup.vm.clone())
     }
 
-    fn running_cap(&self, job: &Job) -> Option<u32> {
+    fn running_cap(&self, job: &Run) -> Option<u32> {
         self.env.callers.max_running_now(&job.client_id)
     }
 
@@ -202,7 +202,7 @@ impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
                     } else {
                         crate::api::event::LaneState::Idle
                     },
-                    job_id: None,
+                    run_id: None,
                     reason: Some(op.to_owned()),
                 });
         }

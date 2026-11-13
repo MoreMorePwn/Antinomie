@@ -13,7 +13,7 @@ use super::{
 };
 use crate::api::{
     error::{ApiError, ErrorCode, ErrorReason},
-    job::RecordingPhase,
+    run::RecordingPhase,
 };
 use antinomie_monitor_core::{
     RunArtifactState, RunArtifacts,
@@ -139,7 +139,7 @@ fn the_summary_is_building_then_the_report_builders_and_nothing_is_written() {
         call(
             &service,
             "recording.summary",
-            json!({"run_key": key}),
+            json!({"recording_key": key}),
             &ctx(),
         )
         .unwrap(),
@@ -150,7 +150,7 @@ fn the_summary_is_building_then_the_report_builders_and_nothing_is_written() {
         "{first}"
     );
     assert!(first.get("value").is_none());
-    let summary = settle(&service, "recording.summary", json!({"run_key": key}));
+    let summary = settle(&service, "recording.summary", json!({"recording_key": key}));
     assert_eq!(summary["phase"], "complete");
     let value = &summary["value"];
     assert!(value["assessment"].is_string(), "{summary}");
@@ -167,7 +167,7 @@ fn the_summary_is_building_then_the_report_builders_and_nothing_is_written() {
         ("recording.network.list", json!({"tab": "endpoints"})),
         ("recording.timeline", json!({})),
     ] {
-        let mut params = json!({"run_key": key});
+        let mut params = json!({"recording_key": key});
         params
             .as_object_mut()
             .unwrap()
@@ -196,7 +196,11 @@ fn findings_filter_sort_and_page_over_the_whole_row_set() {
     let run = rwx_run(&data, false);
     let service = data.service();
     let key = run.key();
-    let all = settle(&service, "recording.findings.list", json!({"run_key": key}));
+    let all = settle(
+        &service,
+        "recording.findings.list",
+        json!({"recording_key": key}),
+    );
     let items = all["items"].as_array().unwrap().clone();
     assert!(!items.is_empty(), "{all}");
     assert_eq!(all["total"].as_u64().unwrap(), items.len() as u64);
@@ -208,7 +212,7 @@ fn findings_filter_sort_and_page_over_the_whole_row_set() {
     let only = settle(
         &service,
         "recording.findings.list",
-        json!({"run_key": key, "q": format!("finding.rule == \"{rule}\"")}),
+        json!({"recording_key": key, "q": format!("finding.rule == \"{rule}\"")}),
     );
     assert!(
         only["items"]
@@ -220,14 +224,14 @@ fn findings_filter_sort_and_page_over_the_whole_row_set() {
     let none = settle(
         &service,
         "recording.findings.list",
-        json!({"run_key": key, "q": "finding.rule == \"no.such.rule\""}),
+        json!({"recording_key": key, "q": "finding.rule == \"no.such.rule\""}),
     );
     assert!(none["items"].as_array().unwrap().is_empty());
     // The request filters.
     let by_tier = settle(
         &service,
         "recording.findings.list",
-        json!({"run_key": key, "tier": items[0]["tier"]}),
+        json!({"recording_key": key, "tier": items[0]["tier"]}),
     );
     assert!(
         by_tier["items"]
@@ -240,7 +244,7 @@ fn findings_filter_sort_and_page_over_the_whole_row_set() {
     let error = call(
         &service,
         "recording.findings.list",
-        json!({"run_key": key, "q": "finding.rule == "}),
+        json!({"recording_key": key, "q": "finding.rule == "}),
         &ctx(),
     )
     .unwrap_err();
@@ -252,7 +256,7 @@ fn findings_filter_sort_and_page_over_the_whole_row_set() {
     let error = call(
         &service,
         "recording.findings.list",
-        json!({"run_key": key, "q": "bogus.field == 1"}),
+        json!({"recording_key": key, "q": "bogus.field == 1"}),
         &ctx(),
     )
     .unwrap_err();
@@ -262,12 +266,12 @@ fn findings_filter_sort_and_page_over_the_whole_row_set() {
     let asc = settle(
         &service,
         "recording.findings.list",
-        json!({"run_key": key, "sort": {"field": "finding.count", "dir": "asc"}}),
+        json!({"recording_key": key, "sort": {"field": "finding.count", "dir": "asc"}}),
     );
     let desc = settle(
         &service,
         "recording.findings.list",
-        json!({"run_key": key, "sort": {"field": "finding.count", "dir": "desc"}}),
+        json!({"recording_key": key, "sort": {"field": "finding.count", "dir": "desc"}}),
     );
     let counts = |page: &Value| -> Vec<u64> {
         page["items"]
@@ -284,7 +288,7 @@ fn findings_filter_sort_and_page_over_the_whole_row_set() {
     let error = call(
         &service,
         "recording.findings.list",
-        json!({"run_key": key, "sort": {"field": "nope", "dir": "asc"}}),
+        json!({"recording_key": key, "sort": {"field": "nope", "dir": "asc"}}),
         &ctx(),
     )
     .unwrap_err();
@@ -294,7 +298,7 @@ fn findings_filter_sort_and_page_over_the_whole_row_set() {
     let mut seen = Vec::new();
     let mut cursor = Value::Null;
     loop {
-        let mut params = json!({"run_key": key, "limit": 1});
+        let mut params = json!({"recording_key": key, "limit": 1});
         if !cursor.is_null() {
             params["cursor"] = cursor.clone();
         }
@@ -313,7 +317,7 @@ fn findings_filter_sort_and_page_over_the_whole_row_set() {
         let error = call(
             &service,
             "recording.findings.list",
-            json!({"run_key": key, "limit": 1, "cursor": cursor, "q": "finding.count > 0"}),
+            json!({"recording_key": key, "limit": 1, "cursor": cursor, "q": "finding.count > 0"}),
             &ctx(),
         )
         .unwrap_err();
@@ -324,7 +328,7 @@ fn findings_filter_sort_and_page_over_the_whole_row_set() {
     let error = call(
         &service,
         "recording.findings.list",
-        json!({"run_key": key, "limit": 501}),
+        json!({"recording_key": key, "limit": 501}),
         &ctx(),
     )
     .unwrap_err();
@@ -337,12 +341,16 @@ fn a_finding_is_read_by_its_id() {
     let run = rwx_run(&data, false);
     let service = data.service();
     let key = run.key();
-    let list = settle(&service, "recording.findings.list", json!({"run_key": key}));
+    let list = settle(
+        &service,
+        "recording.findings.list",
+        json!({"recording_key": key}),
+    );
     let first = &list["items"][0];
     let got = settle(
         &service,
         "recording.findings.get",
-        json!({"run_key": key, "finding_id": first["finding_id"]}),
+        json!({"recording_key": key, "finding_id": first["finding_id"]}),
     );
     assert_eq!(got["value"]["rule"], first["rule"]);
     assert_eq!(got["value"]["ref"], first["ref"]);
@@ -355,7 +363,7 @@ fn a_finding_is_read_by_its_id() {
     let error = call(
         &service,
         "recording.findings.get",
-        json!({"run_key": key, "finding_id": "fnd_000000000000000000"}),
+        json!({"recording_key": key, "finding_id": "fnd_000000000000000000"}),
         &ctx(),
     )
     .unwrap_err();
@@ -375,7 +383,7 @@ fn the_network_reads_come_from_the_capture() {
     let summary = settle(
         &service,
         "recording.network.summary",
-        json!({"run_key": key}),
+        json!({"recording_key": key}),
     );
     let value = &summary["value"];
     assert!(value["endpoints"].as_u64().unwrap() >= 1, "{summary}");
@@ -386,7 +394,7 @@ fn the_network_reads_come_from_the_capture() {
     let endpoints = settle(
         &service,
         "recording.network.list",
-        json!({"run_key": key, "tab": "endpoints", "q": "network.protocol == \"tcp\""}),
+        json!({"recording_key": key, "tab": "endpoints", "q": "network.protocol == \"tcp\""}),
     );
     let rows = endpoints["items"].as_array().unwrap();
     assert!(!rows.is_empty(), "{endpoints}");
@@ -394,7 +402,7 @@ fn the_network_reads_come_from_the_capture() {
     let captures = settle(
         &service,
         "recording.network.captures",
-        json!({"run_key": key}),
+        json!({"recording_key": key}),
     );
     let capture_id = captures["items"][0]["capture_id"].clone();
     assert_eq!(rows[0]["capture"], capture_id);
@@ -407,33 +415,33 @@ fn the_network_reads_come_from_the_capture() {
         let page = settle(
             &service,
             "recording.network.list",
-            json!({"run_key": key, "tab": tab, "sort": null}),
+            json!({"recording_key": key, "tab": tab, "sort": null}),
         );
         assert!(page["items"].is_array(), "{tab}: {page}");
     }
     let http = settle(
         &service,
         "recording.network.list",
-        json!({"run_key": key, "tab": "http"}),
+        json!({"recording_key": key, "tab": "http"}),
     );
     assert_eq!(http["items"][0]["host"], "example.com");
     let urls = settle(
         &service,
         "recording.network.list",
-        json!({"run_key": key, "tab": "urls"}),
+        json!({"recording_key": key, "tab": "urls"}),
     );
     assert_eq!(urls["items"][0]["url"], "http://example.com/");
     // The indicators of the same capture.
     let indicators = settle(
         &service,
         "recording.indicators.list",
-        json!({"run_key": key}),
+        json!({"recording_key": key}),
     );
     assert_eq!(indicators["total"], counts["indicators"]);
     let defanged = settle(
         &service,
         "recording.indicators.list",
-        json!({"run_key": key, "defang": true, "kind": "domain"}),
+        json!({"recording_key": key, "defang": true, "kind": "domain"}),
     );
     if let Some(row) = defanged["items"].get(0) {
         assert_eq!(row["raw_indicators"], false);
@@ -442,7 +450,7 @@ fn the_network_reads_come_from_the_capture() {
     let raw = settle(
         &service,
         "recording.indicators.list",
-        json!({"run_key": key}),
+        json!({"recording_key": key}),
     );
     assert!(
         raw["items"]
@@ -459,7 +467,11 @@ fn the_timeline_merges_processes_findings_and_files_in_time_order() {
     let run = rwx_run(&data, false);
     let service = data.service();
     let key = run.key();
-    let page = settle(&service, "recording.timeline", json!({"run_key": key}));
+    let page = settle(
+        &service,
+        "recording.timeline",
+        json!({"recording_key": key}),
+    );
     let items = page["items"].as_array().unwrap();
     assert!(!items.is_empty(), "{page}");
     let times: Vec<u64> = items.iter().map(|e| e["ts_ms"].as_u64().unwrap()).collect();
@@ -477,7 +489,7 @@ fn the_timeline_merges_processes_findings_and_files_in_time_order() {
     let findings = settle(
         &service,
         "recording.timeline",
-        json!({"run_key": key, "kinds": ["finding"]}),
+        json!({"recording_key": key, "kinds": ["finding"]}),
     );
     assert!(
         findings["items"]
@@ -489,7 +501,7 @@ fn the_timeline_merges_processes_findings_and_files_in_time_order() {
     let late = settle(
         &service,
         "recording.timeline",
-        json!({"run_key": key, "from_ms": times.last().unwrap() + 1}),
+        json!({"recording_key": key, "from_ms": times.last().unwrap() + 1}),
     );
     assert!(late["items"].as_array().unwrap().is_empty());
 }
@@ -515,7 +527,7 @@ fn a_recording_that_is_still_written_refuses_the_triage_reads() {
         ("recording.network.list", json!({"tab": "domains"})),
         ("recording.timeline", json!({})),
     ] {
-        let mut params = json!({"run_key": run.key()});
+        let mut params = json!({"recording_key": run.key()});
         params
             .as_object_mut()
             .unwrap()
@@ -526,7 +538,7 @@ fn a_recording_that_is_still_written_refuses_the_triage_reads() {
     }
     assert_eq!(service.scans_in_memory(), 0, "no scan was started");
     // The run list still says live.
-    let list = settle(&service, "recording.run.list", json!({}));
+    let list = settle(&service, "recording.list", json!({}));
     assert_eq!(
         list["phase"],
         serde_json::to_value(RecordingPhase::Live).unwrap()
@@ -548,7 +560,7 @@ fn a_run_that_never_started_cannot_be_triaged() {
     let error = call(
         &data.service(),
         "recording.summary",
-        json!({"run_key": run.key()}),
+        json!({"recording_key": run.key()}),
         &ctx(),
     )
     .unwrap_err();
@@ -564,7 +576,7 @@ fn the_sensitive_file_content_needs_its_scope_and_other_runs_are_not_found() {
     let error = call(
         &service,
         "recording.files.content",
-        json!({"run_key": key, "version_id": "ver_0"}),
+        json!({"recording_key": key, "version_id": "ver_0"}),
         &plain_ctx(),
     )
     .unwrap_err();
@@ -572,7 +584,7 @@ fn the_sensitive_file_content_needs_its_scope_and_other_runs_are_not_found() {
     let error = call(
         &service,
         "recording.files.content",
-        json!({"run_key": key, "version_id": "ver_0", "range": {"offset": 0, "len": 2_000_000}}),
+        json!({"recording_key": key, "version_id": "ver_0", "range": {"offset": 0, "len": 2_000_000}}),
         &ctx(),
     )
     .unwrap_err();
@@ -580,7 +592,7 @@ fn the_sensitive_file_content_needs_its_scope_and_other_runs_are_not_found() {
     let error = call(
         &service,
         "recording.summary",
-        json!({"run_key": super::key::RunKey::new(VM, "boot-9", "nope").unwrap()}),
+        json!({"recording_key": super::key::RecordingKey::new(VM, "boot-9", "nope").unwrap()}),
         &ctx(),
     )
     .unwrap_err();
@@ -598,14 +610,14 @@ fn the_file_tables_list_what_the_run_opened_and_a_changed_file_has_versions() {
     let opened = settle(
         &service,
         "recording.files.list",
-        json!({"run_key": key, "tab": "opened", "q": "file.path contains \"passwd\"",
+        json!({"recording_key": key, "tab": "opened", "q": "file.path contains \"passwd\"",
                "sort": {"field": "file.path", "dir": "desc"}}),
     );
     assert_eq!(opened["total"], 0, "{opened}");
     let error = call(
         &service,
         "recording.files.list",
-        json!({"run_key": key, "tab": "opened", "q": "path contains \"x\""}),
+        json!({"recording_key": key, "tab": "opened", "q": "path contains \"x\""}),
         &ctx(),
     )
     .unwrap_err();
@@ -618,7 +630,7 @@ fn the_file_tables_list_what_the_run_opened_and_a_changed_file_has_versions() {
     let changed = settle(
         &service,
         "recording.files.list",
-        json!({"run_key": key, "tab": "changed"}),
+        json!({"recording_key": key, "tab": "changed"}),
     );
     assert!(changed["items"].as_array().unwrap().is_empty());
     for tab in [
@@ -635,14 +647,14 @@ fn the_file_tables_list_what_the_run_opened_and_a_changed_file_has_versions() {
         let page = settle(
             &service,
             "recording.files.list",
-            json!({"run_key": key, "tab": tab}),
+            json!({"recording_key": key, "tab": tab}),
         );
         assert!(page["items"].is_array(), "{tab}");
     }
     let error = call(
         &service,
         "recording.files.versions",
-        json!({"run_key": key, "file_id": "fil_00000000000000000000"}),
+        json!({"recording_key": key, "file_id": "fil_00000000000000000000"}),
         &ctx(),
     );
     // A scan that is still being made answers `building`; a finished one, not_found.
@@ -650,7 +662,7 @@ fn the_file_tables_list_what_the_run_opened_and_a_changed_file_has_versions() {
         Ok(_) => settle_error(
             &service,
             "recording.files.versions",
-            json!({"run_key": key, "file_id": "fil_00000000000000000000"}),
+            json!({"recording_key": key, "file_id": "fil_00000000000000000000"}),
         ),
         Err(error) => error,
     };

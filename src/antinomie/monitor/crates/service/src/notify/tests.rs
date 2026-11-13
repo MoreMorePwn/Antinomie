@@ -10,8 +10,8 @@ use crate::{
     api::{
         artifact::{ArtifactKind, MediaType},
         assessment::{Assessment, AssessmentKind, Counts, Label, Tier},
-        ids::{JobId, Sha256Hex},
-        job::{Job, Outcome},
+        ids::{RunId, Sha256Hex},
+        run::{Outcome, Run},
     },
     store::{NewArtifact, tests::Fx},
 };
@@ -48,7 +48,7 @@ impl Rig {
 
     /// A job that ended `outcome`, with an html report, a json report and
     /// (sensitive) a packet capture in its folder.
-    fn ended(&self, outcome: Outcome, label: Option<Label>) -> Job {
+    fn ended(&self, outcome: Outcome, label: Option<Label>) -> Run {
         let job = self.fx.running(1);
         let dir = self.fx.store.job_dir(&job.id);
         fs::create_dir_all(dir.join("artifacts")).unwrap();
@@ -115,7 +115,7 @@ impl Rig {
 
     fn deliver_with(
         &self,
-        id: &JobId,
+        id: &RunId,
         results: bool,
         hook: &[&str],
         timeout: Duration,
@@ -136,7 +136,7 @@ impl Rig {
         .unwrap()
     }
 
-    fn deliver(&self, id: &JobId, results: bool, hook: &[&str]) -> super::Delivered {
+    fn deliver(&self, id: &RunId, results: bool, hook: &[&str]) -> super::Delivered {
         self.deliver_with(id, results, hook, Duration::from_secs(10))
     }
 
@@ -144,7 +144,7 @@ impl Rig {
         self.alerts.lock().unwrap().clone()
     }
 
-    fn job_log(&self, id: &JobId) -> String {
+    fn job_log(&self, id: &RunId) -> String {
         fs::read_to_string(self.fx.store.job_dir(id).join("job.log")).unwrap_or_default()
     }
 }
@@ -292,7 +292,7 @@ fn an_artifact_that_is_a_link_out_of_the_job_folder_is_never_copied() {
     // The job is what it was.
     assert_eq!(
         rig.fx.store.get(&job.id).unwrap().state,
-        crate::api::job::JobState::Succeeded
+        crate::api::run::RunState::Succeeded
     );
 }
 
@@ -338,9 +338,9 @@ fn the_hook_gets_exactly_five_variables_and_nothing_else() {
     assert_eq!(
         lines,
         [
-            format!("ANTINOMIE_JOB_ID={}", job.id).as_str(),
             "ANTINOMIE_LABEL=malicious",
             &format!("ANTINOMIE_RESULT_JSON={}", result.display()),
+            &format!("ANTINOMIE_RUN_ID={}", job.id),
             &format!("ANTINOMIE_SHA256={sha}"),
             "ANTINOMIE_STATE=succeeded",
         ]
@@ -357,7 +357,7 @@ fn the_label_and_hash_are_empty_for_a_job_without_them() {
         .store
         .cancel(&queued.id, Some("test"), &crate::store::tests::manager())
         .unwrap();
-    assert_eq!(job.state, crate::api::job::JobState::Cancelled);
+    assert_eq!(job.state, crate::api::run::RunState::Cancelled);
     let run = rig.deliver(&job.id, false, &["/usr/bin/env"]).hook.unwrap();
     let text = String::from_utf8(run.stdout).unwrap();
     assert!(text.contains("ANTINOMIE_LABEL=\n"), "{text}");
@@ -417,7 +417,7 @@ fn nothing_the_job_controls_reaches_the_hooks_arguments_or_environment() {
         })
         .unwrap()
         .unwrap();
-    assert_eq!(started.id, submitted.job.id);
+    assert_eq!(started.id, submitted.run.id);
     let job = rig
         .fx
         .store
@@ -488,7 +488,7 @@ fn a_hook_past_its_time_is_killed_with_what_it_started() {
     assert_eq!(rig.alerts(), ["hook_failed"]);
     assert_eq!(
         rig.fx.store.get(&job.id).unwrap().state,
-        crate::api::job::JobState::Succeeded,
+        crate::api::run::RunState::Succeeded,
         "a hook never fails a job"
     );
     // The sleep it started is gone too.
@@ -562,7 +562,7 @@ fn a_hook_that_cannot_start_is_a_logged_alert_not_a_failure() {
     );
     assert_eq!(
         rig.fx.store.get(&job.id).unwrap().state,
-        crate::api::job::JobState::Succeeded
+        crate::api::run::RunState::Succeeded
     );
 }
 
@@ -586,7 +586,7 @@ fn after_a_restart_the_last_day_is_delivered_and_older_jobs_are_not() {
         alert: &alert,
     }
     .sweep();
-    let delivered = |id: &JobId| rig.fx.store.job_dir(id).join("notified.json").exists();
+    let delivered = |id: &RunId| rig.fx.store.job_dir(id).join("notified.json").exists();
     assert!(delivered(&recent.id));
     assert!(!delivered(&old.id));
 }

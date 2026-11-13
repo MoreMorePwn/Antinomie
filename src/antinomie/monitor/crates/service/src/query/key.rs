@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `RunKey` (design 5.12.1): the opaque address of one recorded run. A run id
+//! `RecordingKey` (design 5.12.1): the opaque address of one recorded run. A run id
 //! alone is not unique across boots, so the key carries `{vm_id, boot_id,
-//! run_id}`. Clients never build or parse it; `recording.run.list` and
-//! `Job.recording.run_key` produce it, and the CLI's `vm:boot:run` triple is
-//! turned into one with [`RunKey::from_triple`].
+//! run_id}`. Clients never build or parse it; `recording.list` and
+//! `Run.recording.recording_key` produce it, and the CLI's `vm:boot:run` triple is
+//! turned into one with [`RecordingKey::from_triple`].
 
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
@@ -75,9 +75,9 @@ pub struct RunKeyError(pub &'static str);
 /// `[vm_id, boot_id, run_id]`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct RunKey(String);
+pub struct RecordingKey(String);
 
-impl RunKey {
+impl RecordingKey {
     /// The key of a run, from the engine's own ids.
     pub fn new(vm_id: &str, boot_id: &str, run_id: &str) -> Result<Self, RunKeyError> {
         if ![vm_id, boot_id, run_id].into_iter().all(safe_part) {
@@ -114,7 +114,7 @@ impl RunKey {
     }
 }
 
-impl TryFrom<String> for RunKey {
+impl TryFrom<String> for RecordingKey {
     type Error = RunKeyError;
     fn try_from(text: String) -> Result<Self, RunKeyError> {
         if text.len() > 512 {
@@ -136,25 +136,25 @@ impl TryFrom<String> for RunKey {
     }
 }
 
-impl From<RunKey> for String {
-    fn from(key: RunKey) -> String {
+impl From<RecordingKey> for String {
+    fn from(key: RecordingKey) -> String {
         key.0
     }
 }
 
-impl fmt::Display for RunKey {
+impl fmt::Display for RecordingKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl JsonSchema for RunKey {
+impl JsonSchema for RecordingKey {
     fn schema_name() -> Cow<'static, str> {
-        Cow::Borrowed("RunKey")
+        Cow::Borrowed("RecordingKey")
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({"type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 512,
-            "description": "Opaque run address. Produced by recording.run.list and Job.recording.run_key; clients never build or parse it."})
+            "description": "Opaque run address. Produced by recording.list and Run.recording.recording_key; clients never build or parse it."})
     }
 }
 
@@ -187,30 +187,30 @@ mod tests {
 
     #[test]
     fn a_key_round_trips_its_three_ids() {
-        let key = RunKey::new("vm_1", "b2", "r3.x").unwrap();
+        let key = RecordingKey::new("vm_1", "b2", "r3.x").unwrap();
         assert_eq!(key.parts(), ("vm_1".into(), "b2".into(), "r3.x".into()));
-        assert_eq!(RunKey::try_from(key.to_string()).unwrap(), key);
-        assert_eq!(RunKey::from_triple("vm_1:b2:r3.x").unwrap(), key);
+        assert_eq!(RecordingKey::try_from(key.to_string()).unwrap(), key);
+        assert_eq!(RecordingKey::from_triple("vm_1:b2:r3.x").unwrap(), key);
         let value = serde_json::to_value(&key).unwrap();
-        assert_eq!(serde_json::from_value::<RunKey>(value).unwrap(), key);
+        assert_eq!(serde_json::from_value::<RecordingKey>(value).unwrap(), key);
     }
 
     #[test]
     fn a_key_cannot_name_a_path() {
         for bad in ["..", ".", "a/b", "", "a b", "é"] {
-            assert!(RunKey::new(bad, "b", "r").is_err(), "{bad:?}");
-            assert!(RunKey::new("v", bad, "r").is_err());
-            assert!(RunKey::new("v", "b", bad).is_err());
+            assert!(RecordingKey::new(bad, "b", "r").is_err(), "{bad:?}");
+            assert!(RecordingKey::new("v", bad, "r").is_err());
+            assert!(RecordingKey::new("v", "b", bad).is_err());
         }
-        assert!(RunKey::from_triple("a:b").is_err());
-        assert!(RunKey::from_triple("a:b:c:d").is_err());
+        assert!(RecordingKey::from_triple("a:b").is_err());
+        assert!(RecordingKey::from_triple("a:b:c:d").is_err());
         let hand_made = base64url_encode(br#"["../x","b","r"]"#);
-        assert!(RunKey::try_from(hand_made).is_err());
+        assert!(RecordingKey::try_from(hand_made).is_err());
         let loose = base64url_encode(br#"[ "v","b","r"]"#);
         assert!(
-            RunKey::try_from(loose).is_err(),
+            RecordingKey::try_from(loose).is_err(),
             "only the canonical spelling is a key"
         );
-        assert!(RunKey::try_from("!!".to_owned()).is_err());
+        assert!(RecordingKey::try_from("!!".to_owned()).is_err());
     }
 }

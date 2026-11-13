@@ -63,7 +63,7 @@ fn recording_root(run_dir: &Path) -> Option<PathBuf> {
 
 /// A stable id for a file of a run: the hash of the run, kind and name.
 fn artifact_id(
-    run: &super::key::RunKey,
+    run: &super::key::RecordingKey,
     kind: RecordingArtifactKind,
     name: &str,
 ) -> RecordingArtifactId {
@@ -245,7 +245,7 @@ impl QueryService {
         &self,
         params: &RunParams,
     ) -> Result<Page<RecordingArtifact>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let entries = self.recording_entries(&opened);
         let items: Vec<RecordingArtifact> = entries
             .iter()
@@ -269,7 +269,7 @@ impl QueryService {
         params: &ArtifactGetParams,
         ctx: &ReadContext,
     ) -> Result<Single<BytesReply>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let entry = self
             .recording_entries(&opened)
             .into_iter()
@@ -307,14 +307,19 @@ impl QueryService {
             data_b64: base64(&bytes),
         };
         if entry.kind.sensitive() {
-            self.audit_read(ctx, "recording.artifact.get", &params.run_key, reply.len);
+            self.audit_read(
+                ctx,
+                "recording.artifact.get",
+                &params.recording_key,
+                reply.len,
+            );
         }
         Ok(opened.single(reply, entry.kind != RecordingArtifactKind::NetworkCapture))
     }
 
     /// `recording.network.captures`.
     pub(super) fn network_captures(&self, params: &RunParams) -> Result<Page<Capture>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let links = self
             .artifacts_json(&opened)
             .ok_or_else(|| ApiError::not_recorded("network capture"))?;
@@ -380,7 +385,7 @@ impl QueryService {
     /// `recording.cores.list`: metadata only. Registers, mappings and memory
     /// are not sent.
     pub(super) fn cores_list(&self, params: &RunParams) -> Result<Page<CoreInfo>, ApiError> {
-        let opened = self.open_run(&params.run_key)?;
+        let opened = self.open_run(&params.recording_key)?;
         let links = self
             .artifacts_json(&opened)
             .ok_or_else(|| ApiError::not_recorded("core"))?;
@@ -447,7 +452,7 @@ impl QueryService {
 /// run's (exact), whatever its own summary says; other runs live in its
 /// window are listed by time.
 fn capture_link(
-    key: &super::key::RunKey,
+    key: &super::key::RecordingKey,
     saved: Option<&NetworkCapture>,
     windows: &[network_link::RunWindow],
     known: &[NetworkCapture],
