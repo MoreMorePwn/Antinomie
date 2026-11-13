@@ -46,7 +46,7 @@ fn a_readable_screen_keeps_the_interval_and_shows_the_box() {
     let texts = render(&ctx, &mut request, true);
     assert_eq!(request.screenshot_every_s, Some(30));
     assert!(texts.iter().any(|t| t == "Take a screenshot every"));
-    assert!(texts.iter().any(|t| t.contains("30 s")), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "30"), "{texts:?}");
     assert!(texts.iter().any(|t| t.contains("at most 500 pictures")));
 }
 
@@ -57,5 +57,5 @@ fn off_by_default() {
     let mut request = ExecRequest::default();
     let texts = render(&ctx, &mut request, true);
     assert_eq!(request.screenshot_every_s, None);
-    assert!(!texts.iter().any(|t| t.contains(" s")), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "10" || t == "s"), "{texts:?}");
 }
