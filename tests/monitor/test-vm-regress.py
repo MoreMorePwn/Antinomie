@@ -402,6 +402,9 @@ class PlanTests(unittest.TestCase):
             self.assertEqual(check.timeout, x86[name] * scale, name)
         self.assertEqual([c.name for c in vm.plan("quick", self.ctx(), "arm64")],
                          ["conf-quick", "nic-routed", "desktop"])
+        # An arm64 Debian desktop base also runs the in-app screen check.
+        self.assertEqual([c.name for c in vm.plan("quick", {**self.ctx(), "desktop_base": True}, "arm64")],
+                         ["conf-quick", "screen", "nic-routed", "desktop"])
         self.assertEqual(vm.parse(["quick", "/base", "--arch", "arm64"]).arch, "arm64")
         self.assertEqual(vm.parse(["quick", "/base"]).arch, "x86_64")
 

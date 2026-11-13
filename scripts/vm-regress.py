@@ -134,9 +134,12 @@ ARCH_CC32 = {"arm64": "arm-linux-gnueabihf-gcc"}
 # The stealth probe measures arm64 without its CPUID and I/O port checks; the
 # cloud check expects the arm64 instance's identity. Interop has its own arm64
 # check (ARM64_INTEROP). tracer-ia32's 32-bit x86 program runs on x86-64 only.
-# The in-app screen check has no arm64 display device checked yet.
+# The in-app screen check runs on an arm64 Debian desktop base (its desktop
+# check needs the display anyway) and not yet on the other arm64 bases.
 ARM64_LATER = {"debugger-live", "conf-stress-extreme", "uring-legacy", "tracer-legacy",
                "tracer-ia32", "screen"}
+# ARM64_LATER checks an arm64 Debian desktop base runs all the same.
+ARM64_DESKTOP = {"screen"}
 # What an old host (--old-host: 0.8.0, which has no arm64 VMs) says when it is
 # asked to start a VM on an arm64 base: it must refuse before QEMU runs, with
 # its own message, or as a base of a newer revision (0.8.0's base_refusal():
@@ -449,12 +452,14 @@ class Check:
 
 def plan(tier, ctx, arch="x86_64"):
     """The checks of a tier in run order. ctx holds paths: base, old_base, out, new, old, fix.
-    A foreign architecture's tier leaves out ARM64_LATER and scales every timeout."""
+    A foreign architecture's tier leaves out ARM64_LATER (but ARM64_DESKTOP on a desktop base)
+    and scales every timeout."""
     checks = plan_x86_64(tier, ctx)
     if arch == "x86_64":
         return checks
     scale = time_scale(arch)
-    checks = [check for check in checks if check.name not in ARM64_LATER and check.group != "interop"]
+    later = ARM64_LATER - (ARM64_DESKTOP if ctx.get("desktop_base") else set())
+    checks = [check for check in checks if check.name not in later and check.group != "interop"]
     for check in checks:
         check.timeout *= scale
     if tier == "full":
