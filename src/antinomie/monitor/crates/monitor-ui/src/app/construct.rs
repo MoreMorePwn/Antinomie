@@ -120,6 +120,7 @@ impl MonitorApp {
             disk_view: Default::default(),
             core_view: Default::default(),
             triage: Default::default(),
+            statistics: Default::default(),
             cpu_history: Default::default(),
             triage_pcap: Default::default(),
             run_labels: Default::default(),

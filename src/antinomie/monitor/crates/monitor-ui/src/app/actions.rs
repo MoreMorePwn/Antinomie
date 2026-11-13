@@ -99,6 +99,8 @@ pub(super) enum Action {
     ExportReport,
     /// The details of the rule selected in Detection rules.
     RuleDetails,
+    /// The Statistics window, on a tab (`None`: the tab it showed last).
+    Statistics(Option<crate::statistics::Tab>),
     /// The IDS rules' abuse.ch packs tab.
     AbusechPacks,
 }
@@ -198,7 +200,9 @@ impl Action {
             Self::ExportReport,
             Self::RuleDetails,
             Self::AbusechPacks,
+            Self::Statistics(None),
         ]);
+        actions.extend(crate::statistics::Tab::ALL.map(|tab| Self::Statistics(Some(tab))));
         actions
     }
 
@@ -276,6 +280,9 @@ impl Action {
             Self::ExportReport => "html pdf json misp stix write triage",
             Self::RuleDetails => "yara suricata sigma source text sid",
             Self::AbusechPacks => "suricata ids rules update check live feed",
+            Self::Statistics(_) => {
+                "stats counts calls hierarchy errors failed properties wireshark"
+            }
             Self::Go(Panel::Debugger) => "gdb breakpoints attach process",
             Self::Go(Panel::VmScreen) => "display monitor console vnc keyboard mouse",
             _ => "",
@@ -322,6 +329,7 @@ impl Action {
             Self::TelemetryTransport | Self::DeviceProfile => "VM",
             Self::OpenTerminal | Self::EditRunTags | Self::DeleteRun | Self::ExportReport => "Run",
             Self::RuleDetails | Self::AbusechPacks => "Rules",
+            Self::Statistics(_) => "Statistics",
             Self::Settings
             | Self::AnalysisTools
             | Self::DetectionRules
@@ -362,6 +370,7 @@ impl Action {
             Self::Go(Panel::Activity) => keys::SHOW_ACTIVITY,
             Self::Go(Panel::Jobs) => keys::SHOW_JOBS,
             Self::Go(Panel::Details) => keys::SHOW_DETAILS,
+            Self::Statistics(None) => keys::STATISTICS,
             _ => return None,
         })
     }
@@ -453,6 +462,8 @@ impl Action {
             Self::ExportReport => "Export report…".into(),
             Self::RuleDetails => "Rule details".into(),
             Self::AbusechPacks => "IDS rules: abuse.ch packs".into(),
+            Self::Statistics(None) => "Statistics window".into(),
+            Self::Statistics(Some(tab)) => format!("Statistics: {}", tab.label()),
         }
     }
 
@@ -654,6 +665,7 @@ impl MonitorApp {
                 "No debugger is attached; attach one to a process first.",
             ),
             Action::AbusechPacks
+            | Action::Statistics(_)
             | Action::Go(_)
             | Action::Quit
             | Action::DownloadBase
@@ -883,6 +895,7 @@ impl MonitorApp {
                 self.triage.request_report();
                 self.focus_panel = Some(Panel::Triage);
             }
+            Action::Statistics(tab) => self.statistics.request_open(tab),
             Action::RuleDetails => self.open_library(LibraryPage::Rules),
             Action::AbusechPacks => {
                 self.rules_ui.show_abusech();

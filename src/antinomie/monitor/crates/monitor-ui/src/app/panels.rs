@@ -98,6 +98,7 @@ impl MonitorApp {
         layout.show(self, root);
         self.layout = layout;
         self.dialogs(ctx);
+        self.show_statistics(ctx);
         self.data_windows.show(ctx);
         self.rules_ui.show_rule_lists(ctx, &self.options.data_dir);
         self.file_drop_overlay(ctx);

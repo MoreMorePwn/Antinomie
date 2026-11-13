@@ -50,6 +50,7 @@ mod samples_view;
 mod settings_link;
 mod snapshots;
 mod stat_cache;
+mod statistics;
 mod summary;
 mod table_sort;
 mod terminal;

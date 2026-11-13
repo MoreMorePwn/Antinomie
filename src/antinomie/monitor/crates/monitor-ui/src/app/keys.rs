@@ -37,6 +37,9 @@ pub const TOGGLE_BOTTOM_PANE: KeyboardShortcut = KeyboardShortcut::new(Modifiers
 /// Show the Details tab (Ctrl+Shift+D).
 pub const SHOW_DETAILS: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::D);
+/// Open the Statistics window (Ctrl+Shift+T).
+pub const STATISTICS: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T);
 pub const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 pub const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 

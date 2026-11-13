@@ -433,6 +433,64 @@ behind it.
   export` in `run_read.rs`, and `triage`).
 * **Tests.** `cargo test --release -p antinomie-cli -p antinomie-service`.
 
+### Statistics window (0.9.0)
+
+The Statistics window (ANT-T0477) is `monitor-ui/src/statistics.rs` and its
+`statistics/` folder; the counting is `antinomie_triage::statistics` (see
+`triage-and-analysis.md`, "Statistics engine"). What a user sees is in
+`docs/usage.md`, "Statistics (0.9.0)".
+
+* **Window.** `StatisticsWindow` floats over the main window (`widgets::window`)
+  or, after **Pop out**, is drawn by `show_viewport_immediate` into its own
+  operating-system window with the Activity graph window's pattern; where the
+  platform has no separate windows it floats again. It is drawn from
+  `app/panels.rs::draw`; `app/statistics_ui.rs` tells it which run or capture is
+  selected and does what a click asks of the Syscall Trace (`Navigate`:
+  `scope_trace`, `jump_triage_call`, a hidden category shown first). Size and the
+  pop-out state are settings (`statistics_window`, `statistics_popped`). A body
+  must fit the window: a row wider than it, or a body taller than it, makes egui
+  widen the window every frame until it fills the screen, so the filter row keeps
+  480 points for its buttons and the tab body 52 points for the footer (test
+  `b_the_window_does_not_grow_by_itself_on_any_tab`).
+* **Worker.** `worker.rs` runs `compute` on a thread named `statistics`, one walk
+  per `Key` (run folder, capture flag, root cookie, filter, custom lines), with
+  its own cancel flag; the window polls it every frame. The last four complete
+  results are kept. A stopped walk keeps its counts marked partial. Custom Call
+  rate lines use a second `Worker` (`rate_worker`): a key with lines is a
+  `Parts::RateOnly` walk, started when the main walk is over (one walk at a
+  time), replaced when the lines change, forgotten when the last custom line is
+  removed.
+* **Tabs.** A tab is a `Tab` variant, a module, and an arm in
+  `StatisticsWindow::tab_body` and `current_table` (`toolbar.rs`). A tab returns a
+  `Pick`: a count to open (`Click { clause, group }`, added to the window's
+  filter) or one exact call. Properties and the quality strip, Hierarchy, Call
+  rate (`rate.rs` model and tab, `rate_lines.rs` line editor, `rate_paint.rs`
+  painter and pointer) and Latency (`latency.rs`) read only the `RunStatistics`.
+* **Call rate drawing.** The engine's bins are on a grid of whole widths from 0,
+  every width a power of two times 1 ms. The tab rounds the chosen interval up to
+  a whole number of the coarsest bin on screen, so every interval holds whole bins
+  of every line and its count is exact; the click clause
+  `event.time_ns >= A && event.time_ns < B` selects exactly those calls (test D3
+  compares it with the Trace's count). A line is thinned to at most 640 points
+  (the largest count in each group of pixel columns) and a dashed line is dashed
+  by columns when it has more than 400 points, so a frame costs the same for
+  65,536 bins as for a few hundred.
+* **Equality.** The Trace's "N matching" for a clicked clause equals
+  `calls + out_of_scope` of the engine for the same filter (tests C4 and D3).
+
+**Measured** (release build, WSL2, 4 jobs, the test machine; tests A9 and D5).
+
+| Bound | Measured |
+|---|---|
+| Aggregator alone, at least 2 M calls/s | 11.8 M calls/s |
+| Walk of the 200,000-call fixture, at most 1.25 times the Trace's count plus 100 ms | Trace count 1.63 s (122,500 calls/s), statistics 1.70 s (117,500 calls/s): 1.04 times |
+| Paint of 4 lines x 65,536 intervals at 1280x800, at most 4 ms (median of 15 frames) | 3.2 ms for the whole run, 1.25 ms for a tenth of it, 0.17 ms for a hundredth; no repaint when idle |
+
+The fixture holds 4 packets a call and sits in the page cache, so the walk rate is
+the best case of a small, warm recording; a multi-GiB recording that is not cached
+reads slower. No real recording has been walked yet, so the 10-million-call
+estimate in the design stays an estimate.
+
 ### Historical initial requirements
 
 - Linux 6.12.94 existing baseline, BusyBox filesystem; Debian userspace later.

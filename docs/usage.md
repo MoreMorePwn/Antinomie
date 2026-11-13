@@ -682,6 +682,10 @@ The network capture is the guest's own view on every route.
   plain word), and a trace row's menu copies the call's decoded records as JSON.
   Records are decoded on x86-64 and arm64 guests, and for ia32 and AArch32
   programs where the compat inventory has a layout.
+- **Statistics** (menu bar, or Ctrl+Shift+T): the numbers behind the selected
+  run or Capture all recording: properties and recording quality, the call
+  hierarchy, the call rate over time and syscall latency. Every number opens its
+  calls in the Syscall Trace. See [Statistics](#statistics-090).
 - **Run History**: every run on the selected VM, including earlier boots, with
   its command line, user, status and exit code. The state is coloured (see
   *Run states* below). Double-click a run to open its
@@ -1381,6 +1385,96 @@ be selected for one launch with `antinomie --graphics-driver d3d12`; the dialog
 can copy a command preserving the data directory. Close the app normally before
 using it. The default `--graphics-driver system` keeps the existing environment.
 
+### Statistics (0.9.0)
+
+**Statistics** in the menu bar (or **Ctrl+Shift+T**, changeable in Settings >
+Keyboard) opens the Statistics window on the run or Capture all recording you have
+selected; the **Statistics of these calls** button on the Syscall Trace opens it
+with the Trace's filter. The window floats over the main window; **Pop out** moves
+it into its own window (and remembers that), **Back into the main window** returns
+it. It follows the run you select; **Change...** opens Run History. Esc closes it.
+
+The top of the window is the same for every tab.
+
+- **Filter box.** The Syscall Trace's filter language, with completion. **Apply**
+  (or Enter) counts the calls it keeps; **Use Trace filter** copies the Trace's
+  applied filter once (the window does not follow the Trace while you type);
+  **Clear** counts every call. The Trace's hidden categories and selected process
+  are ignored. A filter that does not compile shows the parser's message and keeps
+  the last numbers, greyed.
+- **Time base.** **Run time** (0 is the first call in the view), **Guest clock**
+  (what the filter's `event.time_ns` uses) or **Host time**, an estimate through the
+  run's clock anchor (hidden when the run has none).
+- **Quality strip.** Chips say what the counts cannot tell you: **Complete** or
+  **Incomplete: at least N packets lost**, **Reduced from +m:ss**, **N host read
+  gaps**, **Guest waited N times**, **Still recording**, **Continued after a
+  reconnect**, and, when the run recorded another launched program too, **N calls
+  of another program not counted**. A chip opens the Quality block of Properties.
+- **Progress line.** The first read of a large recording builds its index
+  (**Indexing the recording**), then **Reading calls: N of M**. The tabs show the
+  counts so far, marked partial; **Stop** keeps what was read and **Read again**
+  starts over. A run that is still recording is read as far as it is saved;
+  **Recording grew by N since it was read. Refresh** reads it again.
+- **Copy and Export.** **Copy** puts the table of the tab on view on the clipboard as
+  tab-separated text. **Export** writes it as CSV or JSON, or writes everything as
+  JSON, to `exports/statistics` in the data folder; the message says where. CSV
+  and JSON carry raw numbers in base units (nanoseconds, calls), with the unit in
+  the column name.
+
+**Every number is a link.** Click a count (or press Enter on it) and the Syscall
+Trace opens with a filter that lists exactly those calls, added to the window's
+own filter, for example `syscall.name == openat && syscall.errno == 2`. If the call's
+group is hidden in the Trace, the window first asks "Show it there and open these
+calls?". The Trace's "N matching" equals the number you clicked. The one exception
+is a recording that holds another launched program: the Trace lists its calls too,
+and the window counts only the run's own program, as Triage does.
+
+**Properties.** The run (program, state, times), the guest (base, kernel,
+accelerator, vCPUs, RAM), the recording (calls, size, first and last call, the
+busiest second, processes and threads) and the transport policy, and the
+**Quality** block with every loss figure shown apart, never summed: telemetry lost,
+dropped by the transport, the recording writer and the UI, the reduced-recording
+switch, host read gaps and full-ring spells, guest send waits. Figures an old run
+did not record read "not recorded".
+
+**Hierarchy.** Calls by group, then call, then result (`returned`, `ENOENT`, ...), with
+the share of the view and of the parent and a bar. **Failed only** keeps the calls
+that returned an error number (harmless ones such as `EAGAIN` count too) and
+**By error** puts the result first. The Failed column opens the failed calls of a
+row. After a reduced recording a **Not saved** column shows how many calls were not
+kept.
+
+**Call rate.** Calls per interval over the run, up to four lines. A line is all
+calls, failed calls, a group, or your own filter (**+ Line**); the first three
+cost nothing, a custom line reads the recording once more with its filter and
+shows its progress on its legend chip. Lines differ in colour, dash pattern and end
+marker. Host read gaps and full-ring spells inside the run are hatched bands
+labelled "no telemetry read here": a quiet stretch inside one is not an idle program.
+A dashed marker shows where a reduced recording began, and "peak" marks the busiest
+second. **Interval** is Auto or 1 ms to 1 min, rounded up to a whole number of the
+recording's own bins so every count is exact. Ctrl + wheel zooms, a drag pans,
+double click shows the whole run again, and **Table** shows the numbers as rows.
+Click a point to open that line's calls of that interval in the Syscall Trace.
+
+**Latency.** The time from a call's entry record to its exit record on the guest
+clock, which is the filter field `syscall.duration_ns`. It includes the wait in the
+kernel, the recorder's own work at entry and exit and, in never-drop mode, any wait
+of the guest for room in the telemetry ring; a banner says whether the run was
+measured under **KVM** or **TCG** (software emulation, much slower: compare only
+with other TCG runs) and a warning appears when the boot's guest sends waited. Min,
+max, total and mean are exact; the median and the percentiles come from a log-scale
+histogram and are within about 6 %, so they carry the sign **≈**. Calls that wait by
+design (`poll`, `futex` waits, `nanosleep`, `wait4`, ...) are in a table of their
+own so they do not hide the slow ordinary calls; calls whose time depends on the
+descriptor (`read`, `write`, `connect`, ...) carry **may block**. The chart button on a
+row draws that call's distribution; right-click a row for **Slowest 1 % in Trace**.
+**Slowest ordinary calls** and **Longest waits** list the 20 longest, and a click opens
+exactly that call. **Copy and Export take** chooses which of the four tables the
+footer uses. Compare latencies only between runs measured under the same accelerator.
+
+A reconnected run is read from the part after the reconnect, as the Syscall Trace
+does. The window needs a recording: a run that failed before recording says so.
+
 ## Run states
 
 Run History, the sample window's Runs list and Summary, the VM's recent runs, the
@@ -1604,6 +1698,7 @@ button, table or graph does not block the shortcuts.
 | Ctrl+1 to Ctrl+9 | Show the 1st to 9th tab of the work area, in the order the tab bar shows them (they follow a tab you dragged) |
 | Ctrl+J | Fold or open the lower bar (Details, Activity and Jobs); the arrow at the right end of its tab strip does the same |
 | Ctrl+Shift+D, Ctrl+Shift+A, Ctrl+Shift+J | Show Details, Activity, Jobs (the lower bar) |
+| Ctrl+Shift+T | Statistics window |
 | Esc | Close the window on top (not while a field has the keyboard). In a filter or search box, Esc clears the text first |
 
 **Defaults for a 60 % keyboard.** Every default is a Ctrl or Ctrl+Shift chord on a
@@ -1861,7 +1956,7 @@ appears, so the page ends with "IP geolocation by DB-IP" (linking db-ip.com) and
 ### Zooming a graph
 
 In every graph (the Relationships graph, the lineage graph, the VM snapshot graph,
-the file activity graph and the Activity graph) the plain mouse wheel scrolls
+the file activity graph, the Activity graph and the Statistics Call rate graph) the plain mouse wheel scrolls
 the page, also over the graph; Ctrl + wheel or a pinch zooms the graph, and a
 drag moves it.
 

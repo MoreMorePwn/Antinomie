@@ -50,6 +50,7 @@ mod sidebar;
 mod sidebar_last_run;
 mod sidebar_rail;
 mod start_error;
+mod statistics_ui;
 mod stealth;
 mod trace_paging;
 mod trace_view;
@@ -214,6 +215,9 @@ struct Settings {
     warn_clear_activity: bool,
     /// The size the activity graph's window opened at last, in points.
     graph_window: [f32; 2],
+    /// The Statistics window's size, and whether it is popped out.
+    statistics_window: [f32; 2],
+    statistics_popped: bool,
     /// How the activity graph spaces findings along its time axis.
     graph_spacing: crate::triage::GraphSpacing,
     /// Triage > Export report: the sections, formats and options chosen last.
@@ -352,6 +356,8 @@ impl Default for Settings {
             warn_no_snapshot: true,
             warn_clear_activity: true,
             graph_window: crate::triage::GRAPH_WINDOW_SIZE,
+            statistics_window: crate::statistics::DEFAULT_SIZE,
+            statistics_popped: false,
             graph_spacing: Default::default(),
             report_export: Default::default(),
             show_fps: false,
@@ -558,6 +564,7 @@ pub struct MonitorApp {
     disk_view: crate::disk_view::DiskView,
     core_view: crate::core_view::CoreView,
     triage: crate::triage::TriageView,
+    statistics: crate::statistics::StatisticsWindow,
     cpu_history: crate::summary::CpuHistory,
     /// What the disk said about the capture Triage shows; see `triage_pcap`.
     triage_pcap: std::cell::RefCell<triage_pcap::PcapLookup>,
