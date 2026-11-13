@@ -128,7 +128,10 @@ fn a_guest_that_hangs_under_the_program_is_guest_lost_and_retried_not_internal()
     assert_eq!(stops.len(), 1, "{stops:?}");
     assert!(stops[0] >= 74_000, "{stops:?}");
     let stored = w.job(&job.id);
-    assert_eq!(stored.program.unwrap().end_reason, Some(EndReason::GuestLost));
+    assert_eq!(
+        stored.program.unwrap().end_reason,
+        Some(EndReason::GuestLost)
+    );
     let file = w.lane_file();
     assert!(file.quarantine.is_none() && file.current.is_none());
 }
