@@ -534,7 +534,7 @@ def display(desktop):
 # The end of every installation (the installer's finish-install): build-time
 # apt and dpkg settings (recommends, proxy, left-out documentation) leave, the
 # system is checked and inventoried, apt's history reads like the installer's,
-# and the console base gets the resolver its DHCP lease named. In the console
+# and every base gets the resolver its DHCP lease named. In the console
 # base this runs after the boot loader, in the BIOS system and in its UEFI copy
 # ($manager is "none" there); a desktop runs it at the end of its customization.
 FINISH = """# Build-time apt and dpkg settings (recommends, proxy, left-out documentation)
@@ -552,9 +552,11 @@ if [ "$manager" = none ] && [ -f /var/log/apt/history.log ]; then
     cat /tmp/history.log > /var/log/apt/history.log
     rm -f /tmp/history.log
 fi
+# The resolver the installer's DHCP lease named, on every base (the build
+# host's own, which the bootstrap copied in, never stays); dhcpcd, or a
+# desktop's NetworkManager, rewrites it at boot.
+printf 'nameserver 192.168.1.1\\n' > /etc/resolv.conf
 if [ "$manager" = none ]; then
-    # The resolver the installer's DHCP lease named; dhcpcd rewrites it at boot.
-    printf 'nameserver 192.168.1.1\\n' > /etc/resolv.conf
     find /var/cache/apt/archives -name '*.deb' -delete
 else
     apt-get clean

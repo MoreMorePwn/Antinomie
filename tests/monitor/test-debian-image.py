@@ -647,6 +647,11 @@ class DebianImageTests(unittest.TestCase):
             self.assertNotIn("antinomie", path.lower(), path)
         self.assertIn('if [ -e "/usr/lib/systemd/system/$unit" ]', script)
         self.assertIn("rm -f /etc/.resolv.conf.systemd-resolved.bak", script)
+        # Every base, the desktops too, replaces the build host's resolv.conf that
+        # the bootstrap copied in (FINISH, outside the console-only branch).
+        resolver = "printf 'nameserver 192.168.1.1\\n' > /etc/resolv.conf\nif [ \"$manager\" = none ]"
+        self.assertIn(resolver, script)
+        self.assertIn(resolver, image.finish_script())
         self.assertNotIn("/var/lib/antinomie-image", script)
         with patch.object(image.os, "geteuid", return_value=1000):
             command = image.mmdebstrap_command(image.options({"desktop": image.CONSOLE}),
