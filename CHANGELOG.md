@@ -32,6 +32,26 @@ x86 programs by their own table.
   (`clear`, `show`); without a key the step is skipped with `no_key` and the
   run is not refused. The key never appears in a log, an error, a run or an
   artifact.
+- **IOC datasets from the command line (ANT-T0548 F2b).** `antinomie-cli ioc
+  datasets list`, `update [NAME...]`, `enable NAME` and `disable NAME` download
+  and refresh the abuse.ch datasets on a headless node with the window's own
+  code: the same sources and checks, the same files in `<data>/ioc/feeds/`, so
+  the desktop and the daemon see the same datasets and an Auto run's Check
+  online has something to compare with (without datasets it is skipped with
+  `no_datasets`). `update` needs `outbound_catalog` (the window's Allow
+  outbound catalog and rule downloads); the abuse.ch key for ThreatFox and
+  URLhaus comes from `api-keys.json` and reaches `curl` on standard input only. A missing key
+  downloads nothing (exit 5), a failed download keeps the previous copy (exit
+  21). No engine lock: it runs while a daemon serves, from cron or a systemd
+  timer if the admin wants one. One dataset update runs at a time per data
+  folder, the window's included.
+- **The daemon never turns on an automatic lookup from `settings.json`
+  (ANT-T0548 F2b, decision B-H16).** The daemon now builds its engine settings
+  through `for_daemon`: the online symbol lookup and the MalwareBazaar hash
+  lookup are off and an address lookup that asks another machine (`dig`,
+  `whois`) falls back to TShark's installed GeoIP fields, whatever the file
+  says; the address lookup is `service.toml [privacy]`'s. No daemon code read
+  those switches before either; Check online stays a preset's choice.
 - **Auto mode's API speaks of runs, not jobs (ANT-T0492).**
   - The contract is `docs/run-api-1.md` with its schema
     `docs/run-api-1.schema.json` (was the job API). A run is one analysis of

@@ -444,6 +444,16 @@ key sends nothing (the runs that ask for Check online carry the warning
 `online_skipped` with `no_key`), and a caller without `lookup.online` cannot
 ask for it.
 
+Check online compares with the IOC datasets: a node without them skips it with
+`no_datasets`. `antinomie-cli ioc datasets update` downloads them into the data
+directory with the same key (see [Auto mode](auto-mode.md), "Getting the
+datasets on a node").
+
+The window's automatic lookups in `settings.json` never apply to the daemon:
+it starts with the online symbol lookup and the MalwareBazaar hash lookup off
+and with the address lookup of `[privacy]` above (never `dig` or `whois`),
+whatever the file says (decision B-H16).
+
 ## Webhooks
 
 `[[notify.webhooks]]` is read and checked by `config validate` (HTTPS or loopback

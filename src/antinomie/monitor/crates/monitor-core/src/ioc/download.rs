@@ -4,6 +4,10 @@
 //! unpacked, checked, and only then published by atomically replacing its
 //! `meta.json`. Any failure leaves the previous copy exactly as it was and
 //! records which feed failed and why.
+//!
+//! One update runs at a time per data folder, whoever asks (the window's
+//! Tools > Detection rules > IOC, `antinomie-cli ioc datasets update`): each holds the `flock`
+//! of `<data dir>/ioc/update.lock` while it downloads and publishes.
 use super::{
     feeds::{self, Feed, FeedMeta},
     records,
@@ -27,6 +31,40 @@ const STALE_STAGING: Duration = Duration::from_secs(24 * 3600);
 const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 /// Entries a feed's zip may hold; the feeds send one file.
 const MAX_ZIP_ENTRIES: usize = 64;
+
+/// The file whose lock an update holds, in [`feeds::root`].
+const UPDATE_LOCK: &str = "update.lock";
+/// The start of the refusal when another update holds the lock.
+pub const UPDATE_BUSY: &str = "another dataset update is running";
+
+/// The update lock, held while it lives.
+struct UpdateLock {
+    _file: File,
+}
+
+/// Take the update lock of `data_dir`'s datasets without waiting.
+fn update_lock(data_dir: &Path) -> Result<UpdateLock, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = feeds::root(data_dir);
+    crate::storage::private_dir(&root).map_err(|error| format!("{}: {error}", root.display()))?;
+    let path = root.join(UPDATE_LOCK);
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32)
+        .open(&path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    match crate::data_owner::flock_within(&file, Duration::ZERO) {
+        Ok(true) => Ok(UpdateLock { _file: file }),
+        Ok(false) => Err(format!(
+            "{UPDATE_BUSY} (the window's Tools > Detection rules > IOC or antinomie-cli); try again when it ends"
+        )),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
 
 /// What an update of one feed ended with.
 #[derive(Debug)]
@@ -157,6 +195,8 @@ pub fn update_feed(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<FeedMeta, String> {
+    crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::FeedUpdate)?;
+    let _lock = update_lock(data_dir).map_err(|error| format!("{}: {error}", feed.name))?;
     let size = remote_size(feed, key, fetcher, cancel);
     update_sized(data_dir, feed, key, size, fetcher, cancel, progress)
 }
@@ -326,17 +366,20 @@ pub fn update_all(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Vec<Outcome> {
-    if let Err(refused) =
-        crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::FeedUpdate)
-    {
-        let enabled = feeds::status(data_dir).into_iter().filter(|s| s.enabled);
-        return enabled
-            .map(|status| Outcome {
-                feed: status.feed,
-                result: Err(refused.clone()),
-            })
-            .collect();
-    }
+    let lock = crate::lanes::refuse_in_lane(data_dir, crate::lanes::SharedWrite::FeedUpdate)
+        .and_then(|()| update_lock(data_dir));
+    let _lock = match lock {
+        Ok(lock) => lock,
+        Err(refused) => {
+            let enabled = feeds::status(data_dir).into_iter().filter(|s| s.enabled);
+            return enabled
+                .map(|status| Outcome {
+                    feed: status.feed,
+                    result: Err(refused.clone()),
+                })
+                .collect();
+        }
+    };
     feeds::remove_withdrawn(data_dir);
     let statuses = feeds::status(data_dir);
     let enabled: Vec<&feeds::FeedStatus> =
@@ -1022,6 +1065,49 @@ mod tests {
             mock.calls.borrow().last().unwrap(),
             &format!("https://urlhaus-api.abuse.ch/v2/files/exports/{KEY}/recent.csv")
         );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn one_update_at_a_time_and_a_refused_one_asks_for_nothing() {
+        let dir = data_dir("busy");
+        let mock = all_fixtures();
+        let held = update_lock(&dir).unwrap();
+        let outcomes = update_all(&dir, &key(), &mock, &AtomicBool::new(false), &mut quiet);
+        assert_eq!(outcomes.len(), 6);
+        assert!(
+            outcomes
+                .iter()
+                .all(|o| o.result.as_ref().unwrap_err().starts_with(UPDATE_BUSY)),
+            "{outcomes:?}"
+        );
+        let feed = feeds::feed("feodo").unwrap();
+        let error = update_feed(
+            &dir,
+            feed,
+            &key(),
+            &mock,
+            &AtomicBool::new(false),
+            &mut quiet,
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("Feodo Tracker: another dataset update"),
+            "{error}"
+        );
+        assert!(mock.calls.borrow().is_empty(), "no request while busy");
+        // Busy is not a failure of the dataset.
+        assert!(feeds::status(&dir)[3].last_error.is_none());
+        drop(held);
+        update_feed(
+            &dir,
+            feed,
+            &key(),
+            &mock,
+            &AtomicBool::new(false),
+            &mut quiet,
+        )
+        .unwrap();
         let _ = fs::remove_dir_all(dir);
     }
 

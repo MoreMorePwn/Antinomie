@@ -2317,6 +2317,29 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   custom groups with their state; `rules enable ID` and `rules disable ID` switch
   one (`pack:ID` or `group:ID` when an id names both). Changing the selection
   takes the data-directory lock; listing does not.
+- `ioc datasets list` lists the abuse.ch IOC datasets (ThreatFox, URLhaus dump,
+  URLhaus payloads, Feodo Tracker, SSLBL JA3, SSLBL certificates, URLhaus recent):
+  `name`, `state` (`loaded`, `old` past 14 days, `not_downloaded`, `failed`,
+  `update_failed`, `off`), `records`, `fetched` date, `needs_key`, the source and
+  the stored `file`; the human form also says whether the abuse.ch key is stored.
+  `ioc datasets update [NAME...]` downloads the named datasets, or every one that
+  is switched on, with the window's own code (**Tools > Detection rules > IOC**):
+  the same sources and checks, the same files in `<data>/ioc/feeds/<name>/`, which
+  Triage, the reports and an Auto run's Check online read. It needs `config set
+  outbound_catalog true` (**Settings > Detection > Allow outbound catalog and rule
+  downloads** in the window; exit 5 otherwise); ThreatFox and the URLhaus datasets
+  need the abuse.ch key (`config api-key set abusech`): without it nothing is
+  downloaded and exit 5 names them (the key-free datasets can still be named). The
+  key goes to `curl` on standard input only and is removed from every message.
+  Progress goes to standard error; a failed download keeps the previous copy and
+  exits 21 (`unavailable`, retryable) with each dataset's result in
+  `details.datasets`; another update in progress (the window or another `ioc
+  datasets update`) is exit 21 too; Ctrl-C stops (exit 130). An unknown name is
+  exit 3, a dataset that is switched off exit 4. `ioc datasets enable NAME` and
+  `disable NAME` switch one on or off (an `off` dataset is not downloaded or used;
+  its copy stays). The `ioc` commands take no engine lock, so they run while the
+  window or a daemon owns the data directory, from cron or a systemd timer as well
+  (Antinomie installs none).
 - `config path` prints the paths of `settings.json`, `service.toml` and `presets/`.
   `config get [KEY]` prints one engine setting, or all of them; a dotted key reaches
   into an object (`disks.hide_dotfiles`) and the command takes no lock.

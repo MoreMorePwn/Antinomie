@@ -14,6 +14,7 @@ mod custody;
 mod detect;
 mod digest;
 mod doctor;
+mod ioc;
 mod library;
 mod machine;
 mod query;
@@ -41,6 +42,11 @@ pub enum Command {
     /// Rule packs and groups: list, enable, disable.
     #[command(subcommand)]
     Rules(rules::Rules),
+    /// The abuse.ch IOC datasets: `ioc datasets list`, `update [NAME...]`,
+    /// `enable`, `disable`. The window's files; no engine lock, so a daemon
+    /// may serve meanwhile. An Auto run's Check online needs them.
+    #[command(subcommand)]
+    Ioc(ioc::Ioc),
     /// Bases: list, install, download, build, delete; takes the engine lock
     /// (`list` asks the daemon when one answers).
     #[command(subcommand)]
@@ -105,6 +111,7 @@ pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
         Command::Config(config) => config::run(config, context),
         Command::Analyze(arguments) => analyze::run(arguments, context),
         Command::Rules(rules) => rules::run(rules, context),
+        Command::Ioc(ioc) => ioc::run(ioc, context),
         Command::Base(base) => base::run(base, context),
         Command::Vm(vm) => vm::run(vm, context),
         Command::Snapshot(snapshot) => snapshot::run(snapshot, context),

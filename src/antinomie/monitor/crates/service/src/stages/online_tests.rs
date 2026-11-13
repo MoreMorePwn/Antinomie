@@ -394,3 +394,127 @@ fn at_most_fifty_values_are_sent_per_run() {
         online::MAX_LOOKUPS
     );
 }
+
+/// The stand-in abuse.ch download (ANT-T0548 F2b): a Feodo Tracker list
+/// and a ThreatFox export that do not list the run's values, with their
+/// sizes on a HEAD. ThreatFox's URL carries the key (curl has it on
+/// standard input).
+struct Served;
+
+const FEODO_LIST: &str = r#"[{"ip_address":"203.0.113.45","port":443,"status":"online","first_seen":"2026-08-01 00:00:00","malware":"Dridex"}]"#;
+const THREATFOX_LIST: &str = "# \"first_seen_utc\", \"ioc_id\", \"ioc_value\", \"ioc_type\", \"threat_type\", \"fk_malware\", \"malware_alias\", \"malware_printable\", \"last_seen_utc\", \"confidence_level\", \"reference\", \"tags\", \"anonymous\", \"reporter\"\n\
+\"2026-09-02 10:11:13\", \"1831207\", \"c2.update-cdn.example\", \"domain\", \"botnet_cc\", \"elf.mirai\", \"\", \"Mirai\", \"\", \"75\", \"None\", \"mirai\", \"0\", \"reporter1\"\n";
+
+impl Served {
+    fn body(url: &str) -> &'static str {
+        if url.starts_with("https://feodotracker.abuse.ch/") {
+            FEODO_LIST
+        } else {
+            assert_eq!(
+                url,
+                format!("https://threatfox-api.abuse.ch/v2/files/exports/{FAKE_KEY}/full.csv.zip")
+            );
+            THREATFOX_LIST
+        }
+    }
+}
+
+impl antinomie_monitor_core::ruleset::Fetcher for Served {
+    fn fetch(
+        &self,
+        url: &str,
+        dest: &std::path::Path,
+        _max_size: u64,
+        _cancel: &AtomicBool,
+        progress: &mut dyn FnMut(u64),
+    ) -> Result<(), String> {
+        let body = Self::body(url);
+        std::fs::write(dest, body).map_err(|e| e.to_string())?;
+        progress(body.len() as u64);
+        Ok(())
+    }
+
+    fn remote_size(&self, url: &str, _cancel: &AtomicBool) -> Option<u64> {
+        Some(Self::body(url).len() as u64)
+    }
+}
+
+/// A node as `antinomie-cli ioc datasets update` and `config api-key set`
+/// leave it: the datasets in its data directory (or none) and the key; the
+/// run's indicators are looked up in what is really stored there.
+fn node_world(name: &str, datasets: bool, fake: &Arc<FakeAbuse>) -> W {
+    let mut w = world_with(name, |p| p.detection.check_online = true);
+    let data = data_dir(&w);
+    api_keys::set(&data, ApiKey::Abusech, FAKE_KEY).unwrap();
+    if datasets {
+        let key = api_keys::get(&data, ApiKey::Abusech);
+        for id in ["feodo", "threatfox"] {
+            antinomie_monitor_core::ioc::update_feed(
+                &data,
+                feeds::feed(id).unwrap(),
+                &key,
+                &Served,
+                &AtomicBool::new(false),
+                &mut |_| {},
+            )
+            .unwrap();
+        }
+    }
+    let found = indicators(0).indicators.clone();
+    let scan =
+        antinomie_monitor_core::ioc::verdict::scan_datasets(&data, &found, &AtomicBool::new(false))
+            .unwrap();
+    assert_eq!(scan.loaded.len(), 2 * usize::from(datasets));
+    let mut ioc = IocScan::for_tests(found);
+    ioc.scan = Arc::new(scan);
+    let transport: Arc<dyn Transport + Send + Sync> = fake.clone();
+    let ioc = Arc::new(ioc);
+    hook(&mut w, |h: &mut Hooked| {
+        h.ioc = Some(ioc);
+        h.transport = Some(transport);
+    });
+    w
+}
+
+#[test]
+fn a_node_with_downloaded_datasets_and_a_key_gets_online_answers() {
+    // Before the datasets are downloaded: skipped, nothing sent.
+    let fake = Arc::new(FakeAbuse::default());
+    let w = node_world("online-node-bare", false, &fake);
+    let job = collected(&w, 1);
+    let mut waiter = w.engine(|_| {});
+    let done = finished(host(&w, &mut waiter, &job));
+    assert_eq!(done.state, RunState::Succeeded, "{:?}", done.warnings);
+    let text = warning(&done, "online_skipped").expect("a warning");
+    assert!(text.contains("no_datasets"), "{text}");
+    assert!(fake.sent.lock().unwrap().is_empty());
+    // After the download into the data directory: the values the dataset
+    // does not list are asked about and the answers are kept.
+    let fake = Arc::new(FakeAbuse::default());
+    let w = node_world("online-node-ready", true, &fake);
+    let job = collected(&w, 1);
+    let mut waiter = w.engine(|_| {});
+    let done = finished(host(&w, &mut waiter, &job));
+    assert_eq!(done.state, RunState::Succeeded, "{:?}", done.warnings);
+    assert!(
+        done.warnings.iter().all(|x| !x.code.starts_with("online")),
+        "{:?}",
+        done.warnings
+    );
+    let sent = fake.sent.lock().unwrap().clone();
+    assert!(
+        sent.iter()
+            .any(|(_, body)| body.contains("gate.kd-relay.example")),
+        "{sent:?}"
+    );
+    assert!(fake.keys.lock().unwrap().iter().all(|k| k == FAKE_KEY));
+    let kept = online::load(&run_dir(&w));
+    let hit = kept
+        .entry(
+            antinomie_monitor_core::ioc::kind::Kind::Domain,
+            "gate.kd-relay.example",
+        )
+        .expect("the domain's answer");
+    assert_eq!(hit.records[0].family, "Gafgyt");
+    assert_no_key(&w, &job);
+}

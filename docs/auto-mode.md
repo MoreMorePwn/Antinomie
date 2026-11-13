@@ -255,10 +255,33 @@ its default is Standard's. The full list is in
   the run is not refused, the step is skipped with `no_key` and a warning.
   With no indicator dataset downloaded nothing can be asked (`no_datasets`):
   as in the window, the online check asks only about values the datasets do
-  not list. The datasets are downloaded with the desktop app (**Tools >
-  Detection rules > IOC**) on the node's data directory; 0.9.0 has no CLI
-  command for it. The key never appears in a log, an error, the run,
-  an event or an artifact.
+  not list. The key never appears in a log, an error, the run, an event or an
+  artifact.
+
+  **Getting the datasets on a node.** Download them once with `antinomie-cli
+  ioc datasets update`, as the user the daemon runs as and on its data
+  directory; it is the window's own download (**Tools > Detection rules >
+  IOC**): the same abuse.ch sources, the same files in `<data>/ioc/feeds/`, so
+  the desktop and the daemon see the same datasets. Downloads must be allowed
+  first (`config set outbound_catalog true`, **Settings > Detection > Allow
+  outbound catalog and rule downloads** in the window; `config set` takes the
+  data-directory lock, so set it before the daemon starts), and ThreatFox and
+  the two URLhaus datasets need the abuse.ch key stored above:
+
+  ```sh
+  antinomie-cli --data-dir /srv/antinomie config set outbound_catalog true
+  antinomie-cli --data-dir /srv/antinomie config api-key set abusech < abusech-key.txt
+  antinomie-cli --data-dir /srv/antinomie ioc datasets update
+  antinomie-cli --data-dir /srv/antinomie ioc datasets list
+  ```
+
+  `update` takes no engine lock, so it runs while the daemon serves; each run
+  reads the datasets when its Triage scan starts. The datasets age (the list
+  calls one older than 14 days `old`): refreshing them is the admin's choice,
+  for example a daily cron entry or systemd timer running `antinomie-cli
+  --data-dir /srv/antinomie -q ioc datasets update` (Antinomie installs no
+  timer). A failed download keeps the previous copy and exits 21. The command
+  reference is under "Command line" in [usage](usage.md).
 
 * **Dump on suspicious activity.** `dumps.dump_when_suspicious = true` makes the
   run take a dump while the program runs, when the live Triage rules match at
