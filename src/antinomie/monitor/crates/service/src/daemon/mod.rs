@@ -330,9 +330,9 @@ pub fn shutdown_step(
                 state.lanes_cancelled_at.get_or_insert(now);
                 lines.push(match service.store.cancel_for_shutdown(job) {
                     Ok(_) => format!(
-                        "job={job} is in its lane stages: cancelled for shutdown, it goes back to the queue"
+                        "run={job} is in its lane stages: cancelled for shutdown, it goes back to the queue"
                     ),
-                    Err(error) => format!("job={job}: cancel for shutdown: {error}"),
+                    Err(error) => format!("run={job}: cancel for shutdown: {error}"),
                 });
             }
             Phase::Lane(job)
@@ -344,7 +344,7 @@ pub fn shutdown_step(
                 state.interrupted = true;
                 service.controls.interrupt();
                 lines.push(format!(
-                    "job={job} did not leave its lane stages within {} s of the stop; its waits are \
+                    "run={job} did not leave its lane stages within {} s of the stop; its waits are \
                      interrupted and recovery puts it back in the queue on the next start",
                     LANE_SHUTDOWN_GRACE.as_secs()
                 ));
@@ -356,7 +356,7 @@ pub fn shutdown_step(
                 state.interrupted = true;
                 service.controls.interrupt();
                 lines.push(format!(
-                    "job={job} did not finish its host stages within {} s; it resumes at analyse on the next start",
+                    "run={job} did not finish its host stages within {} s; it resumes at analyse on the next start",
                     limit.as_secs()
                 ));
             }

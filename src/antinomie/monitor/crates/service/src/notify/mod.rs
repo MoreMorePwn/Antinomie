@@ -138,13 +138,13 @@ impl Delivery<'_> {
                 Ok(path) => {
                     marker.results = true;
                     (self.log)(&format!(
-                        "notify: job={id} result files in {}",
+                        "notify: run={id} result files in {}",
                         path.display()
                     ));
                 }
                 Err(error) => {
                     (self.log)(&format!(
-                        "notify: job={id} result files not written: {error}"
+                        "notify: run={id} result files not written: {error}"
                     ));
                     (self.alert)(
                         "result_drop_failed",
@@ -191,7 +191,7 @@ impl Delivery<'_> {
         ];
         let run = hook::run(&self.on_finish, &env, self.hook_timeout);
         (self.log)(&format!(
-            "notify: job={} on_finish hook {}",
+            "notify: run={} on_finish hook {}",
             job.id,
             run.words()
         ));

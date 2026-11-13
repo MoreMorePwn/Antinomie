@@ -39,7 +39,8 @@ x86 programs by their own table.
     service log names a recording read `recording=` and a run artifact read
     `run=`; the retention and `run.delete` lines name the run `run=` and its
     recording `recording=`. A host work item's `basis` for a fixed limit is
-    `preset`.
+    `preset`. Every daemon log line names a run `run=<id>` (the lane, host
+    pool, result file, hook and shutdown lines said `job=`).
   - The run store's layout is 2. A store written by a 0.9.0 test build before
     the run API (layout 1) is not converted: the daemon and the `auto`
     commands refuse it with a message naming `<data>/service/jobs.sqlite` and

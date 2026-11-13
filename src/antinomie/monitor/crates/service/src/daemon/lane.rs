@@ -137,7 +137,7 @@ impl LaneLoop<'_> {
                 return;
             }
             set(self.phase, Phase::Host(job.id.clone()));
-            (self.log)(&format!("job={} resuming at analyse", job.id));
+            (self.log)(&format!("run={} resuming at analyse", job.id));
             let end = runner.resume(job);
             set(self.phase, Phase::Idle);
             if end == JobEnd::Aborted {
@@ -224,7 +224,7 @@ impl LaneLoop<'_> {
             match claimed {
                 Ok(Some(job)) => {
                     set(self.phase, Phase::Lane(job.id.clone()));
-                    (self.log)(&format!("job={} started, attempt {}", job.id, job.attempt));
+                    (self.log)(&format!("run={} started, attempt {}", job.id, job.attempt));
                     let id = job.id.clone();
                     let phase = self.phase;
                     let end = runner.run_job(&job, &mut || set(phase, Phase::Host(id.clone())));
@@ -234,7 +234,7 @@ impl LaneLoop<'_> {
                         .get(&job.id)
                         .map(|j| format!("{:?}", j.state).to_lowercase())
                         .unwrap_or_default();
-                    (self.log)(&format!("job={} left the lane: {state}", job.id));
+                    (self.log)(&format!("run={} left the lane: {state}", job.id));
                     if end == JobEnd::Aborted {
                         return;
                     }

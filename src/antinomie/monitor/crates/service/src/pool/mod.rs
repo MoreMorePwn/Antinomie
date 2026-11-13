@@ -193,7 +193,7 @@ impl HostPool {
             Ok(frozen) => frozen,
             Err(error) => {
                 self.log(&format!(
-                    "job={} cannot enter the host pool: {error}",
+                    "run={} cannot enter the host pool: {error}",
                     job.id
                 ));
                 return;
@@ -260,11 +260,11 @@ impl HostPool {
             drop(state);
             if let Err(error) = self.env.store.set_host_work(&id, &view_copy) {
                 self.log(&format!(
-                    "job={id}: the host work cannot be stored: {error}"
+                    "run={id}: the host work cannot be stored: {error}"
                 ));
             }
             self.log(&format!(
-                "job={id} entered the host pool: {} item(s), {ahead} s of work ahead, deadline in {} s",
+                "run={id} entered the host pool: {} item(s), {ahead} s of work ahead, deadline in {} s",
                 view_copy.len(),
                 budget / 1000
             ));
@@ -284,7 +284,7 @@ impl HostPool {
         let procs = ProcFs;
         let lane = fresh.lane.clone().unwrap_or_else(|| LaneId::new(1));
         let outcome = self.stages(waiter, &procs, lane).resumed_outcome(&fresh);
-        self.log(&format!("job={} resuming in the host pool", fresh.id));
+        self.log(&format!("run={} resuming in the host pool", fresh.id));
         let kept = fresh.host_work.clone();
         self.enter(&fresh, outcome, &kept);
     }
@@ -329,7 +329,7 @@ impl HostPool {
             && let Err(error) = self.env.store.set_host_work(id, &view)
         {
             self.log(&format!(
-                "job={id}: the host work cannot be stored: {error}"
+                "run={id}: the host work cannot be stored: {error}"
             ));
         }
     }
@@ -467,7 +467,7 @@ impl HostPool {
             } => {
                 let name = kind.name();
                 self.log(&format!(
-                    "job={id} item={name} started (limit {} s)",
+                    "run={id} item={name} started (limit {} s)",
                     limit.as_secs()
                 ));
                 let began = waiter.now_ms();
@@ -493,7 +493,7 @@ impl HostPool {
                 let disconnected =
                     matches!(&result, Err(StageStop::Abort(WaitError::Disconnected(_))));
                 self.log(&format!(
-                    "job={id} item={name} ended after {seconds} s: {}",
+                    "run={id} item={name} ended after {seconds} s: {}",
                     match &result {
                         Ok(end) => format!("{:?}", end.state).to_lowercase(),
                         Err(stop) => format!("{stop:?}"),
@@ -516,7 +516,7 @@ impl HostPool {
                 let mut stages = self.stages(waiter, procs, lane);
                 let result = stages.end_analyse(&job, &mut lock(&work)).map_err(stop_of);
                 if matches!(result, Ok(PhaseEnd::Again)) {
-                    self.log(&format!("job={id}: the host stages run again"));
+                    self.log(&format!("run={id}: the host stages run again"));
                 }
                 self.change(&id, |state| state.analyse_ended(&id, result));
             }
@@ -530,10 +530,10 @@ impl HostPool {
                     }
                     stages.conclude(&job, &w).map(|(done, problem)| {
                         if let Some(problem) = problem {
-                            self.log(&format!("job={id}: {problem}"));
+                            self.log(&format!("run={id}: {problem}"));
                         }
                         self.log(&format!(
-                            "job={id} left the host pool: {}",
+                            "run={id} left the host pool: {}",
                             format!("{:?}", done.state).to_lowercase()
                         ));
                         Concluded::Done
@@ -548,10 +548,10 @@ impl HostPool {
                 if !matches!(stop, PoolStop::Aborted(_)) {
                     let mut stages = self.stages(waiter, procs, lane);
                     let hosted = stages.settle_host(&job, Err(stage_stop(stop)));
-                    self.log(&format!("job={id} left the host pool: {hosted:?}"));
+                    self.log(&format!("run={id} left the host pool: {hosted:?}"));
                 } else {
                     self.log(&format!(
-                        "job={id} left in its host stages for the next start"
+                        "run={id} left in its host stages for the next start"
                     ));
                 }
                 self.change(&id, |state| {
