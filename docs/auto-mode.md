@@ -505,11 +505,11 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `unavailable_on_node` | submit | no | The node does not have it: a live route, keeping the VM after a failure (both arrive with 0.9.1), or another lane group; `details.what` |
 | `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The run waits `queued` for up to `[queue] wait_s` (3600), then fails |
 | `no_base`, `no_vm` | provision | no | The lane VM or its base is gone; `auto lane list` says which |
-| `vm_start_failed`, `guest_unreachable` | provision, launch | yes | The VM or its guest did not come up, or the guest kernel crashed while it booted (the crash line is the detail); three in a row quarantine the lane |
+| `vm_start_failed`, `guest_unreachable` | provision, upload, launch | yes | The VM or its guest did not come up, the guest kernel crashed while it booted (the crash line is the detail), or the guest stopped answering before the program ran and the engine could not get it back in time; three in a row quarantine the lane |
 | `revert_failed`, `lane_changed` | provision | no | The lane is quarantined (see above) |
 | `upload_failed` | upload | yes | The sample did not reach the guest |
 | `launch_failed` | launch | depends | The program did not start (not executable for the guest, no terminal) |
-| `guest_lost` | run, collect | once | The guest or QEMU died. A sample that does that twice ends `failed` |
+| `guest_lost` | run, collect | once | The guest or QEMU died, or the guest stopped answering (a kernel panic, a hang) and the engine could not get it back by the run limit plus 120 s. A sample that does that twice ends `failed` |
 | `recording_failed` | collect | once | The recording could not be completed |
 | `analysis_failed` | analyse, report | yes | Only when the preset marks the stage required (`required_stages`); otherwise the run is `partial` with a warning. A static check that only timed out or stopped short is not this failure unless it is in `static_analysis.required_checks` (it is a `static_check_incomplete` warning and the run is `partial`) |
 | `deadline_exceeded` | analyse, report | no | The host stages passed their deadline (`host_time_factor` x the expected work, see "Time limits"): the running items were stopped (`timed_out`), the queued ones never started; what finished is kept. A busy host or too low a factor; try again later or raise `host_time_factor` |
@@ -543,7 +543,9 @@ continues. Low disk and a missing KVM pause every lane the same way.
 
 **The disk filled up during a run.** The running program is stopped within a
 minute and the queue pauses (`low_disk`), also when the run database itself is
-too full to record the pause. A run whose end cannot be written yet waits for room
+too full to record the pause. The program ends `stopped` and the run `partial` with
+the warning `low_disk`, also when the guest, held on the full disk, never confirms
+the stop (evidence it could not finish is the warning `evidence_incomplete`). A run whose end cannot be written yet waits for room
 (it shows its last stage meanwhile) and ends as soon as there is; if the recording
 could not be finished it ends `recording_failed`, and the lane waits
 (`layer_pending`) until the engine has finished the recording, which it tries again

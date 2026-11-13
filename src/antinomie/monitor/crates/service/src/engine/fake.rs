@@ -106,8 +106,31 @@ pub enum Unscripted {
     Ok,
 }
 
+/// The engine's words for a guest command it refuses while the guest is in
+/// a transition (`Backend::send`): a reconnect to a guest that stopped
+/// answering, or a snapshot restore.
+pub const TRANSITION_REFUSAL: &str =
+    "guest transition in progress; submit the command after recovery completes";
+
+/// The words of a guest command the engine had taken before a transition
+/// began and cancelled at its end (`Worker::command_at_epoch`).
+pub const TRANSITION_CANCEL: &str = "command cancelled at snapshot/reconnect boundary; submit it explicitly in the current timeline";
+
+/// The guest commands the service sends that the engine refuses during a
+/// guest transition (a subset of monitor-core's `guest_scoped_command`).
+const GUEST_COMMANDS: [&str; 5] = [
+    "UploadSample",
+    "Execute",
+    "AwaitBoot",
+    "StopRun",
+    "TerminalRead",
+];
+
 pub struct FakeEngine {
     clock: Arc<ManualClock>,
+    /// Clock windows `[from, until)` in which guest commands are refused.
+    transitions: Vec<(u64, u64)>,
+    refused: Vec<(String, u64)>,
     snapshot: Snapshot,
     steps: BTreeMap<String, VecDeque<Step>>,
     due: Vec<(u64, u64, Item)>,
@@ -124,6 +147,8 @@ impl FakeEngine {
     pub fn new(clock: Arc<ManualClock>) -> Self {
         Self {
             clock,
+            transitions: Vec::new(),
+            refused: Vec::new(),
             snapshot: Snapshot::default(),
             steps: BTreeMap::new(),
             due: Vec::new(),
@@ -179,6 +204,22 @@ impl FakeEngine {
             Item::Change(Box::new(Change::Call(Arc::new(call)))),
         );
         self
+    }
+
+    /// The guest is in a transition from `from` until `until` (both from
+    /// now): the engine refuses every guest command meanwhile with
+    /// [`TRANSITION_REFUSAL`], as the real one does while it reconnects to a
+    /// guest that stopped answering. A refused command is not in
+    /// [`sent`](Self::sent) and uses no step.
+    pub fn guest_transition(&mut self, from: Duration, until: Duration) -> &mut Self {
+        let now = self.clock.now_ms();
+        self.transitions.push((now + ms(from), now + ms(until)));
+        self
+    }
+
+    /// The guest commands refused for a transition: name and clock time.
+    pub fn refused(&self) -> &[(String, u64)] {
+        &self.refused
     }
 
     pub fn unscripted(&mut self, behaviour: Unscripted) -> &mut Self {
@@ -377,6 +418,16 @@ impl Engine for FakeEngine {
             return Err(message.clone());
         }
         let name = crate::waiter::command_name(&command);
+        let now = self.clock.now_ms();
+        if GUEST_COMMANDS.contains(&name.as_str())
+            && self
+                .transitions
+                .iter()
+                .any(|(from, until)| (*from..*until).contains(&now))
+        {
+            self.refused.push((name, now));
+            return Err(TRANSITION_REFUSAL.to_owned());
+        }
         self.next_id += 1;
         let id = self.next_id;
         self.sent.lock().unwrap().push(Sent {

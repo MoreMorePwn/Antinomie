@@ -158,6 +158,9 @@ pub fn wait_error(error: WaitError) -> CliError {
         WaitError::Interrupted => CliError::internal("interrupted").with_exit(Exit::Interrupted),
         WaitError::Cancelled => CliError::internal("cancelled"),
         WaitError::Disconnected(message) => CliError::internal(message),
+        // The engine is recovering the guest (a reconnect or a restore): try
+        // again once it is back.
+        WaitError::GuestTransition(message) => CliError::new(ErrorCode::Unavailable, message),
     }
 }
 

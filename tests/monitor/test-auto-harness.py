@@ -394,6 +394,19 @@ class IsolationAndFaultTests(unittest.TestCase):
         self.assertEqual(shell.count("--case"), 1)
         self.assertTrue(shell.endswith("--case disk-full --quota-inner /w/cases/disk-full/quota"))
 
+    def test_disk_full_b_requires_partial_low_disk_and_stopped(self):
+        floor = [{"code": "low_disk"}, {"code": "evidence_incomplete"}]
+        stopped = {"id": "r1", "end_reason": "stopped"}
+        self.assertEqual(faults.disk_full_outcome(finished_job(state="partial", warnings=floor, program=stopped)),
+                         (True, "partial, low_disk, stopped"))
+        failed = finished_job(state="failed", warnings=floor, program=stopped, failure={"code": "recording_failed"})
+        self.assertEqual(faults.disk_full_outcome(failed), (False, "state failed, not partial"))
+        self.assertEqual(faults.disk_full_outcome(finished_job(state="partial", warnings=[], program=stopped)),
+                         (False, "no low_disk warning"))
+        lost = finished_job(state="partial", warnings=floor, program={"id": "r1", "end_reason": "lost"})
+        self.assertEqual(faults.disk_full_outcome(lost), (False, "end_reason lost, not stopped"))
+        self.assertEqual(faults.disk_full_outcome(finished_job(state="failed", program=None))[0], False)
+
     def test_the_clean_snapshot_layer_is_found_in_the_manifest(self):
         manifest = {"nodes": [{"checkpoint": {"id": "a"}, "disk": "snapshots/a.qcow2"},
                               {"checkpoint": {"id": "b"}, "disk": "snapshots/b.qcow2"}]}
