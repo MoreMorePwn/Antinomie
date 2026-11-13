@@ -236,6 +236,7 @@ impl Service {
             &request.run_id,
             request.preset.as_deref(),
             request.overrides.as_ref(),
+            request.priority,
             &self.submit_context(&presets),
         )?;
         self.wake_lane();

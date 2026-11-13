@@ -9,7 +9,8 @@
 //! Custom again. `overrides` (a partial preset) are merged on top. The new job
 //! goes through the whole of `run.submit` (preset, permissions, node, limits),
 //! except the duplicate rule: a retry asks to run again. Its `repeat_of` is
-//! the old job.
+//! the old job. The priority is the one asked for, else the old run's within
+//! the rerunning caller's `priority_max` (lowered to it when above).
 
 use super::{R, Store, SubmitContext, db, model::from_json};
 use crate::api::{
@@ -44,18 +45,20 @@ impl Store {
         overrides: Option<&Overrides>,
         ctx: &SubmitContext<'_>,
     ) -> R<Submitted> {
-        self.rerun(caller, id, None, overrides, ctx)
+        self.rerun(caller, id, None, overrides, None, ctx)
     }
 
     /// `run.rerun` with `preset`: the run's sample and request under another
     /// preset as it is now (its own options, not the old run's), with
-    /// `overrides` on top. Without `preset`, [`Store::retry`].
+    /// `overrides` on top. Without `preset`, [`Store::retry`]. `priority`
+    /// replaces the old run's.
     pub fn rerun(
         &self,
         caller: &Caller,
         id: &RunId,
         preset: Option<&str>,
         overrides: Option<&Overrides>,
+        priority: Option<u8>,
         ctx: &SubmitContext<'_>,
     ) -> R<Submitted> {
         caller.require(Permission::RunsSubmit)?;
@@ -119,6 +122,12 @@ impl Store {
             path: None,
             upload_id: None,
         };
+        // The old run's priority was within its own caller's ceiling; the
+        // rerunning caller's may be lower.
+        spec.priority = priority.or_else(|| {
+            spec.priority
+                .map(|old| caller.limits.priority_max.map_or(old, |most| old.min(most)))
+        });
         self.submit_with(caller, spec, ctx, Some(id))
     }
 }

@@ -329,7 +329,8 @@ memory dump, Check online, keeping the VM) is a `rejected` run with
 `permission_denied` naming every missing permission in `details.needs`; a live
 route, a kept VM or a lane group other than the node's with
 `unavailable_on_node`; a priority or run time above the caller's limit (when
-one is set) with `limit_exceeded`.
+one is set), or a run time, largest sample or static size limit above the node
+ceiling, with `limit_exceeded`.
 
 ## Uploads and intake
 

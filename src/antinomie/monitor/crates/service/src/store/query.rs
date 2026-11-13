@@ -11,6 +11,7 @@ use crate::api::{
     ops::{RunList, RunListParams},
     run::{Run, RunState},
 };
+use rusqlite::OptionalExtension;
 
 const CURSOR_PREFIX: &str = "jc1.";
 
@@ -143,16 +144,35 @@ impl Store {
         })
     }
 
-    /// Runs `client_id` had accepted since `since_ms` (rejected ones not
+    /// Runs `client_id` had accepted after `since_ms` (rejected ones not
     /// counted): the daily count of `max_runs_per_day`.
     pub fn count_caller_runs_since(&self, client_id: &str, since_ms: u64) -> R<u32> {
         self.conn()
             .query_row(
-                "SELECT COUNT(*) FROM jobs WHERE client_id = ?1 AND created_ms >= ?2
+                "SELECT COUNT(*) FROM jobs WHERE client_id = ?1 AND created_ms > ?2
                  AND state != 'rejected'",
                 rusqlite::params![client_id, since_ms],
                 |r| r.get(0),
             )
+            .map_err(db)
+    }
+
+    /// The `created_ms` of the run `skip` places after the oldest of those
+    /// [`Store::count_caller_runs_since`] counts (0: the oldest).
+    pub fn caller_run_created_since(
+        &self,
+        client_id: &str,
+        since_ms: u64,
+        skip: u32,
+    ) -> R<Option<u64>> {
+        self.conn()
+            .query_row(
+                "SELECT created_ms FROM jobs WHERE client_id = ?1 AND created_ms > ?2
+                 AND state != 'rejected' ORDER BY created_ms, id LIMIT 1 OFFSET ?3",
+                rusqlite::params![client_id, since_ms, skip],
+                |r| r.get(0),
+            )
+            .optional()
             .map_err(db)
     }
 

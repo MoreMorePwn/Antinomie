@@ -3893,6 +3893,16 @@
               "type": "null"
             }
           ]
+        },
+        "priority": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "0 to 9 (default: the run's own, lowered to the caller's\n`priority_max` when above it)."
         }
       },
       "required": [

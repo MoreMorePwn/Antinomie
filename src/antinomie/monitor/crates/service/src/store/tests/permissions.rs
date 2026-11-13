@@ -310,12 +310,9 @@ fn a_preset_locks_nothing_only_permissions_do() {
         .unwrap()
         .run;
     assert_eq!(job.state, RunState::Queued, "{:?}", job.failure);
-    // Values out of range are invalid_argument and store nothing.
+    // Values out of range are invalid_argument and store nothing (a value
+    // above a node ceiling is a limit: see the next test).
     for (overrides, field) in [
-        (
-            json!({"program": {"run_time_s": 1801}}),
-            "overrides.program.run_time_s",
-        ),
         (
             json!({"program": {"run_time_s": 4}}),
             "overrides.program.run_time_s",
@@ -338,6 +335,74 @@ fn a_preset_locks_nothing_only_permissions_do() {
         assert_eq!(error.field.as_deref(), Some(field));
     }
     assert_eq!(fx.store.counts().unwrap().queued, 1);
+}
+
+#[test]
+fn a_custom_value_above_a_node_ceiling_is_limit_exceeded_from_the_node() {
+    let fx = Fx::new("perm-node-ceiling");
+    for (overrides, field, ceiling) in [
+        (
+            json!({"program": {"run_time_s": 1801}}),
+            "program.run_time_s",
+            1800,
+        ),
+        (
+            json!({"accepts": {"max_sample_mib": 257}}),
+            "accepts.max_sample_mib",
+            256,
+        ),
+        (
+            json!({"static_analysis": {"limits": {"rows_per_check": u32::MAX}}}),
+            "static_analysis.limits.rows_per_check",
+            u64::from(
+                antinomie_monitor_core::analysis::LIMIT_FIELDS
+                    .iter()
+                    .find(|f| f.setting == antinomie_monitor_core::analysis::LimitSetting::Rows)
+                    .unwrap()
+                    .max,
+            ),
+        ),
+    ] {
+        let failure = failure_of(&fx, &owner(), with(overrides));
+        assert_eq!(failure.code, FailureCode::LimitExceeded, "{failure:?}");
+        assert_eq!(failure.field.as_deref(), Some(field));
+        assert_eq!(
+            failure.details,
+            json!({"field": field, "limit": ceiling, "source": "node"})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+    }
+    // The effective limit is the smaller one: a caller's limit above the
+    // ceiling leaves the node's, one below it is the caller's.
+    let mut generous = owner();
+    generous.limits.max_run_s = Some(1800);
+    let failure = failure_of(
+        &fx,
+        &generous,
+        with(json!({"program": {"run_time_s": 1801}})),
+    );
+    assert_eq!(failure.details["source"], json!("node"));
+    let mut strict = owner();
+    strict.limits.max_run_s = Some(60);
+    let failure = failure_of(&fx, &strict, with(json!({"program": {"run_time_s": 61}})));
+    assert_eq!(
+        (
+            failure.details["source"].clone(),
+            failure.details["limit"].clone()
+        ),
+        (json!("caller"), json!(60))
+    );
+    // The lower bounds stay request errors.
+    let error = fx
+        .submit_as(&owner(), with(json!({"accepts": {"max_sample_mib": 0}})))
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert_eq!(
+        error.field.as_deref(),
+        Some("overrides.accepts.max_sample_mib")
+    );
 }
 
 #[test]

@@ -157,7 +157,8 @@ fn the_daily_limit_is_off_by_default_and_counted_per_caller_when_set() {
             ..Limits::default()
         },
     );
-    fx.submit_as(&alice, spec(1)).unwrap();
+    let first = fx.submit_as(&alice, spec(1)).unwrap().run;
+    fx.clock.advance(60_000);
     fx.submit_as(&alice, spec(1)).unwrap();
     let refused = fx.submit_as(&alice, spec(1)).unwrap();
     assert_eq!(refused.run.state, RunState::Rejected);
@@ -165,6 +166,9 @@ fn the_daily_limit_is_off_by_default_and_counted_per_caller_when_set() {
     assert_eq!(failure.code, FailureCode::LimitExceeded);
     assert_eq!(failure.field.as_deref(), Some("max_runs_per_day"));
     assert_eq!(failure.details["limit"], serde_json::json!(2));
+    // The next run is possible when her oldest counted run is a day old.
+    let next_at = first.created_ms + 24 * 3_600_000;
+    assert_eq!(failure.details["next_at_ms"], serde_json::json!(next_at));
     // The refused run did not count: another caller with the same limit has
     // her own two.
     let bob = limited(
@@ -176,8 +180,86 @@ fn the_daily_limit_is_off_by_default_and_counted_per_caller_when_set() {
     );
     fx.submit_as(&bob, spec(1)).unwrap();
     fx.submit_as(&bob, spec(1)).unwrap();
-    // A day later her count starts again.
-    fx.clock.advance(24 * 3_600_000 + 1);
+    // Just before that time she is still refused; at it, one run passes.
+    fx.clock.set(next_at - 1);
+    let early = fx.submit_as(&alice, spec(1)).unwrap().run;
+    assert_eq!(early.state, RunState::Rejected);
+    fx.clock.set(next_at);
     let again = fx.submit_as(&alice, spec(1)).unwrap().run;
     assert_eq!(again.state, RunState::Queued, "{:?}", again.failure);
+    // A limit lowered below the count (two runs, one allowed): the next time
+    // is when enough runs left the window to bring the count under it.
+    let lowered = limited(
+        1001,
+        Limits {
+            max_runs_per_day: Some(1),
+            ..Limits::default()
+        },
+    );
+    let failure = fx
+        .submit_as(&lowered, spec(1))
+        .unwrap()
+        .run
+        .failure
+        .unwrap();
+    assert_eq!(failure.code, FailureCode::LimitExceeded);
+    assert_eq!(
+        failure.details["next_at_ms"],
+        serde_json::json!(again.created_ms + 24 * 3_600_000)
+    );
+}
+
+#[test]
+fn a_rerun_keeps_the_priority_within_the_rerunning_callers_ceiling() {
+    let fx = Fx::new("limits-rerun-priority");
+    let urgent = fx
+        .submit_as(
+            &caller(1000),
+            RunRequest {
+                priority: Some(8),
+                ..spec(1)
+            },
+        )
+        .unwrap()
+        .run;
+    let started = fx
+        .store
+        .claim_next(&lane(), &mut |_| Eligibility::Ready)
+        .unwrap()
+        .unwrap();
+    fx.store
+        .finish(&started.id, Outcome::Succeeded, None)
+        .unwrap();
+    let ctx = fx.ctx();
+    let rerun = |who: &Caller, priority: Option<u8>| {
+        fx.store
+            .rerun(who, &urgent.id, None, None, priority, &ctx)
+            .unwrap()
+            .run
+    };
+    // Its own caller (no ceiling) runs it again at 8.
+    let own = rerun(&caller(1000), None);
+    assert_eq!(own.request.priority, Some(8));
+    // A caller whose ceiling is 5: lowered to 5, not refused.
+    let bob = limited(
+        1001,
+        Limits {
+            priority_max: Some(5),
+            ..Limits::default()
+        },
+    );
+    let lowered = rerun(&bob, None);
+    assert_eq!(lowered.state, RunState::Queued, "{:?}", lowered.failure);
+    assert_eq!(lowered.request.priority, Some(5));
+    // Asked for: as asked, and refused above the ceiling.
+    assert_eq!(rerun(&bob, Some(2)).request.priority, Some(2));
+    let refused = rerun(&bob, Some(9));
+    assert_eq!(refused.state, RunState::Rejected);
+    assert_eq!(refused.failure.unwrap().code, FailureCode::LimitExceeded);
+    // Out of range is a request error.
+    let error = fx
+        .store
+        .rerun(&bob, &urgent.id, None, None, Some(10), &ctx)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
 }

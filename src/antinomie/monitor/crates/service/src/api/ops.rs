@@ -581,6 +581,10 @@ pub struct RunRerunParams {
     pub preset: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overrides: Option<Overrides>,
+    /// 0 to 9 (default: the run's own, lowered to the caller's
+    /// `priority_max` when above it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -235,7 +235,7 @@ Every failed operation returns `{"error": {"code", "message", "field?", "retryab
 | `forbidden` | 403 | Added by the HTTP layer only |
 | `permission_denied` | 403 | The caller lacks a permission; `details.needs` lists it (also inside a rejected run's `failure`) |
 | `preset_denied` | 403 | There is no such preset (or, from 0.9.1, it is retired or not offered to the caller's role); `details.preset`. Nothing is stored |
-| `limit_exceeded` | 403 | A value above a limit (priority, run time, runs per day); `details.field`, `details.limit`, `details.source` |
+| `limit_exceeded` | 403 | A value above a limit (priority, run time, a node ceiling, runs per day); `details.field`, `details.limit`, `details.source` (`caller` or `node`), and `details.next_at_ms` for runs per day |
 | `unavailable_on_node` | 409 | The node does not have what the request needs (a live route, a kept VM); `details.what` |
 | `not_found` | 404 | Run, artifact, sample, upload, run or recording missing |
 | `conflict` | 409 | Idempotency key reused with another spec; the run is not in a state that allows the op; `details.reason = "cursor_stale"` |
@@ -307,11 +307,16 @@ The four scopes of earlier drafts map to permissions as follows: `read` is
    (`network.route`) and `details.needs` listing every missing permission;
 6. the node has it (a live route, a kept VM, the lane group), else a rejected
    run with `unavailable_on_node`;
-7. the caller's limits, when it has any: `priority` up to `priority_max`,
-   `program.run_time_s` up to `max_run_s`, the runs of the last 24 hours up to
-   `max_runs_per_day` (counted only when the caller has that limit, per client,
-   a rejected run not counted), else a rejected run with `limit_exceeded`
-   (`details.source: "caller"`). `max_queued` is checked first, at submit
+7. the limits: `priority` up to the caller's `priority_max`;
+   `program.run_time_s` up to the smaller of the node ceiling (1800 s) and the
+   caller's `max_run_s`; `accepts.max_sample_mib` and
+   `static_analysis.limits.*` up to their node ceilings; the runs of the last
+   24 hours up to `max_runs_per_day` (counted only when the caller has that
+   limit, per client, a rejected run not counted). Else a rejected run with
+   `limit_exceeded`, `details.source` `caller` or `node` (whose limit is the
+   smaller), and for the daily count `details.next_at_ms`, when the next run
+   becomes possible. Only the lower bounds (5 s, 1 MiB, ...) are
+   `invalid_argument` at step 4. `max_queued` is checked first, at submit
    (`quota_exceeded`); `max_running` holds a queued run back (`waiting_for`
    `quota`) while the caller has that many running;
 8. the sample (intake: size, type, architecture against `[accepts]`), else a
@@ -441,7 +446,10 @@ again for fewer rows.
 the sample named by its library hash, no idempotency key, and `repeat_of` set.
 A run of an unchanged preset uses the preset as it is now; a Custom run uses
 its resolved options as overrides of the preset it was based on (it is Custom
-again). The given `overrides` (a partial preset) are merged on top, key by key. The run must be terminal (`precondition_failed` otherwise); the
+again). The given `overrides` (a partial preset) are merged on top, key by key.
+`priority` (0 to 9) replaces the old run's; without it the old run's priority
+is kept, lowered to the caller's `priority_max` when above it (an asked
+priority above the ceiling is refused `limit_exceeded`). The run must be terminal (`precondition_failed` otherwise); the
 caller needs `runs.submit`, and `runs.see_all` for another client's run.
 
 **Lane operations** (an addition of this binding; section 5.3 has none for lanes,

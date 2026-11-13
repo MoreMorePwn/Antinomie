@@ -100,9 +100,10 @@ fn no_override_climbs_above_the_node_through_submit_retry_or_a_watch() {
             json!({"vm": {"keep_on_failure": true}}),
             "vm.keep_on_failure",
         ),
+        // Above the node ceiling: a rejected run, limit_exceeded.
         (
             json!({"program": {"run_time_s": 999_999}}),
-            "overrides.program.run_time_s",
+            "program.run_time_s",
         ),
         (
             json!({"program": {"run_in": "guest_desktop"}}),

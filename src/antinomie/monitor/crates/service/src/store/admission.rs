@@ -12,7 +12,8 @@
 //! 5. every risky option has its permission, else `permission_denied` naming
 //!    them in `details.needs`;
 //! 6. the node has what the run needs, else `unavailable_on_node`;
-//! 7. the values are within the caller's limits, else `limit_exceeded`.
+//! 7. the values are within the caller's limits and the node ceilings, else
+//!    `limit_exceeded` (`details.source` is `caller` or `node`).
 //!
 //! Steps 3 and 4 store nothing; a refusal of steps 5 to 7 becomes a
 //! `rejected` job carrying the code, the field and the details. Nothing here
@@ -54,7 +55,7 @@ impl Reject {
         }
     }
 
-    fn detail(mut self, key: &str, value: Value) -> Self {
+    pub(super) fn detail(mut self, key: &str, value: Value) -> Self {
         self.details.insert(key.to_owned(), value);
         self
     }
@@ -213,11 +214,24 @@ pub fn node_refusals(preset: &Preset, lane_group: &str) -> Vec<NodeRefusal> {
     out
 }
 
-pub(super) fn limit(field: &str, limit: u64, message: String) -> Reject {
+/// Whose limit a `limit_exceeded` refusal names (`details.source`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Source {
+    /// The caller's limit (`[limits.local]`, a watch folder's).
+    Caller,
+    /// A node ceiling.
+    Node,
+}
+
+pub(super) fn limit(field: &str, limit: u64, source: Source, message: String) -> Reject {
+    let source = match source {
+        Source::Caller => "caller",
+        Source::Node => "node",
+    };
     Reject::new(FailureCode::LimitExceeded, Some(field), message)
         .detail("field", json!(field))
         .detail("limit", json!(limit))
-        .detail("source", json!("caller"))
+        .detail("source", json!(source))
 }
 
 /// A run as admission settled it: the spec as stored (the preset's name, the
@@ -254,11 +268,13 @@ pub fn settle(
         .apply(&spec.overrides.0)
         .map_err(|error| ApiError::invalid_argument(&error.field, error.message))?;
     // A preset was checked when it was loaded; Custom options are checked
-    // here.
+    // here. A value above a node ceiling is a limit of step 7, not an error.
     let custom = preset.based_on.is_some();
+    let ceilings = validate::above_node_ceilings(&preset.preset);
+    let above = |key: &Option<String>| ceilings.iter().any(|c| key.as_deref() == Some(&*c.key));
     if let Some(problem) = validate::check_options(&preset.preset)
         .into_iter()
-        .find(|p| custom && p.severity == Severity::Error)
+        .find(|p| custom && p.severity == Severity::Error && !above(&p.key))
     {
         let key = problem.key.unwrap_or_default();
         return Err(ApiError::invalid_argument(
@@ -316,7 +332,9 @@ pub fn check(resolved: &Resolved, caller: &Caller, lane_group: &str) -> Result<(
         .detail("what", json!(refusal.what)));
     }
 
-    // Within the caller's limits? (Set per caller in service.toml.)
+    // Within the limits? The caller's are set per caller in service.toml;
+    // the effective limit is the smaller of the node ceiling and the
+    // caller's.
     let limits = &caller.limits;
     let priority = resolved.spec.priority.unwrap_or(DEFAULT_PRIORITY);
     if let Some(most) = limits.priority_max
@@ -325,18 +343,33 @@ pub fn check(resolved: &Resolved, caller: &Caller, lane_group: &str) -> Result<(
         return Err(limit(
             "priority",
             u64::from(most),
+            Source::Caller,
             format!("priority {priority} is above the limit of {most}"),
         ));
     }
-    if let Some(longest) = limits.max_run_s
-        && options.program.run_time_s > longest
-    {
+    let (longest, source) = match limits.max_run_s {
+        Some(longest) if longest < validate::MAX_RUN_S => (longest, Source::Caller),
+        _ => (validate::MAX_RUN_S, Source::Node),
+    };
+    if options.program.run_time_s > longest {
         return Err(limit(
             "program.run_time_s",
             u64::from(longest),
+            source,
             format!(
                 "a run of {} s is above the limit of {longest} s",
                 options.program.run_time_s
+            ),
+        ));
+    }
+    if let Some(above) = validate::above_node_ceilings(options).into_iter().next() {
+        return Err(limit(
+            &above.key,
+            above.ceiling,
+            Source::Node,
+            format!(
+                "{} is above the node ceiling of {}",
+                above.value, above.ceiling
             ),
         ));
     }

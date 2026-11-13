@@ -31,6 +31,9 @@ use serde_json::json;
 /// An idempotency key is kept for 24 hours (design 5.2).
 pub const IDEMPOTENCY_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 
+/// The window of `max_runs_per_day`.
+const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+
 /// The queue caps and the wait of `service.toml [queue]` (design 2.4.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SubmitLimits {
@@ -279,21 +282,32 @@ impl Store {
 
     /// The caller's `max_runs_per_day`, when it has one: the runs it had
     /// accepted in the last 24 hours (a rejected one is not counted). No
-    /// limit set, nothing counted.
+    /// limit set, nothing counted. A refusal says in `details.next_at_ms`
+    /// when the next run becomes possible: 24 hours after the run whose
+    /// leaving the window brings the count below the limit.
     fn check_daily(&self, caller: &Caller) -> Result<(), Reject> {
         let Some(most) = caller.limits.max_runs_per_day else {
             return Ok(());
         };
-        let since = self.now_ms().saturating_sub(24 * 3_600_000);
+        let internal = |e: ApiError| Reject::new(FailureCode::Internal, None, e.message);
+        let since = self.now_ms().saturating_sub(DAY_MS);
         let used = self
             .count_caller_runs_since(&caller.client_id, since)
-            .map_err(|e| Reject::new(FailureCode::Internal, None, e.message))?;
+            .map_err(internal)?;
         if used >= most {
-            return Err(admission::limit(
+            let leaving = self
+                .caller_run_created_since(&caller.client_id, since, used - most)
+                .map_err(internal)?;
+            let mut reject = admission::limit(
                 "max_runs_per_day",
                 u64::from(most),
+                admission::Source::Caller,
                 format!("{used} runs in the last 24 hours; the limit is {most}"),
-            ));
+            );
+            if let Some(created) = leaving {
+                reject = reject.detail("next_at_ms", json!(created + DAY_MS));
+            }
+            return Err(reject);
         }
         Ok(())
     }

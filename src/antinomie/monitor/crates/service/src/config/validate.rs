@@ -544,6 +544,49 @@ pub fn check_options(preset: &Preset) -> Vec<Problem> {
     sink.problems
 }
 
+/// A value of a preset above a node ceiling: the key, the value and the
+/// ceiling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AboveCeiling {
+    pub key: String,
+    pub value: u64,
+    pub ceiling: u64,
+}
+
+/// The values of `preset` above a node ceiling: the run time, the largest
+/// sample and the static size limits. A preset file with one is an error of
+/// [`check_options`]; a Custom run with one is refused `limit_exceeded`
+/// with `source: "node"` (access specification, step 7).
+pub fn above_node_ceilings(preset: &Preset) -> Vec<AboveCeiling> {
+    let mut out = Vec::new();
+    let mut add = |key: String, value: u32, ceiling: u32| {
+        if value > ceiling {
+            out.push(AboveCeiling {
+                key,
+                value: u64::from(value),
+                ceiling: u64::from(ceiling),
+            });
+        }
+    };
+    add(
+        "program.run_time_s".into(),
+        preset.program.run_time_s,
+        MAX_RUN_S,
+    );
+    add(
+        "accepts.max_sample_mib".into(),
+        preset.accepts.max_sample_mib,
+        MAX_SAMPLE_MIB,
+    );
+    let fields = antinomie_monitor_core::analysis::LIMIT_FIELDS;
+    for (key, setting, value) in preset.static_analysis.limits.entries() {
+        if let Some(field) = fields.iter().find(|f| f.setting == setting) {
+            add(format!("static_analysis.limits.{key}"), value, field.max);
+        }
+    }
+    out
+}
+
 /// The checks of one preset's values: ranges, the node ceilings, keys that
 /// contradict each other.
 fn check_preset(preset: &Preset, sink: &mut Sink<'_>) {

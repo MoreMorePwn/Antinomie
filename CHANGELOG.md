@@ -90,7 +90,16 @@ x86 programs by their own table.
     `quota` while other callers' runs start.
   - `max_runs_per_day` is optional and counted only when set (the 0.9.0 policy
     key `max_jobs_per_day` was never counted); runs past it are refused
-    `limit_exceeded`, counted per caller over the last 24 hours.
+    `limit_exceeded`, counted per caller over the last 24 hours, with
+    `details.next_at_ms`, the time the next run becomes possible.
+  - A Custom value above a node ceiling (run time above 1800 s, largest sample
+    above 256 MiB, a static size limit above its maximum) is refused
+    `limit_exceeded` with `details.source: "node"`, like a caller's limit; the
+    smaller of the two answers. Below the lowest value it stays
+    `invalid_argument`.
+  - `run.rerun` and `auto rerun` take `priority`; without it the old run's
+    priority is kept, lowered to the rerunning caller's `priority_max` when
+    above it.
 
 - **Auto mode checks permissions, not scopes (ANT-T0489).**
   - The engine checks a list of permissions (`runs.submit`, `route.tor`,

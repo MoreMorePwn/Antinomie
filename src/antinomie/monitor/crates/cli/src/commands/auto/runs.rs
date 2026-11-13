@@ -121,6 +121,10 @@ pub struct Rerun {
     /// text.
     #[arg(long = "override", value_name = "KEY=VALUE")]
     pub overrides: Vec<String>,
+    /// 0 to 9 [default: the run's own, lowered to your highest priority
+    /// when above it].
+    #[arg(long)]
+    pub priority: Option<u8>,
 }
 
 #[derive(Args, Debug)]
@@ -632,6 +636,9 @@ pub fn rerun(arguments: &Rerun, context: &Context) -> Result<Reply, CliError> {
     }
     if !arguments.overrides.is_empty() {
         params["overrides"] = overrides(&arguments.overrides)?;
+    }
+    if let Some(priority) = arguments.priority {
+        params["priority"] = json!(priority);
     }
     let Some(mut client) = link::daemon(context)? else {
         return Err(CliError::new(
