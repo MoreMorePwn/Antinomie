@@ -79,11 +79,12 @@ class BuildBaseTests(unittest.TestCase):
         self.assertEqual((identity["arch"], identity["toolchain"]), ("arm64", found))
         with tempfile.TemporaryDirectory() as name:
             job = Path(name) / "job.json"
-            # BusyBox and Debian Minimal have arm64 recipes; the desktops not yet.
-            job.write_text(json.dumps({"format": 1, "profile": "busybox", "arch": "arm64"}))
-            self.assertEqual(base.load_job(job)[3], "arm64")
-            job.write_text(json.dumps({"format": 1, "profile": "debian-minimal", "arch": "arm64"}))
-            self.assertEqual(base.load_job(job)[3], "arm64")
+            # BusyBox, Debian Minimal and the Debian desktops have arm64 recipes.
+            for profile in ("busybox", "debian-minimal", "debian-xfce"):
+                job.write_text(json.dumps({"format": 1, "profile": profile, "arch": "arm64"}))
+                self.assertEqual(base.load_job(job)[3], "arm64")
+            # A desktop's bootstrap runs arm64 maintainer scripts as Minimal's does.
+            self.assertTrue(base.foreign("debian-xfce", "arm64"))
             # A Debian arm64 bootstrap runs in the QEMU builder VM, or in a
             # container on a host whose qemu-aarch64 handler has the F flag;
             # never natively.
@@ -120,8 +121,7 @@ class BuildBaseTests(unittest.TestCase):
                     base.require_foreign_builder("debian-minimal", "arm64")
             with unittest.mock.patch.dict(os.environ, {"ANTINOMIE_BUILDER": "1"}):
                 base.require_foreign_builder("debian-minimal", "arm64")
-            for profile, arch, error in (("debian-xfce", "arm64", "no arm64 image recipe"),
-                                         ("busybox", "riscv64", "unknown arch")):
+            for profile, arch, error in (("busybox", "riscv64", "unknown arch"),):
                 job.write_text(json.dumps({"format": 1, "profile": profile, "arch": arch}))
                 with self.assertRaisesRegex(RuntimeError, error):
                     base.load_job(job)

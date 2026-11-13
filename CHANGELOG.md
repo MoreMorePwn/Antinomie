@@ -15,6 +15,24 @@ x86 programs by their own table.
 
 ### Host
 
+- **Debian 13 GNOME bases for 0.9.0, and arm64 Debian desktops in the builder (ANT-T0484).**
+  - The base builder builds the Debian desktops (GNOME and the others) for arm64 as it builds
+    Debian 13 Minimal: in the container builder on a host with a `qemu-aarch64` binfmt handler
+    (F flag), else in the QEMU builder, never natively (`build-base.py` job
+    `{"profile": "debian-xfce", "options": {"desktop": "gnome"}, "arch": "arm64"}`). The desktop
+    boots on a device tree from its `/dev/vda` root, with Debian's arm64 kernel packages, the
+    desktop's task and display manager, and the armhf program loader.
+  - Debian bases built from now on end their kernel command line with
+    `console=tty0 console=ttyS0 panic=-1` (`ttyAMA0` on arm64): the serial log shows the boot,
+    and a guest kernel panic reboots the guest so QEMU exits instead of hanging. The desktops
+    always had it; Debian 13 Minimal gets it from its next revision (the published revision-22
+    Minimal bases are unchanged).
+  - `scripts/vm-regress.py`'s quick tier gains `desktop` on a Debian desktop base: a VM with the
+    in-app screen boots to its greeter, and `tests/monitor/debian-desktop-check.sh` checks the
+    greeter session, gnome-shell, `virtio_gpu` as Debian's module on a connected display, every
+    loaded module signed with taint 0, and the command line; then it saves a screenshot of the
+    greeter. A console base or BusyBox skips it as not applicable.
+
 - **Statistics window (ANT-T0477).** **Statistics** in the menu bar, or Ctrl+Shift+T, opens a window on the selected run or Capture all recording (it floats over the main window and pops out into its own). Four tabs: **Properties** (the run, the guest, the recording and the recording-quality figures: lost packets, reduced recording, host read gaps, guest send waits), **Hierarchy** (calls by group, call and result, with Failed only and By error), **Call rate** (calls per interval over the run, up to four lines: all, failed, a group or your own filter, with the recording's read gaps and full-ring spells drawn on the graph) and **Latency** (the time from a call's entry to its exit, labelled with the accelerator the run was measured under, calls that wait by design shown apart, the slowest calls). The window has its own filter box in the Syscall Trace's language and a choice of time base. Every number opens exactly its calls in the Syscall Trace, every table copies and exports as CSV and JSON, and a quality chip says what the counts cannot tell. It counts the run's own program, as Triage does, and says how many calls of another program it left out. A reconnected run reads only the part after the reconnect, as the Syscall Trace does, and says so. The counting is the new `antinomie_triage::statistics` module, in one walk of the recording that costs what the Syscall Trace's own count costs.
 
 - **The golden check hides the string address in `prctl(PR_SET_NAME)` (ANT-T0461).** The Syscall Trace view now shows `arg2` of `prctl` as an address for the options that pass a pointer there (`PR_SET_NAME`, `PR_GET_NAME`, `PR_GET_PDEATHSIG`, `PR_GET_TID_ADDRESS` and the other `PR_GET_*` out-parameters), so the conformance golden files hide it as `<addr>` and a fixture built with another C library no longer fails `conf-quick`. `prctl.set_name_long` is re-blessed in the four user goldens.

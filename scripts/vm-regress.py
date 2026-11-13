@@ -13,7 +13,12 @@ quick  the conformance trace suite's oracle groups (user, root, threads) and the
        update (no host display is needed); on a Debian base also nic-routed:
        a VM of the realistic desktop profile on a Routed network, whose card
        (at its machine's PCI slot; QEMU's igb at 00:0e.0 on arm64) must get a
-       DHCP lease from the gateway
+       DHCP lease from the gateway; on a Debian desktop base (GNOME) also
+       desktop: a VM with the in-app screen boots to its display manager's
+       greeter (tests/monitor/debian-desktop-check.sh as root: the greeter
+       session, gnome-shell, virtio_gpu as Debian's module on a connected
+       connector, every loaded module signed, taint 0, the serial console and
+       panic=-1 on the command line), then a screenshot of the greeter
 full   quick, the debugger, audit, io_uring, tracer, stealth, cloud profiles, network routes, snapshot
        and dump trigger
        checks, the conformance stress groups and interop in both directions
@@ -489,7 +494,12 @@ def plan_x86_64(tier, ctx):
               # (guest-run; its plan: nic_plan). On arm64 the profile presents
               # an arm64 machine with QEMU's igb, which QEMU refused at 00:19.0.
               Check("nic-routed", "quick", example("guest-run", runs / "nic-routed" / "plan.json"), str(ROOT),
-                    1800, needs=("base", "debian_base"))]
+                    1800, needs=("base", "debian_base")),
+              # A Debian desktop base boots to its greeter (guest-run; its plan:
+              # desktop_plan): tests/monitor/debian-desktop-check.sh as root,
+              # then a screenshot of the greeter.
+              Check("desktop", "quick", example("guest-run", runs / "desktop" / "plan.json"), str(ROOT),
+                    1800, needs=("base", "desktop_base"))]
     if tier == "quick":
         return checks
 
@@ -790,7 +800,7 @@ def command_for(check, ctx, args):
         argv = ["cargo", "test", "--release", "--locked", "-j", "2", "-p", "antinomie-triage", "--lib",
                 "recorded_tracer_triage", "--", "--ignored", "--nocapture"]
         return argv, env
-    plans ={"screen": screen_plan, "nic-routed": nic_plan}
+    plans = {"screen": screen_plan, "nic-routed": nic_plan, "desktop": desktop_plan}
     if check.name in plans:
         path = Path(check.argv[-1])
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -848,6 +858,31 @@ def nic_plan(ctx):
                       "timeout": 300 * scale}]}
 
 
+# How long the desktop check waits for the greeter (seconds of guest uptime;
+# scaled on arm64): GNOME's first boot of a new VM, with a loaded host.
+DESKTOP_GREETER_WAIT = 600
+
+
+def desktop_plan(ctx):
+    """guest-run's plan of the desktop check: a new VM of BASE (base_vm) with
+    the default in-app screen, not headless, and one root run of
+    tests/monitor/debian-desktop-check.sh, which waits for the display
+    manager's greeter and checks the display and the kernel's modules; then a
+    screenshot of the greeter (runs/desktop/greeter.png). On arm64 every wait
+    is ARM64_TIME_SCALE times longer."""
+    scale = time_scale(ctx.get("arch", "x86_64"))
+    vm = base_vm(ctx, "vm-regress desktop", "desktopcheck")
+    runs = ctx["out"] / "runs" / "desktop"
+    wait = DESKTOP_GREETER_WAIT * scale
+    return {"data_dir": str(runs / "data"), "headless": False, "import": str(ctx["base"]), "vm": vm,
+            "boot_timeout": 300 * scale, "create_timeout": 900 * scale,
+            "uploads": [{"source": str(TESTS / "debian-desktop-check.sh"),
+                         "destination": "/tmp/debian-desktop-check"}],
+            "runs": [{"path": "/tmp/debian-desktop-check", "args": [str(wait)], "uid": 0, "gid": 0,
+                      "done": "DESKTOP-CHECK-PASS", "timeout": wait + 300 * scale,
+                      "screenshot": str(runs / "greeter.png"), "screenshot_after": 5}]}
+
+
 def input_result(ctx, name):
     """The result of check name: from this run, else from the last run in --out."""
     if name in ctx.get("results", {}):
@@ -863,7 +898,8 @@ def missing(check, ctx):
               "legacy_base": f"--legacy-base (a base of revision {LEGACY_TRACER_REVISION} or older, "
                              f"the 0.7.0 BusyBox base; or {LEGACY_BASE_ENV})",
               "tools": "--debugger-tools (a data folder with tools/gef and tools/pwndbg)",
-              "debian_base": "a Debian base (BASE's guest asks for an account)"}
+              "debian_base": "a Debian base (BASE's guest asks for an account)",
+              "desktop_base": "a Debian desktop base (BASE's guest is graphical)"}
     keys = {"old": "old_ok", "tools": "debugger_ok"}
     for need in check.needs:
         if not ctx.get(keys.get(need, need)):
@@ -879,6 +915,16 @@ def bundle_debian(bundle):
     except (OSError, ValueError, TypeError, AttributeError):
         return False
     return isinstance(guest, dict) and guest.get("requires_credentials") is True
+
+
+def bundle_desktop(bundle):
+    """Whether a base is a Debian desktop: its guest asks for an account and is
+    graphical (bundle.json guest.graphical)."""
+    try:
+        guest = json.loads((Path(bundle) / "bundle.json").read_text()).get("guest")
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+    return bundle_debian(bundle) and isinstance(guest, dict) and guest.get("graphical") is True
 
 
 def bundle_revision(bundle):
@@ -946,9 +992,10 @@ def run_check(check, ctx, args, attempt):
     log.write_text("")
     reason = missing(check, ctx)
     if reason:
-        # A Debian base's check (nic-routed, snapshot-uefi) on a BusyBox BASE is not a missing
-        # prerequisite but another kind of base: not applicable, so a BusyBox tier can pass.
-        other_base = missing(check, {**ctx, "debian_base": True}) is None
+        # A Debian base's check (nic-routed, snapshot-uefi) on a BusyBox BASE, or a desktop's
+        # (desktop) on a console base, is not a missing prerequisite but another kind of base:
+        # not applicable, so a BusyBox or Debian Minimal tier can pass.
+        other_base = missing(check, {**ctx, "debian_base": True, "desktop_base": True}) is None
         return {**result, "status": "SKIP", "seconds": 0.0, "detail": reason,
                 **({"not_applicable": True} if other_base else {})}
     reason = not_applicable(check, ctx)
@@ -1359,7 +1406,8 @@ def main(argv=None):
         ctx = {"out": out, "base": base, "old_base": old_base, "new": MONITOR / EXAMPLES,
                "fix": out / "fixtures", "old": out / "old-host-examples", "old_ok": False,
                "legacy_base": legacy, "base_revision": bundle_revision(base),
-               "debian_base": bundle_debian(base), "arch": args.arch}
+               "debian_base": bundle_debian(base), "desktop_base": bundle_desktop(base),
+               "arch": args.arch}
         checks = plan(tier, ctx, args.arch)
         if args.list:
             for check in checks:

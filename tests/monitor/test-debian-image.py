@@ -481,10 +481,19 @@ class DebianImageTests(unittest.TestCase):
         self.assertTrue(fstab.endswith("/dev/sr0        /media/cdrom0   udf,iso9660 user,noauto"
                                        "     0       0\n"))
         self.assertEqual(image.fstab("xfce"), "/dev/vda / ext4 defaults 0 1\n")
-        self.assertEqual(image.kernel_append("xfce"), image.APPEND)
-        # GRUB's command line for a Debian install: no serial console, no panic=-1.
+        self.assertEqual(image.kernel_append("xfce"),
+                         "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1")
+        # GRUB's command line for a Debian install, then the serial console
+        # and panic=-1 (user decision 2026-11-13).
         self.assertEqual(image.kernel_append("none", "6.12.94+deb13-amd64 (x) #1", root),
-                         f"BOOT_IMAGE=/boot/vmlinuz-6.12.94+deb13-amd64 root=UUID={root} ro quiet")
+                         f"BOOT_IMAGE=/boot/vmlinuz-6.12.94+deb13-amd64 root=UUID={root} ro quiet "
+                         "console=tty0 console=ttyS0 panic=-1")
+        # arm64's virt machine has its serial console on the PL011.
+        self.assertEqual(image.kernel_append("none", "6.12.94+deb13-arm64 (x) #1", root, "arm64"),
+                         f"BOOT_IMAGE=/boot/vmlinuz-6.12.94+deb13-arm64 root=UUID={root} ro quiet "
+                         "console=tty0 console=ttyAMA0 panic=-1")
+        self.assertEqual(image.kernel_append("gnome", arch="arm64"),
+                         "root=/dev/vda rw rootwait console=tty0 console=ttyAMA0 panic=-1")
         script = image.customization_script()
         self.assertIn("rootuuid=${8:-} mirror=${9:-}", script)
         self.assertIn("printf 'UUID=%s /               ext4    errors=remount-ro 0       1\\n'"
@@ -1034,6 +1043,27 @@ class DebianImageTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertEqual(list(Path(name).iterdir()), [kernel])
 
+    def test_an_arm64_gnome_base_bootstraps_the_desktop_on_debians_arm64_system(self):
+        values = image.options({"desktop": "gnome"})
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(values, Path("/w/r.tar"), Path("/w/c.sh"),
+                                               Path("/w/p"), kernel_debs=[Path("/k/a.deb")],
+                                               arch="arm64")
+        self.assertIn("--architectures=arm64,armhf", command)
+        include = next(arg for arg in command if arg.startswith("--include="))
+        for package in ("task-gnome-desktop", "libc6:armhf", "network-manager"):
+            self.assertIn(package, include)
+        # The desktop's /dev/vda root boots on a device tree: no boot loader.
+        self.assertNotIn("grub", include)
+        self.assertFalse(any("boot-loader" in arg for arg in command))
+        self.assertIn("dpkg --verify linux-image-6.12.94+deb13-arm64 linux-image-arm64",
+                      " ".join(command))
+        self.assertIn("gdm3", " ".join(command))
+        self.assertEqual(image.profile("gnome")["min_ram_mib"], 4096)
+        self.assertEqual(image.fstab("gnome"), "/dev/vda / ext4 defaults 0 1\n")
+        customize = image.customization_script("arm64")
+        self.assertIn('test "$(dpkg --print-architecture)" = arm64', customize)
+
     def test_an_arm64_console_base_bootstraps_debians_arm64_system(self):
         values = image.options({"desktop": image.CONSOLE})
         with patch.object(image.os, "geteuid", return_value=1000):
@@ -1314,7 +1344,8 @@ class DebianImageTests(unittest.TestCase):
     def test_profile_contract(self):
         self.assertEqual(image.PROFILE, {"id": "debian-xfce", "label": "Debian 13 (Xfce)",
             "min_ram_mib": 2048, "min_disk_gib": 16, "requires_credentials": True, "graphical": True})
-        self.assertEqual(image.APPEND, "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1")
+        self.assertEqual(image.APPEND.format(console="ttyS0"),
+                         "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1")
 
     def test_customization_has_valid_shell_and_installer_answers(self):
         script = image.customization_script()

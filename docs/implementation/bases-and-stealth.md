@@ -818,8 +818,12 @@ D-Bus's `machine-id` link; `tasksel/first` and popcon answers; the
 installation's dpkg, alternatives and apt logs (`--skip=cleanup/reproducible`).
 `/tmp` stays on the root disk through a `tmp.mount.d/override.conf` condition
 (`ConditionPathIsMountPoint=/tmp`), not a mask. Its command line is GRUB's:
-`BOOT_IMAGE=/boot/vmlinuz-<release> root=UUID=<uuid> ro quiet` (no serial
-console, no `panic=-1`); the app replaces the UUID with the one provisioning
+`BOOT_IMAGE=/boot/vmlinuz-<release> root=UUID=<uuid> ro quiet`, followed by
+`console=tty0 console=ttyS0 panic=-1` (`ttyAMA0` on arm64) in bases built
+after the published revision-22 Minimal bases (user decision 2026-11-13: the
+serial log shows the boot, and a guest kernel panic reboots the guest, so QEMU
+exits instead of hanging; the revision-22 Minimal bases keep GRUB's line
+alone, and the desktops always had it); the app replaces the UUID with the one provisioning
 gave the VM's disk (`vm_kernel_append`, from the account record), and the
 bootstrap initrd finds it with `findfs` on any bus (falling back to the first
 disk for a disk from before), mounts it, grows it, and remounts it read-only
