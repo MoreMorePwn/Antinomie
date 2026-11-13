@@ -205,7 +205,8 @@ class PlanTests(unittest.TestCase):
                          (upload["destination"], 0, "DESKTOP-CHECK-PASS"))
         self.assertEqual(run["args"], [str(vm.DESKTOP_GREETER_WAIT)])
         self.assertGreater(run["timeout"], vm.DESKTOP_GREETER_WAIT)
-        self.assertEqual(run["screenshot"], str(out / "runs/desktop/greeter.png"))
+        # Outside runs/desktop, which the check's clean-up removes.
+        self.assertEqual(run["screenshot"], str(out / "screens/desktop-greeter.png"))
         self.assertEqual(arm["runs"][0]["args"], [str(vm.DESKTOP_GREETER_WAIT * scale)])
         self.assertEqual(arm["runs"][0]["timeout"], run["timeout"] * scale)
         for key in ("boot_timeout", "create_timeout"):

@@ -868,11 +868,14 @@ def desktop_plan(ctx):
     the default in-app screen, not headless, and one root run of
     tests/monitor/debian-desktop-check.sh, which waits for the display
     manager's greeter and checks the display and the kernel's modules; then a
-    screenshot of the greeter (runs/desktop/greeter.png). On arm64 every wait
-    is ARM64_TIME_SCALE times longer."""
+    screenshot of the greeter (screens/desktop-greeter.png in --out, which the
+    check's data clean-up keeps). On arm64 every wait is ARM64_TIME_SCALE
+    times longer."""
     scale = time_scale(ctx.get("arch", "x86_64"))
     vm = base_vm(ctx, "vm-regress desktop", "desktopcheck")
     runs = ctx["out"] / "runs" / "desktop"
+    screens = ctx["out"] / "screens"
+    screens.mkdir(parents=True, exist_ok=True)
     wait = DESKTOP_GREETER_WAIT * scale
     return {"data_dir": str(runs / "data"), "headless": False, "import": str(ctx["base"]), "vm": vm,
             "boot_timeout": 300 * scale, "create_timeout": 900 * scale,
@@ -880,7 +883,7 @@ def desktop_plan(ctx):
                          "destination": "/tmp/debian-desktop-check"}],
             "runs": [{"path": "/tmp/debian-desktop-check", "args": [str(wait)], "uid": 0, "gid": 0,
                       "done": "DESKTOP-CHECK-PASS", "timeout": wait + 300 * scale,
-                      "screenshot": str(runs / "greeter.png"), "screenshot_after": 5}]}
+                      "screenshot": str(screens / "desktop-greeter.png"), "screenshot_after": 5}]}
 
 
 def input_result(ctx, name):
