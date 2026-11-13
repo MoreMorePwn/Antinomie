@@ -194,7 +194,7 @@ impl Timing {
         let limit = ((expected as f64) * self.factor.max(1.0)).ceil() as u64;
         let limit = limit.max(MIN_LIMIT);
         if let (ItemKind::Static(group), Some(minutes)) = (kind, plan.static_limit_min) {
-            // A fixed limit of the policy or the job: tools x limit x 60 + 60.
+            // A fixed limit of the preset: tools x limit x 60 + 60.
             let minutes = if minutes == 0 {
                 TOOL_OWN_LIMIT_MIN
             } else {
@@ -205,7 +205,7 @@ impl Timing {
                 + 60;
             return ItemTime {
                 expected_s: expected,
-                basis: "policy",
+                basis: "preset",
                 limit_s: fixed,
             };
         }

@@ -196,13 +196,10 @@ fn a_recording_past_fourteen_days_goes_and_a_younger_one_stays() {
     assert!(report.actions[0].done);
     assert_eq!(report.freed_bytes, 100);
     assert!(rig.exists(&old) && rig.exists(&young), "records stay");
-    assert!(
-        rig.log
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|l| l.contains(old.as_str()))
-    );
+    // The log names the run `run=` and the recording `recording=`.
+    let run = format!("run={old} recording=");
+    let lines = rig.log.lock().unwrap().clone();
+    assert!(lines.iter().any(|l| l.contains(&run)), "{lines:?}");
 }
 
 #[test]

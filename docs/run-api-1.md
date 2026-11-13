@@ -36,7 +36,7 @@ in a request fails with `invalid_argument` naming the field.
 |---|---|
 | Encoding | UTF-8 JSON. Times are Unix milliseconds in a field ending `_ms`; durations are seconds in `_s` or milliseconds in `_ms`; sizes are bytes. Text is English, times UTC. |
 | Version | `api_version: 1` in every response object and in `capabilities`. |
-| Enumerated values | Lower snake case. Routes: `drop`, `internet`, `inet_sim`, `tor`, `vpn`, `socks5`. Sample types as the library detects them (`elf`, `sh`, `py`, ...) with the architecture as a separate string (`x86_64`, `AArch64`, ...). |
+| Enumerated values | Lower snake case. Routes: `drop`, `inet_sim`, `internet`, `nat`, `tor`, `vpn` or `vpn:NAME`, `socks5` or `socks5:NAME` (NAME a profile of node setup). Sample types as the library detects them (`elf`, `sh`, `py`, ...) with the architecture as a separate string (`x86_64`, `AArch64`, ...). |
 | Identifiers | Opaque strings that are safe as a path component: run `r_<26 chars>`, artifact `a_<26>`, upload `u_<26>`, recording artifact `ra_<26>`, lane `lane-<n>`. The 26 characters are Crockford base32 in the shape of a ULID, so ids sort by creation time. A sample is its lowercase SHA-256. A recorded run is addressed by an opaque `recording_key`; clients never build or parse it. |
 | Pagination | `limit` (1 to 200, default 50 for run lists; sample lists have their own limits, see `sample.list`) and an opaque `cursor`; a reply carries `next_cursor` or null. Newest first. |
 | Idempotency | `run.submit` takes `idempotency_key` (1 to 128 printable ASCII), scoped to `client_id`. The same key with an equal spec within 24 hours returns the original run with `replayed: true`; with a different spec it fails `conflict`. |
@@ -144,7 +144,7 @@ preset's `accepts.max_sample_mib` and a quarter of the lane VM's RAM;
 has handed it to the host work pool: `name` (`triage`, `static:<tool>`,
 `detection`, `assess`, `report`), `state` (`queued`, `running`, `done`,
 `failed`, `timed_out`, `skipped`), `after` (the items it waits for),
-`expected_s` and its `basis` (`median`, `estimate`, `fixed`, `policy`: a fixed limit the preset sets),
+`expected_s` and its `basis` (`median`, `estimate`, `fixed`, `preset`: a fixed limit the preset sets),
 `limit_s`, `started_ms`, `finished_ms` and `note`. `queue.status` has
 `host_pool`: `workers`, `queued` (the pool's queue length), `running`, `runs`
 and `waiting_for` (why the head waits, when it waits for memory).

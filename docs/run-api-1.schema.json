@@ -1274,7 +1274,7 @@
         },
         "basis": {
           "type": "string",
-          "description": "Where `expected_s` came from: `median`, `estimate`, `fixed` or\n`policy` (a fixed limit the preset sets; the name stays for the wire)."
+          "description": "Where `expected_s` came from: `median`, `estimate`, `fixed` or\n`preset` (a fixed limit the preset sets)."
         },
         "limit_s": {
           "type": "integer",

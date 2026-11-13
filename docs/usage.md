@@ -999,8 +999,8 @@ The network capture is the guest's own view on every route.
   written is made again when the recording changes. Only runs started in the last seven
   days are taken at start; `antinomie-cli digest --pending` does the rest. If the app
   quits during a build, nothing is half written and the run is built again the next time.
-  Auto mode does the same for every job's run when Triage did not leave a digest (not in
-  the policy, failed or out of time), and records a `digest_incomplete` warning when the
+  Auto mode does the same for every run's program when Triage did not leave a digest (not in
+  the preset, failed or out of time), and records a `digest_incomplete` warning when the
   digest is partial.
 - **Triage › Summary** has a card for each detection engine (YARA, IDS, Sigma). Its
   status reads **Queued** while the scan waits for its turn and **Scanning** while it
@@ -1100,8 +1100,8 @@ The network capture is the guest's own view on every route.
   the recording grows, and **Scan now** (the Scan button while the run is live)
   scans what it has recorded so far at once and restarts the interval. With the
   setting off a running program is scanned only by **Scan now**. The scan when
-  the run ends always happens. The daemon has no live scans: it scans a job
-  after its run.
+  the run ends always happens. The daemon has no live scans: it scans a run
+  after its program.
   A run on a VM that keeps running is scanned as soon as its recording is
   **saved** (its tree ended, its terminal closed, every byte written and its
   pcap segment closed), without a VM stop; until then the engine says "Waiting
@@ -2084,9 +2084,9 @@ per line: a list command prints its items and then a last line
 | 3 | not_found | Sample, run, VM, base or run does not exist |
 | 4 | invalid | The arguments were refused (`invalid_argument`, `precondition_failed`, `conflict`) |
 | 5 | denied | `permission_denied` (a permission, or a file permission), `preset_denied`, `limit_exceeded`, `unavailable_on_node` |
-| 10 | job_failed | A waited run (or `run exec`) failed |
-| 11 | job_partial | A waited run (or `run exec`) ended partial |
-| 12, 13 | job_cancelled, job_rejected | A waited run was cancelled, or a submitted run was rejected |
+| 10 | run_failed | A waited run (or `run exec`) failed |
+| 11 | run_partial | A waited run (or `run exec`) ended partial |
+| 12, 13 | run_cancelled, run_rejected | A waited run was cancelled, or a submitted run was rejected |
 | 14 | wait_timeout | A wait ran out: the engine did not answer in time, or `--timeout` passed (the run is still queued or running; `run exec` stops the VM) |
 | 20 | dependency | A required tool is missing; `doctor` shows which |
 | 21 | busy | The data directory is owned by another process, or the daemon is starting or stopping |
@@ -2354,7 +2354,7 @@ next run starts in the VM while the previous run's host work (each static tool,
 the Triage scan, detection, the label and the report) runs in the host work
 pool, at most `[daemon] host_workers` items at once (2), first come, first
 served by run arrival. Each item may take twice its expected time
-(`[daemon] host_time_factor`); `auto status <job>` lists the items with their
+(`[daemon] host_time_factor`); `auto status <run>` lists the items with their
 state, expected time and limit, and `auto status` the pool's queue
 ([Auto mode](auto-mode.md#the-host-work-pool)).
 

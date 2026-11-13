@@ -484,10 +484,10 @@ fn outcome_text(outcome: Outcome) -> &'static str {
 pub fn exit_for(outcome: Outcome) -> Exit {
     match outcome {
         Outcome::Succeeded => Exit::Ok,
-        Outcome::Partial => Exit::JobPartial,
-        Outcome::Failed => Exit::JobFailed,
-        Outcome::Cancelled => Exit::JobCancelled,
-        Outcome::Rejected => Exit::JobRejected,
+        Outcome::Partial => Exit::RunPartial,
+        Outcome::Failed => Exit::RunFailed,
+        Outcome::Cancelled => Exit::RunCancelled,
+        Outcome::Rejected => Exit::RunRejected,
     }
 }
 

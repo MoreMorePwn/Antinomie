@@ -315,7 +315,7 @@ fn the_limit_is_twice_the_estimate_and_a_policy_limit_overrides_it() {
     let mut fixed = plain.clone();
     fixed.static_limit_min = Some(4);
     let time = timing.of(&floss, &fixed, &inputs);
-    assert_eq!((time.basis, time.limit_s), ("policy", 300));
+    assert_eq!((time.basis, time.limit_s), ("preset", 300));
 }
 
 #[test]

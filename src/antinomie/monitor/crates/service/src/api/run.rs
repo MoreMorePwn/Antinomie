@@ -365,7 +365,7 @@ pub struct HostItem {
     /// of the item and an estimate from the input size, else the fixed limit.
     pub expected_s: u64,
     /// Where `expected_s` came from: `median`, `estimate`, `fixed` or
-    /// `policy` (a fixed limit the preset sets; the name stays for the wire).
+    /// `preset` (a fixed limit the preset sets).
     pub basis: String,
     /// Its own time limit (seconds): `daemon.host_time_factor` x
     /// `expected_s`, or the preset's fixed limit. Time in the queue does not

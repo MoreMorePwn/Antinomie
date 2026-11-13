@@ -353,7 +353,7 @@ fn finish(job: &Run, replayed: bool, files: Vec<Value>, waited: bool, verdict_ex
         ));
     }
     let exit = if job.state == antinomie_service::api::run::RunState::Rejected {
-        Exit::JobRejected
+        Exit::RunRejected
     } else if waited {
         render::job_exit(job, verdict_exit)
     } else {

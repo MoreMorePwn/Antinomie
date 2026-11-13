@@ -336,7 +336,7 @@ impl Retention<'_> {
         match earlier_runs(self.store, job) {
             Ok(earlier) => runs.extend(earlier),
             Err(error) => report.errors.push(format!(
-                "the earlier runs of job {}: {}",
+                "the recordings of earlier attempts of run {}: {}",
                 job.id, error.message
             )),
         }
@@ -389,7 +389,7 @@ impl Retention<'_> {
                 action.done = true;
                 report.freed_bytes += freed;
                 (self.log)(&format!(
-                    "gc: deleted the recording of job={} run={} ({why}), freed {freed} bytes",
+                    "gc: deleted the recording of run={} recording={} ({why}), freed {freed} bytes",
                     job.id,
                     run.as_deref().unwrap_or("?")
                 ));
@@ -398,13 +398,13 @@ impl Retention<'_> {
             }
             Err(error) => {
                 (self.log)(&format!(
-                    "gc: the recording of job={} run={} was not deleted: {error}",
+                    "gc: the recording of run={} recording={} was not deleted: {error}",
                     job.id,
                     run.as_deref().unwrap_or("?")
                 ));
                 report
                     .errors
-                    .push(format!("recording of job {}: {error}", job.id));
+                    .push(format!("recording of run {}: {error}", job.id));
                 false
             }
         }
@@ -431,19 +431,19 @@ impl Retention<'_> {
                 action.done = true;
                 report.freed_bytes += removed.bytes;
                 (self.log)(&format!(
-                    "gc: deleted job={} (record, events and artifacts), freed {} bytes",
+                    "gc: deleted run={} (record, events and artifacts), freed {} bytes",
                     job.id, removed.bytes
                 ));
                 report.actions.push(action);
             }
             Err(error) => {
                 (self.log)(&format!(
-                    "gc: job={} was not deleted: {}",
+                    "gc: run={} was not deleted: {}",
                     job.id, error.message
                 ));
                 report
                     .errors
-                    .push(format!("job {}: {}", job.id, error.message));
+                    .push(format!("run {}: {}", job.id, error.message));
             }
         }
     }
@@ -576,14 +576,14 @@ pub fn delete_job(
             runs.delete(&run, &actor_for(&run))
                 .map_err(|e| ApiError::new(ErrorCode::Internal, format!("recording: {e}")))?;
             log(&format!(
-                "delete: deleted the recording of job={id} run={}, freed {freed} bytes",
+                "delete: deleted the recording of run={id} recording={}, freed {freed} bytes",
                 run.recording.as_ref().map_or("?", |r| r.run_id.as_str())
             ));
         }
     }
     let removed = store.delete_job(id)?;
     log(&format!(
-        "delete: deleted job={id}, freed {} bytes",
+        "delete: deleted run={id}, freed {} bytes",
         removed.bytes
     ));
     Ok(())

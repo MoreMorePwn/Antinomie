@@ -243,7 +243,7 @@ a recording with an open read (a client reading it through `recording.*`) or who
 capture, dump or core is still being written, the sample library, its custody
 chain. Retention also leaves alone the VM-wide captures and dumps of a run it
 deletes (they may hold the traffic or memory of other runs of the VM; they go with
-the VM, or when you remove them). Each deletion is logged (`gc: deleted the recording of job=... run=...`). The daemon
+the VM, or when you remove them). Each deletion is logged (`gc: deleted the recording of run=<run id> recording=<vm:boot:run>`; a run record `gc: deleted run=<run id>`). The daemon
 runs a pass a minute after its start and then every hour; `antinomie-cli auto gc
 --dry-run` prints what a pass would do and `auto gc` runs one now.
 

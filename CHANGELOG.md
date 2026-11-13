@@ -37,12 +37,16 @@ x86 programs by their own table.
     `recording.run.list` and `.get`), addressed by `recording_key` (was
     `run_key`); a recording names the run that made it in `from_run`. The
     service log names a recording read `recording=` and a run artifact read
-    `run=`.
+    `run=`; the retention and `run.delete` lines name the run `run=` and its
+    recording `recording=`. A host work item's `basis` for a fixed limit is
+    `preset`.
   - Command line: `auto preset list|show NAME` (was `auto policy list`),
     `auto submit --preset`, `auto rerun` (was `auto retry`), run words in the
     output; `recording list|show|export` (was `run list|show|export`; `run
     exec` stays). The watch folder client and custody actor is
-    `auto:preset-<name>`; the hook gets `ANTINOMIE_RUN_ID`. `waiting_for:
+    `auto:preset-<name>`; the hook gets `ANTINOMIE_RUN_ID`. The exit names
+    are `run_failed`, `run_partial`, `run_cancelled` and `run_rejected` (the
+    numbers 10 to 13 are unchanged). `waiting_for:
     quota` also means the caller already has `max_running` runs running.
 
 - **Presets replace policies in Auto mode (ANT-T0490).**
@@ -108,8 +112,7 @@ x86 programs by their own table.
 - **Auto mode checks permissions, not scopes (ANT-T0489).**
   - The engine checks a list of permissions (`runs.submit`, `route.tor`,
     `run.as_root`, `evidence.core_dump`, `evidence.view` and 30 more) instead of the
-    four scopes. A caller carries its permissions (and, unused until limits per
-    caller, its limits). The owner on the local socket holds every permission. A
+    four scopes. A caller carries its permissions and its limits. The owner on the local socket holds every permission. A
     watch folder submits with `runs.submit` and the folder's new `permissions` list in
     `service.toml`: a folder whose preset takes cores needs
     `permissions = ["evidence.core_dump"]`. The old scopes keep their meaning:
@@ -117,7 +120,7 @@ x86 programs by their own table.
     `artifacts:sensitive` is `evidence.view`, `evidence.download` and
     `samples.download`, `manage` is `runs.manage_any`, `samples.tag`, `runs.delete`,
     `queue.manage`, `lanes.reset` and `custody.verify`.
-  - `job.submit` checks, in order: the preset exists, every value is valid, each
+  - `run.submit` checks, in order: the preset exists, every value is valid, each
     run option that adds risk has its permission (a live route, root or an id
     below 1000, core and memory dumps, also those of the dump trigger, Check
     online, keeping the VM), the node has it, then the limits. Each refusal names
@@ -125,15 +128,15 @@ x86 programs by their own table.
   - New error and failure codes `permission_denied` (with `details.needs`),
     `preset_denied`, `limit_exceeded` and `unavailable_on_node`; `policy_denied` is
     gone. A failure now carries `field` and `details`.
-  - A live route asked by a job is refused `unavailable_on_node` (no route is set
-    up for the service yet), after its `route.*` permission; it was `unsupported`.
+  - A live route asked by a run is refused `unavailable_on_node` (no route is set
+    up for the service yet), after its `route.*` permission.
     `keep_on_failure: true` is refused `unavailable_on_node`: keeping a VM arrives
     with 0.9.1.
-  - When a job starts, prechecks asks again whether its client still holds every
-    permission the run uses: one taken away while the job waited ends it `failed`
+  - When a run starts, prechecks asks again whether its client still holds every
+    permission the run uses: one taken away while the run waited ends it `failed`
     with `permission_denied`.
-  - `job.cancel` of another client's job needs `runs.manage_any`; `job.retry`
-    needs `runs.submit`, and `runs.see_all` for another client's job. Events are
+  - `run.cancel` of another client's run needs `runs.manage_any`; `run.rerun`
+    needs `runs.submit`, and `runs.see_all` for another client's run. Events are
     sent only with the permission of their type (`runs.see_all` for all of them in
     0.9.0). `capabilities.queries[].scope` is now `permission`. The CLI reports
     the new codes (exit 5); `base list --remote` with the catalog off answers

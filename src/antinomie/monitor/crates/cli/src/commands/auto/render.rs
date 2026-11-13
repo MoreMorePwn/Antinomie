@@ -27,10 +27,10 @@ pub fn job_exit(job: &Run, verdict_exit: bool) -> Exit {
             }
         }
         RunState::Succeeded => Exit::Ok,
-        RunState::Partial => Exit::JobPartial,
-        RunState::Failed => Exit::JobFailed,
-        RunState::Cancelled => Exit::JobCancelled,
-        RunState::Rejected => Exit::JobRejected,
+        RunState::Partial => Exit::RunPartial,
+        RunState::Failed => Exit::RunFailed,
+        RunState::Cancelled => Exit::RunCancelled,
+        RunState::Rejected => Exit::RunRejected,
         RunState::Queued | RunState::Running | RunState::Cancelling => Exit::WaitTimeout,
     }
 }
@@ -273,7 +273,7 @@ mod tests {
             );
         }
         assert_eq!(
-            worst(&[Exit::Ok, Exit::JobPartial, Exit::Suspicious]).code(),
+            worst(&[Exit::Ok, Exit::RunPartial, Exit::Suspicious]).code(),
             30
         );
         assert_eq!(worst(&[]).code(), 0);
