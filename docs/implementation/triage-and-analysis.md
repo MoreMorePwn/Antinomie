@@ -839,6 +839,12 @@ before anything was read it is `StatsError::Cancelled`. `progress` is told
 counts so far. A finished result carries the archive `stamp` (identity and
 length) it was read from: it is valid while the recording has the same.
 
+**Measured** (release build, 4 jobs; test A9): the aggregator alone counts 11.8 M
+calls/s (bound 2 M); a walk of the 200,000-call fixture takes 1.70 s (117,500
+calls/s) against 1.63 s (122,500 calls/s) for the Trace's own count, 1.04 times
+(bound 1.25 times plus 100 ms). The walk is the Trace's read, so it costs what
+the Trace's count costs.
+
 `statistics/export.rs` makes CSV (RFC 4180), tab-separated and JSON text of the
 tables as pure functions; `statistics/views.rs` makes the Failed only and By
 error readings from the same counts. `statistics/fixture.rs` writes synthetic

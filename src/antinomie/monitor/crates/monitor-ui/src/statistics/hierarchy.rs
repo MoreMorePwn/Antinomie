@@ -373,13 +373,13 @@ pub(super) fn show(
     let mut table = FitBuilder::new(ui)
         .id_salt("statistics-hierarchy-table")
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Col::rest(220.0))
+        .column(Col::rest(170.0))
+        .column(Col::fixed(88.0))
         .column(Col::fixed(96.0))
-        .column(Col::fixed(84.0))
-        .column(Col::fixed(96.0))
-        .column(Col::fixed(120.0));
+        .column(Col::fixed(104.0))
+        .column(Col::fixed(150.0));
     if saved {
-        table = table.column(Col::fixed(110.0));
+        table = table.column(Col::fixed(130.0));
     }
     table
         .column(Col::fixed(130.0))

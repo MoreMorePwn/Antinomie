@@ -7,7 +7,7 @@ use antinomie_monitor_core::{ExecRequest, RunState, RunSummary};
 use antinomie_triage::statistics::aggregate::Capped;
 use serde_json::json;
 
-fn run_summary() -> RunSummary {
+pub(super) fn run_summary() -> RunSummary {
     let request = ExecRequest {
         path: "/tmp/sample".into(),
         args: vec!["--fast".into(), "x y".into()],
@@ -42,7 +42,7 @@ fn run_summary() -> RunSummary {
     .expect("a run summary")
 }
 
-fn manifest() -> serde_json::Value {
+pub(super) fn manifest() -> serde_json::Value {
     json!({
         "started_ms": 1_800_000_000_000_u64, "ended_ms": 1_800_000_065_000_u64,
         "packets": 1000, "bytes": 5_242_880,

@@ -364,9 +364,11 @@ pub(super) fn paint(
             },
         );
         let label = match (band.full_ring, area.width()) {
-            (_, w) if w < 70.0 => None,
+            (_, w) if w < 24.0 => None,
+            (true, w) if w < 60.0 => Some("full"),
             (true, w) if w < 130.0 => Some("ring full"),
             (true, _) => Some("ring full here"),
+            (false, w) if w < 70.0 => Some("gap"),
             (false, w) if w < 150.0 => Some("no telemetry"),
             (false, _) => Some("no telemetry read here"),
         };

@@ -14,6 +14,7 @@ mod call_rate;
 mod hierarchy;
 mod latency;
 mod properties;
+mod shots;
 mod window;
 
 pub(super) const SCREEN: egui::Vec2 = egui::vec2(1280.0, 820.0);
