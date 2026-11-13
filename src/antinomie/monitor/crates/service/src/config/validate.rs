@@ -67,6 +67,11 @@ pub const MIN_CORE_MIB: u32 = 64;
 pub const MAX_CORE_MIB: u32 = 1024;
 pub const MAX_STATIC_MINUTES: u32 = 480;
 pub const MAX_SAMPLE_MIB: u32 = 256;
+/// `record.screenshot_every_s`: 0 is off, else 1 to this many seconds, with
+/// no node minimum (the user's decision of 2026-11-13, ANT-T0548 F3). The
+/// key is reserved at 0 until the timed screenshots of ANT-T0487 are merged;
+/// that merge unreserves it and checks this range in `check_preset`.
+pub const MAX_SCREENSHOT_EVERY_S: u32 = 999;
 /// `[retry]`: attempts of a run and the longest wait between two.
 pub const MAX_ATTEMPTS: u32 = 10;
 pub const MAX_BACKOFF_S: u32 = 3600;
@@ -476,7 +481,8 @@ pub fn reserved(preset: &Preset) -> Vec<Reserved> {
         "record.scope",
         "program",
     );
-    // The engine side of timed screenshots is ANT-T0487; its merge wires it.
+    // The engine side of timed screenshots is ANT-T0487; its merge wires it
+    // and replaces this check by the range 0 or 1 to MAX_SCREENSHOT_EVERY_S.
     check(
         preset.record.screenshot_every_s == 0,
         "record.screenshot_every_s",

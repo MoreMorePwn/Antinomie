@@ -50,7 +50,9 @@ runs while a window or the daemon owns the data directory.
 - The keys 0.9.0 reserves are accepted at their default only, else an error
   "arrives with 0.9.1": `program.source` (`upload`), `executable` (empty),
   `preload` and `extra_files` (empty), `run_in` (`app_terminal`),
-  `record.scope` (`program`), `record.screenshot_every_s` (0),
+  `record.scope` (`program`), `record.screenshot_every_s` (0; once timed
+  screenshots arrive its range is 0 for off or 1 to 999 seconds, with no node
+  minimum),
   `network.private_addresses` (false), `abuse_filter` (true),
   `dumps.disk_dump` (false), `vm.keep_on_failure` (false),
   `static_analysis.rebuilt_file_mib` (16) and `rebuilt_run_mib` (256),
