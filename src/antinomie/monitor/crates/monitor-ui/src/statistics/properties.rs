@@ -513,13 +513,17 @@ pub(crate) fn table(blocks: &[Block]) -> Table {
 }
 
 /// Draw the blocks, each a two-column table that copies as a whole.
-pub(super) fn show(ui: &mut egui::Ui, blocks: &[Block]) {
+/// `scroll_to_quality`: bring the Quality block into view (a quality chip was clicked).
+pub(super) fn show(ui: &mut egui::Ui, blocks: &[Block], scroll_to_quality: bool) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for block in blocks {
                 ui.add_space(6.0);
-                crate::theme::section(ui, block.title);
+                let heading = crate::theme::section(ui, block.title);
+                if scroll_to_quality && block.title == "Quality" {
+                    heading.scroll_to_me(Some(egui::Align::TOP));
+                }
                 egui::Grid::new(("statistics-properties", block.title))
                     .num_columns(2)
                     .spacing([16.0, 4.0])

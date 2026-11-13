@@ -13,6 +13,8 @@ pub(crate) enum Navigate {
     Filter(String),
     /// Show a hidden category in the Trace (a saved preference), then these calls.
     ShowGroup { group: SyscallGroup, filter: String },
+    /// Open this one call (a slowest-call row): `jump_triage_call`.
+    Call((u64, u64, u64)),
     /// Open Run History to choose another run.
     RunHistory,
 }

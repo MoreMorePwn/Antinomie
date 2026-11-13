@@ -168,7 +168,7 @@ fn c3_failed_only_and_by_error_come_from_the_same_result() {
 }
 
 /// What the Syscall Trace would count for `filter`: its own read, no hidden category.
-fn trace_count(fixture: &Fixture, filter: &str) -> u64 {
+pub(super) fn trace_count(fixture: &Fixture, filter: &str) -> u64 {
     let compiled = crate::query::compile_note(filter);
     assert!(compiled.error.is_none(), "{filter}: {:?}", compiled.error);
     let cancel = AtomicBool::new(false);

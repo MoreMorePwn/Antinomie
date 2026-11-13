@@ -12,8 +12,12 @@ use antinomie_monitor_core::syscall_groups::SyscallGroup;
 use std::path::{Path, PathBuf};
 
 mod hierarchy;
+mod latency;
 mod navigate;
 mod properties;
+mod rate;
+mod rate_lines;
+mod rate_paint;
 mod toolbar;
 mod window;
 mod worker;
@@ -31,15 +35,24 @@ pub(crate) enum Tab {
     #[default]
     Properties,
     Hierarchy,
+    CallRate,
+    Latency,
 }
 
 impl Tab {
-    pub(crate) const ALL: [Self; 2] = [Self::Properties, Self::Hierarchy];
+    pub(crate) const ALL: [Self; 4] = [
+        Self::Properties,
+        Self::Hierarchy,
+        Self::CallRate,
+        Self::Latency,
+    ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Properties => "Properties",
             Self::Hierarchy => "Hierarchy",
+            Self::CallRate => "Call rate",
+            Self::Latency => "Latency",
         }
     }
 
@@ -49,8 +62,19 @@ impl Tab {
                 "What the run was, what the recording holds and how far it can be trusted"
             }
             Self::Hierarchy => "Calls by group, call and result, with the failures",
+            Self::CallRate => "Calls per interval over the run, with up to four lines",
+            Self::Latency => "How long calls took, and the slowest ones",
         }
     }
+}
+
+/// What a tab asks the window to do.
+#[derive(Clone, Debug, PartialEq)]
+enum Pick {
+    /// Open the calls behind a number.
+    Count(hierarchy::Click),
+    /// Open exactly this call.
+    Call((u64, u64, u64)),
 }
 
 /// How times are written (design 7).

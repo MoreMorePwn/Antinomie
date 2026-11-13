@@ -10,7 +10,9 @@ use antinomie_triage::statistics::fixture::{nr, Call, Fixture, ROOT};
 use eframe::egui;
 use std::time::{Duration, Instant};
 
+mod call_rate;
 mod hierarchy;
+mod latency;
 mod properties;
 mod window;
 
@@ -60,6 +62,7 @@ pub(super) struct Rig {
     pub trace_filter: String,
     pub data: PathBuf,
     pub navigated: Vec<Navigate>,
+    pub screen: egui::Vec2,
 }
 
 impl Rig {
@@ -81,6 +84,7 @@ impl Rig {
             trace_filter: String::new(),
             data,
             navigated: Vec::new(),
+            screen: SCREEN,
         }
     }
 
@@ -91,11 +95,12 @@ impl Rig {
             hidden: &self.hidden,
             data_dir: &self.data,
         };
+        let screen = self.screen;
         let window = &mut self.window;
         let navigated = &mut self.navigated;
         self.ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
                 events,
                 ..Default::default()
             },
@@ -145,6 +150,11 @@ impl Rig {
     }
 
     pub fn press_at(&mut self, pos: egui::Pos2) {
+        // Two clicks in one place within 0.3 s are a double click (which folds a row);
+        // the tests' frames carry no clock, so egui counts 1/60 s a frame.
+        for _ in 0..24 {
+            self.frame(vec![]);
+        }
         self.frame(vec![egui::Event::PointerMoved(pos)]);
         for pressed in [true, false] {
             self.frame(vec![
@@ -176,6 +186,18 @@ impl Drop for Rig {
         self.window.worker.cancel();
         let _ = std::fs::remove_dir_all(&self.data);
     }
+}
+
+/// The texts equal to `label` on screen, top to bottom.
+pub(super) fn all_at(rig: &mut Rig, label: &str) -> Vec<egui::Rect> {
+    let mut found: Vec<egui::Rect> = rig
+        .texts()
+        .into_iter()
+        .filter(|(text, _)| text == label)
+        .map(|(_, rect)| rect)
+        .collect();
+    found.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    found
 }
 
 pub(super) fn silent(

@@ -4,7 +4,8 @@
 //! them.
 use super::hierarchy::{self, Click};
 use super::navigate::{self, Navigate};
-use super::worker::{Phase, Where};
+use super::worker::{Phase, Where, Worker};
+use super::{latency, rate, Pick};
 use super::{properties, AppView, Question, StatisticsWindow, Tab, Target, TimeBase};
 use crate::theme;
 use antinomie_triage::statistics::export::{self, ExportContext, Table};
@@ -168,6 +169,49 @@ pub(super) fn grew_by(target: &Target, stats: &RunStatistics) -> Option<u64> {
         .filter(|grown| *grown >= 64 * 1024)
 }
 
+/// What the Call rate tab draws: the main result and the custom lines' walk.
+fn rate_inputs<'a>(
+    window: &'a StatisticsWindow,
+    target: &Target,
+    stats: &'a RunStatistics,
+    running: bool,
+) -> rate::Inputs<'a> {
+    let customs = window.rate.lines.customs();
+    inputs_of(
+        &window.rate_worker,
+        &window.applied,
+        &customs,
+        (window.time_base, target.facts.anchor),
+        stats,
+        running,
+    )
+}
+
+fn inputs_of<'a>(
+    worker: &'a Worker,
+    applied: &str,
+    customs: &[String],
+    (base, anchor): (
+        TimeBase,
+        Option<antinomie_monitor_core::api::HostClockAnchor>,
+    ),
+    stats: &'a RunStatistics,
+    running: bool,
+) -> rate::Inputs<'a> {
+    let custom = worker
+        .shown()
+        .filter(|(key, _)| key.lines == customs && key.filter == applied)
+        .map(|(_, result)| &**result);
+    rate::Inputs {
+        stats,
+        custom,
+        progress: rate::LineProgress::of(&worker.phase, running, custom.is_some()),
+        base,
+        anchor,
+        partial: running,
+    }
+}
+
 impl StatisticsWindow {
     /// Everything inside the window.
     pub(super) fn body(
@@ -213,10 +257,10 @@ impl StatisticsWindow {
             }
         });
         ui.separator();
-        let footer = 38.0;
+        let footer = 52.0;
         let height = (ui.available_height() - footer).max(60.0);
         let width = ui.available_width();
-        let click = ui
+        let pick = ui
             .allocate_ui(egui::vec2(width, height), |ui| {
                 ui.set_min_size(egui::vec2(width, height));
                 match &stats {
@@ -235,9 +279,16 @@ impl StatisticsWindow {
                 }
             })
             .inner;
-        if let Some(click) = click {
+        if let Some(pick) = pick {
             let filter = stats.as_ref().map_or(&self.applied, |s| &s.filter).clone();
-            self.click(view, &filter, click, navigate);
+            match pick {
+                Pick::Count(click) => self.click(view, &filter, click, navigate),
+                Pick::Call(key) => navigate.push(Navigate::Call(key)),
+            }
+        }
+        if self.rate_stop {
+            self.rate_stop = false;
+            self.rate_worker.stop();
         }
         ui.separator();
         self.footer(ui, view, target, stats.as_deref());
@@ -276,7 +327,7 @@ impl StatisticsWindow {
     fn filter_row(&mut self, ui: &mut egui::Ui, view: &AppView<'_>) {
         let mut apply = false;
         ui.horizontal(|ui| {
-            let width = (ui.available_width() - 420.0).max(180.0);
+            let width = (ui.available_width() - 480.0).max(180.0);
             let response = crate::query::filter_edit(
                 ui,
                 &mut self.filter,
@@ -325,8 +376,22 @@ impl StatisticsWindow {
     }
 
     fn strip(&mut self, ui: &mut egui::Ui, target: &Target, stats: &RunStatistics, running: bool) {
+        let segments = self
+            .segments
+            .as_ref()
+            .filter(|(id, count)| *id == target.id && *count > 1)
+            .map(|(_, count)| {
+                chip(
+                    format!("Continued after a reconnect ({count} parts)"),
+                    "This run continued after a telemetry reconnect. Like the Syscall Trace, the statistics cover the part after it.",
+                    properties::Tone::Warn,
+                )
+            });
         ui.horizontal_wrapped(|ui| {
-            for chip in chips(stats, target.live, running) {
+            for chip in chips(stats, target.live, running)
+                .into_iter()
+                .chain(segments)
+            {
                 let color = match chip.tone {
                     properties::Tone::Plain => theme::muted(),
                     properties::Tone::Warn => theme::warn(),
@@ -347,6 +412,7 @@ impl StatisticsWindow {
                     ));
                 if response.clicked() {
                     self.tab = Tab::Properties;
+                    self.scroll_quality = true;
                 }
             }
             if let Some(grown) = grew_by(target, stats) {
@@ -456,14 +522,41 @@ impl StatisticsWindow {
         target: &Target,
         stats: &RunStatistics,
         running: bool,
-    ) -> Option<Click> {
+    ) -> Option<Pick> {
         match self.tab {
             Tab::Properties => {
                 let blocks = properties::blocks(&target.facts, stats, self.time_base);
-                properties::show(ui, &blocks);
+                let scroll = std::mem::take(&mut self.scroll_quality);
+                properties::show(ui, &blocks, scroll);
                 None
             }
-            Tab::Hierarchy => hierarchy::show(ui, stats, &mut self.hierarchy, running),
+            Tab::Hierarchy => {
+                hierarchy::show(ui, stats, &mut self.hierarchy, running).map(Pick::Count)
+            }
+            Tab::CallRate => {
+                let customs = self.rate.lines.customs();
+                let input = inputs_of(
+                    &self.rate_worker,
+                    &self.applied,
+                    &customs,
+                    (self.time_base, target.facts.anchor),
+                    stats,
+                    running,
+                );
+                let out = rate::show(ui, &mut self.rate, &input);
+                self.rate_stop |= out.stop_custom;
+                out.click.map(Pick::Count)
+            }
+            Tab::Latency => latency::show(
+                ui,
+                &mut self.latency,
+                &latency::Inputs {
+                    stats,
+                    facts: &target.facts,
+                    base: self.time_base,
+                    anchor: target.facts.anchor,
+                },
+            ),
         }
     }
 
@@ -476,6 +569,11 @@ impl StatisticsWindow {
             Tab::Hierarchy => {
                 export::hierarchy_table(stats, self.hierarchy.failed_only, self.hierarchy.by_error)
             }
+            Tab::CallRate => {
+                let input = rate_inputs(self, target, stats, false);
+                rate::table(&input.plot(&self.rate), &rate::bands(stats))
+            }
+            Tab::Latency => latency::table(stats, self.latency.part),
         }
     }
 

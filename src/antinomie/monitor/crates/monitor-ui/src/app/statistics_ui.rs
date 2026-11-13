@@ -70,6 +70,7 @@ impl MonitorApp {
                         .retain(|g| *g != group);
                     self.scope_trace(filter);
                 }
+                Navigate::Call(key) => self.jump_triage_call(key),
                 Navigate::RunHistory => self.show_panel_asked(Panel::RunHistory),
             }
         }

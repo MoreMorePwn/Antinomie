@@ -208,12 +208,19 @@ fn the_window_follows_the_selected_run_and_a_click_scopes_the_trace() {
     app.settings.hidden_trace_categories = vec![group];
     app.filter.clear();
     app.applied_filter.clear();
+    // Two clicks in one place within 0.3 s are a double click.
+    for _ in 0..24 {
+        shown(&mut app, &ctx);
+    }
     click_label(&mut app, &ctx, SIZE, "openat");
     assert!(
         app.applied_filter.is_empty() && app.filter.is_empty(),
         "asked first, nothing opened"
     );
     assert_eq!(app.settings.hidden_trace_categories, vec![group]);
+    for _ in 0..24 {
+        shown(&mut app, &ctx);
+    }
     click_label(&mut app, &ctx, SIZE, "Show and open");
     assert!(app.settings.hidden_trace_categories.is_empty());
     assert_eq!(app.applied_filter, "syscall.name == openat");

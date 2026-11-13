@@ -4,8 +4,8 @@
 //! `triage/graph/window.rs`), with the embedded fallback when the platform has
 //! no separate windows. The state lives here; the parts are drawn by
 //! `toolbar.rs`.
-use super::hierarchy;
 use super::worker::{Key, Worker};
+use super::{hierarchy, latency, rate};
 use super::{AppView, Navigate, Question, Tab, Target, TimeBase};
 use crate::theme;
 use eframe::egui;
@@ -38,6 +38,16 @@ pub(crate) struct StatisticsWindow {
     pub(super) time_base: TimeBase,
     pub(super) worker: Worker,
     pub(super) hierarchy: hierarchy::State,
+    pub(super) rate: rate::State,
+    pub(super) latency: latency::State,
+    /// The extra walk for custom Call rate lines.
+    pub(super) rate_worker: Worker,
+    /// Segments the run has, read once per run: the quality strip says when more than one.
+    pub(super) segments: Option<(String, usize)>,
+    /// The quality chips were clicked: show the Quality block.
+    pub(super) scroll_quality: bool,
+    /// The Stop button of a custom line was pressed.
+    pub(super) rate_stop: bool,
     pub(super) question: Option<Question>,
     /// What the last Copy or Export did, in words.
     pub(super) note: Option<String>,
@@ -67,6 +77,12 @@ impl Default for StatisticsWindow {
             time_base: TimeBase::default(),
             worker: Worker::default(),
             hierarchy: hierarchy::State::default(),
+            rate: rate::State::default(),
+            latency: latency::State::default(),
+            rate_worker: Worker::default(),
+            segments: None,
+            scroll_quality: false,
+            rate_stop: false,
             question: None,
             note: None,
             #[cfg(test)]
@@ -176,12 +192,55 @@ impl StatisticsWindow {
             capture: target.capture,
             root_cookie: target.root_cookie,
             filter: self.applied.clone(),
+            lines: Vec::new(),
         }
+    }
+
+    /// Custom Call rate lines need one more walk, started once the main read is over
+    /// (one walk at a time). A change of lines cancels the walk in progress.
+    fn walk_custom_lines(&mut self, ctx: &egui::Context, target: &Target) {
+        self.rate_worker.poll();
+        let lines = self.rate.lines.customs();
+        if lines.is_empty() {
+            if self.rate_worker.running() || self.rate_worker.shown().is_some() {
+                self.rate_worker.reset();
+            }
+            return;
+        }
+        if self.worker.running() && !self.rate_worker.running() {
+            return;
+        }
+        let mut key = self.key_of(target);
+        key.lines = lines;
+        self.rate_worker.ensure(ctx, &key);
+    }
+
+    /// How many recording segments the run has, once per run.
+    fn read_segments(&mut self, target: &Target) {
+        if self
+            .segments
+            .as_ref()
+            .is_some_and(|(id, _)| *id == target.id)
+        {
+            return;
+        }
+        let count = if target.capture {
+            1
+        } else {
+            antinomie_monitor_core::recording::run_segments(
+                &target.directory,
+                &target.id,
+                &target.vm,
+            )
+            .map_or(1, |segments| segments.len())
+        };
+        self.segments = Some((target.id.clone(), count));
     }
 
     pub(super) fn close(&mut self) {
         self.open = false;
         self.worker.cancel();
+        self.rate_worker.cancel();
     }
 
     /// Draw the window if it is open and walk what it needs. Called every
@@ -189,12 +248,15 @@ impl StatisticsWindow {
     pub(crate) fn show(&mut self, ctx: &egui::Context, view: &AppView<'_>) -> Vec<Navigate> {
         if !self.open {
             self.worker.cancel();
+            self.rate_worker.cancel();
             return Vec::new();
         }
         // Follow the run chosen in the app: another run starts afresh.
         let id = view.target.as_ref().map(|target| target.id.clone());
         if id != self.target_id {
             self.worker.reset();
+            self.rate_worker.reset();
+            self.segments = None;
             self.question = None;
             self.note = None;
             self.target_id = id;
@@ -203,6 +265,8 @@ impl StatisticsWindow {
         if let Some(target) = view.target.as_ref() {
             let key = self.key_of(target);
             self.worker.ensure(ctx, &key);
+            self.walk_custom_lines(ctx, target);
+            self.read_segments(target);
         }
         let mut navigate = Vec::new();
         if self.popped {

@@ -2,7 +2,9 @@
 //! The walk runs on a thread named `statistics`, one at a time, with its own
 //! cancel flag (design 4.5). The window polls it every frame. The last four
 //! complete results are kept in memory.
-use antinomie_triage::statistics::{self, Progress, RunStatistics, StatsError, StatsRequest};
+use antinomie_triage::statistics::{
+    self, Parts, Progress, RunStatistics, StatsError, StatsRequest,
+};
 use eframe::egui;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +20,8 @@ pub(super) struct Key {
     pub capture: bool,
     pub root_cookie: u64,
     pub filter: String,
+    /// Custom Call rate lines: a key with lines is a `RateOnly` walk.
+    pub lines: Vec<String>,
 }
 
 impl Key {
@@ -26,6 +30,10 @@ impl Key {
         request.capture = self.capture;
         request.root_cookie = self.root_cookie;
         request.filter.clone_from(&self.filter);
+        if !self.lines.is_empty() {
+            request.lines.clone_from(&self.lines);
+            request.parts = Parts::RateOnly;
+        }
         request
     }
 }

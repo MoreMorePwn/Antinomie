@@ -321,3 +321,32 @@ fn b9_copy_puts_tab_separated_text_on_the_clipboard_and_export_writes_under_expo
         serde_json::from_str(&std::fs::read_to_string(json.path()).unwrap()).unwrap();
     assert_eq!(parsed["schema"], "antinomie.statistics/1");
 }
+
+#[test]
+fn b_the_window_does_not_grow_by_itself_on_any_tab() {
+    // A row wider than the window, or a body taller than it, makes egui widen
+    // the window every frame until it fills the screen.
+    for tab in Tab::ALL {
+        let fixture = Fixture::new(&calls());
+        let mut rig = Rig::new(Some(target(&fixture, "run-a")));
+        rig.window.request_open(Some(tab));
+        rig.settle();
+        let place = |rig: &mut Rig| {
+            let output = rig.frame(vec![]);
+            let shown = texts(&output);
+            let title = shown
+                .iter()
+                .find(|(t, _)| t.starts_with("Statistics ·"))
+                .unwrap()
+                .1;
+            let copy = shown.iter().find(|(t, _)| t == "Copy").unwrap().1;
+            (title.left(), title.top(), copy.top())
+        };
+        let first = place(&mut rig);
+        for _ in 0..8 {
+            assert_eq!(place(&mut rig), first, "{tab:?} changed size while idle");
+        }
+        // It opened at about the size asked for, not the screen's.
+        assert!(first.0 > 40.0, "{tab:?} fills the screen: {first:?}");
+    }
+}
