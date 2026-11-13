@@ -521,6 +521,16 @@ estimate in the design stays an estimate.
 - V7 no snapshot/reconnect. No next transport version. Existing transport API
   is opaque; frontend/backend never manage CPU rings.
 
+## Timed screenshots of a run (0.9.0, ANT-T0487)
+
+`ExecRequest::screenshot_every_s` (`Option<u32>`, 1 to 999 (`timed_shots::MAX_INTERVAL_S`), validated by `ExecRequest::validate`, saved with the run) asks the engine to photograph the VM screen while a run goes. `run::ProgramRun::start_shots` (called from `register_run`, after the launch is acknowledged) starts a `timed_shots::TimedShots` on the VM's screen socket (`VmProcess::screen_socket`); a VM without one (VM screen not "In the app", or a headless engine without `BackendOptions::run_screen`) leaves a note in the run and takes nothing.
+
+- **One worker, its own client.** `TimedShots` is a thread with its own `vnc::ScreenClient` (QEMU's VNC accepts several clients), so the VM screen tab need not be open and the recorder and the UI never wait. Each tick the thread copies the frame, hashes it (`DefaultHasher`), skips it when the hash equals the last saved one, PNG-encodes it (`vnc::encode_png`) and writes `screenshots/<name>.part`, renamed to `screenshots/t+SSSSSS.s.png` (the run-relative time from `RunSummary::started_ms`) so a reader never sees a half-written file. Ticks that come due while a picture is still being taken are dropped and counted, never queued. The pure part is `timed_shots::Shooter` (tested without a thread or a clock).
+- **Limits.** `MAX_SHOTS` 500 and `MAX_BYTES` 256 MiB per run; reaching one ends the series with a reason. `screenshots/series.json` keeps the counts (`taken`, `unchanged`, `dropped`, `no_screen`, `bytes`, `stopped`); the same line goes into the run's notes.
+- **End.** When the tree ends (`apply_run_status` -> `record_tree_completion`) the worker is asked to stop (it takes a last picture); `collect_shots` joins it from `release_completed_runs` once it has finished and adds the note, and `begin_finalize` joins it at the VM stop. Nothing blocks the control thread for more than one finished join.
+- **Readers.** `timed_shots::list` reads the folder (the file name is the index; the `.part` files are not listed). The Summary strip (`triage/summary/strip.rs`) decodes only the pictures in view; Library > Screenshots reads the runs' folders on its scan (`TimedRun`) and steps through a run with the arrow keys; the report export adds a note and up to 100 pictures (`bundle::pick_screenshots`, 64 MiB) to the evidence bundle; the service lists them as `RecordingArtifactKind::Screenshot` with `run_time_ms`.
+- **Headless.** `BackendOptions::run_screen` (set by the CLI whenever it is headless) makes `vm::in_app_screen` true for a headless engine, which adds `-vnc unix:...` beside `-display none`; the guest's devices do not change. The service takes `[record] screenshot_every_s` of the run's frozen preset (0 off, 1 to 999, checked by `config::validate::check_preset` against `MAX_SCREENSHOT_EVERY_S`, the same bound; a run may set any value in range as a Custom run, `invalid_argument` outside it), and `stages/plan.rs::effective` puts it in the `ExecRequest`.
+
 ## Accepted aligned VM status cards (0.6.1)
 
 VM Status resource cards have equal height within each responsive

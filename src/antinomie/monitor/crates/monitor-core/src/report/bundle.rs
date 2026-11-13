@@ -18,6 +18,11 @@ use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 use zip::{AesMode, CompressionMethod, ZipWriter};
 
+/// The most timed screenshots a bundle holds, and their bytes together; a
+/// longer series is thinned evenly ([`pick_screenshots`]).
+pub const SCREENSHOT_LIMIT: usize = 100;
+pub const SCREENSHOT_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Bytes of one dropped file, per file and for all of them.
 pub const DROPPED_FILE_LIMIT: u64 = 64 * 1024 * 1024;
 pub const DROPPED_TOTAL_LIMIT: u64 = 512 * 1024 * 1024;
@@ -51,6 +56,8 @@ pub struct BundleInput {
     pub skipped: Vec<(String, String)>,
     /// The sample's custody record, already exported: the JSON and its verifier.
     pub custody: Vec<PathBuf>,
+    /// The run's timed screenshots, oldest first (`screenshots/` in the bundle).
+    pub screenshots: Vec<PathBuf>,
     pub run_id: String,
     pub generated_ms: u64,
 }
@@ -93,6 +100,30 @@ impl<W: Write> Write for Hashing<'_, W> {
     }
 }
 
+/// Choose the screenshots a bundle takes from a run's series (`sizes` are the
+/// bytes of each, oldest first): all of them when they fit, else evenly spaced
+/// ones, always the first and the last, within [`SCREENSHOT_LIMIT`] and
+/// [`SCREENSHOT_BYTES`]. Returns the chosen indexes.
+pub fn pick_screenshots(sizes: &[u64]) -> Vec<usize> {
+    let mut step = sizes.len().div_ceil(SCREENSHOT_LIMIT).max(1);
+    loop {
+        let mut chosen: Vec<usize> = (0..sizes.len()).step_by(step).collect();
+        if let Some(last) = sizes.len().checked_sub(1)
+            && chosen.last() != Some(&last)
+        {
+            chosen.push(last);
+            if chosen.len() > SCREENSHOT_LIMIT {
+                chosen.remove(chosen.len() - 2);
+            }
+        }
+        let bytes: u64 = chosen.iter().map(|i| sizes[*i]).sum();
+        if bytes <= SCREENSHOT_BYTES || chosen.len() <= 2 {
+            return chosen;
+        }
+        step += 1;
+    }
+}
+
 /// What a person finds in the bundle and how to check it.
 fn readme(run_id: &str, generated_ms: u64) -> String {
     format!(
@@ -103,6 +134,8 @@ fn readme(run_id: &str, generated_ms: u64) -> String {
          dropped-files.zip     files the run created, each whose bytes are all known; an AES-256\n\
          \x20                     (WinZip AE-2) archive, password \"{password}\" (the malware-sharing\n\
          \x20                     convention). It holds malware: open it only in a sandbox.\n\
+         screenshots/*.png     the run's timed screenshots of the VM screen; the name is the time\n\
+         \x20                     since the run started (t+SSSSSS.s.png)\n\
          custody/              the sample's custody log (JSON) and verify-custody.py, which checks\n\
          \x20                     the log's hash chain without Antinomie\n\
          manifest.json         every file with its size and SHA-256, the dropped files' guest paths\n\
@@ -261,6 +294,29 @@ fn write_into(out: File, temp: &Path, input: BundleInput, path: &Path) -> Result
                     .metadata()
                     .map_or(true, |m| m.len() > u64::from(u32::MAX));
                 let (size, sha256) = add_stream(&mut zip, &entry, plain(large), &mut file)?;
+                files.push(ManifestFile {
+                    path: entry,
+                    size,
+                    sha256,
+                });
+            }
+            Err(error) => skipped.push((
+                name,
+                crate::disk_start::without_host_paths(&error.to_string()),
+            )),
+        }
+    }
+    for shot in &input.screenshots {
+        let name = shot
+            .file_name()
+            .map_or_else(|| "screenshot".into(), |n| n.to_string_lossy().into_owned());
+        let mut entry = format!("screenshots/{name}");
+        while !used.insert(entry.clone()) {
+            entry.push('_');
+        }
+        match File::open(shot) {
+            Ok(mut file) => {
+                let (size, sha256) = add_stream(&mut zip, &entry, plain(false), &mut file)?;
                 files.push(ManifestFile {
                     path: entry,
                     size,

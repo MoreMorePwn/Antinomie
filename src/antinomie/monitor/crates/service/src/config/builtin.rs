@@ -40,7 +40,7 @@ extra_files = []                               # [{ sample = "<sha256>", guest_p
 
 [record]
 scope = "program"                              # program | whole_vm (Capture all, 0.9.1)
-screenshot_every_s = 0                         # Screenshot every N s, 0 = off
+screenshot_every_s = 0                         # Screenshot every N s (1 to 999), 0 = off
 
 [network]
 capture = true                                 # Capture network

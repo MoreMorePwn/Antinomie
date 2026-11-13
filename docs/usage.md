@@ -262,6 +262,31 @@ guest. While it is captured the picture has an amber frame and a banner,
 "Keyboard captured". Ctrl+Alt gives the keyboard back; so does the window losing focus, or
 another tab coming to the front. No app shortcut fires while it is captured.
 
+**Timed screenshots (a run's picture series).** In **Run program**, the **Screen**
+section has **Take a screenshot every N s** (off by default; N from 1 to 999,
+10 when you switch it on). While the run goes, the app reads the VM screen at that
+interval and saves each picture in the run's own folder as
+`screenshots/t+SSSSSS.s.png`, named by the time since the run started
+(`t+000123.4s.png` is 2 min 3.4 s in). It needs a VM whose **VM screen** is **In the
+app (VNC)**; otherwise the box is greyed with the reason (and a run that was given
+the setting anyway notes that it took none). A screen that has not changed since
+the last picture is skipped, not saved; the run's notes say how many pictures were
+saved and how many were skipped, and a last picture is taken when the program tree
+ends. The pictures are taken and written on a worker thread of their own with their
+own connection to the screen: the VM screen tab does not have to be open, nothing
+waits for the disk, and a tick that arrives while the previous picture is still
+being written is dropped (and counted). A run keeps at most 500 pictures or 256 MiB;
+at the limit the series stops and the run's notes say so.
+
+In **Triage > Summary**, a run with timed screenshots shows them as a strip with
+the run-relative time under each picture. A click opens the picture in
+**Library > Screenshots**, whose viewer steps through the run with the Left and
+Right arrow keys. There the series is grouped under its run ("timed screenshots of
+run ...") and each cell shows its run-relative time. The report lists the series in
+its notes, and the evidence bundle holds the pictures under `screenshots/` (at most
+100 pictures and 64 MiB, evenly spaced when the series is longer; the manifest says
+how many were left out).
+
 The **Overview** (the first tab of the work area) shows the selected VM: its name
 and state dot, the resource cards, the **Compute** card with the vCPU count and
 the RAM side by side, the configuration cards and the **Snapshots** box.
@@ -385,7 +410,9 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    (and its future children); **Capture all** traces all of userspace. Neither
    stops or signals anything. A capture lists the processes it saw as a tree
    (named after the program each one ran); select one to see only its calls.
-7. With the guest network connected, select **Capture network** to record
+7. **Take a screenshot every N s** (section **Screen**) saves the VM screen as a picture
+   at that interval while the run goes; see *Timed screenshots* under the VM screen.
+8. With the guest network connected, select **Capture network** to record
    packets of the VM's network interface outside the guest. Stop it to finish the capture;
    each start creates a separate retained pcap in the boot recording.
    On a Routed VM, **Route** in the same section picks where the run's traffic goes
@@ -2140,7 +2167,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   ...` (or after `--`), `--env K=V`, `--as user|root|UID:GID` (`user` is UID 1000),
   `--route drop|internet|inet_sim|tor|vpn|socks5` (a routed VM only), `--timeout-run
   SECONDS` (default 300: the run is then told to stop), `--net-capture`, `--memory-dump`,
-  `--core-dump`, `--dump-trigger low|medium|high` (take a dump when the live Triage rules match at that tier or above, as the window's **Dump when suspicious activity is seen**; default off) with `--dump-kind core|memory|both` (default `core`; a core needs a revision-16 base), `--core-nonresident` (the trigger's cores also read pages that are not in memory, as **Read non-resident pages**; needs a core trigger and a revision-22 base), `--static CHECKS` (the guest-side analysis too), `--load-into PROGRAM` (the sample is a shared library: it is uploaded, then the guest program PROGRAM, an absolute path, runs with `LD_PRELOAD` set to it, and the run is linked to the library sample) and `--wait` (always on in
+  `--core-dump`, `--screenshot-every SECONDS` (a picture of the VM screen every SECONDS, 1 to 999, and one when the tree ends; see *Timed screenshots*; the headless engine keeps QEMU's VNC display on a private socket for it), `--dump-trigger low|medium|high` (take a dump when the live Triage rules match at that tier or above, as the window's **Dump when suspicious activity is seen**; default off) with `--dump-kind core|memory|both` (default `core`; a core needs a revision-16 base), `--core-nonresident` (the trigger's cores also read pages that are not in memory, as **Read non-resident pages**; needs a core trigger and a revision-22 base), `--static CHECKS` (the guest-side analysis too), `--load-into PROGRAM` (the sample is a shared library: it is uploaded, then the guest program PROGRAM, an absolute path, runs with `LD_PRELOAD` set to it, and the run is linked to the library sample) and `--wait` (always on in
   direct mode). The program runs in the app terminal as `/tmp/<sha8>-<name>`; the end of
   its output is in the result. The wait covers the evidence the way the window's runs do
   (network capture, memory dump and core finished, up to 300 s), then stops the VM and
@@ -2452,7 +2479,7 @@ stays in its lane's folder, and the read commands given the data folder
 
 | Command | What it does |
 |---|---|
-| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a run; prints the run. `--preset` (the preset, default `standard`), `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V` (replaces the preset's environment), `--as user\|root\|nobody\|UID:GID`, `--route drop\|inet_sim` (a live route is not set up on this node in 0.9.0, whereas `run exec --route` takes all six), `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--idempotency-key K`, `--name`. A flag that changes a preset value makes the run Custom; only your permissions and the node limit what a run may change. `--wait` waits for the end and exits with the run's code; `--follow` also prints the run's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded run labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected run exits 13 |
+| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a run; prints the run. `--preset` (the preset, default `standard`), `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V` (replaces the preset's environment), `--as user\|root\|nobody\|UID:GID`, `--route drop\|inet_sim` (a live route is not set up on this node in 0.9.0, whereas `run exec --route` takes all six), `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--screenshot-every S` (a picture of the VM screen every S seconds, 1 to 999, `record.screenshot_every_s`; 0 turns it off), `--idempotency-key K`, `--name`. A flag that changes a preset value makes the run Custom; only your permissions and the node limit what a run may change. `--wait` waits for the end and exits with the run's code; `--follow` also prints the run's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded run labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected run exits 13 |
 | `auto status [RUN]` | One run, or the queue and the lanes |
 | `auto list` | Runs, newest first: `--state`, `--outcome`, `--sha256`, `--label K[=V]`, `--since 24h`, `--limit`, `--cursor` |
 | `auto wait RUN...` | Waits until the runs have ended (`--timeout` bounds it, exit 14) and exits with the worst code; `--verdict-exit` as above |

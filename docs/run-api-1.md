@@ -107,7 +107,8 @@ ranges are in [service configuration](service-config.md)):
 | `static_analysis` | `enabled`, `triage_checks`, `deep_checks`, `time_limit_per_tool_min` (0: each tool's own, up to 480), `ghidra_disassembly`, `required_checks`, `limits.*`, the reserved `rebuilt_file_mib`, `rebuilt_run_mib` |
 | `triage`, `detection`, `report` | `triage.enabled`; `detection.yara`, `sigma`, `ids`, `check_online`; `report.formats` (`html`, `pdf`, `json`, `misp`, `stix`, `md`), `bundle`, `defang`; the reserved `triage.written_*`, `earlier_*`, `detection.scan_every_min`, `report.sections` |
 | `vm` | `lane_group`, `keep_on_failure` (refused `unavailable_on_node`), `allow_control` |
-| `accepts`, `duplicates`, `record`, `verdict`, `retry`, `required_stages` | As in the file (`retry.max_attempts` 1 to 10, each `retry.backoff_s` 0 to 3600, at most 10; `duplicates.on_duplicate = "reuse"` returns only a run the caller may see, else a new run starts) |
+| `record` | `screenshot_every_s`: a picture of the VM screen every N seconds while the program runs, 1 to 999, or 0 for none (every built-in preset); a value above 999 is `invalid_argument`. The pictures are `recording.artifact.list` items of kind `screenshot` (`run_time_ms` is the time since the run started; sensitive, so `evidence.view` to read and `evidence.download` to download), and the evidence bundle holds up to 100 under `screenshots/`; the reserved `scope` |
+| `accepts`, `duplicates`, `verdict`, `retry`, `required_stages` | As in the file (`retry.max_attempts` 1 to 10, each `retry.backoff_s` 0 to 3600, at most 10; `duplicates.on_duplicate = "reuse"` returns only a run the caller may see, else a new run starts) |
 
 **The Custom rule.** An override that changes a value makes the run Custom; an
 override equal to the preset's value changes nothing. A Custom run's `preset`
@@ -605,6 +606,11 @@ Class **C** needs only the engine. Class **T** needs the Triage scan and can ans
 | `recording.terminal.replay` | C | N | | `Page<TerminalRecord>` |
 | `recording.artifact.list` | C | N | | `Page<RecordingArtifact>` |
 | `recording.artifact.get` | C | S or N | `artifact_id`, `range?` | bytes |
+
+`recording.artifact.list` lists the timed screenshots of a run
+(`record.screenshot_every_s`, `run exec --screenshot-every`) as kind
+`screenshot`, oldest first, each with `run_time_ms` (the time since the run
+started); they are sensitive (S).
 
 `recording.network.captures` items carry `link`, which run the segment belongs
 to: `certainty` is `exact` (the run started it and lists it), `by_time` or

@@ -74,6 +74,7 @@ impl MonitorApp {
                 .map(|environment| environment.base_name.clone())
                 .filter(|name| !name.is_empty()),
             screenshot,
+            self.screenshots_page.timed_for(&run),
             run.request
                 .preloaded
                 .iter()

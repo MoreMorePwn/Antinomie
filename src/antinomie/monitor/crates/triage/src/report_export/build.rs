@@ -847,6 +847,10 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
             antinomie_monitor_core::geoip::ATTRIBUTION_NOTE
         ));
     }
+    // Pictures of the VM screen the run took by itself; the bundle holds them.
+    if let Some(note) = timed_shots_note(&job.archive, choices.bundle) {
+        report.notes.push(note);
+    }
     // Every entry its anchor, every mention its link (`*_ref`).
     report::refs::link(&mut report);
     let bundle = choices.bundle.then(|| {
@@ -871,16 +875,57 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
                 captures.push(pcap.clone());
             }
         }
+        let all = antinomie_monitor_core::timed_shots::list(&job.archive);
+        let sizes: Vec<u64> = all.iter().map(|shot| shot.bytes).collect();
+        let chosen = bundle::pick_screenshots(&sizes);
+        if chosen.len() < all.len() {
+            skipped.push((
+                "timed screenshots".into(),
+                format!(
+                    "{} of the run's {} are in the bundle (evenly spaced, at most {} pictures and {} MiB); all are in the run's folder",
+                    chosen.len(),
+                    all.len(),
+                    bundle::SCREENSHOT_LIMIT,
+                    bundle::SCREENSHOT_BYTES / (1024 * 1024)
+                ),
+            ));
+        }
+        let screenshots = chosen.into_iter().map(|i| all[i].path.clone()).collect();
         BundleInput {
             captures,
             dropped,
             skipped,
             custody: Vec::new(),
+            screenshots,
             run_id: job.run.run_id.clone(),
             generated_ms: job.now_ms,
         }
     });
     Ok(Built { report, bundle })
+}
+
+/// The note about a run's timed screenshots (ANT-T0487); `None` when it took none.
+pub fn timed_shots_note(archive: &Path, bundled: bool) -> Option<String> {
+    let shots = antinomie_monitor_core::timed_shots::list(archive);
+    let (first, last) = (shots.first()?, shots.last()?);
+    let mut text = format!(
+        "Timed screenshots: {} pictures of the VM screen, from {} to {} into the run",
+        shots.len(),
+        antinomie_monitor_core::timed_shots::time_label(first.t_ms),
+        antinomie_monitor_core::timed_shots::time_label(last.t_ms),
+    );
+    if let Some(series) = antinomie_monitor_core::timed_shots::series(archive) {
+        text.push_str(&format!(
+            " (every {} s; {} skipped because the screen had not changed)",
+            series.every_s, series.unchanged
+        ));
+    }
+    text.push_str(if bundled {
+        ". They are in the evidence bundle under screenshots/."
+    } else {
+        ". They are in the run's folder; the evidence bundle includes them."
+    });
+    Some(text)
 }
 
 /// What the run's final manifest says of its lost telemetry, as the run's

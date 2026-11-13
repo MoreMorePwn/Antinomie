@@ -526,3 +526,33 @@ fn the_warning_gives_hours_for_a_very_large_recording() {
     };
     assert!(large.warning().contains("hours"), "{}", large.warning());
 }
+
+#[test]
+fn a_run_with_timed_screenshots_says_so_in_the_report_notes() {
+    let run = std::env::temp_dir().join(format!(
+        "ant-shots-note-{}",
+        std::process::id() * 1000 + 487
+    ));
+    let shots = run.join("screenshots");
+    std::fs::create_dir_all(&shots).unwrap();
+    assert_eq!(super::build::timed_shots_note(&run, true), None);
+    for name in ["t+000005.0s.png", "t+000065.4s.png"] {
+        std::fs::write(shots.join(name), b"png").unwrap();
+    }
+    std::fs::write(
+        shots.join("series.json"),
+        br#"{"every_s":5,"taken":2,"unchanged":3,"dropped":0,"no_screen":0,"bytes":6}"#,
+    )
+    .unwrap();
+    let bundled = super::build::timed_shots_note(&run, true).unwrap();
+    assert!(bundled.contains("2 pictures"), "{bundled}");
+    assert!(
+        bundled.contains("+5.0 s") && bundled.contains("+1 min 5.4 s"),
+        "{bundled}"
+    );
+    assert!(bundled.contains("every 5 s; 3 skipped"), "{bundled}");
+    assert!(bundled.contains("in the evidence bundle under screenshots/"));
+    let unbundled = super::build::timed_shots_note(&run, false).unwrap();
+    assert!(unbundled.contains("the evidence bundle includes them"));
+    std::fs::remove_dir_all(&run).unwrap();
+}

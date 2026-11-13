@@ -98,10 +98,6 @@ fn shape_errors_an_unknown_preset_and_reserved_keys_are_errors_not_jobs() {
         ),
         (json!({"record": {"scope": "whole_vm"}}), "record.scope"),
         (
-            json!({"record": {"screenshot_every_s": 5}}),
-            "record.screenshot_every_s",
-        ),
-        (
             json!({"network": {"private_addresses": true}}),
             "network.private_addresses",
         ),
@@ -322,6 +318,48 @@ fn a_change_makes_the_run_custom_and_an_equal_value_does_not() {
         .run;
     assert_eq!(same.preset.name, "standard");
     assert!(same.request.overrides.is_empty());
+}
+
+#[test]
+fn the_screenshot_interval_is_a_record_key_of_the_preset_0_or_1_to_999() {
+    let fx = Fx::new("shots");
+    let shots = |every: u32| with(json!({"record": {"screenshot_every_s": every}}));
+    // Any value in range makes the run Custom, also a short one: no
+    // "lengthen or switch off only" rule and no node minimum (F3).
+    for every in [1, 5, 999] {
+        let run = fx.submit_as(&caller(1000), shots(every)).unwrap().run;
+        assert_eq!(run.state, RunState::Queued, "{every}: {:?}", run.failure);
+        assert_eq!(run.preset.name, "custom");
+        assert_eq!(run.preset.changes, ["record.screenshot_every_s"]);
+        let frozen = fx.store.frozen_preset(&run.id).unwrap();
+        assert_eq!(frozen.preset.record.screenshot_every_s, every);
+        fx.store.cancel(&run.id, None, &caller(1000)).unwrap();
+    }
+    // 0 is Standard's own value: off, and not a change.
+    let run = fx.submit_as(&caller(1000), shots(0)).unwrap().run;
+    assert_eq!(run.preset.name, "standard");
+    assert!(run.request.overrides.is_empty());
+    fx.store.cancel(&run.id, None, &caller(1000)).unwrap();
+    // Out of range is an invalid argument naming the key; nothing is stored.
+    let error = fx.submit_as(&caller(1000), shots(1000)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert_eq!(
+        error.field.as_deref(),
+        Some("overrides.record.screenshot_every_s")
+    );
+    assert!(error.message.contains("0 (off) or 1 to 999"), "{error:?}");
+    // A preset that takes them: its runs have them, and a run may switch
+    // them off or shorten them.
+    let on = Fx::with_policy("shots-on", |p| p.record.screenshot_every_s = 10);
+    let run = on.submit(spec(1)).run;
+    let frozen = on.store.frozen_preset(&run.id).unwrap();
+    assert_eq!(frozen.preset.record.screenshot_every_s, 10);
+    for every in [0, 2] {
+        let run = on.submit_as(&caller(1000), shots(every)).unwrap().run;
+        assert_eq!(run.state, RunState::Queued, "{every}: {:?}", run.failure);
+        let frozen = on.store.frozen_preset(&run.id).unwrap();
+        assert_eq!(frozen.preset.record.screenshot_every_s, every);
+    }
 }
 
 #[test]

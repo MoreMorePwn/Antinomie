@@ -79,6 +79,8 @@ pub(in crate::triage) struct State {
     pub more: [bool; 4],
     pub(super) built: Option<Built>,
     pub thumb: super::thumb::Thumb,
+    /// The strip of the run's timed screenshots.
+    pub strip: super::strip::Strip,
     /// The run's screenshot was clicked: the app opens it.
     pub open_screenshot: Option<std::path::PathBuf>,
 }

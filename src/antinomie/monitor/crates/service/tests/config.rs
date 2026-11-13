@@ -328,6 +328,10 @@ fn the_node_ceilings_and_ranges_are_enforced() {
         ),
         ("[vm]\nlane_group = \"a b\"\n", "vm.lane_group"),
         ("offered_to = [\"Lead\"]\n", "offered_to"),
+        (
+            "[record]\nscreenshot_every_s = 1000\n",
+            "record.screenshot_every_s",
+        ),
         ("[retry]\nmax_attempts = 0\n", "retry.max_attempts"),
         ("[retry]\nmax_attempts = 11\n", "retry.max_attempts"),
         ("[retry]\nbackoff_s = [30, 3601]\n", "retry.backoff_s"),
@@ -349,6 +353,9 @@ fn the_node_ceilings_and_ranges_are_enforced() {
         "[static_analysis]\ntime_limit_per_tool_min = 480\nghidra_disassembly = true\n",
         "[accepts]\ntypes = [\"any\"]\narch = [\"any\"]\nmax_sample_mib = 256\n",
         "[retry]\nmax_attempts = 10\nbackoff_s = [0, 3600]\n",
+        "[record]\nscreenshot_every_s = 0\n",
+        "[record]\nscreenshot_every_s = 1\n",
+        "[record]\nscreenshot_every_s = 999\n",
     ] {
         assert_eq!(problems(text), Vec::<String>::new(), "{text}");
     }
@@ -376,10 +383,6 @@ fn reserved_keys_are_accepted_at_their_default_only() {
         ),
         ("[program]\nrun_in = \"guest_desktop\"\n", "program.run_in"),
         ("[record]\nscope = \"whole_vm\"\n", "record.scope"),
-        (
-            "[record]\nscreenshot_every_s = 30\n",
-            "record.screenshot_every_s",
-        ),
         (
             "[network]\nprivate_addresses = true\n",
             "network.private_addresses",

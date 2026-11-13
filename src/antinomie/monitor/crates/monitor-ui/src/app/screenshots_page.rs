@@ -16,6 +16,8 @@ use std::{
 };
 
 pub(crate) mod decode;
+#[cfg(test)]
+mod fixture;
 
 /// The thumbnail cell: picture area and gap.
 const THUMB_W: f32 = 224.0;
@@ -38,6 +40,18 @@ struct Shot {
     ms: u64,
     /// The last run of the VM that began before it.
     run: Option<String>,
+    /// A timed screenshot of a run: milliseconds from the run's start.
+    rel_ms: Option<u64>,
+}
+
+/// A run with timed screenshots (`<run folder>/screenshots/t+SSSSSS.s.png`).
+#[derive(Clone)]
+struct TimedRun {
+    vm_id: String,
+    vm_name: String,
+    label: String,
+    started_ms: u64,
+    directory: PathBuf,
 }
 
 /// What the scan needs of one VM.
@@ -92,6 +106,13 @@ pub(super) struct ScreenshotsPage {
     viewer: Option<Viewer>,
     confirm: Option<Shot>,
     seen_saved: u64,
+    /// The timed screenshots of the run the Summary shows, read again every
+    /// couple of seconds (a run in progress adds to them).
+    timed: Option<(
+        String,
+        std::time::Instant,
+        Vec<antinomie_monitor_core::timed_shots::RunShot>,
+    )>,
 }
 
 impl Default for ScreenshotsPage {
@@ -110,6 +131,7 @@ impl Default for ScreenshotsPage {
             viewer: None,
             confirm: None,
             seen_saved: 0,
+            timed: None,
         }
     }
 }
@@ -142,7 +164,11 @@ fn taken_ms(path: &Path) -> u64 {
 
 /// Read the screenshot folders of `targets`, newest first. `runs` are
 /// (VM, start ms, label) of every known run.
-fn scan(targets: Vec<Target>, mut runs: Vec<(String, u64, String)>) -> Vec<Shot> {
+fn scan(
+    targets: Vec<Target>,
+    mut runs: Vec<(String, u64, String)>,
+    timed: Vec<TimedRun>,
+) -> Vec<Shot> {
     runs.sort_by_key(|run| run.1);
     let mut seen = HashSet::new();
     let mut shots = Vec::new();
@@ -172,6 +198,26 @@ fn scan(targets: Vec<Target>, mut runs: Vec<(String, u64, String)>) -> Vec<Shot>
                     vm_name: target.vm_name.clone(),
                     ms,
                     run,
+                    rel_ms: None,
+                });
+            }
+        }
+    }
+    // The runs' own series: grouped by run, with the run-relative time.
+    for run in timed {
+        for found in antinomie_monitor_core::timed_shots::list(&run.directory) {
+            if seen.insert(found.path.clone()) {
+                shots.push(Shot {
+                    path: found.path,
+                    vm_id: run.vm_id.clone(),
+                    vm_name: run.vm_name.clone(),
+                    ms: run.started_ms + found.t_ms,
+                    run: Some(format!(
+                        "timed screenshots of run {} ({})",
+                        run.label,
+                        time_text(run.started_ms)
+                    )),
+                    rel_ms: Some(found.t_ms),
                 });
             }
         }
@@ -181,6 +227,28 @@ fn scan(targets: Vec<Target>, mut runs: Vec<(String, u64, String)>) -> Vec<Shot>
 }
 
 impl ScreenshotsPage {
+    /// The timed screenshots of `run`, oldest first; none for a run that did
+    /// not ask for them.
+    pub(super) fn timed_for(
+        &mut self,
+        run: &antinomie_monitor_core::RunSummary,
+    ) -> Vec<antinomie_monitor_core::timed_shots::RunShot> {
+        if run.request.screenshot_every_s.is_none() {
+            return Vec::new();
+        }
+        let stale = self.timed.as_ref().is_none_or(|(id, at, _)| {
+            id != &run.id || at.elapsed() >= std::time::Duration::from_secs(2)
+        });
+        if stale {
+            let shots = antinomie_monitor_core::timed_shots::list(&run.directory);
+            self.timed = Some((run.id.clone(), std::time::Instant::now(), shots));
+        }
+        self.timed
+            .as_ref()
+            .map(|(_, _, shots)| shots.clone())
+            .unwrap_or_default()
+    }
+
     /// The sidebar count, once the folders were read.
     pub(super) fn count_text(&self) -> Option<String> {
         (self.loaded && !self.shots.is_empty()).then(|| self.shots.len().to_string())
@@ -373,7 +441,14 @@ impl ScreenshotsPage {
             if response.clicked() {
                 act = Some(Act::Open(shot.path.clone()));
             }
-            ui.label(RichText::new(time_text(shot.ms)).small());
+            match shot.rel_ms {
+                Some(rel) => ui.label(
+                    RichText::new(antinomie_monitor_core::timed_shots::time_label(rel))
+                        .small()
+                        .strong(),
+                ),
+                None => ui.label(RichText::new(time_text(shot.ms)).small()),
+            };
             ui.horizontal(|ui| {
                 if icon_button(ui, egui_phosphor::regular::COPY, "Copy the path") {
                     act = Some(Act::Copy(shot.path.clone()));
@@ -451,9 +526,43 @@ impl ScreenshotsPage {
         act
     }
 
+    /// Open the picture `delta` places on from the open one, in time order
+    /// within its VM and run group (the arrow keys); nothing at either end.
+    fn step(&mut self, ctx: &egui::Context, delta: i32) {
+        let Some(current) = self.viewer.as_ref().map(|viewer| viewer.shot.clone()) else {
+            return;
+        };
+        let mut group: Vec<&Shot> = self
+            .shots
+            .iter()
+            .filter(|shot| shot.vm_id == current.vm_id && shot.run == current.run)
+            .collect();
+        group.sort_by(|a, b| a.ms.cmp(&b.ms).then_with(|| a.path.cmp(&b.path)));
+        let Some(at) = group.iter().position(|shot| shot.path == current.path) else {
+            return;
+        };
+        let Some(next) = at
+            .checked_add_signed(delta as isize)
+            .and_then(|to| group.get(to))
+            .map(|shot| (*shot).clone())
+        else {
+            return;
+        };
+        self.open(ctx, next);
+    }
+
     /// The enlarged picture; its buttons come back as an action.
     fn viewer_window(&mut self, ctx: &egui::Context) -> Option<Act> {
         let mut act = None;
+        if self.viewer.is_some() && !crate::typing::typing(ctx) {
+            let step = ctx.input(|input| {
+                i32::from(input.key_pressed(egui::Key::ArrowRight))
+                    - i32::from(input.key_pressed(egui::Key::ArrowLeft))
+            });
+            if step != 0 {
+                self.step(ctx, step);
+            }
+        }
         let viewer = self.viewer.as_mut()?;
         let mut open = true;
         let screen = ctx.content_rect().size();
@@ -474,17 +583,27 @@ impl ScreenshotsPage {
                     ui.selectable_value(&mut viewer.one_to_one, false, "Fit");
                     ui.selectable_value(&mut viewer.one_to_one, true, "1:1");
                     ui.separator();
-                    ui.label(
-                        RichText::new(format!(
-                            "{} · {}",
-                            viewer.shot.vm_name,
+                    let when = match viewer.shot.rel_ms {
+                        Some(rel) => format!(
+                            "{} into the run · {}",
+                            antinomie_monitor_core::timed_shots::time_label(rel),
                             time_text(viewer.shot.ms)
-                        ))
-                        .color(theme::muted()),
+                        ),
+                        None => time_text(viewer.shot.ms),
+                    };
+                    ui.label(
+                        RichText::new(format!("{} · {when}", viewer.shot.vm_name))
+                            .color(theme::muted()),
                     );
                     if let Some(texture) = &viewer.texture {
                         let [w, h] = texture.size();
                         ui.label(RichText::new(format!("{w} x {h}")).color(theme::muted()));
+                    }
+                    if viewer.shot.rel_ms.is_some() {
+                        ui.label(
+                            RichText::new("Left/Right: previous/next in the run")
+                                .color(theme::muted()),
+                        );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Delete…").clicked() {
@@ -588,9 +707,30 @@ impl MonitorApp {
                 ))
             })
             .collect();
+        let mut seen_timed = HashSet::new();
+        let timed: Vec<TimedRun> = self
+            .snapshot
+            .runs
+            .iter()
+            .chain(self.history.iter())
+            .filter(|run| run.request.screenshot_every_s.is_some())
+            .filter(|run| seen_timed.insert(run.id.clone()))
+            .filter_map(|run| {
+                let label = Path::new(&run.request.path).file_name()?;
+                Some(TimedRun {
+                    vm_id: run.vm_id.clone(),
+                    vm_name: names
+                        .get(run.vm_id.as_str())
+                        .map_or_else(|| run.vm_id.clone(), |name| (*name).to_owned()),
+                    label: label.to_string_lossy().into_owned(),
+                    started_ms: run.started_ms?,
+                    directory: run.directory.clone(),
+                })
+            })
+            .collect();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(scan(targets, runs));
+            let _ = sender.send(scan(targets, runs, timed));
         });
         self.screenshots_page.scan = Some(receiver);
         self.screenshots_page.stale = false;

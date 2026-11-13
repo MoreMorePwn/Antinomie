@@ -300,6 +300,23 @@ fn the_launch_request_is_the_presets() {
 }
 
 #[test]
+fn the_screenshot_interval_reaches_the_launch_request_only_when_it_is_on() {
+    let revert = crate::config::service::RevertMode::SnapshotDisk;
+    let mut preset = crate::config::Preset::default();
+    let every =
+        |preset: &crate::config::Preset| plan::effective(preset, revert).request.screenshot_every_s;
+    assert_eq!(every(&preset), None, "0 is off");
+    for on in [1, 15, crate::config::validate::MAX_SCREENSHOT_EVERY_S] {
+        preset.record.screenshot_every_s = on;
+        assert_eq!(every(&preset), Some(on));
+        // The engine takes every value the preset check lets through.
+        let mut request = plan::effective(&preset, revert).request;
+        request.path = "/tmp/sample".into();
+        assert_eq!(request.validate(), Ok(()), "{on}");
+    }
+}
+
+#[test]
 fn the_presets_dump_trigger_is_in_the_launch_request_with_its_limits() {
     use antinomie_monitor_core::dump_trigger::TriggerTier;
     let revert = crate::config::service::RevertMode::SnapshotDisk;

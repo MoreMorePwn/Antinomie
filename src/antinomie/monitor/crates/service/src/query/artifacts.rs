@@ -171,6 +171,13 @@ impl QueryService {
                 }
             }
         }
+        // The timed screenshots of the run, oldest first (`screenshots/t+...png`).
+        for shot in antinomie_monitor_core::timed_shots::list(run_dir) {
+            if let Some((relative, size)) = confined(run_dir, &shot.path) {
+                let name = relative.to_string_lossy().into_owned();
+                add(K::Screenshot, run_dir, relative, size, name);
+            }
+        }
         if let Some(root) = &root {
             if let Some(links) = self.artifacts_json(opened) {
                 if !links.network_deleted {
@@ -256,6 +263,15 @@ impl QueryService {
                 size: entry.size,
                 sha256: Self::sha256_of(entry),
                 sensitive: entry.kind.sensitive(),
+                run_time_ms: (entry.kind == RecordingArtifactKind::Screenshot)
+                    .then(|| {
+                        entry
+                            .relative
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .and_then(antinomie_monitor_core::timed_shots::parse_name)
+                    })
+                    .flatten(),
             })
             .collect();
         let total = items.len() as u64;

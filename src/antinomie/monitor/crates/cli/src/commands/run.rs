@@ -88,6 +88,12 @@ pub struct Exec {
     /// Take the VM's memory when the program's tree has ended.
     #[arg(long)]
     pub memory_dump: bool,
+    /// Take a screenshot of the VM screen every SECONDS (1 to 999) while the
+    /// program runs, and one when its tree ends; a screen that has not
+    /// changed is skipped. The pictures are the run's `screenshots/` files,
+    /// named by the time since the run started.
+    #[arg(long = "screenshot-every", value_name = "SECONDS")]
+    pub screenshot_every: Option<u32>,
     /// Take a core of the program before its address space exits.
     #[arg(long)]
     pub core_dump: bool,
@@ -221,6 +227,7 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
         capture_network: arguments.net_capture,
         memory_dump_on_exit: arguments.memory_dump,
         core_dump_on_exit: arguments.core_dump,
+        screenshot_every_s: arguments.screenshot_every,
         route: arguments.route.as_deref().map(parse_route).transpose()?,
         core_max_size: dump_trigger
             .as_ref()
@@ -839,6 +846,19 @@ mod tests {
         assert_eq!(request.run_in, RunIn::AppTerminal);
         assert_eq!(request.env[0], "A=1");
         assert!(request.env.iter().any(|item| item.starts_with("PATH=")));
+    }
+
+    #[test]
+    fn screenshot_every_asks_for_timed_screenshots_within_one_to_999() {
+        assert_eq!(request_for(&parse(&[])).unwrap().screenshot_every_s, None);
+        for (flag, every) in [("15", 15), ("999", 999)] {
+            let request = request_for(&parse(&["--screenshot-every", flag])).unwrap();
+            assert_eq!(request.screenshot_every_s, Some(every));
+        }
+        for bad in ["0", "1000"] {
+            let exec = parse(&["--screenshot-every", bad]);
+            assert!(request_for(&exec).is_err(), "{bad}");
+        }
     }
 
     #[test]

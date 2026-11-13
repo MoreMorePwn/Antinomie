@@ -67,11 +67,11 @@ pub const MIN_CORE_MIB: u32 = 64;
 pub const MAX_CORE_MIB: u32 = 1024;
 pub const MAX_STATIC_MINUTES: u32 = 480;
 pub const MAX_SAMPLE_MIB: u32 = 256;
-/// `record.screenshot_every_s`: 0 is off, else 1 to this many seconds, with
-/// no node minimum (the user's decision of 2026-11-13, ANT-T0548 F3). The
-/// key is reserved at 0 until the timed screenshots of ANT-T0487 are merged;
-/// that merge unreserves it and checks this range in `check_preset`.
-pub const MAX_SCREENSHOT_EVERY_S: u32 = 999;
+/// `record.screenshot_every_s`: 0 is off, else 1 to this many seconds (999),
+/// with no node minimum (the user's decision of 2026-11-13, ANT-T0548 F3);
+/// checked in `check_preset`. It is the engine's own bound, so every value a
+/// preset may hold is one `ExecRequest::validate` takes.
+pub const MAX_SCREENSHOT_EVERY_S: u32 = antinomie_monitor_core::timed_shots::MAX_INTERVAL_S;
 /// `[retry]`: attempts of a run and the longest wait between two.
 pub const MAX_ATTEMPTS: u32 = 10;
 pub const MAX_BACKOFF_S: u32 = 3600;
@@ -481,13 +481,6 @@ pub fn reserved(preset: &Preset) -> Vec<Reserved> {
         "record.scope",
         "program",
     );
-    // The engine side of timed screenshots is ANT-T0487; its merge wires it
-    // and replaces this check by the range 0 or 1 to MAX_SCREENSHOT_EVERY_S.
-    check(
-        preset.record.screenshot_every_s == 0,
-        "record.screenshot_every_s",
-        "0 (off)",
-    );
     check(
         !preset.network.private_addresses,
         "network.private_addresses",
@@ -650,6 +643,12 @@ fn check_preset(preset: &Preset, sink: &mut Sink<'_>) {
     }
     check_program(&preset.program, sink);
     check_dumps(preset, sink);
+    if preset.record.screenshot_every_s > MAX_SCREENSHOT_EVERY_S {
+        sink.error(
+            "record.screenshot_every_s",
+            format!("must be 0 (off) or 1 to {MAX_SCREENSHOT_EVERY_S} seconds"),
+        );
+    }
     if !valid_lane_group(&preset.vm.lane_group) {
         sink.error("vm.lane_group", "1 to 64 bytes of [A-Za-z0-9._-]");
     }

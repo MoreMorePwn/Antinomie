@@ -79,6 +79,7 @@ impl Session {
             host_copy: None,
             sample: None,
             preloaded: Vec::new(),
+            screenshot_every_s: None,
         };
         let reply = match self.request_typed(
             control::EXEC,

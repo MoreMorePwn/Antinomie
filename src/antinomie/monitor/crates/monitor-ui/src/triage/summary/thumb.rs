@@ -23,13 +23,24 @@ pub(in crate::triage) struct Thumb {
 impl Thumb {
     /// Draw the picture at `path`; true when it was clicked.
     pub(super) fn show(&mut self, ui: &mut egui::Ui, path: &Path) -> bool {
+        self.show_sized(ui, path, WIDTH, SIDE)
+    }
+
+    /// [`Self::show`] drawn `width` wide from a picture decoded to `side`.
+    pub(super) fn show_sized(
+        &mut self,
+        ui: &mut egui::Ui,
+        path: &Path,
+        width: f32,
+        side: usize,
+    ) -> bool {
         if self.path.as_deref() != Some(path) {
             *self = Self::default();
             self.path = Some(path.to_owned());
             let (tx, rx) = mpsc::channel();
             let owned = path.to_owned();
             std::thread::spawn(move || {
-                let _ = tx.send(crate::app::screenshots_page::decode::load(&owned, SIDE));
+                let _ = tx.send(crate::app::screenshots_page::decode::load(&owned, side));
             });
             self.rx = Some(rx);
         }
@@ -53,7 +64,7 @@ impl Thumb {
         match &self.texture {
             Some(texture) => {
                 let size = texture.size_vec2();
-                let scale = (WIDTH / size.x).min(1.0);
+                let scale = (width / size.x).min(1.0);
                 ui.add(
                     egui::Image::new(texture)
                         .fit_to_exact_size(size * scale)

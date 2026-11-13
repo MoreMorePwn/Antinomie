@@ -105,6 +105,10 @@ pub fn effective(preset: &Preset, revert: RevertMode) -> Effective {
         host_copy: None,
         sample: None,
         preloaded: Vec::new(),
+        // `record.screenshot_every_s`: 0 is off, else the interval (1 to
+        // `validate::MAX_SCREENSHOT_EVERY_S`, checked at submit).
+        screenshot_every_s: (preset.record.screenshot_every_s > 0)
+            .then_some(preset.record.screenshot_every_s),
     };
     Effective {
         run_limit: Duration::from_secs(u64::from(program.run_time_s)),

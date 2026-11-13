@@ -43,6 +43,8 @@ runs while a window or the daemon owns the data directory.
   `static_analysis.limits.*` within the range of the app's Settings, at most 64
   arguments and 64 `NAME=value` environment entries, absolute
   `program.guest_path` and `program.working_directory`.
+- `record.screenshot_every_s` is 0 (off) or 1 to 999 seconds (timed screenshots
+  of the VM screen while the program runs; no node minimum).
 - `dumps.dump_when_suspicious` must take something (`trigger_memory_dump` or
   `trigger_core`); `read_non_resident_pages` without a trigger core is a
   warning. `static_analysis.triage_checks` take the eleven Triage checks,
@@ -50,10 +52,7 @@ runs while a window or the daemon owns the data directory.
 - The keys 0.9.0 reserves are accepted at their default only, else an error
   "arrives with 0.9.1": `program.source` (`upload`), `executable` (empty),
   `preload` and `extra_files` (empty), `run_in` (`app_terminal`),
-  `record.scope` (`program`), `record.screenshot_every_s` (0; once timed
-  screenshots arrive its range is 0 for off or 1 to 999 seconds, with no node
-  minimum),
-  `network.private_addresses` (false), `abuse_filter` (true),
+  `record.scope` (`program`), `network.private_addresses` (false), `abuse_filter` (true),
   `dumps.disk_dump` (false), `vm.keep_on_failure` (false),
   `static_analysis.rebuilt_file_mib` (16) and `rebuilt_run_mib` (256),
   `triage.written_*` and `earlier_*` (64 and 1024), `detection.scan_every_min`

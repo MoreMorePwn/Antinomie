@@ -193,8 +193,9 @@ pub enum RecordScope {
 #[serde(deny_unknown_fields, default)]
 pub struct Record {
     pub scope: RecordScope,
-    /// Screenshot every N seconds, 1 to 999 (`MAX_SCREENSHOT_EVERY_S`); 0 is
-    /// off (reserved at 0 here; the engine side is ANT-T0487).
+    /// Screenshot of the VM screen every N seconds while the program runs,
+    /// 1 to 999 (`validate::MAX_SCREENSHOT_EVERY_S`); 0 is off. The pictures
+    /// are the recording's `screenshot` artifacts (ANT-T0487).
     pub screenshot_every_s: u32,
 }
 

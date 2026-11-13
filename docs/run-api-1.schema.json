@@ -9951,6 +9951,15 @@
         },
         "sensitive": {
           "type": "boolean"
+        },
+        "run_time_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "For a `screenshot`: milliseconds since the run started."
         }
       },
       "required": [
@@ -9979,7 +9988,8 @@
         "network_capture",
         "memory_dump",
         "core_dump",
-        "file_before"
+        "file_before",
+        "screenshot"
       ],
       "description": "What a file of the recording is."
     },

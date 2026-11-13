@@ -69,6 +69,11 @@ pub struct Submit {
     /// The run time in seconds, 5 to 1800 (`program.run_time_s`).
     #[arg(long, value_name = "SECONDS")]
     pub timeout_run: Option<u32>,
+    /// Take a screenshot of the VM screen every SECONDS while the program
+    /// runs (`record.screenshot_every_s`: 1 to 999; 0 turns it off). The
+    /// pictures are the recording's `screenshot` artifacts.
+    #[arg(long, value_name = "SECONDS")]
+    pub screenshot_every: Option<u32>,
     /// Program arguments (`program.arguments`).
     #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "ARG")]
     pub args: Vec<String>,
@@ -184,6 +189,9 @@ pub fn spec_of(arguments: &Submit) -> Result<Value, CliError> {
     }
     if let Some(seconds) = arguments.timeout_run {
         set("program", "run_time_s", json!(seconds));
+    }
+    if let Some(seconds) = arguments.screenshot_every {
+        set("record", "screenshot_every_s", json!(seconds));
     }
     if !arguments.args.is_empty() {
         set("program", "arguments", json!(arguments.args));
@@ -573,6 +581,17 @@ mod tests {
         let mut all = vec!["submit"];
         all.extend_from_slice(args);
         Wrapper::try_parse_from(all).unwrap().submit
+    }
+
+    #[test]
+    fn screenshot_every_becomes_the_record_key_and_zero_turns_it_off() {
+        for (flag, value) in [("30", 30), ("999", 999), ("0", 0)] {
+            let spec = spec_of(&parse(&["f.elf", "--screenshot-every", flag])).unwrap();
+            assert_eq!(
+                spec["overrides"]["record"]["screenshot_every_s"],
+                json!(value)
+            );
+        }
     }
 
     #[test]

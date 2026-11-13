@@ -573,7 +573,8 @@ impl Session {
     pub(super) fn release_completed_runs(&mut self) {
         for run in self.runs.values_mut() {
             // A run whose tree ended is saved once the writer has caught up.
-            if run.seal_if_complete() {
+            let sealed = run.seal_if_complete();
+            if run.collect_shots(false) || sealed {
                 let _ = run.persist_summary();
             }
             if run.recording_complete() && run.assembler.holds_tables() {
