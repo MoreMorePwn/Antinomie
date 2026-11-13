@@ -1,16 +1,26 @@
-# Job API, version 1
+# Run API, version 1
 
 [← Back to the overview](../README.md)
 
-This is the contract of the headless job API: the objects, states, events,
+This is the contract of the headless run API: the objects, states, events,
 operations and errors that the command line (`antinomie-cli`), the local socket
-and, later, the web process share. The machine-readable form is
-[job-api-1.schema.json](job-api-1.schema.json), generated from the Rust types of
+and, later, the web process share. It was the job API until the run rename of
+0.9.0 (ANT-T0492); no job API was released, and the old names (`job.*`,
+`policy.list`, `recording.run.*`, `job_id`, `run_key`) are not accepted.
+
+> **Words.** A **run** is one analysis of one sample: what a caller submits,
+> follows and reads (id `r_<26>`). The **program** is the sample's execution
+> inside a run. A **recording** is what the engine captured while the program
+> ran; the `recording.*` reads address it by `recording_key`. A **preset** is a
+> named set of run options. **Job** is left for work the engine still has to do
+> (the store, the host work items of a run, uploads, retention); it is not a
+> name of this API. The machine-readable form is
+[run-api-1.schema.json](run-api-1.schema.json), generated from the Rust types of
 the `antinomie-service` crate (`src/api/`) with `schemars` and checked in; a test
 fails when the file is stale. The recording reads (`recording.*`) are in the
 second part of this document.
 
-> **Status in 0.9.0.** The types, the schema, the job store, the read-only
+> **Status in 0.9.0.** The types, the schema, the run store, the read-only
 > recording queries and the daemon's local socket ship. `antinomie-cli auto daemon`
 > serves the operations below on the socket; the `auto` commands of the CLI are its
 > client. The web binding (ANT-T0192) is not part of 0.9.0.
@@ -27,9 +37,9 @@ in a request fails with `invalid_argument` naming the field.
 | Encoding | UTF-8 JSON. Times are Unix milliseconds in a field ending `_ms`; durations are seconds in `_s` or milliseconds in `_ms`; sizes are bytes. Text is English, times UTC. |
 | Version | `api_version: 1` in every response object and in `capabilities`. |
 | Enumerated values | Lower snake case. Routes: `drop`, `internet`, `inet_sim`, `tor`, `vpn`, `socks5`. Sample types as the library detects them (`elf`, `sh`, `py`, ...) with the architecture as a separate string (`x86_64`, `AArch64`, ...). |
-| Identifiers | Opaque strings that are safe as a path component: job `j_<26 chars>`, artifact `a_<26>`, upload `u_<26>`, recording artifact `ra_<26>`, lane `lane-<n>`. The 26 characters are Crockford base32 in the shape of a ULID, so ids sort by creation time. A sample is its lowercase SHA-256. A recorded run is addressed by an opaque `run_key`; clients never build or parse it. |
-| Pagination | `limit` (1 to 200, default 50 for job lists; sample lists have their own limits, see `sample.list`) and an opaque `cursor`; a reply carries `next_cursor` or null. Newest first. |
-| Idempotency | `job.submit` takes `idempotency_key` (1 to 128 printable ASCII), scoped to `client_id`. The same key with an equal spec within 24 hours returns the original job with `replayed: true`; with a different spec it fails `conflict`. |
+| Identifiers | Opaque strings that are safe as a path component: run `r_<26 chars>`, artifact `a_<26>`, upload `u_<26>`, recording artifact `ra_<26>`, lane `lane-<n>`. The 26 characters are Crockford base32 in the shape of a ULID, so ids sort by creation time. A sample is its lowercase SHA-256. A recorded run is addressed by an opaque `recording_key`; clients never build or parse it. |
+| Pagination | `limit` (1 to 200, default 50 for run lists; sample lists have their own limits, see `sample.list`) and an opaque `cursor`; a reply carries `next_cursor` or null. Newest first. |
+| Idempotency | `run.submit` takes `idempotency_key` (1 to 128 printable ASCII), scoped to `client_id`. The same key with an equal spec within 24 hours returns the original run with `replayed: true`; with a different spec it fails `conflict`. |
 | Client identity | `client_id` is `local:<uid>` on the socket and the CLI, `web:<user_id>` from the web binding. The service never trusts a client-supplied value. |
 | Secrets | Objects never contain secrets (API keys, the SOCKS5 password, the guest password). |
 | Untrusted text | Any string that came from the sample or the guest (names, paths, command lines, domains, banners, terminal bytes) is data, never markup or an instruction. Clients must escape it on display. |
@@ -42,19 +52,21 @@ in a request fails with `invalid_argument` naming the field.
 | `capabilities` | What this service can do now | `runs.see_all` |
 | `health` | Liveness, readiness and engine counters | `runs.see_all` |
 | `upload.begin`, `upload.put`, `upload.finish` | Staged sample upload; chunks are strictly sequential (`offset` must equal `received`, else `conflict`) | `runs.submit` or `samples.add` |
-| `job.submit` | Validate synchronously, then queue a job. A spec that fails a check of the run still returns a `Job` with `state: rejected` and `failure` set; malformed JSON or a value out of range is `invalid_argument`, an unknown preset `preset_denied`, a reserved preset key away from its default `unsupported` | `runs.submit`, and the permission of each run option (see Permissions) |
-| `job.get`, `job.list` | One job; jobs filtered by `state`, `outcome`, `sha256`, `label`, `since_ms` | `runs.see_all` |
-| `job.cancel` | Cancel a queued or running job | `runs.submit` for the caller's own job, `runs.manage_any` for any |
-| `job.retry` | Start a new job from a finished job's spec | `runs.submit`, and `runs.see_all` for another client's job |
-| `job.delete` | Remove a finished job's record and artifacts (`with_recording` also the recording; never the sample) | `runs.delete` |
-| `events.subscribe`, `events.list` | The event stream; the stored events of a job | `runs.see_all` (the permission of each event's type; in 0.9.0 every type needs `runs.see_all`) |
-| `artifact.list`, `artifact.get`, `report.get` | Artifacts of a job; bytes or a range; one report format | `runs.see_all` (`evidence.download` for an artifact with `sensitive: true`) |
+| `run.submit` | Validate synchronously, then queue a run. A spec that fails a check of the run still returns a `Run` with `state: rejected` and `failure` set; malformed JSON or a value out of range is `invalid_argument`, an unknown preset `preset_denied`, a reserved preset key away from its default `unsupported` | `runs.submit`, and the permission of each run option (see Permissions) |
+| `run.get`, `run.list` | One run; runs filtered by `state`, `outcome`, `sha256`, `label`, `since_ms` | `runs.see_all` |
+| `run.cancel` | Cancel a queued or running run | `runs.submit` for the caller's own run, `runs.manage_any` for any |
+| `run.rerun` | Start a new run from a finished run: its request and resolved options, or another `preset` as it is now; `overrides` on top (Run again; was `job.retry`) | `runs.submit`, and `runs.see_all` for another client's run |
+| `run.delete` | Remove a finished run's record and artifacts (`with_recording` also the recording; never the sample) | `runs.delete` |
+| `events.subscribe`, `events.list` | The event stream; the stored events of a run | `runs.see_all` (the permission of each event's type; in 0.9.0 every type needs `runs.see_all`) |
+| `artifact.list`, `artifact.get`, `report.get` | Artifacts of a run; bytes or a range; one report format | `runs.see_all` (`evidence.download` for an artifact with `sensitive: true`) |
 | `sample.list`, `sample.get` | Library samples | `runs.see_all` |
 | `sample.add` | Store a file in the library without running it | `samples.add` |
 | `sample.download` | The library archive of a sample (an AES zip, never the plaintext) | `samples.download` |
 | `sample.tag` | Set tags on a sample | `samples.tag` |
-| `policy.list`, `queue.status`, `vm.list`, `base.list` | Every preset (`{policies: [{name, title, description, digest, built_in, offered_to, needs, missing, unavailable}]}`: the permissions its options need, the ones the caller lacks, what the node does not have); queue and lane state; VMs and installed bases | `runs.see_all` |
-| `queue.pause`, `queue.resume` | Stop or resume starting new jobs | `queue.manage` |
+| `preset.list` | Every preset (`{presets: [{name, title, description, digest, built_in, offered_to, needs, missing, unavailable, usable}]}`): the permissions its options need, the ones the caller lacks, what the node does not have, and whether the caller can run it as it is | `runs.submit` |
+| `preset.get` | One preset by `name`: `{name, digest, built_in}` and every key of the preset, with the same tables as its file (`not_found` with `field: "name"` for an unknown name). Preset versions arrive with preset writes (0.9.1) | `runs.submit` |
+| `queue.status`, `vm.list`, `base.list` | Queue and lane state; VMs and installed bases | `runs.see_all` |
+| `queue.pause`, `queue.resume` | Stop or resume starting new runs | `queue.manage` |
 | `custody.verify` | Verify the custody chain of one sample or the whole library | `custody.verify` |
 
 A caller without the permission an operation needs gets `permission_denied`
@@ -63,11 +75,13 @@ with `details.needs` listing it.
 Not in version 1: live terminal streaming and input, the debugger, snapshot
 management, base download or build, VM creation, rule pack management, settings
 changes, memory and disk browsing, core reading, and any write to a recording.
-The namespaces `run.*`, `terminal.*`, `rule.*`, `settings.*`, write operations of
-`vm.*` and `base.*`, and the reserved `recording.*` names are reserved: a binding
-must not invent operations in them.
+The rest of the namespaces `run.*` and `preset.*` (`run.end`, `run.annotate`,
+`run.share`, `preset.put`, `preset.retire` arrive with 0.9.1), the namespaces
+`terminal.*`, `rule.*`, `settings.*`, write operations of `vm.*` and `base.*`,
+and the reserved `recording.*` names are reserved: a binding must not invent
+operations in them.
 
-## Job spec
+## Run spec
 
 Exactly one of `sample.sha256`, `sample.path` (local-only) or `sample.upload_id`
 is set. Every other field is optional. The preset gives every run option;
@@ -76,7 +90,7 @@ is set. Every other field is optional. The preset gives every run option;
 | Field | Meaning |
 |---|---|
 | `name` | File name hint, 1 to 128 bytes, no `/`, no NUL |
-| `policy` | The preset's name, default `standard` (the member keeps this name until the run API). Five presets are built in: `standard`, `quick-look`, `deep`, `interactive`, `live-network`; more are `<data>/presets/<name>.toml` |
+| `preset` | The preset's name, default `standard`. Five presets are built in: `standard`, `quick-look`, `deep`, `interactive`, `live-network`; more are `<data>/presets/<name>.toml` |
 | `priority` | 0 to 9, default 5 (the app's levels: Low 2, Normal 5, Urgent 8); higher starts first, with no ageing; the caller's `priority_max`, when it has one, is a ceiling: a higher value is refused `limit_exceeded`, never lowered (an unset priority becomes the default or the ceiling when that is lower) |
 | `labels` | At most 16 pairs; key 1 to 32 bytes of `[a-z0-9._-]`, value up to 128 bytes |
 | `idempotency_key` | See conventions |
@@ -96,14 +110,14 @@ ranges are in [service configuration](service-config.md)):
 | `accepts`, `duplicates`, `record`, `verdict`, `retry`, `required_stages` | As in the file |
 
 **The Custom rule.** An override that changes a value makes the run Custom; an
-override equal to the preset's value changes nothing. A Custom run's `policy`
+override equal to the preset's value changes nothing. A Custom run's `preset`
 object is `{name: "custom", digest, based_on: {name, digest}, changes: [...]}`
 (`digest` is the SHA-256 of its resolved options, `changes` the dotted keys it
-changed); a run of an unchanged preset has `{name, digest}`. The stored spec
+changed); a run of an unchanged preset has `{name, digest}`. The stored request
 keeps the preset's name and only the changed keys in `overrides`; every
-resolved option is frozen with the job. A preset locks nothing: only the
+resolved option is frozen with the run. A preset locks nothing: only the
 caller's permissions, the node and the caller's limits do (see "How
-`job.submit` is checked"). A key 0.9.0 reserves is accepted at its default
+`run.submit` is checked"). A key 0.9.0 reserves is accepted at its default
 only; another value is `unsupported` with `details.reason = "reserved"` and
 `field` the key ("arrives with 0.9.1").
 
@@ -111,11 +125,11 @@ The sample size limit is the smallest of the engine's 256 MiB maximum, the
 preset's `accepts.max_sample_mib` and a quarter of the lane VM's RAM;
 `capabilities.max_sample_bytes` reports it.
 
-## Job states
+## Run states
 
 | State | Terminal | Meaning |
 |---|---|---|
-| `queued` | no | Accepted and stored; `waiting_for` says what for (`lane`, `resources`, `dependency`, `quota`, `queue_paused`, `layer_pending`, `backoff`, `lane_quarantined`) |
+| `queued` | no | Accepted and stored; `waiting_for` says what for (`lane`, `resources`, `dependency`, `quota` (a limit of the caller, also: the caller already has `max_running` runs running), `queue_paused`, `layer_pending`, `backoff`, `lane_quarantined`) |
 | `running` | no | A lane is working; `stage` says where (`prechecks`, `provision`, `upload`, `launch`, `run`, `collect`, `analyse`, `report`, `cleanup`) |
 | `cancelling` | no | Cancel requested; the lane is stopping the run and cleaning up |
 | `succeeded` | yes | The run ended, the recording is complete, the requested analysis and reports exist |
@@ -124,21 +138,42 @@ preset's `accepts.max_sample_mib` and a quarter of the lane VM's RAM;
 | `cancelled` | yes | Stopped by request; whatever was recorded is kept and flagged |
 | `rejected` | yes | Refused at submit (a permission, the node, a limit, the sample); consumed no lane time |
 
-`outcome` is null while the job is not terminal and equals `state` afterwards.
+`outcome` is null while the run is not terminal and equals `state` afterwards.
 
-`host_work` (0.9.0, ANT-T0454) lists the job's host work items once `collect`
+`host_work` (0.9.0, ANT-T0454) lists the run's host work items once `collect`
 has handed it to the host work pool: `name` (`triage`, `static:<tool>`,
 `detection`, `assess`, `report`), `state` (`queued`, `running`, `done`,
 `failed`, `timed_out`, `skipped`), `after` (the items it waits for),
 `expected_s` and its `basis` (`median`, `estimate`, `fixed`, `policy`: a fixed limit the preset sets),
 `limit_s`, `started_ms`, `finished_ms` and `note`. `queue.status` has
-`host_pool`: `workers`, `queued` (the pool's queue length), `running`, `jobs`
+`host_pool`: `workers`, `queued` (the pool's queue length), `running`, `runs`
 and `waiting_for` (why the head waits, when it waits for memory).
 
-The preset is frozen at submit: a job whose preset changed or went away since
-keeps the options it froze. When the job starts, prechecks asks again
+## The run object
+
+`run.get`, `run.submit`, `run.rerun`, `run.cancel` and the items of `run.list`
+(`{runs, next_cursor}`) are one object:
+
+| Member | Meaning |
+|---|---|
+| `api_version`, `id` | `1`; the run id `r_<26>` (a `j_` id of a store written before the rename still resolves) |
+| `state`, `stage`, `waiting_for`, `outcome`, `queue_position` | See the states above |
+| `created_ms`, `started_ms`, `finished_ms`, `attempt`, `max_attempts` | Times and attempts (a run starts over when the VM or guest failed) |
+| `client_id` | Who submitted it (`local:<uid>`, `auto:preset-<name>` for a watch folder) |
+| `request` | The `RunRequest` as stored: the preset's name and the priority filled in, `overrides` reduced to the keys that changed a value |
+| `preset` | `{name, digest}`, or for a Custom run `{name: "custom", digest, based_on: {name, digest}, changes}` |
+| `settings` | Every resolved option of the run: the frozen preset, with the same tables and keys as a preset file |
+| `permissions_used` | `[{permission, field, source}]`: each permission the run's options use beside `runs.submit` (`field` the preset key, `source` `caller` in 0.9.0: the caller's permission set; roles and grants arrive with 0.9.1); empty for a run that uses none |
+| `sample` | The library sample once archived: `{sha256, size, type, architecture, name}` |
+| `lane`, `vm` | The lane and its VM `{id, name, base_identity, revert}` |
+| `program` | The sample's execution: `{id, started_ms, ended_ms, end_reason, exit, signal, core_dumped, triggers, trigger_notes, pending}`; `id` is the engine's id of the execution (the recording's `run_id`); `end_reason` is `exited`, `signaled`, `time_limit`, `stopped` or `guest_lost` |
+| `recording` | `{vm_id, boot_id, run_id, recording_key, phase, directory?}`: the engine's ids of the recording and the key every `recording.*` read takes |
+| `assessment`, `artifacts`, `warnings`, `failure`, `repeat_of`, `labels`, `host_work` | The label and digest; the files; non-fatal notes; why it failed or was refused; the run it repeats; the request's labels; the host work items |
+
+The preset is frozen at submit: a run whose preset changed or went away since
+keeps the options it froze. When the run starts, prechecks asks again
 whether its client still holds every permission the run uses; one taken away
-while the job waited (a watch folder's `permissions` changed by a reload) ends it
+while the run waited (a watch folder's `permissions` changed by a reload) ends it
 `failed` with `permission_denied`.
 
 ## Failure codes
@@ -164,29 +199,29 @@ while the job waited (a watch folder's `permissions` changed by a reload) ends i
 
 ## Events
 
-Every stored event has `seq` (within one job, from 1, or within one service epoch
+Every stored event has `seq` (within one run, from 1, or within one service epoch
 for engine scope), `gseq` (across the service, persisted, never reused), `ts_ms`,
-`scope` (`job` or `engine`), `job_id`, `type` and `data`.
+`scope` (`run` or `engine`), `run_id` (null for engine scope), `type` and `data`.
 
 | Type | `data` |
 |---|---|
-| `job.created` | `{job}` |
-| `job.state` | `{state, stage, waiting_for?, attempt, queue_position?}` |
-| `job.stage` | `{stage, status, duration_ms?}`; `status` is `started`, `finished`, `skipped` or `failed` |
-| `job.progress` | `{stage, text, fraction?}`. Ephemeral: not stored, no `seq` |
-| `job.run` | `{run_id, pid?, route}` |
-| `job.warning` | `{code, text}` |
-| `job.artifact` | `{artifact}` |
-| `job.trigger` | `{trigger?, note?}`: the preset's dump trigger took a dump (`trigger`: rule, tier, summary, syscall, pid, at_ms, and the `memory` and `core` dump with state, size, capture_id, error; no host path) or did less than asked (`note`) |
-| `job.assessment` | `{assessment}` |
-| `job.requeued` | `{attempt, reason}`; a `job.state` event with `state: queued` follows |
-| `job.finished` | `{outcome, failure?}`; the last event of a job |
-| `lane.state` | `{lane, state, job_id?, reason?}` (engine scope) |
+| `run.created` | `{run}` |
+| `run.state` | `{state, stage, waiting_for?, attempt, queue_position?}` |
+| `run.stage` | `{stage, status, duration_ms?}`; `status` is `started`, `finished`, `skipped` or `failed` |
+| `run.progress` | `{stage, text, fraction?}`. Ephemeral: not stored, no `seq` |
+| `run.program` | `{program_id, pid?, route}`: the program started (`program_id` is `program.id` of the run) |
+| `run.warning` | `{code, text}` |
+| `run.artifact` | `{artifact}` |
+| `run.trigger` | `{trigger?, note?}`: the preset's dump trigger took a dump (`trigger`: rule, tier, summary, syscall, pid, at_ms, and the `memory` and `core` dump with state, size, capture_id, error; no host path) or did less than asked (`note`) |
+| `run.assessment` | `{assessment}` |
+| `run.requeued` | `{attempt, reason}`; a `run.state` event with `state: queued` follows |
+| `run.finished` | `{outcome, failure?}`; the last event of a run |
+| `lane.state` | `{lane, state, run_id?, reason?}` (engine scope) |
 | `engine.alert` | `{code, text}` (engine scope) |
-| `job.metrics` | `{stage, vm, run, health}`. Ephemeral |
+| `run.metrics` | `{stage, vm, run, health}`. Ephemeral |
 
 Stored events are never summarised or dropped. A subscriber that reconnects with
-`since_seq` (one job) or `since_gseq` (all jobs) receives every stored event after
+`since_seq` (one run) or `since_gseq` (all runs) receives every stored event after
 it, then live ones. `engine.hello` and `engine.ping` are frames, not events.
 
 ## Errors
@@ -198,18 +233,18 @@ Every failed operation returns `{"error": {"code", "message", "field?", "retryab
 | `invalid_argument` | 400 | Malformed or unknown field; `field` names it |
 | `unauthenticated` | 401 | Added by the HTTP layer only |
 | `forbidden` | 403 | Added by the HTTP layer only |
-| `permission_denied` | 403 | The caller lacks a permission; `details.needs` lists it (also inside a rejected job's `failure`) |
+| `permission_denied` | 403 | The caller lacks a permission; `details.needs` lists it (also inside a rejected run's `failure`) |
 | `preset_denied` | 403 | There is no such preset (or, from 0.9.1, it is retired or not offered to the caller's role); `details.preset`. Nothing is stored |
 | `limit_exceeded` | 403 | A value above a limit (priority, run time, runs per day); `details.field`, `details.limit`, `details.source` |
 | `unavailable_on_node` | 409 | The node does not have what the request needs (a live route, a kept VM); `details.what` |
-| `not_found` | 404 | Job, artifact, sample, upload, run or recording missing |
-| `conflict` | 409 | Idempotency key reused with another spec; the job is not in a state that allows the op; `details.reason = "cursor_stale"` |
-| `precondition_failed` | 412 | For example `job.retry` of a job that is not terminal; `details.reason = "layer_pending"` or `"recording_open"` |
+| `not_found` | 404 | Run, artifact, sample, upload, run or recording missing |
+| `conflict` | 409 | Idempotency key reused with another spec; the run is not in a state that allows the op; `details.reason = "cursor_stale"` |
+| `precondition_failed` | 412 | For example `run.rerun` of a run that is not terminal; `details.reason = "layer_pending"` or `"recording_open"` |
 | `payload_too_large` | 413 | Upload or sample above the limit; a read range above its limit |
 | `quota_exceeded` | 429 | Queue full or client quota; `details.retry_after_s`; `details.reason = "heavy_read_limit"` |
 | `unavailable` | 503 | Data directory owned by the GUI, service starting or stopping, engine failed; `details.reason = "read_timeout"` |
 | `unsupported` | 501 | Not in this build or not in version 1 |
-| `internal` | 500 | A bug; `details.log` names the job log |
+| `internal` | 500 | A bug; `details.log` names the run log |
 
 ## Permissions
 
@@ -221,14 +256,14 @@ features of 0.9.1 (cases, interactive sessions, presets, kept VMs).
 | Permission | Allows in 0.9.0 |
 |---|---|
 | `runs.see_all` | The read operations above, JSON, MISP and STIX reports, every `recording.*` operation classed normal, the events, `lane.list`, `watch.list` |
-| `runs.submit` | `upload.*`, `job.submit`, `job.retry`, and `job.cancel` of the caller's own jobs |
+| `runs.submit` | `upload.*`, `run.submit`, `run.rerun`, and `run.cancel` of the caller's own runs |
 | `samples.add` | `upload.*`, `sample.add` |
-| `runs.manage_any` | `job.cancel` of any job |
+| `runs.manage_any` | `run.cancel` of any run |
 | `evidence.view` | The sensitive `recording.*` operations (bytes shown, never a file) |
 | `evidence.download` | `artifact.get` and `report.get` of an artifact with `sensitive: true` |
 | `samples.download` | `sample.download` |
 | `samples.tag` | `sample.tag` |
-| `runs.delete` | `job.delete`, `gc.run` |
+| `runs.delete` | `run.delete`, `gc.run` |
 | `queue.manage` | `queue.pause`, `queue.resume`, `watch.scan` |
 | `lanes.reset` | `lane.reset`, `lane.unquarantine` |
 | `custody.verify` | `custody.verify` |
@@ -252,9 +287,9 @@ The four scopes of earlier drafts map to permissions as follows: `read` is
 `samples.download`; `manage` is `runs.manage_any`, `samples.tag`,
 `runs.delete`, `queue.manage`, `lanes.reset` and `custody.verify`.
 
-`runs.see_all` sees every job on the node (one trust domain per node).
+`runs.see_all` sees every run on the node (one trust domain per node).
 
-**How `job.submit` is checked, in order.** The first failing check answers:
+**How `run.submit` is checked, in order.** The first failing check answers:
 
 1. `runs.submit`, else `permission_denied` (nothing stored);
 2. the shape and range of every value, else `invalid_argument` (nothing
@@ -268,20 +303,20 @@ The four scopes of earlier drafts map to permissions as follows: `read` is
 5. every run option that adds risk has its permission, on the run as it will
    run (the preset's values included): the route, the user, core and memory
    dumps (also those the dump trigger takes), Check online, keeping the VM.
-   Else a rejected job with `permission_denied`, `field` the preset key
+   Else a rejected run with `permission_denied`, `field` the preset key
    (`network.route`) and `details.needs` listing every missing permission;
 6. the node has it (a live route, a kept VM, the lane group), else a rejected
-   job with `unavailable_on_node`;
+   run with `unavailable_on_node`;
 7. the caller's limits, when it has any: `priority` up to `priority_max`,
    `program.run_time_s` up to `max_run_s`, the runs of the last 24 hours up to
    `max_runs_per_day` (counted only when the caller has that limit, per client,
-   a rejected run not counted), else a rejected job with `limit_exceeded`
+   a rejected run not counted), else a rejected run with `limit_exceeded`
    (`details.source: "caller"`). `max_queued` is checked first, at submit
    (`quota_exceeded`); `max_running` holds a queued run back (`waiting_for`
    `quota`) while the caller has that many running;
 8. the sample (intake: size, type, architecture against `[accepts]`), else a
-   rejected job with the `sample_*` code. Intake comes last because it archives
-   the sample: a refused job adds nothing to the library.
+   rejected run with the `sample_*` code. Intake comes last because it archives
+   the sample: a refused run adds nothing to the library.
 
 ## Local socket
 
@@ -299,7 +334,7 @@ The four scopes of earlier drafts map to permissions as follows: `read` is
 | Replies | `{"id": N, "ok": true, "result": ...}` or `{"id": N, "ok": false, "error": {...}}` |
 | Hello | The first line of a connection is `{"frame": "engine.hello", "data": {"api_version", "app_version", "owner", "epoch", "gseq", "truncated"}}`, with no `id`. A client that does not know the `api_version` closes |
 | Cancel | `{"id": N, "op": "cancel"}` cancels the request `N` in flight; that request answers for itself (a subscription with `{"cancelled": true, ...}`, another request with `unavailable`, reason `cancelled`). A cancel of an id not in flight is `not_found`. Closing the connection cancels everything it had in flight, including a recording read |
-| Host paths | `sample.path` is refused on the socket (`invalid_argument`, field `sample.path`): a file arrives with `upload.begin`, `upload.put` and `upload.finish`, so no client makes the daemon open a path of its choosing. `artifact.get` and `report.get` answer with the file's `path` (local-only), resolved inside the job's directory: a recorded location that is absolute, has `..`, or leads through a symlink out of the job directory is not served |
+| Host paths | `sample.path` is refused on the socket (`invalid_argument`, field `sample.path`): a file arrives with `upload.begin`, `upload.put` and `upload.finish`, so no client makes the daemon open a path of its choosing. `artifact.get` and `report.get` answer with the file's `path` (local-only), resolved inside the run's directory: a recorded location that is absolute, has `..`, or leads through a symlink out of the run directory is not served |
 
 Limits (a refusal is an error reply; the connection stays open unless the table
 says it closes):
@@ -324,8 +359,8 @@ after 15 s without an event, and a last line:
 
 | Stream | Resume | Without a resume point | Ends |
 |---|---|---|---|
-| One job (`job_id`, `since_seq`) | Every stored event of that job with `seq` above `since_seq`, then live ones; never an event of another job | The job's whole history | After `job.finished` (the job's last event): `{"id": N, "ok": true, "result": {"finished": true, "last_seq": ...}}` |
-| All jobs and the engine (`since_gseq`) | Every stored event with `gseq` above `since_gseq`, then live ones | From now | On cancel, or when the daemon stops (`unavailable`, reason `service_stopping`) |
+| One run (`run_id`, `since_seq`) | Every stored event of that run with `seq` above `since_seq`, then live ones; never an event of another run | The run's whole history | After `run.finished` (the run's last event): `{"id": N, "ok": true, "result": {"finished": true, "last_seq": ...}}` |
+| All runs and the engine (`since_gseq`) | Every stored event with `gseq` above `since_gseq`, then live ones | From now | On cancel, or when the daemon stops (`unavailable`, reason `service_stopping`) |
 
 There is no gap and no duplicate across the resume: the stream subscribes to the
 live events first, then reads the table, then skips what the table gave; the store
@@ -334,20 +369,22 @@ events) reads the table again from the last event it sent, so a burst loses
 nothing. `truncated` is true when `since_gseq` is older than the oldest retained
 event (engine events are kept 7 days or 100 000 rows) or higher than any `gseq`
 this store has stored (another or a restored store); the client re-synchronises
-with `job.list`. `since_seq` without `job_id`, `since_gseq` with it, and an
-unknown name in `types` are `invalid_argument`; an unknown job is `not_found`.
-Ephemeral events (`job.progress`, `job.metrics`) are sent live only.
+with `run.list`. `since_seq` without `run_id`, `since_gseq` with it, and an
+unknown name in `types` are `invalid_argument`; an unknown run is `not_found`.
+Ephemeral events (`run.progress`, `run.metrics`) are sent live only.
 
 **Operations served in 0.9.0.** `capabilities`, `health`, `upload.*`,
-`job.submit`, `job.get`, `job.list`, `job.cancel`, `job.retry`, `events.subscribe`,
-`events.list`, `artifact.list`, `artifact.get`, `report.get`, `policy.list`,
-`queue.status`, `queue.pause`, `queue.resume`, `job.delete`, the `lane.*`, `watch.*` and
+`run.submit`, `run.get`, `run.list`, `run.cancel`, `run.rerun`, `events.subscribe`,
+`events.list`, `artifact.list`, `artifact.get`, `report.get`, `preset.list`,
+`queue.status`, `queue.pause`, `queue.resume`, `run.delete`, the `lane.*`, `watch.*` and
 `gc.run` operations below,
 `sample.list`, `sample.get`, `sample.add`, `sample.download`, `sample.tag`,
-`vm.list`, `base.list`, `custody.verify` and every `recording.*` read. The reserved names of 5.11
-(`run.`, `terminal.`, `rule.`, `settings.`, writes of `vm.` and `base.`) are
-`unsupported`; any other unknown name is `invalid_argument` on `op`. While the
-daemon stops, `job.submit`, `job.retry` and `upload.*` are `unavailable` with
+`vm.list`, `base.list`, `custody.verify` and every `recording.*` read. Any other name in the
+reserved namespaces (`run.`, `preset.`, `terminal.`, `rule.`, `settings.`,
+writes of `vm.` and `base.`) is `unsupported`; any other unknown name, the
+names of the job API before the rename (`job.submit`, `policy.list`, ...)
+included, is `invalid_argument` on `op`. While the
+daemon stops, `run.submit`, `run.rerun` and `upload.*` are `unavailable` with
 reason `service_stopping`.
 
 **Library, VM and base operations (additions to the table above).** They answer
@@ -366,30 +403,31 @@ from the same code direct mode runs, so the CLI prints the same objects either w
 
 **Service log for sensitive reads.** Every served read of the sample's own bytes
 writes one line to the daemon's service log (`antinomie-cli auto daemon` standard
-error, or its log file): `sensitive read: caller=<id> op=<op> run=<vm:boot:run> size=<bytes>`
+error, or its log file): `sensitive read: caller=<id> op=<op> recording=<vm:boot:run> size=<bytes>`
 for `recording.captured.read`, `recording.files.content`, `recording.network.packet`
 and `recording.artifact.get` of a capture, memory dump, core or file copy;
-`... op=artifact.get job=<job id> ...` for a job artifact with `sensitive: true`
+`... op=artifact.get run=<run id> ...` for a run artifact with `sensitive: true`
 (`report.get` too); and `... op=sample.download sample=<sha256> ...` for each range
 of an archive. `size` is the number of bytes served (the frame length for a packet).
 A refused read and a read of rows write nothing, a read that the scan still
 builds (`building`) writes nothing yet, and the line never carries the bytes, a
 host path or a name from the sample.
 
-**Runs and jobs.** `RunInfo.job_id` and the `job_id` filter of
-`recording.run.list` come from the job store: a job records its run (`recording`)
-when its lane stage opens it, and the reads find the newest job whose run is that
-one. The daemon and the CLI's direct mode use the same index (direct mode opens the
-store read-only and creates nothing), so both print the same `job_id`. A run no job
-made, and a data directory with no job store, show `job_id: null`.
+**Runs and recordings.** `RecordingInfo.from_run` and the `from_run` filter of
+`recording.list` come from the run store: a run records its recording
+(`recording`) when its lane stage opens it, and the reads find the newest run
+whose recording is that one. The daemon and the CLI's direct mode use the same
+index (direct mode opens the store read-only and creates nothing), so both print
+the same `from_run`. A recording no run made (the window, `run exec`), and a data
+directory with no run store, show `from_run: null`.
 
-**Held runs (0.9.0).** `RunInfo.held` (optional, untrusted text) is present while a
+**Held recordings (0.9.0).** `RecordingInfo.held` (optional, untrusted text) is present while a
 run's tree has ended but the run is held open for a copy of its program running
 outside the tree: "Held: persisted copy running (pid 1050, .e)". `state` keeps how
 the tree ended; a reader that knows nothing of `held` sees the run as before.
 
-**Reads from the CLI.** With a daemon at the socket `run list`, `run show`, `run
-export`, `triage` and the other read commands send these operations; `run export`
+**Reads from the CLI.** With a daemon at the socket `recording list`, `recording show`, `recording
+export`, `triage` and the other read commands send these operations; `recording export`
 never sends an output path: the command pages through `recording.*` and writes the
 files under `--out` itself, and the bytes the sample produced are fetched only with
 `--sensitive` (the permission `evidence.view` is checked again by the daemon, and
@@ -399,12 +437,12 @@ each read is written to its service log). `sample add FILE` sends the file with
 page that would not fit a 2 MiB line is `payload_too_large` and the command asks
 again for fewer rows.
 
-`job.retry` makes a new job from a finished one: the spec the client first sent,
+`run.rerun` makes a new run from a finished one: the request the client first sent,
 the sample named by its library hash, no idempotency key, and `repeat_of` set.
 A run of an unchanged preset uses the preset as it is now; a Custom run uses
 its resolved options as overrides of the preset it was based on (it is Custom
-again). The given `overrides` (a partial preset) are merged on top, key by key. The job must be terminal (`precondition_failed` otherwise); the
-caller needs `runs.submit`, and `runs.see_all` for another client's job.
+again). The given `overrides` (a partial preset) are merged on top, key by key. The run must be terminal (`precondition_failed` otherwise); the
+caller needs `runs.submit`, and `runs.see_all` for another client's run.
 
 **Lane operations** (an addition of this binding; section 5.3 has none for lanes,
 and the CLI's `auto lane` commands need them while a daemon owns the folder):
@@ -416,14 +454,14 @@ and the CLI's `auto lane` commands need them while a daemon owns the folder):
 | `lane.unquarantine` | `lanes.reset` | `lane?` | The lane with the quarantine lifted when the checks pass (`precondition_failed` naming the failing check otherwise) |
 
 `lane.reset` and `lane.unquarantine` are carried out by the lane's own thread and
-only while no job runs: a busy lane answers `conflict` at once (pause the queue
+only while no run runs: a busy lane answers `conflict` at once (pause the queue
 first), and a request not reached within its wait (900 s, 60 s) is dropped, never
 run late. Each sends `lane.state` with the reason.
 
-`job.delete` (`runs.delete`) removes an ended job's row, events, artifacts and folder
-and answers `{deleted: true}`. A job that has not ended is a `conflict`. With
-`with_recording: true` the job's recording is deleted first through the engine's
-own run deletion (custody actor `auto:policy-<preset>`); a recording that a
+`run.delete` (`runs.delete`) removes an ended run's row, events, artifacts and folder
+and answers `{deleted: true}`. A run that has not ended is a `conflict`. With
+`with_recording: true` the run's recording is deleted first through the engine's
+own run deletion (custody actor `auto:preset-<preset>`); a recording that a
 `recording.*` read has open, or whose artifacts are still being written, is a
 `precondition_failed` with `details.reason = "recording_open"` and nothing is
 removed. Without `with_recording` the recording stays where it is.
@@ -435,7 +473,7 @@ CLI's `auto watch` and `auto gc`):
 |---|---|---|---|
 | `watch.list` | `runs.see_all` | none | `{folders: [{path, preset, state, detail, taken, rejected, refused: [{name, reason}], pending, last_scan_ms, paused_until_ms}]}`; `state` is `watching`, `paused`, `held`, `refused` or `error` |
 | `watch.scan` | `queue.manage` | none | The same, after a scan made now (waits at most 30 s) |
-| `gc.run` | `runs.delete` | `dry_run?` (default false) | `{dry_run, now_ms, actions: [{kind, job, run, detail, bytes, done}], skipped: [{kind, job, why}], errors[], freed_bytes}`; `kind` is `recording`, `job`, `upload` or `rejected_file` |
+| `gc.run` | `runs.delete` | `dry_run?` (default false) | `{dry_run, now_ms, actions: [{kind, run, recording, detail, bytes, done}], skipped: [{kind, run, why}], errors[], freed_bytes}`; `kind` is `recording`, `run` (the run's record), `upload` or `rejected_file` |
 
 Watch folders add the events `engine.alert` with `code` `watch_flood` and
 `watch_folder_refused`; delivery adds `result_drop_failed` and `hook_failed`.
@@ -454,15 +492,17 @@ writing, and with no owner at all. The types are in
 
 ## Addressing
 
-A run is addressed by its `run_key`: an opaque string produced by
-`recording.run.list` and by `Job.recording.run_key`. Clients never build or parse
-it. (The CLI also accepts `vm:boot:run`, which it turns into a key; the key is
-the base64url form of the three ids, and each id must be a plain file name.) A
-run id alone is not unique across boots.
+A recording is addressed by its `recording_key`: an opaque string produced by
+`recording.list` and by `Run.recording.recording_key`. Clients never build or
+parse it. (The CLI also accepts `vm:boot:run`, which it turns into a key; the
+key is the base64url form of the engine's three ids, and each id must be a
+plain file name.) The engine's run id alone is not unique across boots. A
+recording is not a run: the window and `run exec` make recordings too, and a
+run of Auto mode has one recording per attempt that launched.
 
-The analysis operations take exactly one of `run_key` (the analysis linked to a
-run) or `job_id` (the host-side analysis of a job). Custody takes `sha256`
-instead of a run.
+The analysis operations take exactly one of `recording_key` (the analysis
+linked to a recording) or `run_id` (the host-side analysis of a run). Custody
+takes `sha256` instead of a recording.
 
 ## Result shapes
 
@@ -509,10 +549,10 @@ with `Retry-After`. The client polls the same request. Core reads never answer
 Class **C** needs only the engine. Class **T** needs the Triage scan and can answer
 `building`. Permission **N** is `runs.see_all`, **S** is `evidence.view`.
 
-| Op | Class | Permission | Request besides `run_key` | Result |
+| Op | Class | Permission | Request besides `recording_key` | Result |
 |---|---|---|---|---|
-| `recording.run.list` | C | N | `vm_id?`, `sample_sha256?`, `job_id?`, `state?`, `since_ms?` | `Page<RunInfo>` |
-| `recording.run.get` | C | N | | `Single<RunDetail>` |
+| `recording.list` | C | N | `vm_id?`, `sample_sha256?`, `from_run?`, `state?`, `since_ms?` | `Page<RecordingInfo>` |
+| `recording.get` | C | N | | `Single<RecordingDetail>` |
 | `recording.summary` | T | N | | `Single<Summary>` |
 | `recording.trace.page` | C | N | `pid?`, `q?`, `hide_groups[]` | `Page<TraceRow>` |
 | `recording.trace.get` | C | N | `ref` | `Single<Invocation>` |
@@ -531,10 +571,10 @@ Class **C** needs only the engine. Class **T** needs the Triage scan and can ans
 | `recording.network.packet` | C | S | `capture_id`, `n` | `Single<PacketDetail>` |
 | `recording.timeline` | T | N | `from_ms?`, `to_ms?`, `kinds[]` | `Page<TimelineEvent>` |
 | `recording.cores.list` | C | N | | `Page<CoreInfo>` |
-| `recording.analysis.list` | C | N | `run_key` or `job_id` | `Page<AnalysisSection>` |
-| `recording.analysis.section` | C | N | `run_key` or `job_id`, `kind`, `q?`, `sort?` | `Page<AnalysisRow>` |
-| `recording.analysis.ghidra` | C | N | `run_key` or `job_id`, `q?` | `Page<AnalysisRow>` |
-| `recording.custody.list` | C | N | `sha256` or `run_key` | `Page<CustodyEntry>` |
+| `recording.analysis.list` | C | N | `recording_key` or `run_id` | `Page<AnalysisSection>` |
+| `recording.analysis.section` | C | N | `recording_key` or `run_id`, `kind`, `q?`, `sort?` | `Page<AnalysisRow>` |
+| `recording.analysis.ghidra` | C | N | `recording_key` or `run_id`, `q?` | `Page<AnalysisRow>` |
+| `recording.custody.list` | C | N | `sha256` or `recording_key` | `Page<CustodyEntry>` |
 | `recording.terminal.replay` | C | N | | `Page<TerminalRecord>` |
 | `recording.artifact.list` | C | N | | `Page<RecordingArtifact>` |
 | `recording.artifact.get` | C | S or N | `artifact_id`, `range?` | bytes |
@@ -605,7 +645,7 @@ the read is cancelled.
 
 | Condition | Error |
 |---|---|
-| Unknown or deleted `run_key`, `file_id`, `capture_id`, `artifact_id`; a `run_key` of a recording the service cannot reach | `not_found` |
+| Unknown or deleted `recording_key`, `file_id`, `capture_id`, `artifact_id`; a `recording_key` of a recording the service cannot reach | `not_found` |
 | Cursor from another generation or filter | `conflict`, `reason: cursor_stale` |
 | Earlier file bytes while the layer is pending | `precondition_failed`, `reason: layer_pending` |
 | A Triage read of a recording that is still being written | `precondition_failed`, `reason: recording_open`, `details.phase` |

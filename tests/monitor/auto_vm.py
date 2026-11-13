@@ -378,8 +378,8 @@ def unwrap(document):
 
 def job_of(result):
     """A job object from `auto status JOB` or `auto submit` (`{job, ...}`)."""
-    if isinstance(result, dict) and "id" not in result and isinstance(result.get("job"), dict):
-        return result["job"]
+    if isinstance(result, dict) and "id" not in result and isinstance(result.get("run"), dict):
+        return result["run"]
     return result
 
 
@@ -406,11 +406,11 @@ def outcome_ok(job, strict=False):
 
 
 def stage_durations(events):
-    """{stage: duration_ms} of the last `finished` job.stage event of each stage."""
+    """{stage: duration_ms} of the last `finished` run.stage event of each stage."""
     out = {}
     for event in events:
         data = event.get("data") or {}
-        if event.get("type") == "job.stage" and data.get("status") == "finished" and data.get("duration_ms") is not None:
+        if event.get("type") == "run.stage" and data.get("status") == "finished" and data.get("duration_ms") is not None:
             out[data.get("stage")] = int(data["duration_ms"])
     return out
 
@@ -423,19 +423,19 @@ def event_problems(events):
     if seqs != list(range(1, len(seqs) + 1)):
         problems.append(f"seq is not 1..{len(seqs)} without a gap: {seqs[:12]}")
     types = [e.get("type") for e in events]
-    if not types or types[0] != "job.created":
-        problems.append(f"the first event is {types[:1]}, not job.created")
-    if not types or types[-1] != "job.finished":
-        problems.append(f"the last event is {types[-1:]}, not job.finished")
+    if not types or types[0] != "run.created":
+        problems.append(f"the first event is {types[:1]}, not run.created")
+    if not types or types[-1] != "run.finished":
+        problems.append(f"the last event is {types[-1:]}, not run.finished")
     finished = []
     for event in events:
         data = event.get("data") or {}
-        if event.get("type") == "job.stage" and data.get("status") == "finished":
+        if event.get("type") == "run.stage" and data.get("status") == "finished":
             if data.get("stage") not in finished:
                 finished.append(data.get("stage"))
     missing = [s for s in STAGES if s not in finished]
     if missing:
-        problems.append(f"no job.stage finished for {', '.join(missing)}")
+        problems.append(f"no run.stage finished for {', '.join(missing)}")
     order = [s for s in finished if s in STAGES]
     if order != sorted(order, key=STAGES.index):
         problems.append(f"stages finished out of order: {order}")
@@ -478,13 +478,13 @@ def job_checks(job, *, lane=None, vm_name=None, base_identity=None, revert="snap
         out.append((vm.get("name") == vm_name, f"vm.name is {vm.get('name')} (expected {vm_name})"))
     if base_identity:
         out.append((vm.get("base_identity") == base_identity, "vm.base_identity is the installed base"))
-    run = job.get("run") or {}
-    out.append((bool(run.get("run_id")) and run.get("end_reason") == "exited" and run.get("exit") == exit_code,
-                f"run {str(run.get('run_id'))[:12]} ended {run.get('end_reason')} with exit {run.get('exit')} "
+    run = job.get("program") or {}
+    out.append((bool(run.get("id")) and run.get("end_reason") == "exited" and run.get("exit") == exit_code,
+                f"program {str(run.get('id'))[:12]} ended {run.get('end_reason')} with exit {run.get('exit')} "
                 f"(expected exited, {exit_code})"))
     recording = job.get("recording") or {}
-    out.append((recording.get("phase") == "complete" and recording.get("run_id") == run.get("run_id"),
-                f"recording phase {recording.get('phase')}, same run as the job"))
+    out.append((recording.get("phase") == "complete" and recording.get("run_id") == run.get("id"),
+                f"recording phase {recording.get('phase')}, same program as the run"))
     assessment = job.get("assessment") or {}
     out.append((assessment.get("label") in LABELS and bool(assessment.get("basis")),
                 f"label {assessment.get('label')} with a basis sentence"))
@@ -507,7 +507,7 @@ def report_json_checks(report, job):
     out.append((schema == "antinomie-triage-report" and report.get("schema_version") == 2,
                 f"report.json is {schema} version {report.get('schema_version')}"))
     run = report.get("run") or {}
-    out.append((run.get("run_id") == (job.get("run") or {}).get("run_id")
+    out.append((run.get("run_id") == (job.get("program") or {}).get("id")
                 and run.get("vm_id") == (job.get("vm") or {}).get("id"),
                 "report.json names the job's run and VM"))
     sample = report.get("sample") or {}
@@ -713,7 +713,7 @@ CLI_SURFACE = {
     ("base", "install"): (),
     ("auto", "init"): ("--lane", "--ram-mib", "--cpus", "--disk-gib", "--name", "--snapshot", "--password-stdin"),
     ("auto", "daemon"): (),
-    ("auto", "submit"): ("--policy", "--timeout-run", "--args", "--as", "--name"),
+    ("auto", "submit"): ("--preset", "--timeout-run", "--args", "--as", "--name"),
     ("auto", "status"): (),
     ("auto", "events"): ("--all",),
     ("auto", "fetch"): ("--out",),
@@ -725,7 +725,7 @@ CLI_SURFACE = {
     ("config", "set"): (),
     ("snapshot", "create"): ("--mode",),
     ("snapshot", "restore"): ("--yes", "--cold-boot"),
-    ("run", "list"): ("--job",),
+    ("recording", "list"): ("--run",),
     ("sample", "show"): ("--events",),
     ("custody", "verify"): (),
     (): ("--data-dir", "--tcg", "--tcg-multiplier", "--daemon", "--format"),
@@ -967,7 +967,7 @@ def edit_preset(work, name, changes):
 def submit(cli, program, *, preset=None, timeout_run=None, run_as=None, name=None, args=()):
     argv = ["auto", "submit", program]
     if preset:
-        argv += ["--policy", preset]
+        argv += ["--preset", preset]
     if timeout_run:
         argv += ["--timeout-run", timeout_run]
     if run_as:

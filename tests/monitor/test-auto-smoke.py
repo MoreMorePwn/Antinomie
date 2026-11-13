@@ -53,7 +53,7 @@ def plan(args, sample, base_copy):
               "antinomie-cli config validate",
               "antinomie-cli auto daemon (recorded PID; MemAvailable watched every 2 s)",
               f"{jobs} x antinomie-cli auto submit {sample.name} --timeout-run 60 --args {' '.join(av.SAMPLE_ARGS)}",
-              "per job: auto status, auto events, auto fetch html/json, run list --job, sample show --events, "
+              "per job: auto status, auto events, auto fetch html/json, recording list --run, sample show --events, "
               "custody verify",
               "auto lane list; SIGTERM the daemon; delete the VM data"]
     return steps
@@ -97,9 +97,9 @@ def verify_job(cli, work, checks, job, lanes, base, strict):
                 checks.all(av.report_json_checks(json.loads(path.read_text()), job), prefix)
             except ValueError as error:
                 checks.check(False, f"{prefix}report.json parses: {error}")
-    runs = cli.ok("run", "list", "--job", job["id"], daemon=True, timeout=120).get("items", [])
-    run_id = (job.get("run") or {}).get("run_id")
-    checks.check([r.get("run_id") for r in runs] == [run_id], f"{prefix}run list --job finds the run {str(run_id)[:12]}")
+    runs = cli.ok("recording", "list", "--run", job["id"], daemon=True, timeout=120).get("items", [])
+    run_id = (job.get("program") or {}).get("id")
+    checks.check([r.get("run_id") for r in runs] == [run_id], f"{prefix}recording list --run finds the recording {str(run_id)[:12]}")
     checks.all(custody_checks(cli, job["sample"]["sha256"]), prefix)
 
 

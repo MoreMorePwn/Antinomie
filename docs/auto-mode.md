@@ -5,14 +5,25 @@
 Auto mode takes a sample in and gives a report and a label out, without a
 window and without a person: the sample runs in a VM that is reverted to a clean
 snapshot first, the recording is analysed, and the machine is left clean for the
-next job. It is `antinomie-cli auto ...` for one job and `antinomie-cli auto
+next run. It is `antinomie-cli auto ...` for one run and `antinomie-cli auto
 daemon` for a queue that stays up.
 
 This page is the guide to what Auto mode does and how to keep it running. The
 command tables are in the [user guide](usage.md#auto-mode-090), the daemon's files
 in [service configuration](service-config.md), the wire contract in the
-[job API](job-api-1.md) and the safety notes in
+[run API](run-api-1.md) and the safety notes in
 [Unattended use](security.md#unattended-use).
+
+> **Words on this page.**
+>
+> | Word | Means |
+> |---|---|
+> | Run | One analysis of one sample with a preset or Custom options: it waits, runs and ends with a report. Id `r_` and 26 characters |
+> | Program | The sample's execution inside a run (`program` of the run) |
+> | Attempt | A run that started over because the VM or the guest failed ("attempt 2 of 2") |
+> | Recording | What the engine captured while the program ran; `recording list`, `show` and `export` read it |
+> | Preset | A named set of run options to start from; a run that changes one is Custom |
+> | Job | Work the engine still has to do: the store's queue, a run's host work items, uploads, retention |
 
 ## Set up, in four steps
 
@@ -24,16 +35,16 @@ antinomie-cli --data-dir ~/auto auto submit ./sample.elf --verdict-exit --out ./
 ```
 
 Use a data folder of its own (`--data-dir`), never the one the window uses: one
-process owns a data folder at a time. The last command runs the job in the command
-itself and exits with the job's code (see [Exit codes](usage.md#command-line-090)).
+process owns a data folder at a time. The last command runs the run in the command
+itself and exits with the run's code (see [Exit codes](usage.md#command-line-090)).
 For a queue that stays up, run `antinomie-cli --data-dir ~/auto auto daemon`
 instead, and the same `auto submit` then talks to it.
 
 ## The pipeline
 
-A job moves through nine stages. The VM stages hold the lane; the host stages do
+A run moves through nine stages. The VM stages hold the lane; the host stages do
 not: once `collect` has finished, the lane releases the VM and starts the next
-job, and the job's host work goes to the **host work pool** (see below).
+run, and the run's host work goes to the **host work pool** (see below).
 
 | Stage | Where | What happens | Deadline |
 |---|---|---|---|
@@ -49,24 +60,24 @@ job, and the job's host work goes to the **host work pool** (see below).
 
 ### The host work pool
 
-The host work of a job is split into items: `triage` (the Triage scan), one
+The host work of a run is split into items: `triage` (the Triage scan), one
 `static:<tool>` item for each static check (`static:strings+regex`: Regex reads
 the strings), `detection` (YARA, Sigma and IDS, after `triage`), `assess` (the
 run's digest and the label, after `triage` and `detection`) and `report` (after
 all of them). At most `[daemon] host_workers` items run at once (2 by default),
-across every job.
+across every run.
 
-A job launches without the guest-side static analysis, so YARA does not wait for
+A run launches without the guest-side static analysis, so YARA does not wait for
 the specimen that analysis keeps (as the window's Detection tab does): it scans
-the sample the job ran, read from the library, with the files the run wrote and
+the sample the run ran, read from the library, with the files the run wrote and
 the core and memory dumps. The high or critical YARA hit of the default verdict
-mapping therefore applies to jobs too.
+mapping therefore applies to runs too.
 
-* **Order: first come, first served by job arrival.** Every item of an older job
-  starts before any item of a newer one, so a small item of a newer job never
-  goes ahead of a heavy one. A job's items start in the order above; when the
-  first one waiting depends on items still running, a later item of the same job
-  whose own dependencies have ended starts in its place. While the oldest job
+* **Order: first come, first served by run arrival.** Every item of an older run
+  starts before any item of a newer one, so a small item of a newer run never
+  goes ahead of a heavy one. A run's items start in the order above; when the
+  first one waiting depends on items still running, a later item of the same run
+  whose own dependencies have ended starts in its place. While the oldest run
   waits for a worker or for memory, nothing starts.
 * **Memory.** An item starts only with at least 2048 MiB of `MemAvailable`;
   below it the head waits (`auto status` says so) and starts when there is room.
@@ -74,37 +85,37 @@ mapping therefore applies to jobs too.
   the sample (static tools) or of the recording (the others), or its median over
   the last runs on this host (once it ran three times) when that is larger, else
   the stage's fixed limit. A median never lowers the estimate, so a few small
-  jobs do not shrink the limits of a large one. It may take
+  runs do not shrink the limits of a large one. It may take
   `[daemon] host_time_factor` (2) times that, and at least 30 seconds. A preset that
   sets `static_analysis.time_limit_per_tool_min` above 0 gives every static tool
   that fixed limit instead. Time spent waiting in the queue, for memory or for the engine to take
-  a static analysis does not count. A job's host stages as a whole may take the
+  a static analysis does not count. A run's host stages as a whole may take the
   factor times the expected work ahead of it when it arrived plus its own, and
   never less than the factor times the work ahead plus the sum of its own items'
   limits. An item's limit ends at this deadline at the latest. At the deadline
-  the job's running items are stopped, nothing more of it starts, and once the
-  stopped items have ended the job fails `deadline_exceeded`: what had finished
+  the run's running items are stopped, nothing more of it starts, and once the
+  stopped items have ended the run fails `deadline_exceeded`: what had finished
   is kept, the stopped items are `timed_out` and the queued ones `skipped`, and
   the failure's detail names both.
-* **Stopping an item.** An item past its limit (or stopped by its job's
+* **Stopping an item.** An item past its limit (or stopped by its run's
   deadline) is stopped gracefully, as Kubernetes, Slurm and Celery do: SIGTERM to
   its sandboxed tool's process group (the static analysis worker, the detection
   worker), `[daemon] stop_grace_s` (30) seconds to end, then SIGKILL. Only the
   recorded process group of the tool's own sandbox is signalled. Work the daemon
   does in its own process (indexing, the digest, the report) gets its cancel
   flag and stops at its next check.
-* **What you see.** `auto status <job>` lists each item with its state
+* **What you see.** `auto status <run>` lists each item with its state
   (`queued`, `running`, `done`, `failed`, `timed_out`, `skipped`), expected time
-  and limit; the job's `host_work` member carries the same. `auto status` shows
+  and limit; the run's `host_work` member carries the same. `auto status` shows
   the pool's queue length and running items.
-* **Cancel, stop and restart.** Cancelling a job skips its queued items and stops
+* **Cancel, stop and restart.** Cancelling a run skips its queued items and stops
   its running ones at their next wait. At a stop the pool goes on for
   `shutdown_host_grace_s`; what is left stays `running` and is queued again, in
   the same order, at the next start (finished static items are kept).
 
 A run that reaches its limit is not a failure: malware often never exits, and the
-job `succeeded` with the run ended at the time limit. A piece of evidence that
-finished incomplete makes the job `partial` (exit 11): the recording and the
+run `succeeded` with the run ended at the time limit. A piece of evidence that
+finished incomplete makes the run `partial` (exit 11): the recording and the
 report are there, with a warning for each missing piece.
 
 ## Presets
@@ -113,7 +124,7 @@ A preset is a named set of run options to start from. A preset grants nothing
 and locks nothing: only the caller's permissions, what the node has set up and
 the caller's limits do. Five presets are built in and always there; more are
 TOML files in `<data>/presets/<name>.toml` (the file name is the preset name).
-A run that names no preset uses **Standard**. `auto policy list` lists them with
+A run that names no preset uses **Standard**. `auto preset list` lists them with
 the permissions their options need.
 
 | Option | Standard | Quick look | Deep | Interactive | Live network |
@@ -181,7 +192,7 @@ its default is Standard's. The full list is in
   a kept VM or another lane group is `unavailable_on_node`); the priority and
   the run time are within the caller's limits when it has any (else
   `limit_exceeded`), and so is the number of runs of the last 24 hours when
-  the caller has a daily limit (none by default). Each of the last three is stored as a `rejected` job (exit
+  the caller has a daily limit (none by default). Each of the last three is stored as a `rejected` run (exit
   13) with the code, the field (a preset key, `network.route`) and the details.
 
 * **Who holds which permission.** The owner on the local socket (the CLI and
@@ -189,12 +200,12 @@ its default is Standard's. The full list is in
   `runs.submit` and the folder's `permissions` in `service.toml` (see
   `service-config.md`), and runs its preset unchanged: a folder whose preset
   takes cores (Deep) needs `permissions = ["evidence.core_dump"]` and more.
-  When a job starts, prechecks asks again: a permission taken away while the
-  job waited (a reload) ends it `failed` with `permission_denied`.
+  When a run starts, prechecks asks again: a permission taken away while the
+  run waited (a reload) ends it `failed` with `permission_denied`.
 
-* **A job freezes its preset.** The name, the digest and every option are
-  stored with the job. Editing or removing a preset, or `SIGHUP`, changes only
-  jobs submitted afterwards: a waiting job keeps the preset it froze. `auto
+* **A run freezes its preset.** The name, the digest and every option are
+  stored with the run. Editing or removing a preset, or `SIGHUP`, changes only
+  runs submitted afterwards: a waiting run keeps the preset it froze. `auto
   retry` of a run of an unchanged preset uses the preset as it is now; of a
   Custom run, its resolved options (it is Custom again).
 
@@ -203,11 +214,11 @@ its default is Standard's. The full list is in
   `deep_checks` (`disassembly`, `decompilation`, `floss`; none by default),
   with `enabled = false` none. A check that runs out of its time (2 x its
   expected time, or `time_limit_per_tool_min` when it is above 0, stretched on a
-  busy host like the guest waits) or stops short does not fail the job: the job
+  busy host like the guest waits) or stops short does not fail the run: the run
   ends `partial` with a `static_check_incomplete` warning that names the check.
   List checks in `static_analysis.required_checks` (default none) to make their
   timeout, or their being unavailable, a failure of the `analyse` stage; with
-  `required_stages` naming `analyse` that ends the job `failed` with
+  `required_stages` naming `analyse` that ends the run `failed` with
   `analysis_failed`. A static analysis the engine refuses or cannot run at all
   is a failure of the stage whichever checks are required. The size limits
   (`[static_analysis.limits]`) and Ghidra for Disassembly are passed to the
@@ -219,13 +230,13 @@ its default is Standard's. The full list is in
   `trigger_core` (default on; a core of the process that made the call, within
   `core_budget_mib` and `core_deadline_ms`, needs a revision-16 base) and
   `trigger_memory_dump` (default off), at most `max_dumps` (1) dumps
-  `dumps_apart_s` (30) seconds apart. The program is not stopped. The job's
+  `dumps_apart_s` (30) seconds apart. The program is not stopped. The run's
   `run.triggers` lists each match (rule, tier, process, call, and the state and
   size of each dump; the path only for a local caller), `run.trigger_notes` says
-  when it was armed and nothing matched, and `job.trigger` events report them as
+  when it was armed and nothing matched, and `run.trigger` events report them as
   they are known.
 When the guest-side static analysis is still running after the 300 s evidence wait,
-the recording is saved without it and the job succeeds; `run.pending` lists
+the recording is saved without it and the run succeeds; `run.pending` lists
 `analysis`.
 
 * **Non-resident pages in trigger cores.** `dumps.read_non_resident_pages = true`
@@ -234,7 +245,7 @@ the recording is saved without it and the job succeeds; `run.pending` lists
   **Read non-resident pages**; slower, bounded by the core budget and deadline. It
   needs a trigger core (without one `config validate` warns; an exit core
   always reads resident pages) and a base of guest contract revision 22 (on an older
-  one the cores hold resident pages only and the job carries the warning
+  one the cores hold resident pages only and the run carries the warning
   `core_nonresident_unsupported`).
 
 * **Routes.** In 0.9.0 a run may use `drop` (the default: every connection a sample
@@ -246,9 +257,9 @@ the recording is saved without it and the job succeeds; `run.pending` lists
 * **Accepted samples.** `[accepts]` of Standard takes ELF x86-64 programs and
   shell scripts (`types = ["elf", "sh"]`). A script has no architecture, so
   `arch` applies to ELF files only.
-* **Duplicates.** `[duplicates] on_duplicate` is `run` (analyse again; the new job has
-  `repeat_of`), `reuse` (return the earlier job) or `reject` (`duplicate_denied`).
-* **The label.** A succeeded job has the raw Triage assessment, a label
+* **Duplicates.** `[duplicates] on_duplicate` is `run` (analyse again; the new run has
+  `repeat_of`), `reuse` (return the earlier run) or `reject` (`duplicate_denied`).
+* **The label.** A succeeded run has the raw Triage assessment, a label
   (`malicious`, `suspicious`, `clean_observed`, `inconclusive`), an optional score
   and the `basis` sentence that says why. `clean_observed` means nothing was seen
   in this run, not that the sample is clean. `[verdict] mapping = "default"` is the
@@ -268,11 +279,11 @@ so on), and the daemon does not start until the folder is gone.
 
 ## Revert: how the lane stays clean
 
-A VM that ran a sample keeps what the sample did, so every job starts from a known
+A VM that ran a sample keeps what the sample did, so every run starts from a known
 state. The lane VM has a clean Disk snapshot, `auto-clean`, taken by `auto init`
 after the guest booted once and finished booting (a guest stopped while its
 initramfs still grows the root file system would keep a half-grown one, and every
-job's boot from it would crash the guest kernel). Before each job the daemon checks the snapshot is the
+run's boot from it would crash the guest kernel). Before each run the daemon checks the snapshot is the
 one it recorded, restores it and cold-boots (`[lanes] revert = "snapshot_disk"` in
 `service.toml`, the default). `revert = "reset"` is not available on Auto lanes, because every lane
 keeps its clean snapshot: `config validate` refuses it and points at
@@ -281,17 +292,17 @@ resumes a booted guest and needs the VM to be created and snapshotted headless,
 with a full (memory) snapshot: over the disk-only `auto-clean` it could only boot
 cold, so `config validate` refuses it.
 
-A lane is cleaned when the next run starts: after a job its VM stays stopped on
+A lane is cleaned when the next run starts: after a run its VM stays stopped on
 the used disk until then. (A node setting that also reverts right after a run
 arrives with 0.9.1.)
 
-**Quarantine.** A lane stops taking jobs when the restore failed twice, when its
+**Quarantine.** A lane stops taking runs when the restore failed twice, when its
 clean snapshot is not the recorded one (somebody used the VM by hand), or after three
-starts in a row that did not reach a working guest. Queued jobs stay queued with
+starts in a row that did not reach a working guest. Queued runs stay queued with
 `waiting_for: lane_quarantined` and an `engine.alert` is raised. Fix the cause, then:
 
 * `auto lane list` shows whether the lane is quarantined and what keeps it from a
-  job;
+  run;
 * `auto lane reset --yes` reverts the VM to its clean snapshot now and lifts the
   quarantine when that works;
 * `auto lane unquarantine` lifts it without reverting, when the checks pass.
@@ -299,14 +310,14 @@ starts in a row that did not reach a working guest. Queued jobs stay queued with
 After a base update make a new lane VM with `auto init --replace`.
 
 With several lanes a quarantine holds only its own lane: the other lanes go on
-with the queue, and jobs wait (`waiting_for: lane`) only for what no other lane
+with the queue, and runs wait (`waiting_for: lane`) only for what no other lane
 can run. `auto lane list` shows every lane; `reset` and `unquarantine` take
 `--lane lane-N` (default `lane-1`).
 
 ## Several lanes
 
 One lane runs one VM at a time. A machine with the memory for more VMs can run
-up to four lanes, each with its own lane VM, so up to four jobs run their VMs
+up to four lanes, each with its own lane VM, so up to four runs run their VMs
 at once. One lane stays the default.
 
 ```sh
@@ -330,19 +341,19 @@ antinomie-cli --data-dir ~/auto auto status    # lane-1: idle ..., lane-2: idle 
   RAM of every lane VM before it plus this lane's own floor (its VM's RAM plus
   2048 MiB, or `[resources] min_free_ram_mib`). The daemon's log says how many
   lanes started and why the others did not; so does `auto lane list`.
-* A job goes to a free lane that can run it (the base of `[lanes] vm`, and an
+* A run goes to a free lane that can run it (the base of `[lanes] vm`, and an
   ELF of the lane's architecture); among several, the least recently used, so
-  the jobs spread. With `[lanes] vm = "auto-1"` (the default) a job runs on
+  the runs spread. With `[lanes] vm = "auto-1"` (the default) a run runs on
   every lane built on lane 1's base: 0.9.0 has one lane group.
 * Every lane's host work goes to the one host work pool, first come, first
-  served by job arrival; `[daemon] host_workers` is the total for all lanes.
+  served by run arrival; `[daemon] host_workers` is the total for all lanes.
 * A run stays in the folder of the lane that recorded it (`<data>/lanes/N/`
   for lane N). Every read from the data folder finds the runs of all lanes:
-  `run list` (`--vm`, `--job`), `run show`, `run export`, `triage`, `detect`,
+  `recording list` (`--vm`, `--run`), `recording show`, `recording export`, `triage`, `detect`,
   `report`, `sample show --runs`, and the `recording.*` operations of the
   daemon, the same through the daemon and with `--direct`. A lane that
-  `[daemon] lanes` no longer starts is still read. A run's job shows its lane
-  (`auto status JOB`); retention and `auto job delete --with-recording` delete
+  `[daemon] lanes` no longer starts is still read. A run shows its lane
+  (`auto status RUN`); retention and `auto delete --with-recording` delete
   the run in its own lane's folder. A lane folder is read only when its
   `lane.json` names its place, never through a link.
 
@@ -350,7 +361,7 @@ All the keys are in [service configuration](service-config.md#several-lanes).
 
 ## Watch folders
 
-A folder the daemon polls every two seconds; each file that appears becomes a job.
+A folder the daemon polls every two seconds; each file that appears becomes a run.
 Configure it in `service.toml`:
 
 ```toml
@@ -378,60 +389,60 @@ systemd](#run-it-under-systemd)).
 
 ## Results and the command hook
 
-Reports are always in the job's folder (`auto artifacts JOB`, `auto fetch JOB
-KIND`). Two optional channels deliver a finished job without a client:
+Reports are always in the run's folder (`auto artifacts RUN`, `auto fetch RUN
+KIND`). Two optional channels deliver a finished run without a client:
 
-* `[results] dir = "/srv/results"` writes `<dir>/<yyyy-mm-dd>/<sha8>-<jobid>/` with
+* `[results] dir = "/srv/results"` writes `<dir>/<yyyy-mm-dd>/<sha8>-<runid>/` with
   `job.json` and the non-sensitive reports (not the capture or other sensitive
   files), mode 0600 in 0700 folders.
-* `[notify] on_finish = ["/usr/local/bin/hook"]` runs that command when a job ends.
+* `[notify] on_finish = ["/usr/local/bin/hook"]` runs that command when a run ends.
   It is run directly, never through a shell, with an empty environment plus
-  `ANTINOMIE_JOB_ID`, `ANTINOMIE_STATE`, `ANTINOMIE_LABEL`, `ANTINOMIE_SHA256` and
-  `ANTINOMIE_RESULT_JSON` (the path of `job.json`). Nothing a job controls is in its
+  `ANTINOMIE_RUN_ID`, `ANTINOMIE_STATE`, `ANTINOMIE_LABEL`, `ANTINOMIE_SHA256` and
+  `ANTINOMIE_RESULT_JSON` (the path of `job.json`). Nothing a run controls is in its
   arguments or environment. It has 30 s; past that it and what it started are
-  killed. Its output goes to the job's `job.log`.
+  killed. Its output goes to the run's `job.log`.
 
-Delivery is at least once and never changes the job: a failure is a log line and
+Delivery is at least once and never changes the run: a failure is a log line and
 an `engine.alert` (`result_drop_failed`, `hook_failed`).
 
 ## Retention and clean-up
 
 | What | Kept for | Setting |
 |---|---|---|
-| Recordings of auto jobs | 14 days | `[retention] recordings_days` |
+| Recordings of auto runs | 14 days | `[retention] recordings_days` |
 | Recordings above the size cap | oldest go first above 200 GiB | `[retention] max_recordings_gib` |
-| Recordings of failed jobs | until the job record goes | `[retention] keep_failed` |
-| Job records, events and reports | 90 days | `[retention] jobs_days` |
+| Recordings of failed runs | until the run record goes | `[retention] keep_failed` |
+| Run records, events and reports | 90 days | `[retention] jobs_days` |
 | Staged uploads | 24 hours | fixed |
 | `<inbox>/rejected/` files | 7 days | fixed |
 
 The daemon runs a pass an hour (the first one minute after it starts). It never
-touches the library, never deletes a sample and never removes a job that has not
+touches the library, never deletes a sample and never removes a run that has not
 ended; a recording that is being read, or whose evidence is still being written,
 is skipped and taken in a later pass. A recording goes through the app's own
-deletion, which keeps its kept files. A job retried after its launch (a lost
+deletion, which keeps its kept files. A run retried after its launch (a lost
 guest, a stop or a restart of the daemon) recorded a run for each such attempt:
-retention and `--with-recording` delete all of them, and the job record stays
+retention and `--with-recording` delete all of them, and the run record stays
 until they are gone. A recording kept in a VM's recordings folder outside the
 data folder is handled the same way; a recording that cannot be read keeps its
-job record, so it is never left with nothing naming it. `auto gc --dry-run` prints what a pass would
-delete; `auto gc` runs one; `auto delete JOB [--with-recording]` removes one ended
-job. Without a daemon these take the data folder for the command.
+run record, so it is never left with nothing naming it. `auto gc --dry-run` prints what a pass would
+delete; `auto gc` runs one; `auto delete RUN [--with-recording]` removes one ended
+run. Without a daemon these take the data folder for the command.
 
 ## Failure codes
 
-A failed job has a `failure` with a code, shown by `auto status JOB`,
-`auto result JOB` and the job's `job.finished` event. The exit code of a waited job
+A failed run has a `failure` with a code, shown by `auto status RUN`,
+`auto result RUN` and the run's `run.finished` event. The exit code of a waited run
 is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 
 | Code | Stage | Retried | What it means and what to do |
 |---|---|---|---|
 | `sample_missing`, `sample_too_large`, `sample_type_denied`, `sample_arch_denied`, `duplicate_denied` | submit | no | The intake refused the file; the size limit is the smallest of 256 MiB, the preset's `accepts.max_sample_mib` and a quarter of the lane VM's RAM |
-| `permission_denied` | submit, prechecks | no | The caller lacks a permission the run uses (`details.needs`), or lost it while the job waited; `field` names the option |
+| `permission_denied` | submit, prechecks | no | The caller lacks a permission the run uses (`details.needs`), or lost it while the run waited; `field` names the option |
 | `preset_denied` | submit | no | There is no such preset (`details.preset`); nothing is stored |
 | `limit_exceeded` | submit | no | The priority, the run time or the runs of the last 24 hours are above the caller's limit (`details.field`, `details.limit`); set in `service.toml` `[limits.local]` and per watch folder `priority_max` |
 | `unavailable_on_node` | submit | no | The node does not have it: a live route, keeping the VM after a failure (both arrive with 0.9.1), or another lane group; `details.what` |
-| `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The job waits `queued` for up to `[queue] wait_s` (3600), then fails |
+| `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The run waits `queued` for up to `[queue] wait_s` (3600), then fails |
 | `no_base`, `no_vm` | provision | no | The lane VM or its base is gone; `auto lane list` says which |
 | `vm_start_failed`, `guest_unreachable` | provision, launch | yes | The VM or its guest did not come up, or the guest kernel crashed while it booted (the crash line is the detail); three in a row quarantine the lane |
 | `revert_failed`, `lane_changed` | provision | no | The lane is quarantined (see above) |
@@ -439,10 +450,10 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `launch_failed` | launch | depends | The program did not start (not executable for the guest, no terminal) |
 | `guest_lost` | run, collect | once | The guest or QEMU died. A sample that does that twice ends `failed` |
 | `recording_failed` | collect | once | The recording could not be completed |
-| `analysis_failed` | analyse, report | yes | Only when the preset marks the stage required (`required_stages`); otherwise the job is `partial` with a warning. A static check that only timed out or stopped short is not this failure unless it is in `static_analysis.required_checks` (it is a `static_check_incomplete` warning and the job is `partial`) |
+| `analysis_failed` | analyse, report | yes | Only when the preset marks the stage required (`required_stages`); otherwise the run is `partial` with a warning. A static check that only timed out or stopped short is not this failure unless it is in `static_analysis.required_checks` (it is a `static_check_incomplete` warning and the run is `partial`) |
 | `deadline_exceeded` | analyse, report | no | The host stages passed their deadline (`host_time_factor` x the expected work, see "Time limits"): the running items were stopped (`timed_out`), the queued ones never started; what finished is kept. A busy host or too low a factor; try again later or raise `host_time_factor` |
 | `cancelled` | any | no | Cancelled by request; what was recorded is kept |
-| `internal` | any | maybe | A bug, or the watchdog: the whole job ran past `run` plus 30 minutes. `details.log` names the job log |
+| `internal` | any | maybe | A bug, or the watchdog: the whole run ran past `run` plus 30 minutes. `details.log` names the run log |
 
 A retry starts with a full revert. `backoff_s` (30 s, then 120 s) spaces the
 attempts and `max_attempts` bounds them.
@@ -451,49 +462,49 @@ attempts and `max_attempts` bounds them.
 
 **Exit 21, "data directory is owned by ...".** The window, the daemon or another
 command has the folder. `doctor` shows the owner (`data_dir.owner`). Stop it, or use
-another folder. A job submitted with `--daemon` exits 21 when no daemon answers.
+another folder. A run submitted with `--daemon` exits 21 when no daemon answers.
 
 **Exit 20, a dependency is missing.** `antinomie-cli doctor` lists each tool. On
 Debian or Ubuntu install `qemu-system-x86 qemu-utils qemu-system-gui bubblewrap
 util-linux tshark curl`. Bubblewrap must work: on Ubuntu 24.04 an AppArmor setting
-(`kernel.apparmor_restrict_unprivileged_userns`) can forbid it; the job then stops
+(`kernel.apparmor_restrict_unprivileged_userns`) can forbid it; the run then stops
 with `dependency_missing` instead of running unsandboxed.
 
-**Jobs stay `queued`.** `auto status JOB` shows `waiting_for`: `lane` (busy),
+**Runs stay `queued`.** `auto status RUN` shows `waiting_for`: `lane` (busy),
 `resources` (below `min_free_disk_gib` or the RAM floor, the queue pauses),
 `dependency`, `quota`, `queue_paused`, `layer_pending` (the previous run's disk is
 still being saved, which can take minutes after a run that changed many files),
 `backoff` or `lane_quarantined`. A file `<data>/run/PAUSE` pauses admission on
-every lane within five seconds, also while other lanes run jobs (a lane running a
-job starts no other until it ends); `auto queue resume` or removing the file
+every lane within five seconds, also while other lanes run runs (a lane running a
+run starts no other until it ends); `auto queue resume` or removing the file
 continues. Low disk and a missing KVM pause every lane the same way.
 
-**The disk filled up during a job.** The running program is stopped within a
-minute and the queue pauses (`low_disk`), also when the job database itself is
-too full to record the pause. A job whose end cannot be written yet waits for room
+**The disk filled up during a run.** The running program is stopped within a
+minute and the queue pauses (`low_disk`), also when the run database itself is
+too full to record the pause. A run whose end cannot be written yet waits for room
 (it shows its last stage meanwhile) and ends as soon as there is; if the recording
 could not be finished it ends `recording_failed`, and the lane waits
 (`layer_pending`) until the engine has finished the recording, which it tries again
 every 30 seconds. Free space under the data folder: the pause lifts by itself.
 
-**No KVM.** With `require_kvm = true` (the default) jobs wait until `/dev/kvm` is
+**No KVM.** With `require_kvm = true` (the default) runs wait until `/dev/kvm` is
 usable; the daemon user must be in the `kvm` group. Set `[resources] require_kvm =
 false` to run with TCG, which is slow.
 
-**The daemon does not stop.** On `SIGTERM` it stops the running job through the
+**The daemon does not stop.** On `SIGTERM` it stops the running run through the
 engine and finishes in a few minutes at most (`TimeoutStopSec=360` in the unit); a
-job that has not left the VM 240 seconds after the stop (a recording that cannot be
+run that has not left the VM 240 seconds after the stop (a recording that cannot be
 saved on a full disk, say) is left for the next start. A
 second `SIGTERM` or Ctrl-C within five seconds stops at once with exit 130; the next
 start finishes what was left: it removes stale guest RAM files, finishes a pending
-disk layer (up to 30 minutes), and puts a job that was running back in the queue
+disk layer (up to 30 minutes), and puts a run that was running back in the queue
 without using an attempt.
 
-**A change to a preset is ignored.** Jobs already queued keep the preset they were
+**A change to a preset is ignored.** Runs already queued keep the preset they were
 submitted with. Send `SIGHUP` (`systemctl reload antinomie-auto`); a file with an
 error keeps the old settings, so run `config validate` first.
 
-**What happened to a job.** `auto events JOB` lists its events; `<data>/service/jobs/<id>/job.log` has its log lines;
+**What happened to a run.** `auto events RUN` lists its events; `<data>/service/jobs/<id>/job.log` has its log lines;
 `kill -USR1` on the daemon writes the queue's state to its log. Log lines go to
 standard error (the journal under systemd), as text or with `--log-format json`;
 `[log]` in `service.toml` sets the level, the format and an optional rotating file,
@@ -540,7 +551,7 @@ What the units say:
 | Setting | Why |
 |---|---|
 | `Type=simple`, `Restart=on-failure`, `RestartSec=10`, `StartLimitBurst=5` in 5 minutes | The daemon recovers from a crash at its next start; a crash loop stops instead of spinning. A stop through `systemctl` is not restarted. There is no `sd_notify`: the unit is started when the process runs; ask `doctor` or `auto status` whether the daemon answers |
-| `KillMode=mixed`, `TimeoutStopSec=360` | QEMU is a child of the daemon. `systemctl stop` sends `SIGTERM` to the daemon alone, which stops the running job and its VM and exits. Only what is still alive after 360 s (the 120 s VM stop plus up to 120 s for a job already in its host stages and the disk-layer step) gets `SIGKILL`, QEMU included. With `[daemon] shutdown = "drain"` raise it above `drain_timeout_s` |
+| `KillMode=mixed`, `TimeoutStopSec=360` | QEMU is a child of the daemon. `systemctl stop` sends `SIGTERM` to the daemon alone, which stops the running run and its VM and exits. Only what is still alive after 360 s (the 120 s VM stop plus up to 120 s for a run already in its host stages and the disk-layer step) gets `SIGKILL`, QEMU included. With `[daemon] shutdown = "drain"` raise it above `drain_timeout_s` |
 | `ExecReload` | `systemctl reload` sends `SIGHUP`: presets and `service.toml` are read again |
 | `NoNewPrivileges`, `CapabilityBoundingSet=` (empty), `RestrictSUIDSGID`, `LockPersonality`, `ProtectKernel*`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname` | The daemon needs no privilege: QEMU opens `/dev/kvm` through the `kvm` group and bubblewrap uses unprivileged user namespaces |
 | `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `StateDirectory` | The only writable place is the data folder. Add other folders (a watch folder, `[results] dir`, a log file) with `systemctl edit antinomie-auto` and `ReadWritePaths=` |

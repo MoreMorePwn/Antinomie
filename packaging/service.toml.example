@@ -9,7 +9,7 @@
 lanes = 1                    # 1 to 4; lane N needs `auto init --lane N` and RAM for every lane
 host_workers = 2             # host work items at once (static tools, Triage, detection, report)
 host_time_factor = 2         # an item may take this many times its expected time
-shutdown = "cancel"          # or "drain": finish the running job first
+shutdown = "cancel"          # or "drain": let the current run finish first
 drain_timeout_s = 600
 shutdown_host_grace_s = 120
 
@@ -59,11 +59,11 @@ keep_failed = true
 # priority_max = 5           # the highest priority its runs may ask for
 # delete_after = "move"      # or "delete", "keep"
 
-# A copy of job.json and the reports for every finished job.
+# A copy of job.json and the reports for every finished run.
 # [results]
 # dir = "/srv/results"
 
-# A command run when a job ends: argv, never a shell; five ANTINOMIE_* variables.
+# A command started when a run ends: argv, never a shell; five ANTINOMIE_* variables.
 # [notify]
 # on_finish = ["/usr/local/bin/antinomie-hook"]
 

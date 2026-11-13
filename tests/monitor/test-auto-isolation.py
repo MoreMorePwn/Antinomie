@@ -164,7 +164,7 @@ def run_strategy(cli, work, args, factor, checks, mode, daemon, watch):
             job = av.submit(cli, program, timeout_run=60, run_as="root", name=f"{mode}-{step}")
             job = av.wait_job(cli, job["id"], JOB_TIMEOUT_S * factor, watch=watch, daemon=daemon)
             jobs.append(job)
-            run = job.get("run") or {}
+            run = job.get("program") or {}
             fine, why = av.outcome_ok(job)
             ok &= checks.check(fine and (job.get("vm") or {}).get("revert") == mode,
                                f"{mode} job {step} ({job['id'][-8:]}) ended {why}, vm.revert {(job.get('vm') or {}).get('revert')}")

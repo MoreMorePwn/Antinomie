@@ -10,11 +10,11 @@ harness started, and the lane's QEMU as service/lanes/lane-1.json records it
 
   qemu-kill       SIGKILL the lane's QEMU in the run stage of a 45 s benign
                   program. Expected: attempt 1 ends guest_lost and is retried
-                  (job.requeued); the job ends succeeded (or partial for host
+                  (run.requeued); the job ends succeeded (or partial for host
                   tools only) on attempt 2; the lane is not quarantined.
   daemon-kill     SIGKILL the daemon in the run stage, then start it again.
                   Expected: recovery ends the recorded QEMU, requeues the job
-                  (job.requeued, service_restart, the first restart free) and
+                  (run.requeued, service_restart, the first restart free) and
                   it ends succeeded or partial (host tools); the lane is free.
   disk-full       The data folder on a small filesystem: a tmpfs of
                   --quota-mib in a user and mount namespace of this script
@@ -87,9 +87,9 @@ echo c > /proc/sysrq-trigger
 sleep 30
 """
 EXPECTED = {
-    "qemu-kill": "attempt 1 guest_lost, retried (job.requeued); ends succeeded/partial(host tools) on attempt 2; "
+    "qemu-kill": "attempt 1 guest_lost, retried (run.requeued); ends succeeded/partial(host tools) on attempt 2; "
                  "lane not quarantined",
-    "daemon-kill": "recovery ends the recorded QEMU, job.requeued (service_restart); ends succeeded/partial(host "
+    "daemon-kill": "recovery ends the recorded QEMU, run.requeued (service_restart); ends succeeded/partial(host "
                    "tools); lane free",
     "disk-full": "(a) below the floor: queued, waiting_for resources, then runs; (b) ENOSPC mid-run: queue paused "
                  "low_disk, then partial or failed, daemon up; next job succeeded/partial(host tools); SIGTERM exit 0",
@@ -221,7 +221,7 @@ class Case:
                            daemon=self.daemon)
 
     def requeues(self, job):
-        return [e.get("data") or {} for e in av.events_of(self.cli, job["id"]) if e.get("type") == "job.requeued"]
+        return [e.get("data") or {} for e in av.events_of(self.cli, job["id"]) if e.get("type") == "run.requeued"]
 
     def lane_state(self):
         return av.lane_list(self.cli).get("lane-1") or {}
@@ -353,7 +353,7 @@ def disk_full_steps(case, filler):
     job = case.wait(job)
     holds &= job.get("state") in ("partial", "failed") and case.daemon.alive()
     observed.append(f"then {describe(job)} warnings {sorted(set(av.warning_codes(job)))}; end_reason "
-                    f"{(job.get('run') or {}).get('end_reason')}; requeued {[r.get('reason') for r in case.requeues(job)]}")
+                    f"{(job.get('program') or {}).get('end_reason')}; requeued {[r.get('reason') for r in case.requeues(job)]}")
     job = case.submit(case.program("short-c", SHORT))
     job = case.wait(job)
     holds &= av.outcome_ok(job)[0]

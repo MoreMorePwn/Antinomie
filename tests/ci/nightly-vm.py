@@ -138,7 +138,7 @@ def auto_job(cli, base, work, failures):
         job = auto_vm.job_of(status) if code_status == 0 and status else job
     ok, why = auto_vm.outcome_ok(job)
     check(code in (0, 11) and ok, f"auto: the job ended {why} (exit {code})", failures)
-    run = job.get("run") or {}
+    run = job.get("program") or {}
     check(run.get("exit") == 0 and (job.get("recording") or {}).get("phase") == "complete",
           f"auto: the program exited {run.get('exit')}, recording {(job.get('recording') or {}).get('phase')}",
           failures)

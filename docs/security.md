@@ -306,7 +306,7 @@ size, requests, connections and subscriptions). Any program that runs as that us
 acts with every right, so a service that other people reach through it needs its own
 authentication layer.
 
-**Routes.** A job may use only `drop` (the default: attempts are captured and dropped)
+**Routes.** A run may use only `drop` (the default: attempts are captured and dropped)
 or `inet_sim` (simulated services). The live routes (Internet, Tor, VPN, SOCKS5) and
 NAT are refused by `config validate`, so an unattended sample cannot reach a third
 party. The lane VM is on a routed network, which drops everything between runs.
@@ -327,13 +327,13 @@ lookup, and the IOC check uses the offline datasets you installed). What can lea
 | A sample's own network traffic | The simulated services (`inet_sim`), or nowhere (`drop`) | Always inside the host; not to the internet in 0.9.0 |
 | Bases, rules, analysis tools and datasets | Their hosts, as in [What the app itself contacts](#what-the-app-itself-contacts) | Only when an administrator runs `base download`, `rules update` or a similar command |
 | The result drop | A folder on this machine, mode 0600 in 0700 folders (`[results] dir`) | When configured |
-| The command hook | Whatever the command does with the job id, state, label, hash and the path of `job.json` | When `[notify] on_finish` is set; the command is yours |
+| The command hook | Whatever the command does with the run id, state, label, hash and the path of `job.json` | When `[notify] on_finish` is set; the command is yours |
 | Reports and recordings | Wherever you copy them | They are malware evidence: handle them as in [Sensitive data](#sensitive-data-and-where-it-lives) |
 
 There is no telemetry and no crash reporting. Logs carry hashes, ids, durations and
 error text, never sample bytes, terminal output, keys or passwords.
 
-**Keeping it small.** Retention deletes recordings after 14 days and job records after
+**Keeping it small.** Retention deletes recordings after 14 days and run records after
 90 by default (`[retention]`); the library is never touched. Run `auto gc --dry-run` to
 see what a pass would remove. A file `run/PAUSE` in the data folder, or `auto queue
 pause`, stops new jobs within seconds.

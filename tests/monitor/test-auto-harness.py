@@ -52,7 +52,7 @@ def finished_job(**changes):
         "created_ms": 1000, "started_ms": 1010, "finished_ms": 5000, "lane": "lane-1",
         "sample": {"sha256": "a" * 64, "type": "elf"},
         "vm": {"id": "auto_1_x", "name": "auto-1", "base_identity": "b" * 64, "revert": "snapshot_disk"},
-        "run": {"run_id": "r1", "end_reason": "exited", "exit": 0},
+        "program": {"id": "r1", "end_reason": "exited", "exit": 0},
         "recording": {"run_id": "r1", "phase": "complete", "directory": "/data/auto_1_x/runs/r1"},
         "assessment": {"assessment": "observed_only", "label": "clean_observed", "basis": "Only low-tier ...",
                        "counts": {"processes": 3}},
@@ -67,11 +67,11 @@ def finished_job(**changes):
 
 
 def events(*stages, gap=False):
-    out = [{"seq": 1, "type": "job.created", "data": {}}]
+    out = [{"seq": 1, "type": "run.created", "data": {}}]
     for stage in stages:
-        out.append({"type": "job.stage", "data": {"stage": stage, "status": "started"}})
-        out.append({"type": "job.stage", "data": {"stage": stage, "status": "finished", "duration_ms": 100}})
-    out.append({"type": "job.finished", "data": {"outcome": "succeeded"}})
+        out.append({"type": "run.stage", "data": {"stage": stage, "status": "started"}})
+        out.append({"type": "run.stage", "data": {"stage": stage, "status": "finished", "duration_ms": 100}})
+    out.append({"type": "run.finished", "data": {"outcome": "succeeded"}})
     for number, event in enumerate(out, start=1):
         event["seq"] = number + (1 if gap and number > 3 else 0)
     return out
@@ -208,7 +208,7 @@ class JobCheckTests(unittest.TestCase):
 
     def test_wrong_details_fail_their_check(self):
         cases = {
-            "exit": finished_job(run={"run_id": "r1", "end_reason": "exited", "exit": 3}),
+            "exit": finished_job(program={"id": "r1", "end_reason": "exited", "exit": 3}),
             "revert": finished_job(vm={"id": "auto_1_x", "name": "auto-1", "revert": "reset"}),
             "phase": finished_job(recording={"run_id": "r1", "phase": "finalizing"}),
             "label": finished_job(assessment={"label": "maybe", "basis": "", "counts": {}}),
@@ -254,7 +254,7 @@ class JobCheckTests(unittest.TestCase):
     def test_envelopes(self):
         self.assertEqual(av.unwrap({"ok": True, "result": {"a": 1}}), {"a": 1})
         self.assertIsNone(av.unwrap({"ok": False, "error": {"code": "x"}}))
-        self.assertEqual(av.job_of({"job": {"id": "j"}, "replayed": False}), {"id": "j"})
+        self.assertEqual(av.job_of({"run": {"id": "r"}, "replayed": False}), {"id": "r"})
         self.assertEqual(av.job_of({"id": "j", "job": None}), {"id": "j", "job": None})
 
 

@@ -402,23 +402,23 @@ behind it.
   takes the data lock in the process; `--daemon` and `--socket` are accepted but
   nothing listens yet. Commands that only read (`sample`, `custody verify`,
   `config get`, `config validate`, `rules list`) take no lock.
-* **`antinomie-service`.** `api/` holds the job and query objects, errors and
-  `job-api-1.schema.json` (generated with `schemars`; a test fails when the
+* **`antinomie-service`.** `api/` holds the run and query objects, errors and
+  `run-api-1.schema.json` (generated with `schemars`; a test fails when the
   checked-in file is stale). `config/` loads and validates `service.toml` and
   `policies/*.toml` (unknown keys are errors, ceilings, the v1 routes `drop` and
   `inet_sim`, the lane VM); `antinomie-cli config validate` is its only caller
   today. `store/` is the job store under `<data>/service/`: SQLite in WAL mode
-  with one writer, the `jobs` table as queue and source of truth, every state
+  with one writer, the `runs` table as queue and source of truth, every state
   change one transaction that also inserts its event rows, an events mirror in
   `jobs/<id>/events.ndjson` appended after the commit, idempotency keys, and a
-  recovery pass that repairs the mirror and requeues jobs a dead process left
+  recovery pass that repairs the mirror and requeues runs a dead process left
   running. `intake/` stages uploads and applies the common checks (regular file
   opened without following links, size ceiling, type and architecture
   acceptance, library add with origin `Added`, de-duplication by SHA-256). A
   staged file never runs on the host. `custody.rs` names the custody actor of
-  a job (`local:<uid>`, `web:<user>` or `auto:policy-<name>`, its `client_id`),
-  sets it for the length of the job so the engine's own threads record it too,
-  and writes one `automation` entry per job with the policy digest, the route
+  a run (`local:<uid>`, `web:<user>` or `auto:preset-<name>`, its `client_id`),
+  sets it for the length of the run so the engine's own threads record it too,
+  and writes one `automation` entry per run with the preset digest, the route
   and the submitter (the kind and its verifier support are in core). `query/` is the read-only recording API (run lists, calls, process and
   file reads, safe artifact reads, packet reads through the no-cache packet
   worker, cursors with generations and row and byte limits). The Triage reads
@@ -429,7 +429,7 @@ behind it.
   the whole row set with the Triage crate's `FieldSpec` lists (the catalogue's
   tables are those lists). The summary and indicators come from
   `report_export::build_report`, so counts equal the export's. `antinomie-cli`
-  reaches the query API in `commands/query.rs` (`run list`, `run show`, `run
+  reaches the query API in `commands/query.rs` (`recording list`, `recording show`, `run
   export` in `run_read.rs`, and `triage`).
 * **Tests.** `cargo test --release -p antinomie-cli -p antinomie-service`.
 

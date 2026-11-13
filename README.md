@@ -383,7 +383,7 @@ terminal: `antinomie --check-dependencies`. The
   See [Command line and automation](docs/usage.md#command-line-and-automation-090).
 * **Auto mode:** `antinomie-cli auto daemon` and `auto submit` take a sample in and
   give a report and a label out, on a lane VM that reverts to a clean snapshot before
-  every job, with policies, watch folders, result files, retention and a systemd unit
+  every run, with presets, permissions, watch folders, result files, retention and a systemd unit
   (`packaging/`). See [Auto mode](docs/auto-mode.md) and
   [Unattended use](docs/security.md#unattended-use).
 
@@ -531,9 +531,9 @@ Planned and undated:
 | Read | For |
 |---|---|
 | [User guide](docs/usage.md) | Bases, VMs, runs, routes and reading results. |
-| [Command line and automation](docs/usage.md#command-line-and-automation-090) | `antinomie-cli` (0.9.0): install, `doctor`, your first job, the daemon and watch folders; the [command reference](docs/usage.md#command-line-090) follows. |
+| [Command line and automation](docs/usage.md#command-line-and-automation-090) | `antinomie-cli` (0.9.0): install, `doctor`, your first run, the daemon and watch folders; the [command reference](docs/usage.md#command-line-090) follows. |
 | [Auto mode](docs/auto-mode.md) | The pipeline, policies, revert, retention, failure codes, troubleshooting and the systemd unit. |
-| [Job API](docs/job-api-1.md) and [service configuration](docs/service-config.md) | The contract and the configuration files of the job daemon. |
+| [Run API](docs/run-api-1.md) and [service configuration](docs/service-config.md) | The contract and the configuration files of the Auto mode daemon. |
 | [Triage report](docs/triage-report.md) | Export formats, evidence bundle and the JSON schema. |
 | [Security model](docs/security.md) | Trust boundaries, network modes, sensitive data and safe use. |
 | [Security policy](SECURITY.md) | Supported versions and how to report a vulnerability privately. |

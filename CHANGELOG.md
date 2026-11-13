@@ -15,6 +15,36 @@ x86 programs by their own table.
 
 ### Host
 
+- **Auto mode's API speaks of runs, not jobs (ANT-T0492).**
+  - The contract is `docs/run-api-1.md` with its schema
+    `docs/run-api-1.schema.json` (was the job API). A run is one analysis of
+    one sample; "job" is left for work the engine still has to do. The old
+    names are not accepted (no job API was released).
+  - Operations: `run.submit`, `run.get`, `run.list`, `run.cancel`, `run.rerun`
+    (was `job.retry`; it also takes another `preset`), `run.delete`;
+    `preset.list` (was `policy.list`, now needs `runs.submit`) and the new
+    `preset.get` (every option of one preset). Events: `run.created`,
+    `run.state`, `run.stage`, `run.progress`, `run.program` (was `job.run`),
+    `run.warning`, `run.artifact`, `run.trigger`, `run.assessment`,
+    `run.requeued`, `run.finished`, `run.metrics`; an event's scope is `run` or
+    `engine`.
+  - The run object: `request` (was `spec`), `preset` (was `policy`),
+    `program` (was `run`, with `id` for the engine's run id), and the new
+    `settings` (every resolved option) and `permissions_used` (each
+    permission its options use, with the preset key). `job_id` is `run_id`
+    everywhere; new run ids are `r_...` (a `j_...` id still resolves).
+  - Recordings: `recording.list` and `recording.get` (were
+    `recording.run.list` and `.get`), addressed by `recording_key` (was
+    `run_key`); a recording names the run that made it in `from_run`. The
+    service log names a recording read `recording=` and a run artifact read
+    `run=`.
+  - Command line: `auto preset list|show NAME` (was `auto policy list`),
+    `auto submit --preset`, `auto rerun` (was `auto retry`), run words in the
+    output; `recording list|show|export` (was `run list|show|export`; `run
+    exec` stays). The watch folder client and custody actor is
+    `auto:preset-<name>`; the hook gets `ANTINOMIE_RUN_ID`. `waiting_for:
+    quota` also means the caller already has `max_running` runs running.
+
 - **Presets replace policies in Auto mode (ANT-T0490).**
   - A preset is a named set of run options to start from, in the final format of
     the 0.9.1 web: one table per part of Submit (`[program]`, `[network]`,
@@ -44,8 +74,8 @@ x86 programs by their own table.
     froze when the file changes or goes.
   - A `policies/` folder is refused: `config validate` names the new home of each
     old key and the daemon does not start until the folder is gone.
-    `config validate --preset NAME`, `auto policy list` (the presets with what
-    they need) and `auto retry --override program.run_time_s=60` follow.
+    `config validate --preset NAME`, `auto preset list` (the presets with what
+    they need) and `auto rerun --override program.run_time_s=60` follow.
 - **Limits per caller (ANT-T0491).**
   - `service.toml` sets a caller's limits: `[limits.local]` for the owner on the
     local socket (`priority_max`, `max_run_s`, `max_queued`, `max_running`,
@@ -200,7 +230,7 @@ x86 programs by their own table.
     and says `auto submit --route` takes only `drop` and `inet_sim` by design.
     `docs/service-config.md` lists `[daemon] host_workers`, `[privacy]`, `[query]` and
     `[log]` (checked, not yet applied) and says plainly that `[[notify.webhooks]]` sends
-    nothing in 0.9.0. `docs/job-api-1.md` states the default page sizes and the CLI name
+    nothing in 0.9.0. `docs/run-api-1.md` states the default page sizes and the CLI name
     `run_limit`. The `--yes` help of `auto lane` says `unquarantine` accepts it and does not need it.
 
 - **Network attribution polish on ARM and InetSim, and an InetSim IRC greeting (ANT-T0435).**
@@ -710,7 +740,7 @@ x86 programs by their own table.
 
 - **Service configuration and the job API contract.** The new
   `antinomie-service` library holds what the coming daemon, command line and
-  web layer share: the job and query API types (docs/job-api-1.md, with its
+  web layer share: the job and query API types (docs/run-api-1.md, with its
   JSON Schema), `service.toml` and `policies/*.toml` (docs/service-config.md),
   the job store (SQLite, the state machine, the queue and its recovery),
   uploads and sample intake, read-only recording queries, and the `automation`
@@ -773,7 +803,7 @@ x86 programs by their own table.
   duplicate. SIGTERM lets a job that is past its VM stages finish its analysis
   and report (up to 120 s, `[daemon] shutdown_host_grace_s`) and puts a job in
   its VM stages back in the queue; a second signal within 5 s stops at once;
-  SIGHUP reloads the policies. See docs/job-api-1.md and docs/service-config.md.
+  SIGHUP reloads the policies. See docs/run-api-1.md and docs/service-config.md.
 
 - **`antinomie-cli auto init` and the lane commands (ANT-T0378).** `auto init`
   makes the Auto mode lane on an installed base: it creates a routed VM, boots it
@@ -875,7 +905,7 @@ x86 programs by their own table.
   web pages will use (`recording.summary`) and writes nothing into the
   recording; it prints the summary's counts, families, techniques, key
   behaviours and detections, and `--parts` still adds report parts. The query
-  API (`docs/job-api-1.md`) serves the Triage reads: the summary, findings,
+  API (`docs/run-api-1.md`) serves the Triage reads: the summary, findings,
   indicators, files, network and a merged timeline, with the window's filter
   language, server-side sort and paging, and the `trace.page` filter (`q`). Their
   counts are the window's: a test compares them with the report builder.

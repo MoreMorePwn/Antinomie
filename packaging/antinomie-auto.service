@@ -40,19 +40,19 @@ ExecStart=/usr/local/bin/antinomie-cli --data-dir /var/lib/antinomie --log-forma
 ExecReload=/bin/kill -HUP $MAINPID
 
 # A crash or a non-zero exit restarts the daemon (startup recovery finishes the
-# job and the disk layer it left); a stop through systemctl does not.
+# run and the disk layer it left); a stop through systemctl does not.
 Restart=on-failure
 RestartSec=10
 
 # QEMU is a child of the daemon. SIGTERM goes to the daemon alone, which stops
-# the running job through the engine, stops the VM and exits; only what is still
+# the current run through the engine, stops the VM and exits; only what is still
 # alive when the time is up is killed, QEMU included (SIGKILL to the whole group).
-# The stop path is the 120 s VM stop plus, for a job already in its host stages,
+# The stop path is the 120 s VM stop plus, for a run already in its host stages,
 # up to 120 s (shutdown_host_grace_s) and the disk-layer step: 360 s is the floor
 # (with [daemon] shutdown = "drain", raise it above drain_timeout_s).
 KillMode=mixed
 TimeoutStopSec=360
-# A QEMU the kernel kills for memory is the daemon's job to handle (guest_lost);
+# A QEMU the kernel kills for memory is the daemon's to handle (guest_lost);
 # it must not stop the whole service.
 OOMPolicy=continue
 

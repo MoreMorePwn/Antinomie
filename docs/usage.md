@@ -2005,8 +2005,8 @@ A missing KVM is only a warning by default (VMs then run with TCG, slowly).
 `$HOME/antinomie`, the window's). One process owns a data folder at a time, so give
 automation `~/auto`, `/var/lib/antinomie` or similar, never the window's folder.
 
-**The first job.** Install a base into the folder, make the lane VM, and submit one
-sample; the command runs the job itself and exits with its code.
+**The first run.** Install a base into the folder, make the lane VM, and submit one
+sample; the command runs the run itself and exits with its code.
 
 ```text
 antinomie-cli --data-dir ~/auto base install ./bases/busybox
@@ -2015,9 +2015,9 @@ antinomie-cli --data-dir ~/auto auto submit ./sample.elf --verdict-exit --out ./
 echo $?     # 0 clean_observed, 30 suspicious, 31 malicious, 32 inconclusive, 10 failed, 11 partial
 ```
 
-`auto init` makes a VM, boots it once, and takes the clean snapshot that every job
+`auto init` makes a VM, boots it once, and takes the clean snapshot that every run
 starts from. A run uses the built-in preset Standard unless it names another. The report files (HTML and JSON by
-default) are in `./report`. See [Auto mode](#auto-mode-090) for the job commands.
+default) are in `./report`. See [Auto mode](#auto-mode-090) for the run commands.
 
 **The daemon.** For a queue that stays up, run `antinomie-cli --data-dir ~/auto auto
 daemon` (in the foreground; under systemd it is a service, see [Run it under
@@ -2027,7 +2027,7 @@ config validate` checks `service.toml` and the presets before you reload it with
 `SIGHUP`.
 
 **Watch folders.** Add a folder to `service.toml` and every stable file dropped in it
-becomes a job of the preset you name, run unchanged:
+becomes a run of the preset you name, run unchanged:
 
 ```toml
 [[inbox.watch]]
@@ -2041,7 +2041,7 @@ rules are in [Auto mode](auto-mode.md#watch-folders); `antinomie-cli auto watch 
 folder's state.
 
 **Before you leave it running,** read [Unattended use](security.md#unattended-use):
-the daemon's user, what the systemd unit restricts, which routes jobs may use, and what
+the daemon's user, what the systemd unit restricts, which routes runs may use, and what
 leaves the machine.
 
 ## Command line (0.9.0)
@@ -2060,7 +2060,7 @@ global flags may also follow the command.
 | `--bundle PATH`, `--qemu PATH`, `--qemu-img PATH`, `--tcg`, `--no-headless` | Engine options, as in the window. The CLI is headless unless `--no-headless` is given |
 | `--boot-wait SECONDS`, `--tcg-multiplier N` | The waits of a VM start and a launch for this command, over `settings.json`'s `start` section (the window's **Tools > Settings > Advanced**, VM start and guest connection timeouts; `config set start.boot_wait_secs 120`). `--boot-wait` (5 to 600, default 60) is how long a launch waits at KVM speed for a Debian guest to finish booting before it starts the program anyway; `--tcg-multiplier` (1 to 100, default 10) is how many times longer every start wait, that boot wait and each guest command may take under TCG. They matter to the commands that start an engine with a VM: `vm start`, `run exec --start`, `snapshot restore`, `auto daemon` |
 | `--socket PATH` | The daemon's socket. Without it a command uses `[daemon] socket` of `<data>/service.toml`, else `<data>/run/antinomie.sock` (the same rule the daemon follows) |
-| `--daemon`, `--direct` | `--daemon` requires a running daemon (exit 21 when none answers), `--direct` never uses one. Without either, the `auto` commands and the reads (`run list`, `run show`, `run export`, `triage`, `sample list`, `sample show`, `sample tag`, `custody verify` without `--export`, `vm list`, `base list`) use the daemon when one answers and work in the calling process when none does. The other commands always run in the calling process and take the lock (`--direct` and `--daemon` conflict) |
+| `--daemon`, `--direct` | `--daemon` requires a running daemon (exit 21 when none answers), `--direct` never uses one. Without either, the `auto` commands and the reads (`recording list`, `recording show`, `recording export`, `triage`, `sample list`, `sample show`, `sample tag`, `custody verify` without `--export`, `vm list`, `base list`) use the daemon when one answers and work in the calling process when none does. The other commands always run in the calling process and take the lock (`--direct` and `--daemon` conflict) |
 | `-o, --format human\|json\|ndjson` | Output format; `human` on a terminal, `json` otherwise |
 | `--color auto\|always\|never` | Colour of human output; `NO_COLOR` is honoured |
 | `-q`, `-v`, `-vv`, `--log-format text\|json` | Log lines on standard error; for `auto daemon` the flags win over `[log]` in `service.toml` |
@@ -2081,17 +2081,17 @@ per line: a list command prints its items and then a last line
 | 0 | ok | Success |
 | 1 | failed | Other failure |
 | 2 | usage | Bad arguments |
-| 3 | not_found | Sample, run, VM, base or job does not exist |
+| 3 | not_found | Sample, run, VM, base or run does not exist |
 | 4 | invalid | The arguments were refused (`invalid_argument`, `precondition_failed`, `conflict`) |
 | 5 | denied | `permission_denied` (a permission, or a file permission), `preset_denied`, `limit_exceeded`, `unavailable_on_node` |
-| 10 | job_failed | A waited job (or `run exec`) failed |
-| 11 | job_partial | A waited job (or `run exec`) ended partial |
-| 12, 13 | job_cancelled, job_rejected | A waited job was cancelled, or a submitted job was rejected |
-| 14 | wait_timeout | A wait ran out: the engine did not answer in time, or `--timeout` passed (the job is still queued or running; `run exec` stops the VM) |
+| 10 | job_failed | A waited run (or `run exec`) failed |
+| 11 | job_partial | A waited run (or `run exec`) ended partial |
+| 12, 13 | job_cancelled, job_rejected | A waited run was cancelled, or a submitted run was rejected |
+| 14 | wait_timeout | A wait ran out: the engine did not answer in time, or `--timeout` passed (the run is still queued or running; `run exec` stops the VM) |
 | 20 | dependency | A required tool is missing; `doctor` shows which |
 | 21 | busy | The data directory is owned by another process, or the daemon is starting or stopping |
 | 22 | quota | `quota_exceeded` |
-| 30 to 32 | suspicious, malicious, inconclusive | With `--verdict-exit` only: the waited job succeeded and its label is `suspicious` (30), `malicious` (31) or `inconclusive` (32). The job's state comes first: a partial or failed job exits 11 or 10 whatever its label |
+| 30 to 32 | suspicious, malicious, inconclusive | With `--verdict-exit` only: the waited run succeeded and its label is `suspicious` (30), `malicious` (31) or `inconclusive` (32). The run's state comes first: a partial or failed run exits 11 or 10 whatever its label |
 | 130 | interrupted | Interrupted with Ctrl-C |
 
 **Commands in this build.** This list is what `antinomie-cli --help` shows; the
@@ -2135,7 +2135,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
 - **Run a program.** `run exec SAMPLE` uploads one library sample into a VM, runs it, and
   waits until the recording is complete and settled. `SAMPLE` is a SHA-256 from `sample
   list`, or a file, which is added to the library first. The low-level form of what an
-  Auto job does: no revert, no triage, no report. Flags: `--vm ID` (optional when there is
+  Auto run does: no revert, no triage, no report. Flags: `--vm ID` (optional when there is
   one VM), `--start` (boot a stopped VM; without it a stopped VM is refused), `--args A B
   ...` (or after `--`), `--env K=V`, `--as user|root|UID:GID` (`user` is UID 1000),
   `--route drop|internet|inet_sim|tor|vpn|socks5` (a routed VM only), `--timeout-run
@@ -2147,7 +2147,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   waits until the recording is final: the stop is saved and the disk layer is gone. A
   `--static` analysis that is still running when the 300 s end does not fail the run: the
   recording is saved without it, the outcome stays `succeeded` and the result lists
-  `pending: ["analysis"]` (an Auto job has `run.pending`); any other evidence still
+  `pending: ["analysis"]` (an Auto run has `run.pending`); any other evidence still
   pending at 300 s is `recording_failed`.
   The result says `outcome`: `succeeded` (exit 0), `partial` (exit 11: a piece of evidence
   finished incomplete), or `failed` (exit 10, with `failure.code` such as `no_vm`,
@@ -2159,11 +2159,11 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   `tier`, `pid`, `syscall`, and the `core` and `memory` dump with `state`, `size` and `path`),
   the counts of matches missed, skipped over the budget or lost, and `notes` (the run is
   noted "armed, but no rule of that tier matched" when nothing fired). `--events` prints the progress as it
-  happens, one event of the job API per line (`job.stage`, `job.progress`, `job.run`,
-  `job.warning`, `job.trigger`, `job.finished`; `job_id` is null, `seq` counts from 1), then the result;
+  happens, one event of the run API per line (`run.stage`, `run.progress`, `run.program`,
+  `run.warning`, `run.trigger`, `run.finished`; `run_id` is null, `seq` counts from 1), then the result;
   it implies `-o ndjson`. `--timeout SECONDS` limits the whole command (exit 14).
   While the guest finishes mounting its disk the upload is tried again once a second, and
-  `job.progress` says so at most every five seconds, with the count of tries.
+  `run.progress` says so at most every five seconds, with the count of tries.
   **Under TCG** (every arm64 VM on an x86-64 host) the upload, launch and guest-answer
   waits, and the minute after which an unanswered guest command is `internal`, are
   stretched by the same factor as the engine's own waits: the TCG multiplier times the host
@@ -2171,7 +2171,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   does not count as silence. The `Start` of the VM is the same: its 180 s is a limit on
   silence, and under TCG the time the engine reports waiting for the guest to connect does
   not count against it (at most 30 minutes in all); under KVM it is 180 s as before.
-  If the engine still answers a launch after the job gave up
+  If the engine still answers a launch after the run gave up
   on it, the VM is stopped (which ends the program), the result names that run and a
   `late_launch` warning says what happened.
 - **Run digests.** `digest RUN` builds the Triage digest of one finished run, and
@@ -2219,15 +2219,16 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   `report`, `detect` and `triage --parts` write nothing into the recording but the
   index Triage keeps there (its event and finding journals), as the window does
   when it shows the run; `triage` without `--parts` writes nothing.
-- **Look at recorded runs.** `run list [--vm ID] [--sample SHA256] [--job ID] [--state
-  STATE] [--since SPAN] [--limit N] [--cursor C]` lists the recorded runs of the data
-  directory, newest first (`--since` takes a span such as `90m`, `24h` or `7d`, or a
+- **Look at recordings.** A recording is what the engine captured while a program
+  ran (`run exec` makes one, and so does every run of Auto mode). `recording list
+  [--vm ID] [--sample SHA256] [--run ID] [--state STATE] [--since SPAN] [--limit N]
+  [--cursor C]` lists the recordings of the data directory, newest first (`--since` takes a span such as `90m`, `24h` or `7d`, or a
   Unix time in milliseconds). A run held open for a persisted copy (see *Copies of
   the program outside the recorded tree*) shows `held` in the STATE column, and its
   JSON item has `held` ("Held: persisted copy running (pid 1050, .e)") beside
-  `state`, which still says how its tree ended. `run show RUN [--summary]` shows one run: its state,
+  `state`, which still says how its tree ended. `recording show RUN [--summary]` shows one recording: its state,
   whether its recording is `live`, `finalizing`, `complete` or `interrupted`, its
-  evidence and `generation`; `--summary` adds the Triage summary. `run export RUN --out
+  evidence and `generation`; `--summary` adds the Triage summary. `recording export RUN --out
   DIR [--part LIST] [--sensitive]` writes the parts `trace`, `processes`,
   `findings`, `indicators`, `files`, `network`, `timeline`, `analysis`, `custody`
   and `artifacts` (default: all) as `*.ndjson` files, one row per line (a `trace` row's `nr` is the number the guest used for the call; `args_preview` holds the engine's raw argument previews, and the decoded records are in the Syscall Trace's own JSON export), and the
@@ -2242,7 +2243,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   its service log; `--no-triage` leaves out the
   parts that need the Triage index (findings, indicators, files, network, timeline), so
   a very large recording is not indexed in full. `RUN` is as for `triage`.
-  These commands are the read-only query API of the job API (`docs/job-api-1.md`,
+  These commands are the read-only query API of the run API (`docs/run-api-1.md`,
   "Recording queries"): they take no engine lock and write nothing into a recording,
   so they work while the window is open. A recording that is still being written
   (`live`) can be listed, shown and exported in its core parts, but its Triage parts
@@ -2253,19 +2254,19 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   **With a daemon** (`auto daemon`) at the socket these commands, `triage`, `sample
   list|show|tag`, `custody verify` (without `--export`), `vm list` and `base list`
   ask the daemon and print the same objects; `--direct` keeps them in the command and
-  `--daemon` insists on the daemon. Every read of `run export` has its own deadline (10 s
+  `--daemon` insists on the daemon. Every read of `recording export` has its own deadline (10 s
   light, 60 s heavy, per page), never one for the whole export; a read that passes it is
   asked again twice before the export stops, with exit 21 and `details.part`, `details.op`
   and `details.parts_done` naming where, and the files already written stay in `--out`.
-  `run export` still writes only under `--out`: the
+  `recording export` still writes only under `--out`: the
   command asks the daemon for the rows and the bytes and writes the files itself, so no
   path is sent to the daemon. `triage --parts` builds its report parts in the command
   from the recording folder (no lock is needed). `vm list` and `base list` from the
   daemon print the contract's summaries (id, name, base, lane; identity, name,
   architecture), fewer columns than direct mode, which needs the lock and so cannot
-  run beside a daemon. `run list` shows the `job_id` of the Auto-mode job that made a
-  run, and `--job` finds its runs, both through the daemon and in direct mode (the
-  command reads the job store without writing). With a daemon `sample add FILE`
+  run beside a daemon. `recording list` shows in `from_run` the Auto-mode run that made a
+  recording, and `--run` finds its recordings, both through the daemon and in
+  direct mode (the command reads the run store without writing). With a daemon `sample add FILE`
   uploads the file and adds it as the socket's caller (`local:<uid>`);
   `--delete-original` then removes the file after the daemon reported the same
   SHA-256. `sample verify`, `sample remove` and `custody verify --export` work in the
@@ -2292,8 +2293,8 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   `sample tag SHA256 TAG... [--remove]`, `sample verify [SHA256]` (exit 1 when an
   archive does not match its hash) and `sample remove SHA256 --yes` (deletes the
   archive; the record and its custody log stay). A sample is the `Sample` object
-  of the job API: `sha256`, `size`, `type`, `architecture`, `name`, `tags`,
-  `first_seen_ms`, `run_count`, `last_job`, `custody_ok` (null unless
+  of the run API: `sha256`, `size`, `type`, `architecture`, `name`, `tags`,
+  `first_seen_ms`, `run_count`, `last_run`, `custody_ok` (null unless
   `--custody` or `show`). `run_count` and the `--runs` list count every run in the
   recordings of all VMs that executed the sample or loaded it as a preloaded
   library, whether or not the window ever opened them. These commands and `custody verify` need no engine
@@ -2334,8 +2335,8 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   folder is an error that names the new key of each old one.
 - Watch folders (`auto watch`), retention (`auto gc`), result files (`[results]`) and
   the finish hook (`[notify] on_finish`) ship in 0.9.0 and are described under
-  [Auto mode](#auto-mode-090). Webhooks are not part of 0.9.0. The job contract is
-  written down in [Job API, version 1](job-api-1.md).
+  [Auto mode](#auto-mode-090). Webhooks are not part of 0.9.0. The run contract is
+  written down in [Run API, version 1](run-api-1.md).
 
 ### Auto mode (0.9.0)
 
@@ -2348,11 +2349,11 @@ it for as long as it runs.
 The pipeline, presets, retention, failure codes and troubleshooting are in
 [Auto mode](auto-mode.md); this section lists the commands.
 
-**Pipelining.** The VM is free as soon as a job's recording is collected: the
-next job starts in the VM while the previous job's host work (each static tool,
+**Pipelining.** The VM is free as soon as a run's recording is collected: the
+next run starts in the VM while the previous run's host work (each static tool,
 the Triage scan, detection, the label and the report) runs in the host work
 pool, at most `[daemon] host_workers` items at once (2), first come, first
-served by job arrival. Each item may take twice its expected time
+served by run arrival. Each item may take twice its expected time
 (`[daemon] host_time_factor`); `auto status <job>` lists the items with their
 state, expected time and limit, and `auto status` the pool's queue
 ([Auto mode](auto-mode.md#the-host-work-pool)).
@@ -2363,18 +2364,18 @@ manager or `&`. It owns the data folder (`run/owner.json` says "daemon" and name
 its socket), so the window, another daemon or a command that needs the engine on
 that folder is refused with exit 21 and told who owns it. It reads
 `service.toml` and `presets/` (see [service configuration](service-config.md)),
-finishes what a crash left behind, runs the queue one job at a time on its lane,
-and serves the job API on `<data>/run/antinomie.sock`.
+finishes what a crash left behind, runs the queue one run at a time on its lane,
+and serves the run API on `<data>/run/antinomie.sock`.
 
 | Signal | What the daemon does |
 |---|---|
-| `SIGTERM` or Ctrl-C | Stops taking jobs (queued jobs stay queued). A job that is past its VM stages finishes its analysis and report first, for up to 120 s (`[daemon] shutdown_host_grace_s`). A job still in the VM is stopped and put back in the queue without using an attempt |
+| `SIGTERM` or Ctrl-C | Stops taking runs (queued runs stay queued). A run that is past its VM stages finishes its analysis and report first, for up to 120 s (`[daemon] shutdown_host_grace_s`). A run still in the VM is stopped and put back in the queue without using an attempt |
 | a second one within 5 s | Stops at once, VM included (exit 130); the next start finishes the rest |
-| `SIGHUP` | Reads `presets/` and `service.toml` again; a file with an error keeps the old settings. Jobs already queued keep the preset they were submitted with |
+| `SIGHUP` | Reads `presets/` and `service.toml` again; a file with an error keeps the old settings. Runs already queued keep the preset they were submitted with |
 | `SIGUSR1` | Writes the queue's state to the log |
 
 **Setting up the lane.** A lane is one VM kept for automation, with a clean
-snapshot that every job starts from.
+snapshot that every run starts from.
 
 ```text
 antinomie-cli --data-dir ~/auto base install ./bases/busybox
@@ -2382,7 +2383,7 @@ antinomie-cli --data-dir ~/auto auto init --base busybox --cpus 2 --ram-mib 2048
 ```
 
 `auto init` creates the lane VM (`--name`, default `auto-1`) on a routed network
-(each job chooses where its traffic goes; between runs nothing leaves), boots it
+(each run chooses where its traffic goes; between runs nothing leaves), boots it
 once and waits for the guest to answer and to finish booting (its root file system
 mounted, so the initramfs no longer grows it to the lane disk; a Debian guest's
 start-up finished), stops it, waits until its disk has settled,
@@ -2398,7 +2399,7 @@ a kernel `BUG` or oops, or the guest could not grow its file system) fails `auto
 init` without a clean snapshot. `auto init` runs in the calling process, so stop the daemon first;
 `--replace` makes a new lane VM for an existing lane (a new base) and keeps the old
 VM for you to delete. `auto lane list` shows the lane, whether it is quarantined and
-what would keep it from a job; `auto lane reset --yes` reverts the VM to its clean
+what would keep it from a run; `auto lane reset --yes` reverts the VM to its clean
 snapshot now and lifts a quarantine when that works; `auto lane unquarantine` lifts
 it without reverting when the checks pass (the clean snapshot is there, the VM is
 stopped, nothing is still being saved).
@@ -2408,39 +2409,39 @@ stopped, nothing is still being saved).
 folder and writes `<data>/service/lanes/lane-N.json`. With `[daemon] lanes = N`
 in `service.toml` the daemon runs lanes 1 to N, one engine and one VM each, and
 starts a lane only when the machine has the memory for every lane VM (the log
-and `auto lane list` say why a lane did not start). A job goes to a free lane
+and `auto lane list` say why a lane did not start). A run goes to a free lane
 whose base and architecture can run it, the least recently used first; every
 lane's host work goes to the one host work pool. `auto status` and `capabilities`
-show every lane; `auto lane reset` and `unquarantine` take `--lane lane-N`. A run
-stays in its lane's folder, and the read commands given the data folder (`run
-list`, `run show`, `run export`, `triage`, `detect`, `report`, `sample show
+show every lane; `auto lane reset` and `unquarantine` take `--lane lane-N`. A recording
+stays in its lane's folder, and the read commands given the data folder
+(`recording list`, `recording show`, `recording export`, `triage`, `detect`, `report`, `sample show
 --runs`) find the runs of every lane, directly and through the daemon. See
 [Auto mode](auto-mode.md#several-lanes).
 
-**Submitting and following jobs.**
+**Submitting and following runs.**
 
 | Command | What it does |
 |---|---|
-| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a job; prints the job. `--policy` (the preset, default `standard`), `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V` (replaces the preset's environment), `--as user\|root\|nobody\|UID:GID`, `--route drop\|inet_sim` (a live route is not set up on this node in 0.9.0, whereas `run exec --route` takes all six), `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--idempotency-key K`, `--name`. A flag that changes a preset value makes the run Custom; only your permissions and the node limit what a run may change. `--wait` waits for the end and exits with the job's code; `--follow` also prints the job's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded job labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected job exits 13 |
-| `auto status [JOB]` | One job, or the queue and the lanes |
-| `auto list` | Jobs, newest first: `--state`, `--outcome`, `--sha256`, `--label K[=V]`, `--since 24h`, `--limit`, `--cursor` |
-| `auto wait JOB...` | Waits until the jobs have ended (`--timeout` bounds it, exit 14) and exits with the worst code; `--verdict-exit` as above |
-| `auto events JOB` | The job's stored events; `--since SEQ` starts after an event, `--follow` keeps printing new ones until the job ends, `--types job.stage,job.state` filters. `auto events --all --follow [--since GSEQ]` follows every job and the engine |
-| `auto result JOB` | The outcome, the label, its score and basis sentence, and the paths of the report files |
-| `auto artifacts JOB`, `auto fetch JOB KIND [--out PATH\|-]` | The job's artifacts; copy one (`html`, `json`, ..., or `report.bundle`) to a file, a folder or standard output |
-| `auto cancel JOB [--reason TEXT]` | A queued job is cancelled at once; a running one stops its run and VM and ends `cancelled` (its recording is kept) |
-| `auto retry JOB [--override TABLE.KEY=VALUE]` | A new job from a finished one, with `repeat_of` set: the preset as it is now, or a Custom run's resolved options; `--override program.run_time_s=60` changes one option |
-| `auto queue status\|pause\|resume` | The queue; a paused queue starts no job (running jobs finish) |
-| `auto policy list` | The presets (five built in, and `presets/*.toml`) with the permissions their options need |
-| `auto delete JOB [--with-recording]` | Removes a finished job: its record, events and artifacts (the sample stays in the library). `--with-recording` also deletes the job's recording, and the run of each earlier attempt that launched, through the run deletion the window uses; a recording a client is reading, or still being written, is refused |
+| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a run; prints the run. `--preset` (the preset, default `standard`), `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V` (replaces the preset's environment), `--as user\|root\|nobody\|UID:GID`, `--route drop\|inet_sim` (a live route is not set up on this node in 0.9.0, whereas `run exec --route` takes all six), `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--idempotency-key K`, `--name`. A flag that changes a preset value makes the run Custom; only your permissions and the node limit what a run may change. `--wait` waits for the end and exits with the run's code; `--follow` also prints the run's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded run labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected run exits 13 |
+| `auto status [RUN]` | One run, or the queue and the lanes |
+| `auto list` | Runs, newest first: `--state`, `--outcome`, `--sha256`, `--label K[=V]`, `--since 24h`, `--limit`, `--cursor` |
+| `auto wait RUN...` | Waits until the runs have ended (`--timeout` bounds it, exit 14) and exits with the worst code; `--verdict-exit` as above |
+| `auto events RUN` | The run's stored events; `--since SEQ` starts after an event, `--follow` keeps printing new ones until the run ends, `--types run.stage,run.state` filters. `auto events --all --follow [--since GSEQ]` follows every run and the engine |
+| `auto result RUN` | The outcome, the label, its score and basis sentence, and the paths of the report files |
+| `auto artifacts RUN`, `auto fetch RUN KIND [--out PATH\|-]` | The run's artifacts; copy one (`html`, `json`, ..., or `report.bundle`) to a file, a folder or standard output |
+| `auto cancel RUN [--reason TEXT]` | A queued run is cancelled at once; a running one stops its run and VM and ends `cancelled` (its recording is kept) |
+| `auto rerun RUN [--preset NAME] [--override TABLE.KEY=VALUE]` | Run again: a new run from a finished one, with `repeat_of` set: the preset as it is now, or a Custom run's resolved options; `--preset` uses another preset as it is now instead; `--override program.run_time_s=60` changes one option |
+| `auto queue status\|pause\|resume` | The queue; a paused queue starts no run (running runs finish) |
+| `auto preset list`, `auto preset show NAME` | The presets (five built in, and `presets/*.toml`) with the permissions their options need and whether you can run them as they are; `show` prints every option of one preset (`table.key = value`; JSON with `-o json`) |
+| `auto delete RUN [--with-recording]` | Removes a finished run: its record, events and artifacts (the sample stays in the library). `--with-recording` also deletes the run's recording, and the run of each earlier attempt that launched, through the run deletion the window uses; a recording a client is reading, or still being written, is refused |
 | `auto gc [--dry-run]` | Applies retention now (below) and prints what was deleted and what was skipped and why; `--dry-run` deletes nothing. Works with a daemon, or on its own when none runs |
 | `auto watch list` | The watch folders: state, files taken, files rejected, entries refused and why. Without a daemon, the folders `service.toml` names |
 | `auto watch scan` | Scans every watch folder now (a file still has to be steady for 3 seconds). Needs the daemon |
 
-Without a daemon, the reading commands read the job store directly (they work
+Without a daemon, the reading commands read the run store directly (they work
 beside the window), `cancel` and `queue pause/resume` take the data folder for a
-moment, and **`auto submit` runs the job in the command itself**: it owns the data
-folder while the job runs and exits with the job's code, so one command takes an ELF
+moment, and **`auto submit` runs the run in the command itself**: it owns the data
+folder while the run runs and exits with the run's code, so one command takes an ELF
 to a report:
 
 ```text
@@ -2449,7 +2450,7 @@ echo $?     # 0 clean_observed, 30 suspicious, 31 malicious, 32 inconclusive, 10
 ```
 
 **Watch folders.** Name a folder in `service.toml` and every file dropped into it
-becomes a job:
+becomes a run:
 
 ```toml
 [[inbox.watch]]
@@ -2470,35 +2471,35 @@ rejects (wrong type, too large, a duplicate the preset denies) goes to
 `<data>/inbox/rejected/` with a `.reason` file and is not tried again. More than
 `watch_rate` (10) files a minute pauses the folder for a minute and raises an
 `engine.alert` `watch_flood`. `preset_by_dir = true` makes a subfolder named after
-a preset use that preset; other subfolders are ignored. The jobs carry the label
-`watch=<folder name>` and the custody actor `auto:policy-<preset>`. The keys are
+a preset use that preset; other subfolders are ignored. The runs carry the label
+`watch=<folder name>` and the custody actor `auto:preset-<preset>`. The keys are
 in [service configuration](service-config.md#watch-folders).
 
-**Results and the hook.** With `[results] dir` set, each job that ends leaves
-`<dir>/<date>/<sha8>-<jobid>/` with its `job.json` and its reports, for a program
+**Results and the hook.** With `[results] dir` set, each run that ends leaves
+`<dir>/<date>/<sha8>-<runid>/` with its `job.json` and its reports, for a program
 that polls a folder. With `[notify] on_finish = ["/path/to/hook"]` the daemon runs
-that program when a job ends, without a shell and with only `ANTINOMIE_JOB_ID`,
+that program when a run ends, without a shell and with only `ANTINOMIE_RUN_ID`,
 `ANTINOMIE_STATE`, `ANTINOMIE_LABEL`, `ANTINOMIE_SHA256` and
 `ANTINOMIE_RESULT_JSON` (the path of `job.json`) in its environment. It has 30
-seconds, runs as the daemon's user, and what it prints goes to the job's `job.log`.
-A failing hook never fails a job; it raises an `engine.alert` `hook_failed`.
+seconds, runs as the daemon's user, and what it prints goes to the run's `job.log`.
+A failing hook never fails a run; it raises an `engine.alert` `hook_failed`.
 
 **Retention.** The daemon cleans up after itself once an hour: a recording is
-deleted 14 days after its job ended (through the window's own run deletion; a failed
-job's is kept until its record goes), the oldest recordings go first above 200 GiB,
-a job's record and artifacts go after 90 days, staged uploads after 24 hours and
+deleted 14 days after its run ended (through the window's own run deletion; a failed
+run's is kept until its record goes), the oldest recordings go first above 200 GiB,
+a run's record and artifacts go after 90 days, staged uploads after 24 hours and
 rejected inbox files after 7 days (`[retention]` in `service.toml`). It never
-touches a job that has not ended, a recording that is being read through the API or
+touches a run that has not ended, a recording that is being read through the API or
 written, the sample library or the custody chain. `auto gc --dry-run` shows the
-plan first; every deletion is logged with the job and run id.
+plan first; every deletion is logged with the run and run id.
 
-**The label.** A succeeded job has an assessment: the raw Triage assessment, the
+**The label.** A succeeded run has an assessment: the raw Triage assessment, the
 highest tier, a label (`malicious`, `suspicious`, `clean_observed`,
 `inconclusive`), an optional score and the `basis` sentence that says why.
 `clean_observed` means "nothing seen in this run", not "clean". With `[verdict]
 tag_library = true` in a preset, the sample also gets the library tags
 `auto:label=<label>` and `auto:preset=<name>`, recorded in its custody chain under
-the actor `auto:policy-<name>`.
+the actor `auto:preset-<name>`.
 
 **Who can talk to the daemon.** Only you. The socket file can be opened only by
 its owner (mode 0600, in a folder only you can enter, 0700), and on every
@@ -2507,7 +2508,7 @@ the connection, without a word, unless it is the user the daemon runs as. Every
 local client therefore acts as you, with every right. The daemon never opens a
 file a client names: a sample travels over the socket in pieces and is checked and
 stored by the daemon, and a report path it hands back is checked to be inside the
-job's own folder. Each request is checked strictly (an unknown field is an error
+run's own folder. Each request is checked strictly (an unknown field is an error
 that names it), and the socket has limits so a broken or hostile local program
 cannot wear the daemon down: 2 MiB per message, 16 requests at a time and 50 a
 second per connection, 64 connections, 64 event subscriptions, idle connections
@@ -2515,8 +2516,8 @@ closed after 5 minutes, and a client that stops reading is dropped. Nothing the
 daemon does contacts the network on its own; a sample's traffic is dropped unless
 its preset chooses the simulated internet (`inet_sim`).
 
-**Event streams.** Every change of a job is an event with a number: `seq` counts
-the events of one job, `gseq` counts every event of the daemon and never repeats.
+**Event streams.** Every change of a run is an event with a number: `seq` counts
+the events of one run, `gseq` counts every event of the daemon and never repeats.
 A client that lost its connection asks for the events after the last number it
 saw and gets each one exactly once, then the new ones as they happen.
 
