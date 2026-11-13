@@ -33,6 +33,7 @@ pub(super) fn plan(statics: &[AnalysisKind], engines: bool) -> HostPlan {
         } else {
             Vec::new()
         },
+        online: false,
         formats: vec![crate::api::spec::ReportFormat::Json],
         bundle: false,
         defang: true,

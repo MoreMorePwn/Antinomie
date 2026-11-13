@@ -2333,6 +2333,13 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   [service configuration](service-config.md)); it prints each problem as
   `file:line:column` and exits 4 when there is an error. A 0.9.0 `policies/`
   folder is an error that names the new key of each old one.
+  `config api-key set abusech|malshare` reads a key from standard input (its
+  first line; never an argument or the environment) and stores it in
+  `<data>/api-keys.json` (mode 0600, the file of the window's **Tools > API
+  keys**); `config api-key clear SERVICE` forgets it and `config api-key show`
+  prints which keys are stored, each as its last four characters. The abuse.ch
+  key is the one an Auto run with `[detection] check_online = true` uses (see
+  [service configuration](service-config.md#the-abusech-key)).
 - Watch folders (`auto watch`), retention (`auto gc`), result files (`[results]`) and
   the finish hook (`[notify] on_finish`) ship in 0.9.0 and are described under
   [Auto mode](#auto-mode-090). Webhooks are not part of 0.9.0. The run contract is

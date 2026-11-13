@@ -111,6 +111,7 @@ impl PoolJob {
             view.started_ms = None;
             view.finished_ms = None;
             view.note = None;
+            view.online = None;
         }
         self.phase = JobPhase::Analyse;
         self.begun = false;
@@ -363,6 +364,18 @@ impl PoolState {
                     job.stop = Some(stop);
                 }
             }
+        }
+    }
+
+    /// The `online` item's account of itself, once it ended.
+    pub fn item_online(
+        &mut self,
+        id: &RunId,
+        index: usize,
+        online: Option<crate::api::run::OnlineCheck>,
+    ) {
+        if let Some(view) = self.get_mut(id).and_then(|job| job.views.get_mut(index)) {
+            view.online = online;
         }
     }
 

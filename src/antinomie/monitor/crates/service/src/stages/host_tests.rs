@@ -8,6 +8,7 @@ use super::{
     Hosted, StageStop,
     collect::CollectEnd,
     host::{HostTriage, RealTriage, SampleTags},
+    online::OnlineAccess,
     tests::{MS, SECOND, W},
 };
 use crate::clock::Clock;
@@ -28,7 +29,10 @@ use crate::{
 };
 use antinomie_monitor_core::{
     BackendOptions, ExecRequest, RunState as CoreRunState, RunSummary,
-    analysis::detection::Engine as DetectionEngine, report::Choices, samples::SampleRef,
+    analysis::detection::Engine as DetectionEngine,
+    ioc::online::{Body, Transport},
+    report::Choices,
+    samples::SampleRef,
 };
 use antinomie_triage::{
     ArchiveScan, SavedRun, detection::Outcome as DetectOutcome, tests::write_rwx_calls,
@@ -59,6 +63,26 @@ pub(super) struct Hooked {
     pub(super) scans: AtomicU32,
     /// The jobs whose run was opened, in order, when set.
     pub(super) opened: Option<Arc<std::sync::Mutex<Vec<crate::api::ids::RunId>>>>,
+    /// Indicators put into the scan in place of the fixture's (none).
+    pub(super) ioc: Option<Arc<antinomie_triage::ioc_scan::IocScan>>,
+    /// What Check online sends through; `None`: no key and nothing sent.
+    /// Never the real `curl`: the key is the scratch data directory's.
+    pub(super) transport: Option<Arc<dyn Transport + Send + Sync>>,
+}
+
+/// A shared fake behind the boxed sender of [`OnlineAccess`].
+struct Shared(Arc<dyn Transport + Send + Sync>);
+
+impl Transport for Shared {
+    fn post(
+        &self,
+        url: &str,
+        body: Body<'_>,
+        key: &antinomie_monitor_core::api_keys::Secret,
+        cancel: &AtomicBool,
+    ) -> Result<String, String> {
+        self.0.post(url, body, key, cancel)
+    }
 }
 
 impl Hooked {
@@ -80,7 +104,14 @@ impl HostTriage for Hooked {
         if let Some(hook) = &self.index {
             hook(cancel)?;
         }
-        self.real().index(saved, cancel)
+        let mut scan = self.real().index(saved, cancel)?;
+        if let Some(ioc) = &self.ioc {
+            // The process keeps the last indexes for the next report; drop
+            // them so this one is not shared and can take the indicators.
+            antinomie_triage::scan_cache::forget();
+            scan.ioc = Some(Arc::clone(ioc));
+        }
+        Ok(scan)
     }
 
     fn detect(
@@ -132,6 +163,18 @@ impl HostTriage for Hooked {
 
     fn ioc_datasets(&self) -> u32 {
         self.datasets
+    }
+
+    fn online_access(&self) -> OnlineAccess {
+        let Some(transport) = &self.transport else {
+            return OnlineAccess::none();
+        };
+        let real = self.real().online_access();
+        OnlineAccess {
+            key: real.key,
+            transport: Box::new(Shared(Arc::clone(transport))),
+            key_dir: real.key_dir,
+        }
     }
 }
 
@@ -309,7 +352,7 @@ pub(super) fn host(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Run) -> Hosted 
     w.stages(waiter).host(job, &end_ok())
 }
 
-fn finished(hosted: Hosted) -> Run {
+pub(super) fn finished(hosted: Hosted) -> Run {
     match hosted {
         Hosted::Finished(job) => *job,
         other => panic!("{other:?}"),

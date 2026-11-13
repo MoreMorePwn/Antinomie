@@ -8,11 +8,13 @@
 //! [`RealTriage`]; a test can wrap it and replace one step (a scan that never
 //! ends, a report that cannot be written). [`SampleTags`] is the seam to the
 //! library for the one thing the service writes there on its own.
+use super::online::OnlineAccess;
 use crate::{api::run::Run, custody};
 use antinomie_monitor_core::{
     BackendOptions,
     analysis::detection::Engine,
-    ioc::feeds,
+    api_keys::{self, ApiKey},
+    ioc::{feeds, online},
     recording::{find_run_read_only, read_only_locations},
     report::{Choices, Report, Summary, export::Written},
     samples::{Library, Tag, TagKind},
@@ -95,6 +97,11 @@ pub trait HostTriage: Send + Sync {
     /// do not depend on the load of the machine they run on.
     fn load_scale(&self) -> f64 {
         1.0
+    }
+    /// The key and the sender of Check online ([`super::online`]). The
+    /// default has no key, so a fake sends nothing unless it says so.
+    fn online_access(&self) -> OnlineAccess {
+        OnlineAccess::none()
     }
 }
 
@@ -237,6 +244,20 @@ impl HostTriage for RealTriage {
 
     fn load_scale(&self) -> f64 {
         antinomie_monitor_core::accel::host_load_scale()
+    }
+
+    /// The abuse.ch Auth-Key of the node's data directory (lane 1's, where
+    /// `antinomie-cli config api-key set` and the desktop's Tools > API keys
+    /// keep it), read at each run, and the system `curl`.
+    fn online_access(&self) -> OnlineAccess {
+        let dir = &self.options.data_dir;
+        OnlineAccess {
+            key: api_keys::get(dir, ApiKey::Abusech),
+            transport: Box::new(online::CurlTransport {
+                curl: self.options.curl.clone(),
+            }),
+            key_dir: Some(dir.clone()),
+        }
     }
 }
 

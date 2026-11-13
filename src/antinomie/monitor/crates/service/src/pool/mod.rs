@@ -500,13 +500,15 @@ impl HostPool {
                     }
                 ));
                 let now = self.env.clock.now_ms();
+                let online = result.as_ref().ok().and_then(|end| end.online.clone());
                 self.change(&id, |state| {
                     state.item_ended(
                         &id,
                         index,
                         now,
                         result.map(|end| (end.state, end.note)).map_err(stop_of),
-                    )
+                    );
+                    state.item_online(&id, index, online);
                 });
                 if disconnected {
                     self.lost(&WaitError::Disconnected("the engine is gone".into()));

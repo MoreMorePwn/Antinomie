@@ -15,6 +15,23 @@ x86 programs by their own table.
 
 ### Host
 
+- **Check online in Auto runs (ANT-T0548 F2).** A preset with `[detection]
+  check_online = true` (off in every built-in preset; needs `lookup.online`)
+  now asks abuse.ch about the run's indicators, as the window's Triage › IOC ›
+  Check online does and with the same code: after the Triage scan, the public
+  values the downloaded datasets do not list go to ThreatFox and URLhaus from
+  the host, at most 50 values and 300 seconds per run, one run at a time on
+  the node, stopped by a cancel. The answers go into the recording's
+  `ioc-online.json` before the label and the reports, which show them as
+  `Matched · online` with dataset, family or tags and link. The new host work
+  item `online` carries the step's account (`status`, `reason`, `asked`,
+  `found`, `left_out`, `error`); a step that did not finish is a warning
+  (`online_skipped`, `online_incomplete`) and never changes the outcome. The
+  key is the node's abuse.ch Auth-Key in `<data>/api-keys.json` (0600), stored
+  with the new `antinomie-cli config api-key set abusech` from standard input
+  (`clear`, `show`); without a key the step is skipped with `no_key` and the
+  run is not refused. The key never appears in a log, an error, a run or an
+  artifact.
 - **Auto mode's API speaks of runs, not jobs (ANT-T0492).**
   - The contract is `docs/run-api-1.md` with its schema
     `docs/run-api-1.schema.json` (was the job API). A run is one analysis of

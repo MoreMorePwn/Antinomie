@@ -35,6 +35,9 @@ mod host_tests;
 mod hosted;
 pub mod items;
 mod launch;
+pub mod online;
+#[cfg(test)]
+mod online_tests;
 pub mod plan;
 #[cfg(test)]
 mod pool_tests;

@@ -522,7 +522,10 @@ pub struct Detection {
     pub ids: bool,
     /// Scan every N minutes while the program runs; 0 is off (reserved).
     pub scan_every_min: u32,
-    /// Check online (needs `lookup.online`).
+    /// Check online (needs `lookup.online`): after Triage, ask abuse.ch
+    /// (ThreatFox, URLhaus) about the run's public indicators the datasets do
+    /// not list, with the node's abuse.ch key (`stages::online`). Off in
+    /// every built-in preset.
     pub check_online: bool,
 }
 

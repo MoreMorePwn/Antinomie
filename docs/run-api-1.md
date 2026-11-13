@@ -142,10 +142,29 @@ preset's `accepts.max_sample_mib` and a quarter of the lane VM's RAM;
 
 `host_work` (0.9.0, ANT-T0454) lists the run's host work items once `collect`
 has handed it to the host work pool: `name` (`triage`, `static:<tool>`,
-`detection`, `assess`, `report`), `state` (`queued`, `running`, `done`,
+`detection`, `online`, `assess`, `report`), `state` (`queued`, `running`, `done`,
 `failed`, `timed_out`, `skipped`), `after` (the items it waits for),
 `expected_s` and its `basis` (`median`, `estimate`, `fixed`, `preset`: a fixed limit the preset sets),
-`limit_s`, `started_ms`, `finished_ms` and `note`. `queue.status` has
+`limit_s`, `started_ms`, `finished_ms` and `note`.
+
+The `online` item (Check online, only for a run whose preset has
+`detection.check_online = true`; after `triage`, before `assess`; a fixed
+300 s limit) carries one more member once it ended, `online`:
+
+| Member | Meaning |
+|---|---|
+| `status` | `done` (every value it had to send was answered), `partial` (some were: the rest were past the bound or the time limit, or an error stopped it), `skipped` (nothing sent), `failed` (nothing answered) |
+| `reason` | Null for `done`; `no_key` (the node has no abuse.ch key), `no_triage` (the Triage scan gave no indicators), `no_datasets` (no indicator dataset is downloaded), `limit` (more than 50 values), `time_limit`, `error` |
+| `asked`, `found`, `left_out` | Values sent (each to ThreatFox and URLhaus), values abuse.ch knows, values not sent |
+| `error` | What went wrong, in words; never the key |
+
+The item's `state` is `done` for `done` and for `partial` with `limit`,
+`timed_out` for `time_limit`, `skipped` for `skipped` and `failed` otherwise.
+A run whose Check online did not finish carries the warning `online_skipped`
+or `online_incomplete`; its outcome does not change. The answers are in the
+run's reports (an indicator abuse.ch knows is `Matched · online` with its
+dataset, family or tags and link) and in the recording's `ioc-online.json`.
+`queue.status` has
 `host_pool`: `workers`, `queued` (the pool's queue length), `running`, `runs`
 and `waiting_for` (why the head waits, when it waits for memory).
 

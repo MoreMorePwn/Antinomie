@@ -12,12 +12,16 @@
 //! The limit is `daemon.host_time_factor` (default 2) times the expected
 //! time, at least [`MIN_LIMIT`]. A `static_analysis.time_limit_per_tool_min`
 //! above 0 (of the preset, or of a Custom run) gives the static tools that
-//! fixed limit instead (`policy`). Time an item spends in the
+//! fixed limit instead (`policy`). The `online` item (Check online) always
+//! has the fixed [`ONLINE_WAIT`] for the whole step. Time an item spends in the
 //! pool's queue, waiting for memory or in the engine's own analysis queue does
 //! not count against its limit.
 use super::{
     items::ItemKind,
-    plan::{ANALYSE_WAIT, DIGEST_WAIT, HostPlan, REPORT_WAIT, TOOL_OWN_LIMIT_MIN},
+    plan::{
+        ANALYSE_WAIT, DIGEST_WAIT, HostPlan, ONLINE_EXPECTED_S, ONLINE_WAIT, REPORT_WAIT,
+        TOOL_OWN_LIMIT_MIN,
+    },
 };
 use antinomie_monitor_core::analysis::AnalysisKind;
 use std::{
@@ -159,6 +163,7 @@ impl Timing {
             }
             ItemKind::Triage => 20.0 + 10.0 * recording?,
             ItemKind::Detection => engines * (30.0 + 5.0 * recording?),
+            ItemKind::Online => ONLINE_EXPECTED_S as f64,
             ItemKind::Assess => 20.0 + 5.0 * recording?,
             ItemKind::Report => 30.0 + 5.0 * recording?,
         };
@@ -170,6 +175,7 @@ impl Timing {
         match kind {
             ItemKind::Static(group) => group.len() as u64 * u64::from(TOOL_OWN_LIMIT_MIN) * 60 + 60,
             ItemKind::Triage | ItemKind::Detection => ANALYSE_WAIT.as_secs(),
+            ItemKind::Online => ONLINE_WAIT.as_secs(),
             ItemKind::Assess => DIGEST_WAIT.as_secs(),
             ItemKind::Report => REPORT_WAIT.as_secs(),
         }
@@ -177,6 +183,16 @@ impl Timing {
 
     /// The expected time and the limit of `kind` for a job.
     pub fn of(&self, kind: &ItemKind, plan: &HostPlan, inputs: &Inputs) -> ItemTime {
+        if *kind == ItemKind::Online {
+            // Bound by abuse.ch and the per-run count, not by this host: a
+            // fixed whole-step limit, neither scaled by the load nor by the
+            // factor.
+            return ItemTime {
+                expected_s: ONLINE_EXPECTED_S,
+                basis: "fixed",
+                limit_s: ONLINE_WAIT.as_secs(),
+            };
+        }
         // The median takes no account of the input's size: after a few small
         // jobs it would give a large one the time of a small one. It may
         // raise the estimate (a slow host), never lower it.

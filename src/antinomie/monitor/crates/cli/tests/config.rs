@@ -254,3 +254,65 @@ fn validate_refuses_a_0_9_0_policies_folder_naming_the_new_keys() {
     assert!(text.contains("run.as_root"), "{text}");
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn an_api_key_is_read_from_stdin_stored_private_and_never_printed() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    // A key of the right shape that no service knows.
+    const KEY: &str = "fake-cli-key-for-tests-9a1f";
+    let root = scratch("api-key");
+    let data = root.join("data");
+    let run = |tail: &[&str], input: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_antinomie-cli"))
+            .args([
+                "-o",
+                "json",
+                "--data-dir",
+                data.to_str().unwrap(),
+                "config",
+                "api-key",
+            ])
+            .args(tail)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("antinomie-cli runs");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!text.contains(KEY), "the key was printed: {text}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+        (output.status.code().unwrap_or(-1), value)
+    };
+    let (code, set) = run(&["set", "abusech"], &format!("{KEY}\n"));
+    assert_eq!(code, 0, "{set}");
+    assert_eq!(set["result"]["shown"], "…9a1f");
+    let file = data.join("api-keys.json");
+    let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    assert!(std::fs::read_to_string(&file).unwrap().contains(KEY));
+    let (code, shown) = run(&["show"], "");
+    assert_eq!(code, 0, "{shown}");
+    assert_eq!(shown["result"]["keys"][0]["key"], "abusech");
+    assert_eq!(shown["result"]["keys"][0]["stored"], true);
+    // A key with a space is refused and changes nothing.
+    let (code, bad) = run(&["set", "abusech"], "two words\n");
+    assert_eq!(code, 4, "{bad}");
+    assert!(std::fs::read_to_string(&file).unwrap().contains(KEY));
+    let (code, _) = run(&["clear", "abusech"], "");
+    assert_eq!(code, 0);
+    let (_, shown) = run(&["show"], "");
+    assert_eq!(shown["result"]["keys"][0]["stored"], false);
+    let _ = std::fs::remove_dir_all(root);
+}

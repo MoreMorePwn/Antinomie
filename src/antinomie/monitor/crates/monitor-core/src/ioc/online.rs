@@ -2,7 +2,9 @@
 //! The online check: ask abuse.ch about values the stored datasets do not
 //! list. It sends indicator values (never files) to threatfox-api.abuse.ch and
 //! urlhaus-api.abuse.ch, so it runs only when the person has switched it on
-//! for this session and pressed the button; the switch is never saved.
+//! for this session and pressed the button; the switch is never saved. The
+//! service's Auto runs use the same code when the run's preset has
+//! `[detection] check_online = true` (see [`candidates`]).
 //!
 //! Only public values that had no offline match are sent: a private address,
 //! a local name, a value a known false positive excuses or a value the
@@ -152,6 +154,42 @@ pub fn eligible(indicator: &Indicator, verdict: &Verdict) -> Vec<Lookup> {
         })
         .cloned()
         .collect()
+}
+
+/// The values worth sending for a whole run (an Auto run's Check online):
+/// [`eligible`] over every indicator, without repeats, files first (the
+/// sample's own hash among them), then URLs, domains and endpoints, each in
+/// the run's order. The base image's own traffic (an indicator with a
+/// `noise` reason) is not sent. `verdicts` are the indicators' verdicts, in
+/// the same order.
+pub fn candidates(indicators: &[Indicator], verdicts: &[Verdict]) -> Vec<Lookup> {
+    let rank = |ty: super::indicator::Type| {
+        use super::indicator::Type;
+        match ty {
+            Type::File => 0,
+            Type::Url => 1,
+            Type::Domain => 2,
+            Type::Endpoint => 3,
+            Type::Tls => 4,
+        }
+    };
+    let mut rows: Vec<(usize, &Indicator, &Verdict)> = indicators
+        .iter()
+        .zip(verdicts)
+        .filter(|(indicator, _)| indicator.noise.is_none())
+        .map(|(indicator, verdict)| (rank(indicator.ty), indicator, verdict))
+        .collect();
+    rows.sort_by_key(|(rank, _, _)| *rank);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out: Vec<Lookup> = Vec::new();
+    for (_, indicator, verdict) in rows {
+        for lookup in eligible(indicator, verdict) {
+            if seen.insert(lookup.clone()) {
+                out.push(lookup);
+            }
+        }
+    }
+    out
 }
 
 fn text(value: &Value, name: &str) -> String {
@@ -579,6 +617,70 @@ mod tests {
             ["198.51.100.23:8443", "gate.kd-relay.example"],
             "no private address, local name or JA3: {sent:?}"
         );
+    }
+
+    #[test]
+    fn a_whole_run_sends_files_first_without_repeats_or_base_image_noise() {
+        let mut c = Collector::default();
+        c.endpoint(
+            ip("198.51.100.23"),
+            8443,
+            "tcp",
+            Source::Pcap,
+            Seen::default(),
+        );
+        c.domain(
+            "gate.kd-relay.example",
+            Via::Dns,
+            &[],
+            Source::Pcap,
+            Seen::default(),
+        );
+        c.domain(
+            "deb.debian.org",
+            Via::Dns,
+            &[],
+            Source::Pcap,
+            Seen::default(),
+        );
+        let mut all = c.finish();
+        for indicator in &mut all {
+            if indicator.value == "deb.debian.org" {
+                indicator.noise = Some("apt".into());
+            }
+        }
+        let mut file = all[0].clone();
+        file.ty = super::super::indicator::Type::File;
+        file.noise = None;
+        file.lookups = vec![Lookup {
+            kind: Kind::Sha256,
+            value: "f66025c51e65b02ffdaf55ea9460656a0b79598cb7db1514dc7a23a81b4cf1aa".into(),
+        }];
+        all.push(file.clone());
+        all.push(file);
+        let verdicts = vec![verdict_of(Outcome::NoMatch); all.len()];
+        let sent: Vec<String> = candidates(&all, &verdicts)
+            .into_iter()
+            .map(|l| l.value)
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                "f66025c51e65b02ffdaf55ea9460656a0b79598cb7db1514dc7a23a81b4cf1aa",
+                "gate.kd-relay.example",
+                "198.51.100.23:8443",
+            ],
+            "{sent:?}"
+        );
+    }
+
+    fn verdict_of(outcome: Outcome) -> Verdict {
+        let mut c = Collector::default();
+        c.domain("x.example", Via::Dns, &[], Source::Pcap, Seen::default());
+        let indicator = c.finish().remove(0);
+        let mut verdict = evaluate(&indicator, &Scan::default(), &[], &OnlineResults::default());
+        verdict.outcome = outcome;
+        verdict
     }
 
     #[test]

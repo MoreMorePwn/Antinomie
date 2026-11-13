@@ -1304,6 +1304,17 @@
             "null"
           ],
           "description": "A problem in words, when it had one."
+        },
+        "online": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OnlineCheck"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `online` item only (`detection.check_online`): what Check online\ndid, once it ended."
         }
       },
       "required": [
@@ -1313,7 +1324,7 @@
         "basis",
         "limit_s"
       ],
-      "description": "One piece of a run's host processing: a static tool (`static:floss`,\n`static:decompilation`, ...), `triage`, `detection`, `assess` (digest and\nlabel) or `report`."
+      "description": "One piece of a run's host processing: a static tool (`static:floss`,\n`static:decompilation`, ...), `triage`, `detection`, `online` (Check\nonline), `assess` (digest and label) or `report`."
     },
     "HostItemState": {
       "oneOf": [
@@ -1342,10 +1353,120 @@
         {
           "type": "string",
           "const": "skipped",
-          "description": "Not run: the run ended first (cancelled, failed, past its deadline)."
+          "description": "Not run: the run ended first (cancelled, failed, past its deadline),\nor, for `online`, there was nothing it could do (its `online.reason`)."
         }
       ],
       "description": "Where a host work item is."
+    },
+    "OnlineCheck": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/OnlineStatus"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OnlineReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "asked": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Values sent."
+        },
+        "found": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Values abuse.ch had a record of."
+        },
+        "left_out": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Values not sent: past [`ONLINE_MAX_VALUES`] or the time limit."
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What went wrong, in words; never holds the key."
+        }
+      },
+      "required": [
+        "status",
+        "asked",
+        "found",
+        "left_out"
+      ],
+      "description": "What a run's Check online did. The answers themselves are in the run's\nreports (an indicator abuse.ch knows is `Matched · online`, with the\ndataset, family, tags and link) and in the recording's\n`ioc-online.json`."
+    },
+    "OnlineStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "done",
+          "description": "Every value it had to send was sent and answered."
+        },
+        {
+          "type": "string",
+          "const": "partial",
+          "description": "Some values were answered: the rest were past the per-run bound, past\nthe time limit, or an error stopped the step."
+        },
+        {
+          "type": "string",
+          "const": "skipped",
+          "description": "Nothing was sent; `reason` says why."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "Nothing was answered: the first request already failed or timed out."
+        }
+      ],
+      "description": "How a run's Check online ended."
+    },
+    "OnlineReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "no_key",
+          "description": "No abuse.ch Auth-Key is stored on the node."
+        },
+        {
+          "type": "string",
+          "const": "no_triage",
+          "description": "The Triage scan did not give the run's indicators."
+        },
+        {
+          "type": "string",
+          "const": "no_datasets",
+          "description": "No indicator dataset is downloaded: the online check asks only about\nvalues the datasets do not list, so it has nothing to ask."
+        },
+        {
+          "type": "string",
+          "const": "limit",
+          "description": "More values than one run may send ([`ONLINE_MAX_VALUES`])."
+        },
+        {
+          "type": "string",
+          "const": "time_limit",
+          "description": "The step's time limit ended it."
+        },
+        {
+          "type": "string",
+          "const": "error",
+          "description": "abuse.ch refused or the request failed (`error`)."
+        }
+      ],
+      "description": "Why Check online was skipped or did not finish."
     },
     "Submitted": {
       "type": "object",

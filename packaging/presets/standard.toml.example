@@ -108,7 +108,7 @@ yara = true
 sigma = true
 ids = true
 scan_every_min = 0                             # Scan every N min while the program runs (0.9.1)
-check_online = false                           # Check online (needs lookup.online)
+check_online = false                           # Check online at abuse.ch (needs lookup.online and the node's abuse.ch key)
 
 [report]
 formats = ["html", "json"]                     # html | pdf | json | misp | stix | md

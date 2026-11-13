@@ -71,6 +71,16 @@ fn make_rig(w: &W, workers: u32, triage: Hooked) -> Rig {
 /// A pool whose workers have not started: jobs handed to it first are all
 /// queued before any item runs.
 fn make_held_rig(w: &W, workers: u32, triage: Hooked) -> Rig {
+    make_logged_rig(w, workers, triage, Arc::new(|_| {}))
+}
+
+/// [`make_held_rig`] whose pool log lines go to `log`.
+fn make_logged_rig(
+    w: &W,
+    workers: u32,
+    triage: Hooked,
+    log: Arc<dyn Fn(&str) + Send + Sync>,
+) -> Rig {
     let store =
         Arc::new(Store::open_with_clock(&w.fx.dir.join("service"), w.fx.clock.clone()).unwrap());
     let controls = Arc::new(Controls::default());
@@ -86,7 +96,7 @@ fn make_held_rig(w: &W, workers: u32, triage: Hooked) -> Rig {
         floor_mib: 2048,
         controls: Arc::clone(&controls),
         clock: w.fx.clock.clone(),
-        log: Arc::new(|_| {}),
+        log,
         workers,
         timing: Timing::default(),
     });
@@ -461,6 +471,7 @@ fn triage_plan() -> super::plan::HostPlan {
         required_checks: Vec::new(),
         triage: true,
         engines: Vec::new(),
+        online: false,
         formats: Vec::new(),
         bundle: false,
         defang: true,
@@ -645,4 +656,90 @@ fn t0471_a_static_item_is_stopped_at_the_deadline_and_waits_for_the_stop() {
     // ... and the item ended once the stopped analysis had ended.
     let ended = w.fx.clock.now_ms() - began;
     assert!((33_000..40_000).contains(&ended), "{ended}");
+}
+
+// ---- Check online (ANT-T0548 F2) -----------------------------------------
+
+#[test]
+fn the_online_item_runs_before_assess_and_shows_its_account() {
+    use super::online_tests::{FAKE_KEY, FakeAbuse, assert_no_key, online_world};
+    use crate::api::run::OnlineStatus;
+    let fake = Arc::new(FakeAbuse::default());
+    let w = online_world("pool-online", true, true, &fake);
+    let job = arrived(&w, 1);
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    // The pool's own triage double: the world's, with the same seams.
+    let mut triage = hooked(&w);
+    triage.ioc = Some(super::online_tests::indicators(0));
+    triage.transport =
+        Some(fake.clone() as Arc<dyn antinomie_monitor_core::ioc::online::Transport + Send + Sync>);
+    let mut rig = make_logged_rig(
+        &w,
+        2,
+        triage,
+        Arc::new(move |line| sink.lock().unwrap().push(line.to_owned())),
+    );
+    rig.pool.admit(&job, Outcome::Succeeded);
+    rig.start();
+    rig.until("the job to end", |r| r.terminal(&job));
+    let done = rig.job(&job);
+    assert_eq!(done.state, RunState::Succeeded, "{:?}", done.warnings);
+    let names: Vec<&str> = done.host_work.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["triage", "online", "assess", "report"]);
+    let online = &done.host_work[1];
+    assert_eq!(online.after, ["triage"]);
+    assert!(done.host_work[2].after.contains(&"online".to_owned()));
+    assert_eq!(online.state, HostItemState::Done, "{:?}", online.note);
+    assert_eq!(online.limit_s, super::plan::ONLINE_WAIT.as_secs());
+    let account = online.online.as_ref().expect("the account");
+    assert_eq!(
+        (
+            account.status,
+            account.reason,
+            account.asked,
+            account.found,
+            account.left_out
+        ),
+        (OnlineStatus::Done, None, 2, 1, 0)
+    );
+    assert_eq!(fake.sent.lock().unwrap().len(), 4);
+    rig.until("the job to leave the pool", |r| r.pool.status().runs == 0);
+    rig.stop();
+    let lines = lines.lock().unwrap();
+    assert!(lines.iter().any(|l| l.contains("item=online")), "{lines:?}");
+    assert!(lines.iter().all(|l| !l.contains(FAKE_KEY)));
+    assert_no_key(&w, &job);
+}
+
+#[test]
+fn without_a_key_the_online_item_is_skipped_with_no_key() {
+    use super::online_tests::{FakeAbuse, online_world};
+    use crate::api::run::{OnlineReason, OnlineStatus};
+    let fake = Arc::new(FakeAbuse::default());
+    let w = online_world("pool-online-nokey", true, false, &fake);
+    let job = arrived(&w, 1);
+    let mut triage = hooked(&w);
+    triage.ioc = Some(super::online_tests::indicators(0));
+    triage.transport =
+        Some(fake.clone() as Arc<dyn antinomie_monitor_core::ioc::online::Transport + Send + Sync>);
+    let rig = make_rig(&w, 1, triage);
+    rig.pool.admit(&job, Outcome::Succeeded);
+    rig.until("the job to end", |r| r.terminal(&job));
+    let done = rig.job(&job);
+    assert_eq!(done.state, RunState::Succeeded, "{:?}", done.warnings);
+    let online = done
+        .host_work
+        .iter()
+        .find(|i| i.name == "online")
+        .expect("the item");
+    assert_eq!(online.state, HostItemState::Skipped);
+    let account = online.online.as_ref().unwrap();
+    assert_eq!(
+        (account.status, account.reason),
+        (OnlineStatus::Skipped, Some(OnlineReason::NoKey))
+    );
+    assert!(fake.sent.lock().unwrap().is_empty());
+    rig.until("the job to leave the pool", |r| r.pool.status().runs == 0);
+    rig.stop();
 }

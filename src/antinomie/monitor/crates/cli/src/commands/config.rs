@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `config path`, `config get` and `config set` over `settings.json` (design
-//! 2.4.1, card P1-2), and `config validate` over `service.toml` and
-//! `policies/*.toml` (design 4.4, card P3-3).
+//! 2.4.1, card P1-2), `config validate` over `service.toml` and
+//! `policies/*.toml` (design 4.4, card P3-3), and `config api-key` over
+//! `api-keys.json` (ANT-T0548 F2: the key an Auto run's Check online uses).
 use crate::{
     context::Context,
     error::{CliError, ErrorCode},
     output::{Reply, block, table},
 };
 use antinomie_monitor_core::{
+    api_keys::{self, ApiKey},
     data_owner::{self, OwnerClaim, OwnerKind},
     settings::{self, EngineSettings},
 };
@@ -38,6 +40,103 @@ pub enum Config {
         #[arg(long)]
         preset: Option<String>,
     },
+    /// Store, remove or show the node's API keys in `<data>/api-keys.json`
+    /// (mode 0600; the file the desktop's Tools > API keys writes). The
+    /// abuse.ch Auth-Key is the one an Auto run with `[detection]
+    /// check_online = true` uses; the service reads it at each run, so no
+    /// restart is needed. Never prints a key, only its last four characters.
+    #[command(subcommand)]
+    ApiKey(KeyCommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum KeyCommand {
+    /// Read the key from standard input (its first line) and store it. It
+    /// is never taken from an argument or the environment, where `ps` or
+    /// the shell history would show it: `antinomie-cli config api-key set
+    /// abusech < key.txt`.
+    Set { service: KeyService },
+    /// Forget the key.
+    Clear { service: KeyService },
+    /// Which keys are stored, each as its last four characters.
+    Show,
+}
+
+/// The services a key is stored for.
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum KeyService {
+    /// The abuse.ch Auth-Key: Check online (ThreatFox, URLhaus),
+    /// MalwareBazaar, the IOC datasets.
+    Abusech,
+    /// The MalShare API key (desktop sample downloads).
+    Malshare,
+}
+
+impl KeyService {
+    fn key(self) -> ApiKey {
+        match self {
+            Self::Abusech => ApiKey::Abusech,
+            Self::Malshare => ApiKey::MalShare,
+        }
+    }
+}
+
+/// Longest line read for a key (keys are at most 256 characters).
+const KEY_LINE_MAX: u64 = 4096;
+
+fn key_set(service: KeyService, context: &Context) -> Result<Reply, CliError> {
+    use std::io::{BufRead, Read};
+    let key = service.key();
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .take(KEY_LINE_MAX)
+        .read_line(&mut line)
+        .map_err(|error| CliError::invalid(format!("standard input: {error}")))?;
+    let secret = api_keys::Secret::new(line.trim());
+    // The checks name what is wrong, never the key itself.
+    api_keys::set(context.data_dir(), key, secret.expose())
+        .map_err(|message| CliError::invalid(api_keys::redact(&message, &[&secret])))?;
+    let shown = api_keys::masked(&secret);
+    Ok(
+        Reply::value(json!({"key": key.id(), "stored": true, "shown": shown}))
+            .with_human(format!("{}: stored ({shown})\n", key.label())),
+    )
+}
+
+fn key_clear(service: KeyService, context: &Context) -> Result<Reply, CliError> {
+    let key = service.key();
+    api_keys::clear(context.data_dir(), key).map_err(CliError::internal)?;
+    Ok(Reply::value(json!({"key": key.id(), "stored": false}))
+        .with_human(format!("{}: removed\n", key.label())))
+}
+
+fn key_show(context: &Context) -> Reply {
+    let data = context.data_dir();
+    let rows: Vec<(ApiKey, Option<String>)> = ApiKey::ALL
+        .iter()
+        .map(|key| {
+            let secret = api_keys::get(data, *key);
+            (
+                *key,
+                (!secret.is_empty()).then(|| api_keys::masked(&secret)),
+            )
+        })
+        .collect();
+    let value: Vec<Value> = rows
+        .iter()
+        .map(|(key, shown)| json!({"key": key.id(), "stored": shown.is_some(), "shown": shown}))
+        .collect();
+    let lines: Vec<Vec<String>> = rows
+        .iter()
+        .map(|(key, shown)| {
+            vec![
+                key.id().to_owned(),
+                shown.clone().unwrap_or_else(|| "not stored".into()),
+            ]
+        })
+        .collect();
+    Reply::value(json!({"keys": value})).with_human(table(&["key", "stored"], &lines))
 }
 
 fn validate(preset: Option<&str>, context: &Context) -> Result<Reply, CliError> {
@@ -170,6 +269,9 @@ pub fn run(config: &Config, context: &Context) -> Result<Reply, CliError> {
         Config::Get { key } => get(key.as_deref(), context),
         Config::Set { key, value } => set(key, value, context),
         Config::Validate { preset } => validate(preset.as_deref(), context),
+        Config::ApiKey(KeyCommand::Set { service }) => key_set(*service, context),
+        Config::ApiKey(KeyCommand::Clear { service }) => key_clear(*service, context),
+        Config::ApiKey(KeyCommand::Show) => Ok(key_show(context)),
         Config::Path => {
             let data = context.data_dir();
             let paths = [

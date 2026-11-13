@@ -347,13 +347,14 @@ pub enum HostItemState {
     Failed,
     /// It passed its time limit and was stopped.
     TimedOut,
-    /// Not run: the run ended first (cancelled, failed, past its deadline).
+    /// Not run: the run ended first (cancelled, failed, past its deadline),
+    /// or, for `online`, there was nothing it could do (its `online.reason`).
     Skipped,
 }
 
 /// One piece of a run's host processing: a static tool (`static:floss`,
-/// `static:decompilation`, ...), `triage`, `detection`, `assess` (digest and
-/// label) or `report`.
+/// `static:decompilation`, ...), `triage`, `detection`, `online` (Check
+/// online), `assess` (digest and label) or `report`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct HostItem {
     pub name: String,
@@ -375,6 +376,66 @@ pub struct HostItem {
     pub finished_ms: Option<u64>,
     /// A problem in words, when it had one.
     pub note: Option<String>,
+    /// The `online` item only (`detection.check_online`): what Check online
+    /// did, once it ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online: Option<OnlineCheck>,
+}
+
+/// How a run's Check online ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OnlineStatus {
+    /// Every value it had to send was sent and answered.
+    Done,
+    /// Some values were answered: the rest were past the per-run bound, past
+    /// the time limit, or an error stopped the step.
+    Partial,
+    /// Nothing was sent; `reason` says why.
+    Skipped,
+    /// Nothing was answered: the first request already failed or timed out.
+    Failed,
+}
+
+/// Why Check online was skipped or did not finish.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OnlineReason {
+    /// No abuse.ch Auth-Key is stored on the node.
+    NoKey,
+    /// The Triage scan did not give the run's indicators.
+    NoTriage,
+    /// No indicator dataset is downloaded: the online check asks only about
+    /// values the datasets do not list, so it has nothing to ask.
+    NoDatasets,
+    /// More values than one run may send ([`ONLINE_MAX_VALUES`]).
+    Limit,
+    /// The step's time limit ended it.
+    TimeLimit,
+    /// abuse.ch refused or the request failed (`error`).
+    Error,
+}
+
+/// Most values one run's Check online sends (each to ThreatFox and URLhaus):
+/// the desktop's per-press bound.
+pub const ONLINE_MAX_VALUES: u32 = antinomie_monitor_core::ioc::online::MAX_LOOKUPS as u32;
+
+/// What a run's Check online did. The answers themselves are in the run's
+/// reports (an indicator abuse.ch knows is `Matched · online`, with the
+/// dataset, family, tags and link) and in the recording's
+/// `ioc-online.json`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OnlineCheck {
+    pub status: OnlineStatus,
+    pub reason: Option<OnlineReason>,
+    /// Values sent.
+    pub asked: u32,
+    /// Values abuse.ch had a record of.
+    pub found: u32,
+    /// Values not sent: past [`ONLINE_MAX_VALUES`] or the time limit.
+    pub left_out: u32,
+    /// What went wrong, in words; never holds the key.
+    pub error: Option<String>,
 }
 
 /// The result of `run.submit`: the stored run, plus `replayed` when an

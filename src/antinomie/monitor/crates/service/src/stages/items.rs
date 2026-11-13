@@ -7,7 +7,8 @@
 //! | `triage` | opens the saved run and indexes it | nothing |
 //! | `static:<tool>` | one static tool on the library copy (`static:strings+regex`: Regex reads the strings) | nothing |
 //! | `detection` | YARA, Sigma and IDS over the indexed run | `triage` |
-//! | `assess` | the run's digest and the assessment (label) | `triage`, `detection` |
+//! | `online` | Check online: abuse.ch about the indicators the datasets do not list ([`super::online`]) | `triage` |
+//! | `assess` | the run's digest and the assessment (label) | `triage`, `detection`, `online` |
 //! | `report` | the report files | every item above |
 //!
 //! The items of a job are listed in that order, which is a dependency order;
@@ -39,6 +40,8 @@ pub enum ItemKind {
     /// One static tool, or Strings (or FLOSS) with Regex.
     Static(Vec<AnalysisKind>),
     Detection,
+    /// Check online (`detection.check_online`).
+    Online,
     Assess,
     Report,
 }
@@ -57,6 +60,7 @@ impl ItemKind {
                     .join("+")
             ),
             Self::Detection => "detection".into(),
+            Self::Online => "online".into(),
             Self::Assess => "assess".into(),
             Self::Report => "report".into(),
         }
@@ -107,7 +111,7 @@ pub fn items_for(plan: &HostPlan) -> Vec<ItemSpec> {
         // Nothing to analyse: the job still gets its (inconclusive) label.
         push(&mut items, ItemKind::Assess, Vec::new());
     } else {
-        let triage = (plan.triage || !plan.engines.is_empty())
+        let triage = (plan.triage || !plan.engines.is_empty() || plan.online)
             .then(|| push(&mut items, ItemKind::Triage, Vec::new()));
         for group in static_groups(&plan.static_checks) {
             push(&mut items, ItemKind::Static(group), Vec::new());
@@ -119,10 +123,14 @@ pub fn items_for(plan: &HostPlan) -> Vec<ItemSpec> {
                 triage.into_iter().collect(),
             )
         });
+        // Before `assess`: the summary and the label read the answers.
+        let online = plan
+            .online
+            .then(|| push(&mut items, ItemKind::Online, triage.into_iter().collect()));
         push(
             &mut items,
             ItemKind::Assess,
-            triage.into_iter().chain(detection).collect(),
+            triage.into_iter().chain(detection).chain(online).collect(),
         );
     }
     if !plan.report_skipped() {
@@ -185,13 +193,16 @@ pub struct ItemEnd {
     /// Milliseconds it waited for the engine to start it (a static item in
     /// the engine's own queue): not its own run time.
     pub waited_ms: u64,
+    /// The `online` item's account of itself.
+    pub online: Option<crate::api::run::OnlineCheck>,
 }
 
-fn ended(state: HostItemState, note: Option<String>) -> ItemEnd {
+pub(super) fn ended(state: HostItemState, note: Option<String>) -> ItemEnd {
     ItemEnd {
         state,
         note,
         waited_ms: 0,
+        online: None,
     }
 }
 
@@ -216,6 +227,7 @@ pub fn host_item(spec: &ItemSpec, all: &[ItemSpec], time: &super::timing::ItemTi
         started_ms: None,
         finished_ms: None,
         note: None,
+        online: None,
     }
 }
 
@@ -304,6 +316,7 @@ impl<E: Engine> LaneStages<'_, E> {
                 w.problems.extend(problems);
                 Ok(ended(state, note))
             }
+            ItemKind::Online => self.online_item(job, scan.as_deref(), limit),
             ItemKind::Assess => self.assess_item(job, work, &plan, scan, &outcomes, limit),
             ItemKind::Report => match self.report(job, &plan, scan.as_deref(), limit) {
                 Ok(_) => Ok(ended(HostItemState::Done, None)),

@@ -54,7 +54,7 @@ run, and the run's host work goes to the **host work pool** (see below).
 | `launch` | lane | Starts the program in the app terminal with the preset's arguments, environment, working directory and user | 30 s |
 | `run` | lane | Lets it run until it exits or the run time (the preset's `program.run_time_s`, at most 1800) | the limit |
 | `collect` | lane | Waits for the network capture, memory dump and core dump to finish, stops the VM, waits until the recording is saved and the disk layer has settled | collect 300 s, stop 120 s, layer 1800 s |
-| `analyse` | host | Static checks of the library copy in bubblewrap, the Triage scan and the detection engines on the recording, the digest and the assessment | per item, 2 x its expected time |
+| `analyse` | host | Static checks of the library copy in bubblewrap, the Triage scan and the detection engines on the recording, Check online when the preset asks for it, the digest and the assessment | per item, 2 x its expected time (Check online: 300 s) |
 | `report` | host | The report files you asked for | 2 x its expected time |
 | `cleanup` | host | Retention, result files and the command hook | 60 s |
 
@@ -62,9 +62,10 @@ run, and the run's host work goes to the **host work pool** (see below).
 
 The host work of a run is split into items: `triage` (the Triage scan), one
 `static:<tool>` item for each static check (`static:strings+regex`: Regex reads
-the strings), `detection` (YARA, Sigma and IDS, after `triage`), `assess` (the
-run's digest and the label, after `triage` and `detection`) and `report` (after
-all of them). At most `[daemon] host_workers` items run at once (2 by default),
+the strings), `detection` (YARA, Sigma and IDS, after `triage`), `online`
+(Check online, after `triage`, only when the preset has `[detection]
+check_online = true`), `assess` (the run's digest and the label, after
+`triage`, `detection` and `online`) and `report` (after all of them). At most `[daemon] host_workers` items run at once (2 by default),
 across every run.
 
 A run launches without the guest-side static analysis, so YARA does not wait for
@@ -88,7 +89,8 @@ mapping therefore applies to runs too.
   runs do not shrink the limits of a large one. It may take
   `[daemon] host_time_factor` (2) times that, and at least 30 seconds. A preset that
   sets `static_analysis.time_limit_per_tool_min` above 0 gives every static tool
-  that fixed limit instead. Time spent waiting in the queue, for memory or for the engine to take
+  that fixed limit instead. The `online` item has a fixed 300 seconds for the
+  whole step, whatever the host's load. Time spent waiting in the queue, for memory or for the engine to take
   a static analysis does not count. A run's host stages as a whole may take the
   factor times the expected work ahead of it when it arrived plus its own, and
   never less than the factor times the work ahead plus the sum of its own items'
@@ -226,6 +228,37 @@ its default is Standard's. The full list is in
   is a failure of the stage whichever checks are required. The size limits
   (`[static_analysis.limits]`) and Ghidra for Disassembly are passed to the
   engine.
+
+* **Check online.** `[detection] check_online = true` (off in every built-in
+  preset; the caller needs `lookup.online`) asks abuse.ch about the run's
+  indicators the way the window's **Triage › IOC › Check online** does, with
+  the same code: after the Triage scan, the public values the downloaded
+  indicator datasets do not list (files first, then URLs, domains and
+  endpoints; never a private address, a local name, a known false positive, a
+  JA3 or certificate fingerprint, the base image's own traffic or a file) go
+  to ThreatFox and URLhaus, one request at a time, from the host (never from
+  the lab VM), through the system `curl` (HTTPS only, `~/.curlrc` ignored; the
+  daemon's `https_proxy` and `no_proxy` apply as they do for the window).
+  Bounds: at most 50 values per run (the window's per-press bound), 300 seconds
+  for the whole step, one run's lookups at a time on the node; a refused key or
+  HTTP 429 ends the step. Cancelling the run stops the request in flight.
+  The answers go into the recording's `ioc-online.json` (where the window
+  keeps them, so the desktop shows them too) before the label and the
+  reports: an indicator abuse.ch knows is `Matched · online` in the reports,
+  with the dataset, family or tags, first seen and link, and counts for the
+  label like a dataset match. The step's account is the `online` member of
+  its `host_work` item (`status` `done`, `partial`, `skipped` or `failed`,
+  `reason`, `asked`, `found`, `left_out`, `error`). It never changes the
+  run's outcome: a step that did not finish is a warning (`online_skipped`,
+  `online_incomplete`). The key is the node's abuse.ch Auth-Key (see
+  [service configuration](service-config.md#the-abusech-key)); without one
+  the run is not refused, the step is skipped with `no_key` and a warning.
+  With no indicator dataset downloaded nothing can be asked (`no_datasets`):
+  as in the window, the online check asks only about values the datasets do
+  not list. The datasets are downloaded with the desktop app (**Tools >
+  Detection rules > IOC**) on the node's data directory; 0.9.0 has no CLI
+  command for it. The key never appears in a log, an error, the run,
+  an event or an artifact.
 
 * **Dump on suspicious activity.** `dumps.dump_when_suspicious = true` makes the
   run take a dump while the program runs, when the live Triage rules match at

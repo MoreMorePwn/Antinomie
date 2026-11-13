@@ -135,6 +135,12 @@ pub const ANALYSE_WAIT: Duration = Duration::from_secs(900);
 /// The budgeted digest build of a run the scan left none for: its own time
 /// budget (20 minutes) and a minute to finish.
 pub const DIGEST_WAIT: Duration = Duration::from_secs(21 * 60);
+/// The `online` item (Check online): its whole time, whatever the number of
+/// values; past it the request in flight is stopped and the answers so far
+/// are kept.
+pub const ONLINE_WAIT: Duration = Duration::from_secs(300);
+/// The `online` item's expected time, for the pool's estimates.
+pub const ONLINE_EXPECTED_S: u64 = 60;
 /// `report_s` (design 4.1).
 pub const REPORT_WAIT: Duration = Duration::from_secs(300);
 /// `cleanup_s` (design 4.1).
@@ -158,6 +164,9 @@ pub struct HostPlan {
     pub required_checks: Vec<AnalysisKind>,
     pub triage: bool,
     pub engines: Vec<DetectionEngine>,
+    /// Check online (`detection.check_online`): ask abuse.ch about the
+    /// run's indicators that the datasets do not list.
+    pub online: bool,
     pub formats: Vec<ReportFormat>,
     pub bundle: bool,
     pub defang: bool,
@@ -170,7 +179,7 @@ pub struct HostPlan {
 impl HostPlan {
     /// Nothing for `analyse` to do.
     pub fn analyse_skipped(&self) -> bool {
-        self.static_checks.is_empty() && !self.triage && self.engines.is_empty()
+        self.static_checks.is_empty() && !self.triage && self.engines.is_empty() && !self.online
     }
 
     /// Nothing for `report` to write.
@@ -216,6 +225,7 @@ pub fn hosted(preset: &Preset) -> HostPlan {
         required_checks: s.required_checks.iter().map(|c| kind_of(*c)).collect(),
         triage: preset.triage.enabled,
         engines,
+        online: detection.check_online,
         formats: preset.report.formats.clone(),
         bundle: preset.report.bundle,
         defang: preset.report.defang,

@@ -414,6 +414,36 @@ the lists above), but the daemon does not apply them yet: it runs on the default
 shown, and its log goes to standard error, set by the command line (`--log-format`,
 `--quiet`, `-v`), not by `[log]`.
 
+## The abuse.ch key
+
+A run whose preset has `[detection] check_online = true` asks abuse.ch
+(ThreatFox, URLhaus) about its indicators with the node's abuse.ch Auth-Key
+(see [Auto mode](auto-mode.md), "Check online"). The key is kept where the
+desktop app's **Tools > API keys** keeps it: `<data>/api-keys.json`, mode 0600,
+in the daemon's data directory (lane 1's). Store it as the user the daemon runs
+as, from standard input, never as an argument or in the environment (where `ps`
+and the shell history would show it):
+
+```sh
+antinomie-cli --data-dir /srv/antinomie config api-key set abusech < abusech-key.txt
+antinomie-cli --data-dir /srv/antinomie config api-key show     # abusech ...a91f
+antinomie-cli --data-dir /srv/antinomie config api-key clear abusech
+```
+
+`set` reads the first line, checks the key's form (letters, digits and `- _ .
+~`, at most 256 characters) and writes the file through a temporary file that
+is 0600 before a byte is written; `show` prints only the last four characters.
+The daemon reads the key at the start of each run's Check online, so a new key
+needs no restart. It hands the key to `curl` on standard input and removes it
+from any error text; it never appears in a log line, an error, a run, an event
+or an artifact. `<data>/api-key-use.json` notes when the key was last used (a
+time, never the key).
+
+There is no node setting that switches online lookups off: a node without the
+key sends nothing (the runs that ask for Check online carry the warning
+`online_skipped` with `no_key`), and a caller without `lookup.online` cannot
+ask for it.
+
 ## Webhooks
 
 `[[notify.webhooks]]` is read and checked by `config validate` (HTTPS or loopback
