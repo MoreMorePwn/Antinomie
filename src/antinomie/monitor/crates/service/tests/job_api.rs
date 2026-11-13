@@ -12,14 +12,11 @@ use antinomie_service::api::{
     failure::{Failure, FailureCode},
     ids::{ArtifactId, JobId, LaneId, Sha256Hex},
     job::{
-        EndReason, Job, JobRecording, JobRun, JobSample, JobState, JobVm, Outcome, PolicyRef,
+        EndReason, Job, JobRecording, JobRun, JobSample, JobState, JobVm, Outcome, PresetRef,
         RecordingPhase, Revert, Stage, Submitted, WaitingFor,
     },
     ops::{Op, Permission, Reply, Request},
-    spec::{
-        CoreDump, JobSpec, Overrides, ReportFormat, Route, RunAs, RunAsName, StaticCheck,
-        StaticChecks,
-    },
+    spec::{JobSpec, Overrides, ReportFormat, Route},
 };
 use serde_json::json;
 
@@ -52,9 +49,14 @@ fn job(state: JobState) -> Job {
             architecture: Some("x86_64".into()),
             name: "a.out".into(),
         }),
-        policy: PolicyRef {
-            name: "default".into(),
+        policy: PresetRef {
+            name: "custom".into(),
             digest: "d".into(),
+            based_on: Some(antinomie_service::api::job::PresetBase {
+                name: "standard".into(),
+                digest: "s".into(),
+            }),
+            changes: vec!["program.run_time_s".into()],
         },
         lane: Some(LaneId::new(1)),
         vm: Some(JobVm {
@@ -105,15 +107,13 @@ fn a_minimal_spec_parses_and_unknown_fields_are_refused() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("flavour"), "{error}");
-    let error = serde_json::from_value::<JobSpec>(
+    // Overrides are a partial preset: a key outside its tables is refused
+    // by the shape check (and a key inside one by admission).
+    let spec = serde_json::from_value::<JobSpec>(
         json!({"sample": {"sha256": SHA}, "overrides": {"base": "x"}}),
     )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        error.contains("base"),
-        "overrides.base was removed: {error}"
-    );
+    .unwrap();
+    assert_eq!(spec.validate_shape().unwrap_err().field, "overrides");
 }
 
 #[test]
@@ -128,56 +128,52 @@ fn exactly_one_sample_source() {
 }
 
 #[test]
-fn the_full_override_set_round_trips_in_the_documented_spellings() {
+fn overrides_are_a_partial_preset_in_the_documented_spellings() {
     let value = json!({
         "sample": {"sha256": SHA},
-        "name": "x.bin", "policy": "default", "priority": 9,
+        "name": "x.bin", "policy": "standard", "priority": 9,
         "labels": {"case": "42"}, "idempotency_key": "k1",
         "overrides": {
-            "timeout_s": 60, "args": ["-v"], "env": ["A=1"],
-            "run_as": {"uid": 5, "gid": 6}, "run_in": "app_terminal", "route": "inet_sim",
-            "network_capture": true, "memory_dump": false,
-            "core_dump": {"max_mib": 64, "timeout_ms": 5000},
-            "static_checks": ["metadata", "floss"], "static_time_limit_min": 2,
+            "program": {"run_time_s": 60, "arguments": ["-v"], "environment": ["A=1"],
+                        "user": "custom", "uid": 5, "gid": 6, "run_in": "app_terminal"},
+            "network": {"route": "inet_sim", "capture": true},
+            "dumps": {"memory_dump_on_exit": false, "core_budget_mib": 64,
+                      "core_deadline_ms": 5000},
+            "static_analysis": {"triage_checks": ["metadata"], "deep_checks": ["floss"],
+                                "time_limit_per_tool_min": 2},
             "detection": {"yara": true, "sigma": false, "ids": true},
-            "reports": ["html", "misp", "md"], "report_bundle": true, "report_defang": true,
-            "keep_on_failure": false
+            "report": {"formats": ["html", "misp", "md"], "bundle": true, "defang": true},
+            "vm": {"keep_on_failure": false}
         }
     });
     let spec: JobSpec = serde_json::from_value(value.clone()).unwrap();
     assert!(spec.validate_shape().is_ok());
     assert_eq!(serde_json::to_value(&spec).unwrap(), value);
-    assert_eq!(
-        spec.overrides.static_checks,
-        Some(StaticChecks::Names(vec![
-            StaticCheck::Metadata,
-            StaticCheck::Floss
-        ]))
-    );
-    assert_eq!(
-        spec.overrides.run_as,
-        Some(RunAs::Ids(antinomie_service::api::spec::RunAsIds {
-            uid: 5,
-            gid: 6
-        }))
-    );
-    for text in ["user", "root"] {
-        let run_as: RunAs = serde_json::from_value(json!(text)).unwrap();
-        assert!(matches!(run_as, RunAs::Named(_)));
-    }
-    assert_eq!(
-        serde_json::from_value::<StaticChecks>(json!("triage")).unwrap(),
-        StaticChecks::Preset(antinomie_service::api::spec::StaticPreset::Triage)
-    );
-    assert_eq!(
-        serde_json::from_value::<CoreDump>(json!(true)).unwrap(),
-        CoreDump::Switch(true)
-    );
-    for route in ["drop", "internet", "inet_sim", "tor", "vpn", "socks5"] {
+    assert_eq!(spec.overrides.0["program"]["run_time_s"], json!(60));
+    for route in [
+        "drop",
+        "internet",
+        "inet_sim",
+        "nat",
+        "tor",
+        "vpn",
+        "vpn:work",
+        "socks5",
+        "socks5:proxy-1",
+    ] {
         let parsed: Route = serde_json::from_value(json!(route)).unwrap();
-        assert_eq!(serde_json::to_value(parsed).unwrap(), json!(route));
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), json!(route));
     }
-    assert!(serde_json::from_value::<Route>(json!("inetsim")).is_err());
+    assert_eq!(
+        Route::parse("vpn:work"),
+        Some(Route::Vpn(Some("work".into())))
+    );
+    for wrong in ["inetsim", "tor:x", "vpn:", "vpn:a b", "drop:x"] {
+        assert!(
+            serde_json::from_value::<Route>(json!(wrong)).is_err(),
+            "{wrong}"
+        );
+    }
     assert!(serde_json::from_value::<ReportFormat>(json!("docx")).is_err());
 }
 
@@ -199,41 +195,15 @@ fn shape_limits_name_the_field() {
         check(json!({"idempotency_key": "tab\there"})),
         "idempotency_key"
     );
-    assert_eq!(
-        check(json!({"overrides": {"timeout_s": 4}})),
-        "overrides.timeout_s"
-    );
-    assert_eq!(
-        check(json!({"overrides": {"env": ["NOEQUALS"]}})),
-        "overrides.env"
-    );
-    assert_eq!(
-        check(json!({"overrides": {"static_time_limit_min": 481}})),
-        "overrides.static_time_limit_min"
-    );
-}
-
-#[test]
-fn desktop_modes_are_not_in_v1_and_live_routes_go_to_admission() {
-    let spec: JobSpec =
-        serde_json::from_value(json!({"sample": {"sha256": SHA}, "overrides": {"route": "tor"}}))
-            .unwrap();
-    assert!(
-        spec.validate_shape().is_ok(),
-        "a valid spelling is not invalid"
-    );
-    // A live route needs its permission, then the node (admission).
-    assert_eq!(spec.v1_unsupported(), None);
-    let spec = JobSpec {
-        overrides: Overrides {
-            route: Some(Route::InetSim),
-            run_in: Some(antinomie_service::api::spec::RunIn::GuestDesktop),
-            ..Overrides::default()
-        },
-        ..spec
-    };
-    assert_eq!(spec.v1_unsupported().unwrap().field, "overrides.run_in");
-    let _ = RunAsName::User;
+    // A 0.9.0 policy override is not a table of the preset format.
+    assert_eq!(check(json!({"overrides": {"timeout_s": 4}})), "overrides");
+    // The values are checked against the preset (admission).
+    let spec: JobSpec = serde_json::from_value(
+        json!({"sample": {"sha256": SHA}, "overrides": {"program": {"run_time_s": 4}}}),
+    )
+    .unwrap();
+    assert!(spec.validate_shape().is_ok());
+    let _ = Overrides::default();
 }
 
 #[test]

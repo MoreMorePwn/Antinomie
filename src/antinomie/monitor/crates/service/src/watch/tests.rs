@@ -19,7 +19,7 @@ use std::{
 type Answer = Box<dyn FnMut(&str) -> Result<Admission, Defer> + Send>;
 
 struct Fake {
-    policies: Vec<String>,
+    presets: Vec<String>,
     room: Mutex<bool>,
     held: Mutex<bool>,
     answer: Mutex<Answer>,
@@ -33,7 +33,7 @@ struct Taken {
     shown: String,
     file_name: String,
     bytes: Vec<u8>,
-    policy: String,
+    preset: String,
     label: String,
     on_duplicate: Option<OnDuplicate>,
 }
@@ -42,7 +42,7 @@ impl Fake {
     fn new() -> Self {
         let counter = Mutex::new(0u32);
         Self {
-            policies: vec!["default".into(), "strict".into()],
+            presets: vec!["standard".into(), "strict".into()],
             room: Mutex::new(true),
             held: Mutex::new(false),
             answer: Mutex::new(Box::new(move |_| {
@@ -81,8 +81,8 @@ impl Fake {
 }
 
 impl WatchEnv for Fake {
-    fn policy_exists(&self, name: &str) -> bool {
-        self.policies.iter().any(|p| p == name)
+    fn preset_exists(&self, name: &str) -> bool {
+        self.presets.iter().any(|p| p == name)
     }
     fn queue_has_room(&self) -> bool {
         *self.room.lock().unwrap()
@@ -99,7 +99,7 @@ impl WatchEnv for Fake {
                 shown: request.shown,
                 file_name: request.file_name,
                 bytes,
-                policy: request.policy,
+                preset: request.preset,
                 label: request.folder_label,
                 on_duplicate: request.on_duplicate,
             });
@@ -154,14 +154,16 @@ impl Rig {
         private(&outside);
         let mut cfg = Watch {
             path: folder.clone(),
-            policy: "default".into(),
+            preset: "standard".into(),
             recursive: false,
             delete_after: DeleteAfter::Move,
             on_duplicate: None,
-            policy_by_dir: false,
+            preset_by_dir: false,
             allow_group_write: false,
             watch_rate: 10,
             permissions: Vec::new(),
+            policy: None,
+            policy_by_dir: None,
         };
         tune(&mut cfg);
         let mut watcher = Watcher::new(&inbox);
@@ -243,7 +245,7 @@ fn a_file_is_taken_once_its_size_has_been_steady_for_three_seconds() {
     assert_eq!(taken.len(), 1);
     assert_eq!(taken[0].bytes, b"echo hi\n");
     assert_eq!(taken[0].shown, "a.sh");
-    assert_eq!(taken[0].policy, "default");
+    assert_eq!(taken[0].preset, "standard");
     assert_eq!(taken[0].label, "drop");
     assert_eq!(rig.status().taken, 1);
 }
@@ -538,7 +540,7 @@ fn a_rejected_file_goes_to_rejected_with_its_reason_and_is_not_retried() {
     rig.env.answer_with(Box::new(|_| {
         Ok(Admission::Rejected {
             code: "sample_type_denied".into(),
-            message: "policy default does not accept type exe\nsecond line".into(),
+            message: "preset default does not accept type exe\nsecond line".into(),
         })
     }));
     rig.put("bad.exe", b"MZ");
@@ -550,7 +552,7 @@ fn a_rejected_file_goes_to_rejected_with_its_reason_and_is_not_retried() {
     let reason = rejected.iter().find(|n| n.ends_with(".reason")).unwrap();
     let text = fs::read_to_string(rig.inbox.join("rejected").join(reason)).unwrap();
     assert!(
-        text.starts_with("sample_type_denied: policy default"),
+        text.starts_with("sample_type_denied: preset default"),
         "{text}"
     );
     assert_eq!(text.lines().count(), 1, "control characters are removed");
@@ -598,11 +600,11 @@ fn a_full_queue_or_a_low_disk_holds_the_files() {
 }
 
 #[test]
-fn a_folder_named_after_a_policy_picks_that_policy_and_other_names_are_ignored() {
-    let mut rig = Rig::with("bydir", |c| c.policy_by_dir = true);
+fn a_folder_named_after_a_preset_picks_that_preset_and_other_names_are_ignored() {
+    let mut rig = Rig::with("bydir", |c| c.preset_by_dir = true);
     rig.put("root.sh", b"r");
     rig.put("strict/s.sh", b"s");
-    rig.put("default/d.sh", b"d");
+    rig.put("standard/d.sh", b"d");
     rig.put("nonsense/x.sh", b"x");
     rig.put("strict/deeper/y.sh", b"y");
     rig.settle();
@@ -610,14 +612,14 @@ fn a_folder_named_after_a_policy_picks_that_policy_and_other_names_are_ignored()
         .env
         .taken()
         .into_iter()
-        .map(|t| (t.shown, t.policy))
+        .map(|t| (t.shown, t.preset))
         .collect();
     got.sort();
     assert_eq!(
         got,
         [
-            ("default/d.sh".to_owned(), "default".to_owned()),
-            ("root.sh".to_owned(), "default".to_owned()),
+            ("root.sh".to_owned(), "standard".to_owned()),
+            ("standard/d.sh".to_owned(), "standard".to_owned()),
             ("strict/s.sh".to_owned(), "strict".to_owned()),
         ]
     );
@@ -704,8 +706,8 @@ fn a_config_reload_keeps_the_folders_state_and_drops_removed_folders() {
 }
 
 #[test]
-fn a_missing_policy_or_folder_is_an_error_state_not_a_crash() {
-    let mut rig = Rig::with("nopolicy", |c| c.policy = "gone".into());
+fn a_missing_preset_or_folder_is_an_error_state_not_a_crash() {
+    let mut rig = Rig::with("nopreset", |c| c.preset = "gone".into());
     rig.put("a.sh", b"a");
     rig.settle();
     assert_eq!(rig.status().state, "error");

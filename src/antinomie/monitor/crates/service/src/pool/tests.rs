@@ -25,6 +25,7 @@ pub(super) fn plan(statics: &[AnalysisKind], engines: bool) -> HostPlan {
     HostPlan {
         static_checks: statics.to_vec(),
         static_limit_min: None,
+        static_limits: Default::default(),
         required_checks: Vec::new(),
         triage: true,
         engines: if engines {

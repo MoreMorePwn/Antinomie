@@ -9,7 +9,6 @@ use crate::{
         ids::LaneId,
         job::Job,
     },
-    config::PolicyLookup,
     engine::Engine,
     lane::{LaneDir, Processes, provision},
     resources::Governor,
@@ -26,7 +25,8 @@ use serde_json::Value;
 pub struct RunnerEnv<'a> {
     pub store: &'a Store,
     pub lanes: &'a LaneDir,
-    pub policies: &'a dyn PolicyLookup,
+    /// `[lanes]` of service.toml: the revert and the lane VM.
+    pub lane_setup: &'a crate::config::service::Lanes,
     pub callers: &'a dyn crate::config::callers::CallerLookup,
     pub procs: &'a dyn Processes,
     pub host: &'a dyn HostChecks,
@@ -53,7 +53,7 @@ impl<'a, E: Engine> StagesRunner<'a, E> {
             env: LaneEnv {
                 store: self.env.store,
                 lanes: self.env.lanes,
-                policies: self.env.policies,
+                revert: self.env.lane_setup.revert,
                 callers: self.env.callers,
                 procs: self.env.procs,
                 host: self.env.host,
@@ -152,11 +152,8 @@ impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
         profile_of(self.env.lanes, &self.lane, self.waiter.snapshot())
     }
 
-    fn lane_vm(&self, job: &Job) -> Option<String> {
-        self.env
-            .policies
-            .get(&job.policy.name)
-            .and_then(|policy| policy.policy.vm.lane_vm.clone())
+    fn lane_vm(&self, _job: &Job) -> Option<String> {
+        Some(self.env.lane_setup.vm.clone())
     }
 
     fn command(&mut self, op: &str, params: Value) -> Result<Value, ApiError> {

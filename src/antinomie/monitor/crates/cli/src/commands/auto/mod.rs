@@ -19,8 +19,10 @@ pub(crate) mod submit;
 #[derive(Subcommand, Debug)]
 pub enum Auto {
     /// Make a lane: create the lane VM (routed), boot it once, stop it, take
-    /// its clean snapshot, write service/lanes/lane-N.json and, when there is
-    /// none, a default policy. `--lane N` (2 to 4) makes another lane, in
+    /// its clean snapshot, write service/lanes/lane-N.json and, for lane 1
+    /// with another VM name or snapshot, the [lanes] of a new service.toml.
+    /// The presets need no file: five are built in. `--lane N` (2 to 4)
+    /// makes another lane, in
     /// <data>/lanes/N/, for `daemon.lanes`. Runs in this process: stop the
     /// daemon first.
     Init(init::Init),
@@ -56,7 +58,8 @@ pub enum Auto {
     /// The lanes: list, reset, unquarantine (`--lane lane-N`).
     #[command(subcommand)]
     Lane(lanes::Lane),
-    /// The policies you may submit to.
+    /// The presets (`policy list`): the five built-in ones and
+    /// presets/*.toml, with the permissions their options need.
     #[command(subcommand)]
     Policy(jobs::Policy),
     /// The watch folders: their state, and a scan now.

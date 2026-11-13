@@ -36,7 +36,7 @@ StateDirectory=antinomie
 StateDirectoryMode=0700
 Environment=HOME=/var/lib/antinomie
 ExecStart=/usr/local/bin/antinomie-cli --data-dir /var/lib/antinomie --log-format text auto daemon
-# SIGHUP reloads service.toml and policies/; SIGUSR1 writes the queue to the journal.
+# SIGHUP reloads service.toml and presets/; SIGUSR1 writes the queue to the journal.
 ExecReload=/bin/kill -HUP $MAINPID
 
 # A crash or a non-zero exit restarts the daemon (startup recovery finishes the

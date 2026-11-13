@@ -803,7 +803,7 @@ pub struct TimelineEvent {
 // Summary
 
 /// `recording.summary`: the assessment fields of the JSON report summary (5.4.3
-/// without the policy `label` and `score`, which belong to a job).
+/// without the preset `label` and `score`, which belong to a job).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Summary {
     pub assessment: crate::api::assessment::AssessmentKind,

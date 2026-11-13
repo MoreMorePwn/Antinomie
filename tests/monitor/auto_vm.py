@@ -298,7 +298,7 @@ def tree_bytes(path, skip=()):
 
 def set_toml_key(text, section, key, value):
     """Set `key = value` (value already a TOML literal) in [section] of a
-    policy or service.toml, replacing the line or adding it at the end of the
+    preset or service.toml, replacing the line or adding it at the end of the
     section (the section is added when missing). Comments stay."""
     lines = text.splitlines()
     header = re.compile(r"^\s*\[([^\[\]]+)\]\s*(#.*)?$")
@@ -628,8 +628,8 @@ class Work:
         folder = self.data / "service" / "lanes"
         return sorted(folder.glob("lane-*.json")) if folder.is_dir() else []
 
-    def policy(self, name):
-        return self.data / "policies" / f"{name}.toml"
+    def preset(self, name):
+        return self.data / "presets" / f"{name}.toml"
 
 
 # ---------------------------------------------------------------- the CLI
@@ -721,7 +721,7 @@ CLI_SURFACE = {
     ("auto", "lane", "list"): (),
     ("auto", "lane", "reset"): ("--yes", "--lane"),
     ("auto", "gc"): ("--dry-run",),
-    ("config", "validate"): ("--policy",),
+    ("config", "validate"): ("--preset",),
     ("config", "set"): (),
     ("snapshot", "create"): ("--mode",),
     ("snapshot", "restore"): ("--yes", "--cold-boot"),
@@ -952,21 +952,22 @@ def init_lane(cli, args, lane=1, gate=True, name=None, factor=1.0):
     return result.get("lane") or result
 
 
-def edit_policy(work, name, changes, source="default"):
-    """Write policies/<name>.toml: the default policy auto init wrote, with
-    changes {(section, key): toml literal}."""
-    text = work.policy(source).read_text()
+def edit_preset(work, name, changes):
+    """Write presets/<name>.toml: the built-in preset Standard (every key left
+    out takes its value) with changes {(section, key): toml literal}."""
+    text = f'title = "{name}"\n'
     for (section, key), value in changes.items():
         text = set_toml_key(text, section, key, value)
-    path = work.policy(name)
+    path = work.preset(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     return path
 
 
-def submit(cli, program, *, policy=None, timeout_run=None, run_as=None, name=None, args=()):
+def submit(cli, program, *, preset=None, timeout_run=None, run_as=None, name=None, args=()):
     argv = ["auto", "submit", program]
-    if policy:
-        argv += ["--policy", policy]
+    if preset:
+        argv += ["--policy", preset]
     if timeout_run:
         argv += ["--timeout-run", timeout_run]
     if run_as:

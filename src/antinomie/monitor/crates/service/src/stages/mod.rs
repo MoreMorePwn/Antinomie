@@ -59,7 +59,7 @@ use crate::{
         ids::LaneId,
         job::{Job, JobState, Stage, WaitingFor},
     },
-    config::{LoadedPolicy, PolicyLookup, callers::CallerLookup},
+    config::{LoadedPreset, callers::CallerLookup, service::RevertMode},
     engine::Engine,
     lane::{LaneDir, LaneFile, LaneStateError, Processes, state::Checkpoint},
     store::{Eligibility, Store},
@@ -129,7 +129,7 @@ pub enum HostProblem {
 /// Host resources, dependencies for the job's options and KVM. The service's
 /// real checks with injected probes are card P3-5c; these are the seam.
 pub trait HostChecks {
-    fn check(&self, job: &Job, policy: &crate::config::Policy) -> Result<(), HostProblem>;
+    fn check(&self, job: &Job, preset: &crate::config::Preset) -> Result<(), HostProblem>;
 
     /// The disk floor itself, asked every minute while a program runs. The
     /// words say what is short; `None` means room.
@@ -147,7 +147,7 @@ pub trait HostChecks {
 pub struct NoHostChecks;
 
 impl HostChecks for NoHostChecks {
-    fn check(&self, _: &Job, _: &crate::config::Policy) -> Result<(), HostProblem> {
+    fn check(&self, _: &Job, _: &crate::config::Preset) -> Result<(), HostProblem> {
         Ok(())
     }
 }
@@ -155,7 +155,7 @@ impl HostChecks for NoHostChecks {
 /// What `prechecks` hands to the later stages.
 #[derive(Clone, Debug)]
 pub struct Prepared {
-    pub policy: LoadedPolicy,
+    pub preset: LoadedPreset,
     pub effective: Effective,
     pub lane: LaneFile,
 }
@@ -179,7 +179,8 @@ pub struct Launched {
 pub struct LaneEnv<'a> {
     pub store: &'a Store,
     pub lanes: &'a LaneDir,
-    pub policies: &'a dyn PolicyLookup,
+    /// How this node's lanes are made clean (`[lanes] revert`).
+    pub revert: RevertMode,
     /// What each client holds now, for the frozen re-check of prechecks.
     pub callers: &'a dyn CallerLookup,
     pub procs: &'a dyn Processes,

@@ -8,8 +8,8 @@
 //! | Stability | A file is taken after its size, mtime and ctime have been unchanged for 3 s; names starting with `.` or ending in `.part`, `.tmp`, `.crdownload` are never taken |
 //! | Links | The folder and every file are opened with `O_NOFOLLOW`, relative to the folder's descriptor; a symbolic link, device, FIFO, socket, directory is refused, and so is a file with more than one hard link |
 //! | Ownership | The folder must be ours and writable by no one else (a group-writable one only with `allow_group_write`; a world-writable one never); a file must belong to the daemon's user (or, with `allow_group_write`, to the folder's group when the daemon is in it) |
-//! | Policy | `policy`, or with `policy_by_dir` the subfolder named after an existing policy (other folders are ignored); never created from a folder name; no sidecar overrides |
-//! | Actor | The job's client and custody actor is `auto:policy-<policy>`; the label `watch` names the folder |
+//! | Preset | `preset`, or with `preset_by_dir` the subfolder named after an existing preset (other folders are ignored); never created from a folder name; no sidecar overrides; the preset runs unchanged |
+//! | Actor | The job's client and custody actor is `auto:policy-<preset>`; the label `watch` names the folder |
 //! | After intake | `move` to `<inbox>/processed/`, `delete`, or `keep` (remembered by device, inode, size and mtime, so a restart does not take it again) |
 //! | Failure | A file that fails intake moves to `<inbox>/rejected/` with `<name>.reason` and is not tried again; a refused entry (link, foreign file) is left alone and shown by `auto watch list` |
 //! | Rate | At most `watch_rate` files a minute per folder; above that the folder pauses for a minute and `engine.alert` `watch_flood` is raised |
@@ -51,7 +51,7 @@ pub struct Admit {
     pub file_name: String,
     /// The folder's last component, the value of the `watch` label.
     pub folder_label: String,
-    pub policy: String,
+    pub preset: String,
     pub on_duplicate: Option<OnDuplicate>,
     /// The folder's `permissions`, held beside `runs.submit`.
     pub permissions: Vec<crate::api::ops::Permission>,
@@ -67,13 +67,13 @@ pub enum Admission {
 }
 
 /// The file was not looked at and should be tried again later (the queue
-/// refused it, the policy does not let this actor submit, ...).
+/// refused it, the preset does not exist, ...).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Defer(pub String);
 
 /// What a folder needs from the daemon.
 pub trait WatchEnv: Send + Sync {
-    fn policy_exists(&self, name: &str) -> bool;
+    fn preset_exists(&self, name: &str) -> bool;
     /// False when the queue is at its `max_queued`.
     fn queue_has_room(&self) -> bool;
     /// True while the queue is paused for low disk: nothing new is taken.

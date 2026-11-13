@@ -90,7 +90,7 @@ pub struct Refusal {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FolderStatus {
     pub path: String,
-    pub policy: String,
+    pub preset: String,
     /// `watching`, `paused` (flood), `held` (low disk or a full queue),
     /// `refused` (the folder is not safe), `error`.
     pub state: String,
@@ -118,7 +118,7 @@ struct Candidate {
     name: Vec<u8>,
     c_name: CString,
     rel: String,
-    policy: String,
+    preset: String,
     facts: Facts,
 }
 
@@ -155,7 +155,7 @@ impl FolderRun {
     pub fn new(cfg: Watch, remembered: BTreeSet<[i128; 4]>) -> Self {
         let status = FolderStatus {
             path: cfg.path.display().to_string(),
-            policy: cfg.policy.clone(),
+            preset: cfg.preset.clone(),
             state: "watching".into(),
             detail: None,
             taken: 0,
@@ -181,7 +181,7 @@ impl FolderRun {
 
     /// Take a changed configuration of the same folder (a reload).
     pub fn reconfigure(&mut self, cfg: Watch) {
-        self.status.policy = cfg.policy.clone();
+        self.status.preset = cfg.preset.clone();
         self.cfg = cfg;
     }
 
@@ -223,8 +223,8 @@ impl FolderRun {
             self.set("held", Some("the disk is low; the queue is paused".into()));
             return;
         }
-        if !scan.env.policy_exists(&self.cfg.policy) {
-            let words = format!("policy {} does not exist", self.cfg.policy);
+        if !scan.env.preset_exists(&self.cfg.preset) {
+            let words = format!("preset {} does not exist", self.cfg.preset);
             self.set("error", Some(words));
             return;
         }
@@ -260,7 +260,7 @@ impl FolderRun {
         let mut budget = MAX_ENTRIES;
         let root = Arc::new(root);
         let cfg = self.cfg.clone();
-        let policy = cfg.policy.clone();
+        let preset = cfg.preset.clone();
         walk(
             &Walk {
                 cfg: &cfg,
@@ -270,7 +270,7 @@ impl FolderRun {
             &root,
             root_facts.gid,
             "",
-            &policy,
+            &preset,
             0,
             &mut State {
                 found: &mut found,
@@ -407,7 +407,7 @@ impl FolderRun {
             shown: shown(candidate.rel.as_bytes()),
             file_name: shown(&candidate.name),
             folder_label: self.cfg.label(),
-            policy: candidate.policy.clone(),
+            preset: candidate.preset.clone(),
             on_duplicate: self.cfg.on_duplicate,
             permissions: self.cfg.permissions.clone(),
         });
@@ -554,7 +554,7 @@ fn walk(
     dir: &Arc<OwnedFd>,
     folder_gid: u32,
     rel: &str,
-    policy: &str,
+    preset: &str,
     depth: usize,
     state: &mut State<'_>,
 ) {
@@ -592,14 +592,14 @@ fn walk(
                 if looks_partial(&name) || w.scan.places.skip.contains(&(facts.dev, facts.ino)) {
                     continue;
                 }
-                let child_policy = if w.cfg.policy_by_dir && depth == 0 {
-                    // Only folders named after a policy are used.
+                let child_preset = if w.cfg.preset_by_dir && depth == 0 {
+                    // Only folders named after a preset are used.
                     match std::str::from_utf8(&name) {
-                        Ok(text) if w.scan.env.policy_exists(text) => text.to_owned(),
+                        Ok(text) if w.scan.env.preset_exists(text) => text.to_owned(),
                         _ => continue,
                     }
                 } else if w.cfg.recursive {
-                    policy.to_owned()
+                    preset.to_owned()
                 } else {
                     continue;
                 };
@@ -631,7 +631,7 @@ fn walk(
                     &Arc::new(child),
                     facts.gid,
                     &rel_name,
-                    &child_policy,
+                    &child_preset,
                     depth + 1,
                     state,
                 );
@@ -656,7 +656,7 @@ fn walk(
                     name,
                     c_name,
                     rel: rel_name,
-                    policy: policy.to_owned(),
+                    preset: preset.to_owned(),
                     facts,
                 });
             }

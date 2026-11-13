@@ -90,8 +90,9 @@ pub enum ErrorReason {
     HeavyReadLimit,
     /// `unavailable`: a read passed its deadline and was cancelled.
     ReadTimeout,
-    /// `unsupported`: a desktop run mode in a v1 job.
-    RunModeNotInV1,
+    /// `unsupported`: a preset key 0.9.0 reserves, set away from its default
+    /// ("arrives with 0.9.1").
+    Reserved,
     /// `unsupported`: the core needs a newer guest revision.
     GuestRevision,
     /// `not_found`: the run never produced that data.
@@ -297,14 +298,6 @@ impl From<super::spec::SpecError> for ApiError {
     }
 }
 
-impl From<super::spec::Unsupported> for ApiError {
-    fn from(error: super::spec::Unsupported) -> Self {
-        Self::new(ErrorCode::Unsupported, "not available in API version 1")
-            .with_field(error.field)
-            .with_reason(ErrorReason::RunModeNotInV1)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,13 +308,13 @@ mod tests {
             ErrorCode::UnavailableOnNode,
             "route tor is not set up on this node",
         )
-        .with_field("overrides.route");
+        .with_field("network.route");
         let value = serde_json::to_value(error.body()).unwrap();
         assert_eq!(
             value,
             json!({"error": {"code": "unavailable_on_node",
                 "message": "route tor is not set up on this node",
-                "field": "overrides.route", "retryable": false, "details": {}}})
+                "field": "network.route", "retryable": false, "details": {}}})
         );
     }
 

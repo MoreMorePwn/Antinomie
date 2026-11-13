@@ -37,11 +37,11 @@ job, and the job's host work goes to the **host work pool** (see below).
 
 | Stage | Where | What happens | Deadline |
 |---|---|---|---|
-| `prechecks` | host | The policy still allows the job, the disk, RAM and KVM floors hold, the lane is not quarantined and its clean snapshot is the one recorded | 60 s |
+| `prechecks` | host | The caller still holds every permission the run uses, the disk, RAM and KVM floors hold, the lane is not quarantined and its clean snapshot is the one recorded | 60 s |
 | `provision` | lane | Waits until the VM has no pending disk layer, restores the clean snapshot (a failed restore is tried once more, then the lane is quarantined), cold-boots the VM and waits for the guest | boot 180 s |
-| `upload` | lane | Sends the sample from the library into the guest as `/tmp/<sha8>-<name>`; the sample is decrypted in memory and never touches the host's disk | 60 s and 1 s per 10 MiB |
-| `launch` | lane | Starts the program in the app terminal with the job's arguments, environment and user | 30 s |
-| `run` | lane | Lets it run until it exits or the run limit (the policy's `run.timeout_s`, at most `run.max_run_s`) | the limit |
+| `upload` | lane | Sends the sample from the library into the guest at the preset's `program.guest_path` (`/tmp/<sha8>-<name>`); the sample is decrypted in memory and never touches the host's disk | 60 s and 1 s per 10 MiB |
+| `launch` | lane | Starts the program in the app terminal with the preset's arguments, environment, working directory and user | 30 s |
+| `run` | lane | Lets it run until it exits or the run time (the preset's `program.run_time_s`, at most 1800) | the limit |
 | `collect` | lane | Waits for the network capture, memory dump and core dump to finish, stops the VM, waits until the recording is saved and the disk layer has settled | collect 300 s, stop 120 s, layer 1800 s |
 | `analyse` | host | Static checks of the library copy in bubblewrap, the Triage scan and the detection engines on the recording, the digest and the assessment | per item, 2 x its expected time |
 | `report` | host | The report files you asked for | 2 x its expected time |
@@ -75,9 +75,9 @@ mapping therefore applies to jobs too.
   the last runs on this host (once it ran three times) when that is larger, else
   the stage's fixed limit. A median never lowers the estimate, so a few small
   jobs do not shrink the limits of a large one. It may take
-  `[daemon] host_time_factor` (2) times that, and at least 30 seconds. A policy that
-  sets `analysis.static_time_limit_min` gives every static tool that fixed limit
-  instead. Time spent waiting in the queue, for memory or for the engine to take
+  `[daemon] host_time_factor` (2) times that, and at least 30 seconds. A preset that
+  sets `static_analysis.time_limit_per_tool_min` above 0 gives every static tool
+  that fixed limit instead. Time spent waiting in the queue, for memory or for the engine to take
   a static analysis does not count. A job's host stages as a whole may take the
   factor times the expected work ahead of it when it arrived plus its own, and
   never less than the factor times the work ahead plus the sum of its own items'
@@ -107,89 +107,145 @@ job `succeeded` with the run ended at the time limit. A piece of evidence that
 finished incomplete makes the job `partial` (exit 11): the recording and the
 report are there, with a warning for each missing piece.
 
-## Policies
+## Presets
 
-A policy is a TOML file in `<data>/policies/<name>.toml`; the file name is the
-policy name. It says what a job may ask for and what a job gets when it asks for
-nothing: which sample types and architectures it accepts, which lane VM and
-snapshot it uses, the run limit, the user the program runs as, the routes it may
-use, the evidence it keeps (network capture, memory dump, core dump), the static
-checks and detection engines, the report formats, how failures are retried and
-who may submit. `auto init` writes `default.toml` when the folder has none; a
-copy with comments is in `packaging/policies/default.toml.example`.
+A preset is a named set of run options to start from. A preset grants nothing
+and locks nothing: only the caller's permissions, what the node has set up and
+the caller's limits do. Five presets are built in and always there; more are
+TOML files in `<data>/presets/<name>.toml` (the file name is the preset name).
+A run that names no preset uses **Standard**. `auto policy list` lists them with
+the permissions their options need.
 
-* **Static checks and required checks.** `analysis.static_checks` (`"triage"`
-  by default, `"none"` or a list) runs the library copy's tools before the
-  Triage scan. A check that runs out of its time (2 x its expected time, or
-  `analysis.static_time_limit_min` when the policy sets it, stretched on a busy
-  host like the guest waits) or stops short
-  does not fail the job: the job ends `partial` with a `static_check_incomplete`
-  warning that names the check. List checks in `analysis.required_checks`
-  (default none) to make their timeout, or their being unavailable, a failure of
-  the `analyse` stage; with `analysis.required_stages` naming `analyse` that
-  ends the job `failed` with `analysis_failed`. A static analysis the engine
-  refuses or cannot run at all is a failure of the stage whichever checks are
-  required.
+| Option | Standard | Quick look | Deep | Interactive | Live network |
+|---|---|---|---|---|---|
+| Run time | 5 min | 2 min | 15 min | 10 min | 10 min |
+| Route | None (drop) | None (drop) | InetSim | None (drop) | Tor |
+| Dumps | none | none | when suspicious from Medium (memory and core), core on exit | none | none |
+| Static analysis | 11 Triage checks | metadata, strings, hardening, rules, identification | 11 Triage checks, Disassembly, Decompilation, FLOSS | 11 Triage checks | 11 Triage checks |
+| Detection | YARA, Sigma, IDS | YARA | YARA, Sigma, IDS | YARA, Sigma | YARA, IDS |
+| Report | HTML, JSON | HTML, JSON | HTML, JSON, PDF, evidence bundle | HTML, JSON | HTML, JSON |
+| Needs | nothing | nothing | `evidence.core_dump`, `evidence.memory_dump` | nothing | `route.tor`; not set up on this node before 0.9.1 |
 
-* **Dump on suspicious activity.** `evidence.dump_trigger = "off"` (default),
-  `"low"`, `"medium"` or `"high"` makes every job under the policy take a dump
-  while the program runs, when the live Triage rules match at that tier or above;
-  `evidence.dump_trigger_kind` is `"core"` (default; a core of the process that
-  made the call, within `evidence.core_max_mib`, needs a revision-16 base, which
-  `auto init` asks for), `"memory"` or `"both"`. One dump per run, 30 seconds
-  apart, as the window's defaults. The program is not stopped. The job's
+The built-in presets are read-only (a file may not take their names, `standard`,
+`quick-look`, `deep`, `interactive`, `live-network`, nor `custom`): copy
+`packaging/presets/standard.toml.example`, which is Standard with every key and
+a comment naming the app's label, under another name.
+
+The format has one table per part of Submit: `[accepts]` and `[duplicates]`
+(what the preset takes), `[program]` (source, guest path, arguments, working
+directory, environment, user `normal`, `root`, `nobody` or `custom` with `uid`
+and `gid`, run in, run time), `[record]`, `[network]` (capture, route),
+`[dumps]` (memory and core dumps on exit, the core budget and deadline, Dump
+when suspicious activity is seen with its minimum tier, what it takes, at most
+N dumps N seconds apart, non-resident pages), `[vm]` (lane group, keep the VM
+after a failure, allow taking control), `[static_analysis]` (the Triage and
+deep checks, the time limit per tool, Ghidra for Disassembly, required checks,
+the size limits), `[triage]`, `[detection]` (YARA, Sigma, IDS, Check online),
+`[report]` (formats, sections, evidence bundle, defang), `[verdict]` and
+`[retry]`; `required_stages` stays a top-level key. Every key may be left out:
+its default is Standard's. The full list is in
+[service configuration](service-config.md).
+
+* **Keys 0.9.0 reserves.** The format is final, so 0.9.1 does not change the
+  file. A key the 0.9.0 engine cannot act on yet is accepted at its default
+  only; any other value is an error of `config validate` and, in a submit,
+  `unsupported` ("arrives with 0.9.1"): `program.source`, `executable`,
+  `preload`, `extra_files`, `run_in`, `record.scope`,
+  `record.screenshot_every_s`, `network.private_addresses`, `abuse_filter`,
+  `dumps.disk_dump`, `static_analysis.rebuilt_*`, `triage.written_*` and
+  `earlier_*`, `detection.scan_every_min`, `report.sections`. A live route and
+  `vm.keep_on_failure = true` need their permission and are then refused
+  `unavailable_on_node`. Deep scans every 2 minutes from 0.9.1; in 0.9.0 its
+  `scan_every_min` is 0.
+
+* **The Custom rule.** `auto submit` flags (`--timeout-run`, `--args`, `--env`,
+  `--as`, `--route`, `--static`, `--formats` ...) and the `overrides` of a
+  submit change the preset's options; `overrides` is a partial preset with the
+  same tables and keys as the file (`{"program": {"run_time_s": 600}}`). A run
+  whose overrides change a value is **Custom**: it stores the name `custom`,
+  `based_on` (the preset's name and digest), the changed keys (`changes`) and
+  every resolved option; an override equal to the preset's value leaves the
+  run on its preset. Nothing in a preset is a ceiling: arguments, environment,
+  the user, the routes, the dumps and the engines can always be changed, within
+  the caller's permissions and the node.
+
+* **The order of the checks.** The run, as it will run (the preset's values
+  with the overrides), is checked in this order: an unknown preset is
+  `preset_denied`; a value out of range is `invalid_argument` and a reserved
+  key away from its default `unsupported` (exit 4, nothing stored); each option
+  that adds risk has its permission (else `permission_denied`, with every
+  missing permission in `details.needs`): a live route its `route.*`, root or an
+  id below 1000 `run.as_root`, a core on exit or from the dump trigger
+  `evidence.core_dump`, a memory dump `evidence.memory_dump`, Check online
+  `lookup.online`, keeping the VM `run.keep_vm`; the node has it (a live route,
+  a kept VM or another lane group is `unavailable_on_node`); the priority and
+  the run time are within the caller's limits when it has any (else
+  `limit_exceeded`). Each of the last three is stored as a `rejected` job (exit
+  13) with the code, the field (a preset key, `network.route`) and the details.
+
+* **Who holds which permission.** The owner on the local socket (the CLI and
+  `auto daemon`) holds every permission. A watch folder submits with
+  `runs.submit` and the folder's `permissions` in `service.toml` (see
+  `service-config.md`), and runs its preset unchanged: a folder whose preset
+  takes cores (Deep) needs `permissions = ["evidence.core_dump"]` and more.
+  When a job starts, prechecks asks again: a permission taken away while the
+  job waited (a reload) ends it `failed` with `permission_denied`.
+
+* **A job freezes its preset.** The name, the digest and every option are
+  stored with the job. Editing or removing a preset, or `SIGHUP`, changes only
+  jobs submitted afterwards: a waiting job keeps the preset it froze. `auto
+  retry` of a run of an unchanged preset uses the preset as it is now; of a
+  Custom run, its resolved options (it is Custom again).
+
+* **Static checks and required checks.** `[static_analysis]` runs the library
+  copy's tools before the Triage scan: `triage_checks` (the eleven by default),
+  `deep_checks` (`disassembly`, `decompilation`, `floss`; none by default),
+  with `enabled = false` none. A check that runs out of its time (2 x its
+  expected time, or `time_limit_per_tool_min` when it is above 0, stretched on a
+  busy host like the guest waits) or stops short does not fail the job: the job
+  ends `partial` with a `static_check_incomplete` warning that names the check.
+  List checks in `static_analysis.required_checks` (default none) to make their
+  timeout, or their being unavailable, a failure of the `analyse` stage; with
+  `required_stages` naming `analyse` that ends the job `failed` with
+  `analysis_failed`. A static analysis the engine refuses or cannot run at all
+  is a failure of the stage whichever checks are required. The size limits
+  (`[static_analysis.limits]`) and Ghidra for Disassembly are passed to the
+  engine.
+
+* **Dump on suspicious activity.** `dumps.dump_when_suspicious = true` makes the
+  run take a dump while the program runs, when the live Triage rules match at
+  `dumps.minimum_tier` (`low`, `medium`, `high`; default `high`) or above:
+  `trigger_core` (default on; a core of the process that made the call, within
+  `core_budget_mib` and `core_deadline_ms`, needs a revision-16 base) and
+  `trigger_memory_dump` (default off), at most `max_dumps` (1) dumps
+  `dumps_apart_s` (30) seconds apart. The program is not stopped. The job's
   `run.triggers` lists each match (rule, tier, process, call, and the state and
   size of each dump; the path only for a local caller), `run.trigger_notes` says
   when it was armed and nothing matched, and `job.trigger` events report them as
-  they are known. A job cannot turn the trigger on or off; only the policy does.
+  they are known.
 When the guest-side static analysis is still running after the 300 s evidence wait,
 the recording is saved without it and the job succeeds; `run.pending` lists
 `analysis`.
 
-* **Non-resident pages in trigger cores.** `evidence.core_nonresident = true`
+* **Non-resident pages in trigger cores.** `dumps.read_non_resident_pages = true`
   (default `false`) makes the cores the dump trigger takes also read the pages that
   are not in memory (swapped out, or file pages the kernel dropped), as the window's
   **Read non-resident pages**; slower, bounded by the core budget and deadline. It
-  needs a core `dump_trigger` (without one `config validate` warns; an exit core
+  needs a trigger core (without one `config validate` warns; an exit core
   always reads resident pages) and a base of guest contract revision 22 (on an older
   one the cores hold resident pages only and the job carries the warning
   `core_nonresident_unsupported`).
 
-* **A job asks within the caller's permissions and the policy's ceiling.**
-  `--timeout-run`, `--args`, `--env`, `--as`, `--route`, `--static`, `--formats`
-  and the other flags of `auto submit` can lower or choose among what the policy
-  allows, never exceed it. The run, as it will run with the policy's defaults,
-  is checked in this order: the policy is offered to the caller (else
-  `preset_denied`); each option that adds risk has its permission (else
-  `permission_denied`, with every missing permission in `details.needs`): a live
-  route its `route.*`, root or an id below 1000 `run.as_root`, a core on exit or
-  from the dump trigger `evidence.core_dump`, a memory dump `evidence.memory_dump`,
-  `analysis.online_ioc` `lookup.online`, `keep_on_failure` `run.keep_vm`; the node
-  has it (a live route or a kept VM is `unavailable_on_node` in 0.9.0); the
-  priority and the run time are within the policy's `priority_max` and `max_run_s`
-  (else `limit_exceeded`). Each is stored as a `rejected` job (exit 13) with the
-  code, the field and the details. Last come the policy's own switches (a switch
-  the policy leaves off cannot be turned on by a job): a value outside them is
-  refused with `invalid_argument` (exit 4) and nothing is stored.
-* **Who holds which permission.** The owner on the local socket (the CLI and
-  `auto daemon`) holds every permission. A watch folder submits with
-  `runs.submit` and the folder's `permissions` in `service.toml` (see
-  `service-config.md`): a folder whose policy takes cores needs
-  `permissions = ["evidence.core_dump"]`. When a job starts, prechecks asks again:
-  a permission taken away while the job waited (a reload) ends it `failed` with
-  `permission_denied`.
-* **A job freezes its policy.** The file's digest and parsed content are stored with
-  the job. Editing a policy, or `SIGHUP`, changes only jobs submitted afterwards.
-* **Routes.** In 0.9.0 a job may use `drop` (the default: every connection a sample
+* **Routes.** In 0.9.0 a run may use `drop` (the default: every connection a sample
   tries is captured and dropped) or `inet_sim` (simulated internet services); neither
-  needs a permission. A job asking for a live route (`internet`, `tor`, `vpn`,
-  `socks5`) needs its `route.*` permission and is then refused
+  needs a permission. A run asking for a live route (`internet`, `nat`, `tor`,
+  `vpn[:NAME]`, `socks5[:NAME]`) needs its `route.*` permission and is then refused
   `unavailable_on_node`: no live route is set up for the service before 0.9.1. In a
-  policy, live routes and NAT are refused by `config validate`.
-* **Accepted samples.** The default policy accepts ELF x86-64 programs only; add
-  `"sh"` to `[sample] accept_types` for shell scripts. A script has no
-  architecture, so `accept_arch` applies to ELF files only.
-* **Duplicates.** `[sample] on_duplicate` is `run` (analyse again; the new job has
+  preset file, a live route is "not set up on this node" for `config validate`.
+* **Accepted samples.** `[accepts]` of Standard takes ELF x86-64 programs and
+  shell scripts (`types = ["elf", "sh"]`). A script has no architecture, so
+  `arch` applies to ELF files only.
+* **Duplicates.** `[duplicates] on_duplicate` is `run` (analyse again; the new job has
   `repeat_of`), `reuse` (return the earlier job) or `reject` (`duplicate_denied`).
 * **The label.** A succeeded job has the raw Triage assessment, a label
   (`malicious`, `suspicious`, `clean_observed`, `inconclusive`), an optional score
@@ -202,6 +258,13 @@ config validate`. It prints `file:line:column: error: message` for each problem
 and exits 4 when there is an error. All keys are in
 [service configuration](service-config.md).
 
+**From 0.9.0 policies.** `<data>/policies/` is not read any more: `config
+validate` lists every key of every file there with its new home
+(`run.timeout_s` is `program.run_time_s`, `run.allow_root` the permission
+`run.as_root`, `[access]` the caller's permissions, `[limits]` limits of the
+caller, `[vm] revert` and `revert_to` the `[lanes]` table of `service.toml`, and
+so on), and the daemon does not start until the folder is gone.
+
 ## Revert: how the lane stays clean
 
 A VM that ran a sample keeps what the sample did, so every job starts from a known
@@ -209,16 +272,17 @@ state. The lane VM has a clean Disk snapshot, `auto-clean`, taken by `auto init`
 after the guest booted once and finished booting (a guest stopped while its
 initramfs still grows the root file system would keep a half-grown one, and every
 job's boot from it would crash the guest kernel). Before each job the daemon checks the snapshot is the
-one it recorded, restores it and cold-boots (`vm.revert = "snapshot_disk"`, the
-default). `vm.revert = "reset"` is not available on Auto lanes, because every lane
+one it recorded, restores it and cold-boots (`[lanes] revert = "snapshot_disk"` in
+`service.toml`, the default). `revert = "reset"` is not available on Auto lanes, because every lane
 keeps its clean snapshot: `config validate` refuses it and points at
 `snapshot_disk`, which gives the same clean disk. `snapshot_full`
 resumes a booted guest and needs the VM to be created and snapshotted headless,
 with a full (memory) snapshot: over the disk-only `auto-clean` it could only boot
-cold, so `config validate` refuses it and the daemon does not load that policy.
+cold, so `config validate` refuses it.
 
-With `vm.revert_after = true` the lane also reverts right after the job, so no
-used disk sits idle; the cost is one more restore per job.
+A lane is cleaned when the next run starts: after a job its VM stays stopped on
+the used disk until then. (A node setting that also reverts right after a run
+arrives with 0.9.1.)
 
 **Quarantine.** A lane stops taking jobs when the restore failed twice, when its
 clean snapshot is not the recorded one (somebody used the VM by hand), or after three
@@ -259,16 +323,16 @@ antinomie-cli --data-dir ~/auto auto status    # lane-1: idle ..., lane-2: idle 
   folder refuses to delete a base while a lane's VM uses it or a lane is
   creating a VM from it.
 * The lanes share the data folder's bases, library, rules, tools, IOC data,
-  engine settings and route settings. The job store, the policies and the host
+  engine settings and route settings. The job store, the presets and the host
   work pool are one for all lanes.
 * A lane starts when its VM exists and the machine has `MemAvailable` for the
   RAM of every lane VM before it plus this lane's own floor (its VM's RAM plus
   2048 MiB, or `[resources] min_free_ram_mib`). The daemon's log says how many
   lanes started and why the others did not; so does `auto lane list`.
-* A job goes to a free lane that can run it (the base of the policy's
-  `vm.lane_vm`, and an ELF of the lane's architecture); among several, the
-  least recently used, so the jobs spread. A policy whose `vm.lane_vm` is
-  `auto-1` therefore runs on every lane built on lane 1's base.
+* A job goes to a free lane that can run it (the base of `[lanes] vm`, and an
+  ELF of the lane's architecture); among several, the least recently used, so
+  the jobs spread. With `[lanes] vm = "auto-1"` (the default) a job runs on
+  every lane built on lane 1's base: 0.9.0 has one lane group.
 * Every lane's host work goes to the one host work pool, first come, first
   served by job arrival; `[daemon] host_workers` is the total for all lanes.
 * A run stays in the folder of the lane that recorded it (`<data>/lanes/N/`
@@ -291,7 +355,7 @@ Configure it in `service.toml`:
 ```toml
 [[inbox.watch]]
 path = "/srv/drop/default"       # absolute, owned by the daemon's user
-policy = "default"
+preset = "standard"              # run unchanged
 delete_after = "move"            # "move" (to processed/), "delete" or "keep"
 ```
 
@@ -305,7 +369,7 @@ opened. A file the intake rejects (type, architecture, size, duplicate) moves to
 `<inbox>/rejected/` with a `<name>.reason` file; it is not retried. More than
 `watch_rate` (10) files a minute pauses the folder for a minute and raises
 `watch_flood`. There are no per-file settings: a dropped file cannot choose its
-own route, only the policy decides. `auto watch list` shows each folder's state
+own route, only the preset decides. `auto watch list` shows each folder's state
 and what was taken or refused; `auto watch scan` scans now.
 
 With the system unit, add the folder to `ReadWritePaths` (see [Run it under
@@ -361,12 +425,12 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 
 | Code | Stage | Retried | What it means and what to do |
 |---|---|---|---|
-| `sample_missing`, `sample_too_large`, `sample_type_denied`, `sample_arch_denied`, `duplicate_denied` | submit | no | The intake refused the file; the size limit is the smallest of 256 MiB, the policy's `max_sample_mib` and a quarter of the lane VM's RAM |
+| `sample_missing`, `sample_too_large`, `sample_type_denied`, `sample_arch_denied`, `duplicate_denied` | submit | no | The intake refused the file; the size limit is the smallest of 256 MiB, the preset's `accepts.max_sample_mib` and a quarter of the lane VM's RAM |
 | `permission_denied` | submit, prechecks | no | The caller lacks a permission the run uses (`details.needs`), or lost it while the job waited; `field` names the option |
-| `preset_denied` | submit, prechecks | no | The policy is not offered to the caller, or it changed or went away after the submit (`details.preset`) |
-| `limit_exceeded` | submit | no | The priority or the run time is above the limit (`details.field`, `details.limit`) |
-| `unavailable_on_node` | submit | no | The node does not have it: a live route, or keeping the VM after a failure (both arrive with 0.9.1); `details.what` |
-| `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The job waits `queued` for up to the policy's `wait_s` (3600), then fails |
+| `preset_denied` | submit | no | There is no such preset (`details.preset`); nothing is stored |
+| `limit_exceeded` | submit | no | The priority or the run time is above the caller's limit (`details.field`, `details.limit`) |
+| `unavailable_on_node` | submit | no | The node does not have it: a live route, keeping the VM after a failure (both arrive with 0.9.1), or another lane group; `details.what` |
+| `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The job waits `queued` for up to `[queue] wait_s` (3600), then fails |
 | `no_base`, `no_vm` | provision | no | The lane VM or its base is gone; `auto lane list` says which |
 | `vm_start_failed`, `guest_unreachable` | provision, launch | yes | The VM or its guest did not come up, or the guest kernel crashed while it booted (the crash line is the detail); three in a row quarantine the lane |
 | `revert_failed`, `lane_changed` | provision | no | The lane is quarantined (see above) |
@@ -374,7 +438,7 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `launch_failed` | launch | depends | The program did not start (not executable for the guest, no terminal) |
 | `guest_lost` | run, collect | once | The guest or QEMU died. A sample that does that twice ends `failed` |
 | `recording_failed` | collect | once | The recording could not be completed |
-| `analysis_failed` | analyse, report | yes | Only when the policy marks the stage required (`analysis.required_stages`); otherwise the job is `partial` with a warning. A static check that only timed out or stopped short is not this failure unless it is in `analysis.required_checks` (it is a `static_check_incomplete` warning and the job is `partial`) |
+| `analysis_failed` | analyse, report | yes | Only when the preset marks the stage required (`required_stages`); otherwise the job is `partial` with a warning. A static check that only timed out or stopped short is not this failure unless it is in `static_analysis.required_checks` (it is a `static_check_incomplete` warning and the job is `partial`) |
 | `deadline_exceeded` | analyse, report | no | The host stages passed their deadline (`host_time_factor` x the expected work, see "Time limits"): the running items were stopped (`timed_out`), the queued ones never started; what finished is kept. A busy host or too low a factor; try again later or raise `host_time_factor` |
 | `cancelled` | any | no | Cancelled by request; what was recorded is kept |
 | `internal` | any | maybe | A bug, or the watchdog: the whole job ran past `run` plus 30 minutes. `details.log` names the job log |
@@ -424,8 +488,8 @@ start finishes what was left: it removes stale guest RAM files, finishes a pendi
 disk layer (up to 30 minutes), and puts a job that was running back in the queue
 without using an attempt.
 
-**A change to a policy is ignored.** Jobs already queued keep the policy they were
-submitted under. Send `SIGHUP` (`systemctl reload antinomie-auto`); a file with an
+**A change to a preset is ignored.** Jobs already queued keep the preset they were
+submitted with. Send `SIGHUP` (`systemctl reload antinomie-auto`); a file with an
 error keeps the old settings, so run `config validate` first.
 
 **What happened to a job.** `auto events JOB` lists its events; `<data>/service/jobs/<id>/job.log` has its log lines;
@@ -476,7 +540,7 @@ What the units say:
 |---|---|
 | `Type=simple`, `Restart=on-failure`, `RestartSec=10`, `StartLimitBurst=5` in 5 minutes | The daemon recovers from a crash at its next start; a crash loop stops instead of spinning. A stop through `systemctl` is not restarted. There is no `sd_notify`: the unit is started when the process runs; ask `doctor` or `auto status` whether the daemon answers |
 | `KillMode=mixed`, `TimeoutStopSec=360` | QEMU is a child of the daemon. `systemctl stop` sends `SIGTERM` to the daemon alone, which stops the running job and its VM and exits. Only what is still alive after 360 s (the 120 s VM stop plus up to 120 s for a job already in its host stages and the disk-layer step) gets `SIGKILL`, QEMU included. With `[daemon] shutdown = "drain"` raise it above `drain_timeout_s` |
-| `ExecReload` | `systemctl reload` sends `SIGHUP`: policies and `service.toml` are read again |
+| `ExecReload` | `systemctl reload` sends `SIGHUP`: presets and `service.toml` are read again |
 | `NoNewPrivileges`, `CapabilityBoundingSet=` (empty), `RestrictSUIDSGID`, `LockPersonality`, `ProtectKernel*`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname` | The daemon needs no privilege: QEMU opens `/dev/kvm` through the `kvm` group and bubblewrap uses unprivileged user namespaces |
 | `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `StateDirectory` | The only writable place is the data folder. Add other folders (a watch folder, `[results] dir`, a log file) with `systemctl edit antinomie-auto` and `ReadWritePaths=` |
 | `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`, `RestrictNamespaces=user mnt pid ipc uts net` | QEMU's user-mode network, the local socket and bubblewrap's namespaces, and nothing else |

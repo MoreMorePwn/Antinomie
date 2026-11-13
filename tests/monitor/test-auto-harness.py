@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 """The Auto mode VM tiers (test-auto-smoke/isolation/faults/soak.py and
-auto_vm.py) without a VM: argument handling, the policy and service.toml
+auto_vm.py) without a VM: argument handling, the preset and service.toml
 edits, the job, event and report checks, the recorded-PID rule, the probe
 codes, the quota namespace command, the soak's table and its resume files.
 
@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 import tempfile
 import tomllib
+import types
 import unittest
 import unittest.mock
 
@@ -41,7 +42,7 @@ smoke = load("auto_smoke", "test-auto-smoke.py")
 isolation = load("auto_isolation", "test-auto-isolation.py")
 faults = load("auto_faults", "test-auto-faults.py")
 soak = load("auto_soak", "test-auto-soak.py")
-POLICY_EXAMPLE = ROOT / "packaging/policies/default.toml.example"
+PRESET_EXAMPLE = ROOT / "packaging/presets/standard.toml.example"
 
 
 def finished_job(**changes):
@@ -139,22 +140,30 @@ class TomlTests(unittest.TestCase):
                                                "c", "k", "true"))
         self.assertEqual(parsed, {"a": {"x": 1, "z": "q"}, "b": {"y": 1}, "c": {"k": True}})
 
-    def test_the_tier_policies_parse_from_the_shipped_default(self):
-        text = POLICY_EXAMPLE.read_text()
+    def test_the_tier_settings_parse_from_the_shipped_files(self):
+        service = av.service_toml(lanes=1, require_kvm=False)
         for mode in isolation.STRATEGIES:
             with self.subTest(mode=mode):
-                edited = text
-                for (section, key), value in isolation.policy_changes(mode).items():
+                edited = service
+                for (section, key), value in isolation.lane_changes(mode).items():
                     edited = av.set_toml_key(edited, section, key, value)
                 parsed = tomllib.loads(edited)
-                self.assertEqual(parsed["vm"]["revert"], mode)
-                self.assertEqual(parsed["sample"]["accept_types"], ["elf", "sh"])
-                self.assertIs(parsed["run"]["allow_root"], True)
-                self.assertEqual(parsed["run"]["timeout_s"], 300)
-        edited = text
-        for (section, key), value in faults.POLICY.items():
+                self.assertEqual(parsed["lanes"]["revert"], mode)
+                self.assertEqual(parsed["daemon"]["lanes"], 1)
+        standard = tomllib.loads(PRESET_EXAMPLE.read_text())
+        self.assertEqual(standard["accepts"]["types"], ["elf", "sh"])
+        self.assertEqual(standard["program"]["run_time_s"], 300)
+        edited = PRESET_EXAMPLE.read_text()
+        for (section, key), value in faults.PRESET.items():
             edited = av.set_toml_key(edited, section, key, value)
         self.assertEqual(tomllib.loads(edited)["retry"]["backoff_s"], [10, 10])
+
+    def test_a_preset_file_is_standard_with_the_changes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            work = types.SimpleNamespace(preset=lambda name: Path(folder) / "presets" / f"{name}.toml")
+            path = av.edit_preset(work, "t7", faults.PRESET)
+            self.assertEqual(tomllib.loads(path.read_text()),
+                             {"title": "t7", "retry": {"backoff_s": [10, 10]}})
 
     def test_service_toml(self):
         parsed = tomllib.loads(av.service_toml(lanes=2, require_kvm=False, min_free_disk_gib=1,

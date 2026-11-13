@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `upload` (design 4.1): the library sample goes into the guest, decrypted in
-//! memory only, to `<guest_dir>/<sha8>-<name>`. The first upload after boot
-//! fails for about a second while the disk mounts and is retried inside
-//! `upload_s` (60 s plus one second per 10 MiB).
+//! memory only, to the preset's `program.guest_path` (`/tmp/<sha8>-<name>`).
+//! The first upload after boot fails for about a second while the disk mounts
+//! and is retried inside `upload_s` (60 s plus one second per 10 MiB).
 use super::{
     LaneStages, Prepared, StageStop,
     plan::{guest_path, upload_wait},
@@ -27,7 +27,7 @@ impl<E: Engine> LaneStages<'_, E> {
             ))
         })?;
         Ok(guest_path(
-            &prepared.effective.guest_dir,
+            &prepared.effective.guest_path,
             sample.sha256.as_str(),
             &sample.name,
         ))

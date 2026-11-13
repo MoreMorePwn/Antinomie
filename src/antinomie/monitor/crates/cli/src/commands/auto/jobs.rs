@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The `auto` commands that look at and act on jobs (design 3.4.4; card
 //! P3-6b): `status`, `list`, `wait`, `events`, `result`, `artifacts`,
-//! `fetch`, `cancel`, `retry`, `queue`, `policy list`. Each goes to the
+//! `fetch`, `cancel`, `retry`, `queue`, `policy list` (the presets). Each goes to the
 //! daemon when one answers, else to the job store (see [`super::link`]).
 use super::{
     link::{self, api},
@@ -113,8 +113,9 @@ pub struct Cancel {
 #[derive(Args, Debug)]
 pub struct Retry {
     pub job: String,
-    /// Change one override of the original spec (`timeout_s=60`,
-    /// `route=inet_sim`); the value is JSON when it parses, else text.
+    /// Change one option, a dotted preset key (`program.run_time_s=60`,
+    /// `network.route=inet_sim`); the value is JSON when it parses, else
+    /// text.
     #[arg(long = "override", value_name = "KEY=VALUE")]
     pub overrides: Vec<String>,
 }
@@ -142,7 +143,7 @@ pub enum Queue {
 
 #[derive(Subcommand, Debug)]
 pub enum Policy {
-    /// The policies this user may submit to.
+    /// Every preset, with what its options need.
     List,
 }
 
@@ -591,17 +592,28 @@ pub fn cancel(arguments: &Cancel, context: &Context) -> Result<Reply, CliError> 
     Ok(job_reply(&job))
 }
 
-/// `--override KEY=VALUE` as an `Overrides` object.
+/// `--override TABLE.KEY=VALUE` as overrides (a partial preset).
 pub fn overrides(pairs: &[String]) -> Result<Value, CliError> {
-    let mut out = serde_json::Map::new();
+    let mut out = json!({});
     for pair in pairs {
-        let (key, text) = pair.split_once('=').ok_or_else(|| {
-            CliError::invalid(format!("{pair:?} is not KEY=VALUE")).with_field("override")
-        })?;
+        let bad =
+            || CliError::invalid(format!("{pair:?} is not TABLE.KEY=VALUE")).with_field("override");
+        let (key, text) = pair.split_once('=').ok_or_else(bad)?;
         let value = serde_json::from_str(text).unwrap_or_else(|_| json!(text));
-        out.insert(key.to_owned(), value);
+        let path: Vec<&str> = key.split('.').collect();
+        if path.iter().any(|part| part.is_empty()) {
+            return Err(bad());
+        }
+        let mut slot = &mut out;
+        for part in &path[..path.len() - 1] {
+            if !slot[*part].is_object() {
+                slot[*part] = json!({});
+            }
+            slot = &mut slot[*part];
+        }
+        slot[path[path.len() - 1]] = value;
     }
-    Ok(Value::Object(out))
+    Ok(out)
 }
 
 pub fn retry(arguments: &Retry, context: &Context) -> Result<Reply, CliError> {
@@ -655,20 +667,41 @@ pub fn policy(command: &Policy, context: &Context) -> Result<Reply, CliError> {
                 &antinomie_service::config::DiskVms::open(context.data_dir()),
                 None,
             );
-            value(&antinomie_service::config::PolicySet::new(report.policies).list_for(&link::me()))
+            value(&report.preset_set().list_for(&link::me()))
         }
     };
     let items = list.as_array().cloned().unwrap_or_default();
+    let words = |v: &Value| {
+        v.as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    };
     let rows: Vec<Vec<String>> = items
         .iter()
         .map(|p| {
+            let mut needs = words(&p["needs"]);
+            if needs.is_empty() {
+                needs = "-".into();
+            }
+            if p["unavailable"].as_array().is_some_and(|u| !u.is_empty()) {
+                needs.push_str(" (not on this node)");
+            }
             vec![
                 p["name"].as_str().unwrap_or("").into(),
+                render::clean(p["title"].as_str().unwrap_or("")),
+                needs,
                 render::clean(p["description"].as_str().unwrap_or("")),
             ]
         })
         .collect();
-    Ok(Reply::list(items, None).with_human(table(&["POLICY", "DESCRIPTION"], &rows)))
+    Ok(Reply::list(items, None)
+        .with_human(table(&["PRESET", "TITLE", "NEEDS", "DESCRIPTION"], &rows)))
 }
 
 #[cfg(test)]
@@ -690,15 +723,17 @@ mod tests {
     #[test]
     fn overrides_are_json_when_they_parse() {
         let value = overrides(&[
-            "timeout_s=60".into(),
-            "route=inet_sim".into(),
-            "args=[\"a\"]".into(),
+            "program.run_time_s=60".into(),
+            "network.route=inet_sim".into(),
+            "program.arguments=[\"a\"]".into(),
         ])
         .unwrap();
         assert_eq!(
             value,
-            json!({"timeout_s": 60, "route": "inet_sim", "args": ["a"]})
+            json!({"program": {"run_time_s": 60, "arguments": ["a"]},
+                   "network": {"route": "inet_sim"}})
         );
         assert!(overrides(&["nokey".into()]).is_err());
+        assert!(overrides(&["program..x=1".into()]).is_err());
     }
 }

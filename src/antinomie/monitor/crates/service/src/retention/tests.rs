@@ -210,7 +210,10 @@ fn the_custody_actor_of_a_deletion_is_the_automation_actor_of_the_policy() {
     let rig = Rig::new("actor");
     rig.ended(Outcome::Succeeded, NOW - 20 * DAY, Some(1));
     rig.run(false);
-    assert_eq!(rig.runs.deleted.lock().unwrap()[0].1, "auto:policy-default");
+    assert_eq!(
+        rig.runs.deleted.lock().unwrap()[0].1,
+        "auto:policy-standard"
+    );
 }
 
 #[test]

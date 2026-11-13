@@ -499,7 +499,7 @@ impl<E: Engine> LaneStages<'_, E> {
         self.cancel_point(job)?;
         let store = self.env.store;
         let frozen = store
-            .frozen_policy(&job.id)
+            .frozen_preset(&job.id)
             .map_err(|e| self.store_error(Stage::Cleanup, e))?;
         store
             .begin_stage(&job.id, Stage::Cleanup)

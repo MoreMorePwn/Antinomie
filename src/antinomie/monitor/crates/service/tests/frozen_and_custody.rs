@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The policy a job froze at submit survives a reload (card P3-3), and a job's
-//! custody entries name its caller (card P3-7).
+//! The preset a job froze at submit survives a reload (card P3-3, presets of
+//! ANT-T0490), and a job's custody entries name its caller (card P3-7).
 
 // `ApiError` is the contract's error type (large by design, see the crate root).
 #![allow(clippy::result_large_err)]
@@ -11,11 +11,11 @@ use antinomie_service::{
         failure::FailureCode,
         ids::Sha256Hex,
         job::{JobSample, JobState},
-        ops::{Caller, Scope},
+        ops::{Caller, Permission},
         spec::{JobSpec, Overrides, Route, SampleSource},
     },
     clock::ManualClock,
-    config::{DEFAULT_POLICY, NoVms, SharedPolicies},
+    config::{NoVms, SharedPresets, builtin::STANDARD},
     custody::{actor_of, record_automation},
     store::{IntakeError, SampleAdmission, Store, SubmitContext, SubmitLimits},
 };
@@ -28,7 +28,7 @@ impl SampleAdmission for Fixed {
         &self,
         _: &SampleSource,
         _: Option<&str>,
-        _: &antinomie_service::config::LoadedPolicy,
+        _: &antinomie_service::config::LoadedPreset,
         _: &str,
     ) -> Result<JobSample, IntakeError> {
         Ok(self.0.clone())
@@ -38,7 +38,7 @@ impl SampleAdmission for Fixed {
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ant-frozen-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(dir.join("policies")).unwrap();
+    fs::create_dir_all(dir.join("presets")).unwrap();
     dir
 }
 
@@ -49,7 +49,7 @@ fn spec(sha: &Sha256Hex) -> JobSpec {
             ..Default::default()
         },
         name: None,
-        policy: None,
+        policy: Some("mine".into()),
         priority: None,
         labels: Default::default(),
         idempotency_key: None,
@@ -58,16 +58,16 @@ fn spec(sha: &Sha256Hex) -> JobSpec {
 }
 
 fn caller(id: &str) -> Caller {
-    Caller::from_scopes(id, &[Scope::Submit])
+    Caller::new(id, &[Permission::SamplesAdd, Permission::RunsSubmit])
 }
 
 #[test]
 fn a_reload_changes_new_jobs_and_never_a_stored_one() {
     let dir = scratch("reload");
-    let file = dir.join("policies/default.toml");
-    fs::write(&file, DEFAULT_POLICY).unwrap();
-    let policies = SharedPolicies::new(Default::default());
-    policies.reload(&dir, &NoVms).unwrap();
+    let file = dir.join("presets/mine.toml");
+    fs::write(&file, STANDARD).unwrap();
+    let presets = SharedPresets::new(Default::default());
+    presets.reload(&dir, &NoVms).unwrap();
 
     let sha = Sha256Hex::try_from("ab".repeat(32)).unwrap();
     let intake = Fixed(JobSample {
@@ -82,8 +82,9 @@ fn a_reload_changes_new_jobs_and_never_a_stored_one() {
         Arc::new(ManualClock::new(1_794_000_000_000)),
     )
     .unwrap();
+    let set = presets.snapshot();
     let ctx = SubmitContext {
-        policies: &policies,
+        presets: &set,
         intake: &intake,
         limits: SubmitLimits::default(),
         on_duplicate: None,
@@ -94,62 +95,85 @@ fn a_reload_changes_new_jobs_and_never_a_stored_one() {
         .job;
     let first_digest = first.policy.digest.clone();
     assert_eq!(
-        store.frozen_policy(&first.id).unwrap().policy.run.timeout_s,
+        store
+            .frozen_preset(&first.id)
+            .unwrap()
+            .preset
+            .program
+            .run_time_s,
         300
     );
 
-    // The administrator tightens the policy and sends SIGHUP.
+    // The administrator shortens the preset and sends SIGHUP.
     fs::write(
         &file,
-        DEFAULT_POLICY
-            .replace("timeout_s    = 300", "timeout_s    = 60")
-            .replace("priority_max          = 5", "priority_max          = 9"),
+        STANDARD
+            .replace("run_time_s = 300", "run_time_s = 60")
+            .replace("on_duplicate = \"run\"", "on_duplicate = \"reject\""),
     )
     .unwrap();
-    policies.reload(&dir, &NoVms).unwrap();
+    presets.reload(&dir, &NoVms).unwrap();
+    let set = presets.snapshot();
+    let ctx = SubmitContext {
+        presets: &set,
+        intake: &intake,
+        limits: SubmitLimits::default(),
+        on_duplicate: None,
+    };
     let second = store
         .submit(&caller("local:1000"), spec(&sha), &ctx)
         .unwrap()
         .job;
     assert_ne!(second.policy.digest, first_digest);
-    assert_eq!(second.spec.overrides.timeout_s, Some(60));
-    // The first job keeps the policy it froze: digest, content and resolved spec.
-    let again = store.get(&first.id).unwrap();
-    assert_eq!(again.policy.digest, first_digest);
-    assert_eq!(again.spec.overrides.timeout_s, Some(300));
-    assert_eq!(store.frozen_policy(&first.id).unwrap().digest, first_digest);
     assert_eq!(
         store
-            .frozen_policy(&first.id)
+            .frozen_preset(&second.id)
             .unwrap()
-            .policy
-            .limits
-            .priority_max,
-        5
-    );
-
-    // Even if the file is deleted, the job still has its terms.
-    fs::remove_file(&file).unwrap();
-    assert!(
-        policies.reload(&dir, &NoVms).is_ok(),
-        "no policies is valid, if empty"
-    );
-    assert_eq!(
-        store
-            .frozen_policy(&second.id)
-            .unwrap()
-            .policy
-            .run
-            .timeout_s,
+            .preset
+            .program
+            .run_time_s,
         60
     );
-    // A new submit against the deleted policy is not_found.
+    // The first job keeps the preset it froze: digest and content.
+    let again = store.get(&first.id).unwrap();
+    assert_eq!(again.policy.digest, first_digest);
+    let frozen = store.frozen_preset(&first.id).unwrap();
+    assert_eq!(frozen.digest, first_digest);
+    assert_eq!(frozen.preset.program.run_time_s, 300);
+    assert_eq!(
+        frozen.preset.duplicates.on_duplicate,
+        antinomie_service::config::service::OnDuplicate::Run
+    );
+
+    // Even if the file is deleted, the job still has its options.
+    fs::remove_file(&file).unwrap();
+    assert!(
+        presets.reload(&dir, &NoVms).is_ok(),
+        "the built-in presets alone are valid"
+    );
+    assert_eq!(
+        store
+            .frozen_preset(&second.id)
+            .unwrap()
+            .preset
+            .program
+            .run_time_s,
+        60
+    );
+    // A new submit naming the deleted preset is preset_denied.
+    let set = presets.snapshot();
+    let ctx = SubmitContext {
+        presets: &set,
+        intake: &intake,
+        limits: SubmitLimits::default(),
+        on_duplicate: None,
+    };
     let error = store
         .submit(&caller("local:1000"), spec(&sha), &ctx)
         .unwrap_err();
     assert_eq!(
         error.code,
-        antinomie_service::api::error::ErrorCode::NotFound
+        antinomie_service::api::error::ErrorCode::PresetDenied
     );
     let _ = FailureCode::PresetDenied;
 }
@@ -173,9 +197,10 @@ fn a_job_writes_one_automation_entry_under_its_caller() {
         .unwrap()
         .sha256;
     let sha = Sha256Hex::try_from(sha).unwrap();
-    fs::write(dir.join("policies/default.toml"), DEFAULT_POLICY).unwrap();
-    let policies = SharedPolicies::new(Default::default());
-    policies.reload(&dir, &NoVms).unwrap();
+    fs::write(dir.join("presets/mine.toml"), STANDARD).unwrap();
+    let presets = SharedPresets::new(Default::default());
+    presets.reload(&dir, &NoVms).unwrap();
+    let set = presets.snapshot();
     let intake = Fixed(JobSample {
         sha256: sha.clone(),
         size: 19,
@@ -185,18 +210,31 @@ fn a_job_writes_one_automation_entry_under_its_caller() {
     });
     let store = Store::open(&dir.join("service")).unwrap();
     let ctx = SubmitContext {
-        policies: &policies,
+        presets: &set,
         intake: &intake,
         limits: SubmitLimits::default(),
         on_duplicate: None,
     };
     let mut s = spec(&sha);
-    s.overrides.route = Some(Route::InetSim);
+    s.overrides = Overrides(
+        serde_json::json!({"network": {"route": "inet_sim"}})
+            .as_object()
+            .cloned()
+            .unwrap(),
+    );
     let job = store.submit(&caller("web:alice"), s, &ctx).unwrap().job;
-    assert_eq!(job.state, JobState::Queued);
+    assert_eq!(job.state, JobState::Queued, "{:?}", job.failure);
     assert_eq!(actor_of(&job), "web:alice");
+    // A Custom run: the automation actor is the preset it was based on.
+    assert_eq!(job.policy.name, "custom");
+    assert_eq!(
+        antinomie_service::custody::automation_actor(&job),
+        "auto:policy-mine"
+    );
 
-    record_automation(&data, &job).unwrap();
+    let route = store.frozen_preset(&job.id).unwrap().preset.network.route;
+    assert_eq!(route, Route::InetSim);
+    record_automation(&data, &job, &route).unwrap();
     let library = Library::open(&data).unwrap();
     let rows = library.events(sha.as_str()).unwrap();
     let last = rows.last().unwrap();
@@ -212,7 +250,7 @@ fn a_job_writes_one_automation_entry_under_its_caller() {
             assert_eq!(id, &job.id.to_string());
             assert_eq!(
                 (policy.as_str(), route.as_str(), submitted_by.as_str()),
-                ("default", "inet_sim", "web:alice")
+                ("custom", "inet_sim", "web:alice")
             );
             assert_eq!(policy_digest, &job.policy.digest);
         }
@@ -227,5 +265,5 @@ fn a_job_writes_one_automation_entry_under_its_caller() {
     // No sample yet: nothing is written.
     let mut bare = job;
     bare.sample = None;
-    assert!(record_automation(&data, &bare).is_err());
+    assert!(record_automation(&data, &bare, &route).is_err());
 }

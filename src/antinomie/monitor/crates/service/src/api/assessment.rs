@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `Assessment` (design 5.4.3): the Triage summary plus the policy label and
+//! `Assessment` (design 5.4.3): the Triage summary plus the label and
 //! score, always with the `basis` sentence.
 
 use schemars::JsonSchema;
@@ -30,7 +30,7 @@ pub enum Tier {
     None,
 }
 
-/// The policy label (design 4.9.2).
+/// The label (design 4.9.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Label {
@@ -77,9 +77,9 @@ pub struct DetectionHit {
 pub struct Assessment {
     pub assessment: AssessmentKind,
     pub highest_tier: Tier,
-    /// Null only when the policy explicitly disables the mapping.
+    /// Null only when the preset explicitly disables the mapping.
     pub label: Option<Label>,
-    /// 0 to 100 from the policy formula; null when no rule sets one.
+    /// 0 to 100 from the preset formula; null when no rule sets one.
     pub score: Option<u8>,
     pub families: Vec<String>,
     pub counts: Counts,

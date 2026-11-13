@@ -34,7 +34,6 @@ use crate::{
         status::HostPoolStatus,
     },
     clock::Clock,
-    config::PolicyLookup,
     daemon::Controls,
     engine::Engine,
     lane::{LaneDir, ProcFs},
@@ -66,7 +65,6 @@ const IDLE: Duration = Duration::from_millis(500);
 pub struct PoolEnv {
     pub store: Arc<Store>,
     pub lanes: LaneDir,
-    pub policies: Arc<dyn PolicyLookup>,
     pub triage: Arc<dyn HostTriage>,
     pub tags: Arc<dyn SampleTags>,
     /// How a run's evidence is read (a plain function: the pool is shared
@@ -172,7 +170,8 @@ impl HostPool {
             env: LaneEnv {
                 store: &self.env.store,
                 lanes: &self.env.lanes,
-                policies: &*self.env.policies,
+                // The pool runs no lane stages.
+                revert: Default::default(),
                 // The pool runs no prechecks.
                 callers: &crate::config::callers::LocalOnly,
                 procs,
@@ -190,7 +189,7 @@ impl HostPool {
     /// is what `collect` found. `kept` are items a restart found finished.
     fn enter(&self, job: &Job, outcome: Outcome, kept: &[HostItem]) {
         let job = self.env.store.get(&job.id).unwrap_or_else(|_| job.clone());
-        let frozen = match self.env.store.frozen_policy(&job.id) {
+        let frozen = match self.env.store.frozen_preset(&job.id) {
             Ok(frozen) => frozen,
             Err(error) => {
                 self.log(&format!(
@@ -200,7 +199,7 @@ impl HostPool {
                 return;
             }
         };
-        let plan = plan::hosted(&job, &frozen.policy);
+        let plan = plan::hosted(&frozen.preset);
         let items = items_for(&plan);
         let inputs = inputs_of(&job, self.env.triage.load_scale());
         let mut views: Vec<HostItem> = items

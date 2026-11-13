@@ -259,10 +259,10 @@ fn one_lane_starts_only_lane_1_whatever_lane_files_exist() {
 
 // ---- the lane choice ------------------------------------------------------
 
-/// A fixture whose policy also accepts shell scripts (sample 20); the
-/// shipped policy takes ELF files only.
+/// A fixture whose preset accepts shell scripts (sample 20), as Standard
+/// does.
 fn scripts_too(name: &str) -> Fx {
-    Fx::with_policy(name, |policy| policy.sample.accept_types.push("sh".into()))
+    Fx::new(name)
 }
 
 fn profile(n: u32, base_id: &str, arch: GuestArch) -> LaneProfile {
@@ -1098,9 +1098,9 @@ fn one_lane_runs_as_before_beside_the_files_of_other_lanes() {
 // ---- reads across lanes (card D) ------------------------------------------
 
 /// A caller of the socket with the permissions of these scopes only.
-fn caller_with(scopes: Vec<crate::api::ops::Scope>) -> CallContext {
+fn caller_with(permissions: Vec<crate::api::ops::Permission>) -> CallContext {
     CallContext {
-        caller: crate::api::ops::Caller::from_scopes("local:7", &scopes),
+        caller: crate::api::ops::Caller::new("local:7", &permissions),
         cancel: Default::default(),
         transport: Transport::Socket,
     }
@@ -1111,7 +1111,7 @@ fn caller_with(scopes: Vec<crate::api::ops::Scope>) -> CallContext {
 /// full recording; then the daemon with `n` engines reads them all.
 fn reads_across(n: u32) {
     use crate::{
-        api::{error::ErrorCode, job::JobRecording, ops::Scope},
+        api::{error::ErrorCode, job::JobRecording, ops::Permission},
         query::testing::{Data, add_run, standard},
         store::JobPatch,
     };
@@ -1208,7 +1208,7 @@ fn reads_across(n: u32) {
     // T9: the scopes hold for a run of another lane.
     let (_, _, full) = made.last().unwrap();
     let key = full.key();
-    let reader = caller_with(vec![Scope::Read]);
+    let reader = caller_with(vec![Permission::RunsSeeAll]);
     let nobody = caller_with(vec![]);
     let service = daemon.service();
     assert!(

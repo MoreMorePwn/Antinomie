@@ -6,7 +6,7 @@
 //! is started with the owner claim `daemon` and the socket path, so
 //! `run/owner.json` names both; another daemon or the window is refused
 //! there with the owner named). Then: the first engine snapshot, the job
-//! store, `service.toml` and the policies, recovery (4.7.3, 4.8, including
+//! store, `service.toml` and the presets, recovery (4.7.3, 4.8, including
 //! jobs that resume at `analyse`), the staging store and its `noexec` check,
 //! the lane's thread, and last the socket.
 //!
@@ -14,7 +14,7 @@
 //! starts lane 1's engine first (it owns the folders the lanes share), then
 //! one engine per lane the plan lets start ([`lanes::plan_lanes`]), and hands
 //! them all to [`Daemon::start_lanes`]. Each lane has its own thread and
-//! [`LaneLoop`]; the lanes share the job store, the policies, the socket and
+//! [`LaneLoop`]; the lanes share the job store, the presets, the socket and
 //! one host work pool (first come, first served by job arrival over every
 //! lane; its workers use lane 1's engine). The recovery of the store is done
 //! once, then each lane's own on its engine; the jobs to resume at `analyse`
@@ -27,7 +27,7 @@
 //! |---|---|
 //! | first `SIGTERM`/`SIGINT` | No new submissions (`unavailable`, reason `service_stopping`); queued jobs stay queued. A job in its lane stages is cancelled for shutdown and goes back to the queue with the attempt not counted (`shutdown = drain`: after `drain_timeout_s`); one still in its lane stages 240 s after that cancel has its waits interrupted, and recovery requeues it on the next start. The host work pool goes on with the jobs it holds (their `analyse`, `report`, `cleanup` items) for up to `shutdown_host_grace_s` (120 s); past that its waits are interrupted and recovery hands those jobs back to the pool on the next start, their items queued in the same order. |
 //! | a second one within 5 s | Every wait is interrupted now; the engine stops the VM; exit 130. Recovery finishes the rest. |
-//! | `SIGHUP` | `policies/` and `service.toml` are read again (the socket stays); a failing reload keeps the old set. Running and queued jobs keep the policy they were frozen with. |
+//! | `SIGHUP` | `presets/` and `service.toml` are read again (the socket stays); a failing reload keeps the old set. Running and queued jobs keep the preset they were frozen with. |
 //! | `SIGUSR1` | The queue's state is written to the log. |
 
 pub mod artifacts;
@@ -59,7 +59,7 @@ use crate::{
         status::{Accelerator, Owner, ReadGaps},
     },
     clock::{Clock, SystemClock},
-    config::{DiskVms, PolicySet, ServiceConfig, SharedPolicies, service::Shutdown},
+    config::{DiskVms, ServiceConfig, SharedPresets, service::Shutdown},
     engine::{Engine, Handle, Mux},
     intake::{Intake, staging::StagingStore},
     lane::{
@@ -106,6 +106,10 @@ pub enum Phase {
     /// A lane command (`lane.reset`, ...).
     Command(String),
 }
+
+/// Why the daemon does not start with a 0.9.0 `policies/` folder.
+pub const POLICIES_REFUSED: &str = "policies/ is replaced by presets/ in 0.9.0: \
+    `antinomie-cli config validate` names the new key of each old one";
 
 /// The flags the supervisor sets and the lane's thread reads.
 #[derive(Debug, Default)]
@@ -417,6 +421,9 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         if !setup.config.notify.webhooks.is_empty() {
             return Err(crate::config::validate::WEBHOOKS_UNSUPPORTED.into());
         }
+        if setup.options.data_dir.join("policies").is_dir() {
+            return Err(POLICIES_REFUSED.into());
+        }
         if engines
             .first()
             .is_none_or(|first| first.lane != LaneId::new(1))
@@ -473,7 +480,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
                 problem.message
             ));
         }
-        let policies = Arc::new(SharedPolicies::new(PolicySet::new(report.policies)));
+        let presets = Arc::new(SharedPresets::new(report.preset_set()));
         if starting.len() > 1 || !left_out.is_empty() {
             let started: Vec<&str> = starting.iter().map(|s| s.lane.as_str()).collect();
             let mut line = format!(
@@ -578,7 +585,6 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         let pool = HostPool::new(PoolEnv {
             store: Arc::clone(&store),
             lanes: LaneDir::new(&service_dir),
-            policies: Arc::clone(&policies) as Arc<dyn crate::config::PolicyLookup>,
             triage: Arc::new(
                 RealTriage::new(setup.options.clone())
                     .with_address_lookup(address_lookup)
@@ -650,7 +656,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             options: setup.options.clone(),
             config: RwLock::new(setup.config.clone()),
             store: Arc::clone(&store),
-            policies,
+            presets,
             intake,
             lanes,
             query,
@@ -891,12 +897,12 @@ impl<E: Engine + Send + 'static> Daemon<E> {
     fn reload(&self) {
         let service = &self.service;
         match service
-            .policies
+            .presets
             .reload(&service.data_dir, &DiskVms::open(&service.data_dir))
         {
-            Ok(count) => (self.log)(&format!("reload: {count} polic(ies) loaded")),
+            Ok(count) => (self.log)(&format!("reload: {count} preset(s) loaded")),
             Err(problems) => (self.log)(&format!(
-                "reload refused, the old policies stay: {}",
+                "reload refused, the old presets stay: {}",
                 problems
                     .iter()
                     .map(|p| format!("{}: {}", p.file, p.message))
@@ -1054,12 +1060,18 @@ fn lane_main<E: Engine>(
         data_dir: service.data_dir.clone(),
     };
     let procs = ProcFs;
+    let lane_setup = service
+        .config
+        .read()
+        .unwrap_or_else(|p| p.into_inner())
+        .lanes
+        .clone();
     let mut runner = StagesRunner {
         waiter,
         env: RunnerEnv {
             store: &service.store,
             lanes: &service.lanes,
-            policies: &*service.policies,
+            lane_setup: &lane_setup,
             callers: service,
             procs: &procs,
             host: &host,

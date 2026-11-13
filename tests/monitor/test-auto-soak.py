@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """T8 (design 7.2): the soak. Sequential benign Auto jobs for a set time.
 
-One lane, `auto daemon`, a policy `soak` (shell scripts and ELF files, no
+One lane, `auto daemon`, a preset `soak` (Standard: shell scripts and ELF files, no
 daily job limit) and retention set so that it has work to do within the run
 (`[retention] recordings_days = 1`, `max_recordings_gib` = --recordings-cap-gib).
 The jobs alternate between a behaviour sample (demo-recon, offline arguments)
@@ -288,8 +288,7 @@ def setup(cli, work, args, accel, factor, soak):
         lanes=1, require_kvm=accel == "kvm",
         retention={"recordings_days": 1, "max_recordings_gib": args.recordings_cap_gib},
         socket=work.socket_override()))
-    av.edit_policy(work, "soak", {("sample", "accept_types"): '["elf", "sh"]',
-                                  ("limits", "max_jobs_per_day"): "1000000"})
+    av.edit_preset(work, "soak", {})
     code, _, err = cli.run("config", "validate", timeout=300)
     if code != 0:
         raise av.Failure(f"config validate exit {code}: {err.strip()[-300:]}")
@@ -346,7 +345,7 @@ def soak_loop(cli, work, args, factor, soak, state, daemon, watch, stop, program
                 stop.reason = f"MemAvailable {av.mem_available_mb()} MB below the floor of {args.mem_floor_mb} MB"
                 break
             program, extra = programs[state["jobs"] % len(programs)]
-            job_id = av.submit(cli, program, policy="soak", timeout_run=60, name=f"soak-{state['jobs'] + 1}",
+            job_id = av.submit(cli, program, preset="soak", timeout_run=60, name=f"soak-{state['jobs'] + 1}",
                                args=extra)["id"]
             state["pending_job"] = job_id
             soak.save(state)
@@ -396,7 +395,7 @@ def main(argv=None):
     if args.dry_run:
         code = av.dry_run(work, cli, checks, [
             "base install; auto init; service.toml lanes = 1, [retention] recordings_days = 1, "
-            f"max_recordings_gib = {args.recordings_cap_gib}; policy soak (elf, sh; max_jobs_per_day 1000000)",
+            f"max_recordings_gib = {args.recordings_cap_gib}; preset soak (Standard: elf, sh; no daily limit)",
             f"auto daemon; one job at a time for {args.duration / 3600:g} h"
             + (f" or {args.max_jobs} jobs" if args.max_jobs else "") + f": {sample_program.name} and {shell.name}",
             "after each job: events, sample of " + ", ".join(METRICS), "table + flat line; delete the VM data"])

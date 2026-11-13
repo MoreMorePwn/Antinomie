@@ -21,7 +21,7 @@ use crate::{
 };
 use antinomie_monitor_core::{
     AnalysisSelection, Command, ExecRequest, RunIn, RunSummary, Snapshot, WaitStatus,
-    dump_trigger::DumpTrigger,
+    dump_trigger::{DumpTrigger, TriggerTier},
     route::RouteKind,
     samples::{NewOrigin, NewSample, SampleRecord, SampleRef},
 };
@@ -31,7 +31,6 @@ use antinomie_service::{
         failure::Failure,
         job::Outcome,
     },
-    config::policy::{TriggerKind, TriggerSetting, trigger_plan},
     waiter::{BOOT_WAIT, EndReason, RunPlan, RunReport, load_artifacts, trigger::TriggerReport},
 };
 use clap::{Args, Subcommand};
@@ -245,7 +244,7 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
         core_timeout_ms: dump_trigger
             .as_ref()
             .is_some_and(|plan| plan.core)
-            .then_some(antinomie_service::stages::plan::CORE_TIMEOUT_MS),
+            .then_some(antinomie_monitor_core::core_limits::CORE_LEGACY_TIMEOUT_MS),
         core_nonresident: arguments.core_nonresident,
         dump_trigger,
         ..ExecRequest::default()
@@ -254,7 +253,7 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
     Ok(request)
 }
 
-/// The core budget of a trigger core, the policy default (`core_max_mib`).
+/// The core budget of a trigger core when `--core-max-mib` is not given.
 const DEFAULT_TRIGGER_CORE_MIB: u32 = 64;
 
 /// The dump trigger the flags ask for; `None` (off) without `--dump-trigger`
@@ -263,24 +262,37 @@ pub fn trigger_for(arguments: &Exec) -> Result<Option<DumpTrigger>, CliError> {
     let Some(text) = arguments.dump_trigger.as_deref() else {
         return Ok(None);
     };
-    let setting = TriggerSetting::parse(text).ok_or_else(|| {
+    if text.trim().eq_ignore_ascii_case("off") {
+        return Ok(None);
+    }
+    let min_tier = TriggerTier::from_name(text).ok_or_else(|| {
         CliError::invalid(format!(
-            "{text:?} is not a dump trigger tier; use {}",
-            TriggerSetting::NAMES
+            "{text:?} is not a dump trigger tier; use off, low, medium or high"
         ))
         .with_field("dump-trigger")
     })?;
-    let kind = match arguments.dump_kind.as_deref() {
-        None => TriggerKind::default(),
-        Some(text) => TriggerKind::parse(text).ok_or_else(|| {
-            CliError::invalid(format!(
-                "{text:?} is not a dump kind; use {}",
-                TriggerKind::NAMES
+    let (memory, core) = match arguments
+        .dump_kind
+        .as_deref()
+        .map(|kind| kind.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("core") => (false, true),
+        Some("memory") => (true, false),
+        Some("both") => (true, true),
+        Some(other) => {
+            return Err(CliError::invalid(format!(
+                "{other:?} is not a dump kind; use core, memory or both"
             ))
-            .with_field("dump-kind")
-        })?,
+            .with_field("dump-kind"));
+        }
     };
-    Ok(trigger_plan(setting, kind))
+    Ok(Some(DumpTrigger {
+        min_tier,
+        memory,
+        core,
+        ..DumpTrigger::default()
+    }))
 }
 
 /// The library record the argument names: a SHA-256, or a file added now.

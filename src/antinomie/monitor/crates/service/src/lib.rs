@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The service layer of headless mode: config and policy loading, the job
+//! The service layer of headless mode: config and preset loading, the job
 //! store, lanes, the pipeline, the event log and the shared job and query API
 //! that the CLI, the local socket and the web process call (design 2.1, 2.8).
 //!
@@ -21,7 +21,7 @@ pub mod api;
 pub mod audit;
 /// Time and ids behind small seams.
 pub mod clock;
-/// `service.toml`, `policies/*.toml` and `config validate` (card P3-3).
+/// `service.toml`, the presets and `config validate` (card P3-3, ANT-T0490).
 pub mod config;
 /// Custody actors and the `automation` entry of a job (card P3-7).
 pub mod custody;
@@ -59,7 +59,7 @@ pub mod server;
 pub mod stages;
 /// The job store: SQLite, the state machine and the queue (card P3-2).
 pub mod store;
-/// The assessment and the label, and the policy's verdict rules (card P3-5).
+/// The assessment and the label, and the preset's verdict rules (card P3-5).
 pub mod verdict;
 /// The engine waiter: commands, results and the waits a headless caller needs.
 pub mod waiter;

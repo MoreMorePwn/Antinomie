@@ -62,11 +62,12 @@ class UnitTests(unittest.TestCase):
             self.assertRegex(exec_start, r"antinomie-cli --data-dir \S+ .*auto daemon$", name)
             self.assertNotRegex(exec_start, r"%h/antinomie\s", name)  # not the window's folder
 
-    def test_default_policy_example_is_what_auto_init_writes(self):
-        source = (ROOT / "src/antinomie/monitor/crates/service/src/config/mod.rs").read_text()
-        body = re.search(r'DEFAULT_POLICY: &str = r#"(.*?)"#;', source, re.S).group(1)
-        example = (PACKAGING / "policies/default.toml.example").read_text()
+    def test_standard_preset_example_is_the_built_in_one(self):
+        source = (ROOT / "src/antinomie/monitor/crates/service/src/config/builtin.rs").read_text()
+        body = re.search(r'pub const STANDARD: &str = r#"(.*?)"#;', source, re.S).group(1)
+        example = (PACKAGING / "presets/standard.toml.example").read_text()
         self.assertTrue(example.endswith(body))
+        self.assertFalse((PACKAGING / "policies").exists())
 
 
 class ScriptTests(unittest.TestCase):

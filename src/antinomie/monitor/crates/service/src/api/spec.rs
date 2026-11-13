@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `JobSpec` (design 5.4.1): what a caller asks for. Every field but the
-//! sample is optional; an absent field takes the policy's value, then the
-//! system default. An unknown field fails (`deny_unknown_fields`), as the
+//! sample is optional; the preset (default `standard`) gives every run
+//! option, and `overrides` (a partial preset) changes them. An unknown field fails (`deny_unknown_fields`), as the
 //! contract says: no silent ignore.
 
 use super::ids::{Sha256Hex, UploadId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 /// The sample of a job. Exactly one member is set ([`SampleSource::validate`]).
@@ -58,74 +59,120 @@ pub struct SpecError {
     pub message: String,
 }
 
-/// A network route by the engine's own serde spelling (`RouteKind`). `drop`
-/// and `inet_sim` need no permission; a live route needs its `route.*`
-/// permission and is then refused `unavailable_on_node` (no route is set up
-/// for the service before 0.9.1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+/// A network route, spelled as in a preset file: `drop`, `inet_sim`,
+/// `internet`, `nat`, `tor`, `vpn[:NAME]`, `socks5[:NAME]` (NAME a profile of
+/// node setup). `drop` and `inet_sim` need no permission; a live route needs
+/// its `route.*` permission and is then refused `unavailable_on_node` (no
+/// route is set up for the service before 0.9.1).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Route {
+    #[default]
     Drop,
-    Internet,
     InetSim,
+    Internet,
+    Nat,
     Tor,
-    Vpn,
-    Socks5,
+    Vpn(Option<String>),
+    Socks5(Option<String>),
+}
+
+/// The spellings a route takes, for messages.
+pub const ROUTE_NAMES: &str = "drop, inet_sim, internet, nat, tor, vpn[:NAME] or socks5[:NAME]";
+
+fn profile_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
 impl Route {
-    /// Whether a v1 job may use the route (decided D6).
-    pub fn allowed_in_v1(self) -> bool {
-        matches!(self, Self::Drop | Self::InetSim)
+    pub fn parse(text: &str) -> Option<Self> {
+        let (kind, profile) = match text.split_once(':') {
+            Some((kind, name)) => (kind, Some(name)),
+            None => (text, None),
+        };
+        if profile.is_some_and(|name| !profile_name(name)) {
+            return None;
+        }
+        let profile = profile.map(str::to_owned);
+        match (kind, profile) {
+            ("drop", None) => Some(Self::Drop),
+            ("inet_sim", None) => Some(Self::InetSim),
+            ("internet", None) => Some(Self::Internet),
+            ("nat", None) => Some(Self::Nat),
+            ("tor", None) => Some(Self::Tor),
+            ("vpn", profile) => Some(Self::Vpn(profile)),
+            ("socks5", profile) => Some(Self::Socks5(profile)),
+            _ => None,
+        }
+    }
+
+    /// The route's kind without a profile (`vpn`).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Drop => "drop",
+            Self::InetSim => "inet_sim",
+            Self::Internet => "internet",
+            Self::Nat => "nat",
+            Self::Tor => "tor",
+            Self::Vpn(_) => "vpn",
+            Self::Socks5(_) => "socks5",
+        }
+    }
+
+    /// Whether traffic leaves the lab (every route but `drop` and `inet_sim`).
+    pub fn is_live(&self) -> bool {
+        !matches!(self, Self::Drop | Self::InetSim)
     }
 }
 
-/// How the program is run in the guest. v1 supports `app_terminal` only
-/// (decided B-H24); the other two are reserved and fail `unsupported`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+impl std::fmt::Display for Route {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Vpn(Some(name)) | Self::Socks5(Some(name)) => write!(f, "{}:{name}", self.kind()),
+            _ => f.write_str(self.kind()),
+        }
+    }
+}
+
+impl Serialize for Route {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Route {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown route `{text}`; the routes are {ROUTE_NAMES}"
+            ))
+        })
+    }
+}
+
+impl JsonSchema for Route {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("Route")
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": "string",
+            "pattern": "^(drop|inet_sim|internet|nat|tor|(vpn|socks5)(:[A-Za-z0-9._-]{1,64})?)$",
+            "description": "A network route: drop, inet_sim, internet, nat, tor, vpn[:NAME], socks5[:NAME]."})
+    }
+}
+
+/// How the program is run in the guest. 0.9.0 runs `app_terminal` only; the
+/// other two are reserved preset values (refused `unsupported`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunIn {
+    #[default]
     AppTerminal,
     GuestDesktop,
     GuestDesktopTerminal,
-}
-
-/// A guest identity: `user` (UID/GID 1000, the default), `root` (needs the
-/// `run.as_root` permission, as does an id below 1000) or explicit ids.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum RunAs {
-    Named(RunAsName),
-    Ids(RunAsIds),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RunAsName {
-    User,
-    Root,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RunAsIds {
-    pub uid: u32,
-    pub gid: u32,
-}
-
-/// A process core on exit: a switch, or its limits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum CoreDump {
-    Switch(bool),
-    Limits(CoreLimits),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CoreLimits {
-    pub max_mib: u32,
-    pub timeout_ms: u32,
 }
 
 /// The names of `AnalysisKind` in lower snake case (`analysis/types.rs:7`).
@@ -148,34 +195,6 @@ pub enum StaticCheck {
     Unpacking,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum StaticPreset {
-    None,
-    Triage,
-}
-
-/// Host-side static analysis of the library copy, run in the `analyse` stage:
-/// `none`, `triage` (the engine's eleven-tool set) or a list of checks.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum StaticChecks {
-    Preset(StaticPreset),
-    Names(Vec<StaticCheck>),
-}
-
-/// Which detection engines run on the evidence.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DetectionSelection {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub yara: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sigma: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ids: Option<bool>,
-}
-
 /// A report format (`report.get`, `overrides.reports`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -188,61 +207,25 @@ pub enum ReportFormat {
     Md,
 }
 
-/// The per-job overrides of the policy (design 5.4.1). `overrides.base` and
-/// `overrides.stealth` of revision 1 are removed: the lane VM fixes both.
+/// The per-run overrides: a partial preset, with the same tables and keys as
+/// a preset file (`{"program": {"run_time_s": 600}}`). Any override that
+/// changes a value makes the run Custom (the presets specification, "The
+/// Custom rule"); a stored run keeps the changed keys only.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Overrides {
-    /// Wall-clock limit of the run in seconds, 5 to the policy `max_run_s`
-    /// (default policy 300, maximum 1800). Reaching it ends the run normally
-    /// (`end_reason: time_limit`); it is not a failure.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_s: Option<u32>,
-    /// Program arguments, at most 64, each at most 4096 bytes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub args: Option<Vec<String>>,
-    /// `K=V` entries, at most 64.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_as: Option<RunAs>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_in: Option<RunIn>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub route: Option<Route>,
-    /// Packet capture for the run; default true on a VM with a network card.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub network_capture: Option<bool>,
-    /// VM memory after the run's tree ends.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory_dump: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub core_dump: Option<CoreDump>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub static_checks: Option<StaticChecks>,
-    /// Minutes per analysis tool, 0 to 480 (`TIME_LIMIT_MAX_MINUTES`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub static_time_limit_min: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detection: Option<DetectionSelection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reports: Option<Vec<ReportFormat>>,
-    /// Evidence bundle zip.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub report_bundle: Option<bool>,
-    /// Defang indicators in HTML, PDF and Markdown; default true (B-W10).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub report_defang: Option<bool>,
-    /// Leave the VM as the failed run left it, for inspection. Needs the
-    /// `run.keep_vm` permission; `true` is refused `unavailable_on_node`:
-    /// keeping a VM arrives with 0.9.1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub keep_on_failure: Option<bool>,
+#[serde(transparent)]
+pub struct Overrides(pub Map<String, Value>);
+
+impl Overrides {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
-/// What a caller submits with `job.submit`, and the resolved form a [`Job`]
-/// carries (policy defaults filled in; `sample.path` removed for remote
-/// callers; `sample.sha256` always set after prechecks).
+/// What a caller submits with `job.submit`, and the form a [`Job`] carries
+/// (the preset's name and the priority filled in, `overrides` reduced to the
+/// keys that changed a value; `sample.path` removed for remote callers;
+/// `sample.sha256` always set after prechecks). The run's resolved options
+/// are its frozen preset.
 ///
 /// [`Job`]: super::job::Job
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -252,10 +235,12 @@ pub struct JobSpec {
     /// File name hint, 1 to 128 bytes, no `/`, no NUL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Policy name; default `default`.
+    /// The preset's name; default `standard`. (The member keeps its 0.9.0
+    /// name until the run API.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<String>,
-    /// 0 to 9, higher starts first; default 5; the policy sets a ceiling.
+    /// 0 to 9, higher starts first; default 5; the caller's limit sets a
+    /// ceiling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<u8>,
     /// At most 16 pairs; key 1 to 32 bytes `[a-z0-9._-]`, value up to 128 bytes.
@@ -268,20 +253,8 @@ pub struct JobSpec {
     pub overrides: Overrides,
 }
 
-impl Overrides {
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-}
-
-/// A part of the spec that v1 does not offer: the field, and the
-/// `details.reason` of the `unsupported` error (design 5.4.1, decided D6 and
-/// B-H24).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Unsupported {
-    pub field: &'static str,
-    pub reason: &'static str,
-}
+/// The keys of a preset that are not tables.
+const TOP_LEVEL_KEYS: [&str; 4] = ["title", "description", "offered_to", "required_stages"];
 
 fn bad(field: &str, message: &str) -> SpecError {
     SpecError {
@@ -291,9 +264,9 @@ fn bad(field: &str, message: &str) -> SpecError {
 }
 
 impl JobSpec {
-    /// The checks of 5.4.1 that need no policy: shape and bounds. A failure
+    /// The checks of 5.4.1 that need no preset: shape and bounds. A failure
     /// is `invalid_argument` naming the field. Ceilings, presence of the
-    /// sample, quotas and the policy itself are the service's checks.
+    /// sample, quotas and the preset itself are the service's checks.
     pub fn validate_shape(&self) -> Result<(), SpecError> {
         self.sample.validate()?;
         if let Some(name) = &self.name
@@ -326,37 +299,17 @@ impl JobSpec {
         {
             return Err(bad("idempotency_key", "1 to 128 printable ASCII"));
         }
-        let o = &self.overrides;
-        if o.timeout_s.is_some_and(|t| t < 5) {
-            return Err(bad("overrides.timeout_s", "at least 5 seconds"));
-        }
-        if let Some(args) = &o.args
-            && (args.len() > 64 || args.iter().any(|a| a.len() > 4096))
+        if self
+            .overrides
+            .0
+            .iter()
+            .any(|(key, value)| !value.is_object() && !TOP_LEVEL_KEYS.contains(&key.as_str()))
         {
-            return Err(bad("overrides.args", "at most 64 arguments of 4096 bytes"));
-        }
-        if let Some(env) = &o.env
-            && (env.len() > 64 || env.iter().any(|e| !e.contains('=')))
-        {
-            return Err(bad("overrides.env", "at most 64 entries of the form K=V"));
-        }
-        if o.static_time_limit_min.is_some_and(|m| m > 480) {
-            return Err(bad("overrides.static_time_limit_min", "0 to 480"));
+            return Err(bad(
+                "overrides",
+                "a partial preset: tables of keys, as in a preset file",
+            ));
         }
         Ok(())
-    }
-
-    /// The first part of the spec that is a valid spelling but not offered in
-    /// v1: a desktop run mode. (A live route is checked by admission: its
-    /// `route.*` permission, then `unavailable_on_node`.)
-    pub fn v1_unsupported(&self) -> Option<Unsupported> {
-        let o = &self.overrides;
-        if o.run_in.is_some_and(|r| r != RunIn::AppTerminal) {
-            return Some(Unsupported {
-                field: "overrides.run_in",
-                reason: "run_mode_not_in_v1",
-            });
-        }
-        None
     }
 }

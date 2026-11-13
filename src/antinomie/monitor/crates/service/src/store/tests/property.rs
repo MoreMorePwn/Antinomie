@@ -116,8 +116,6 @@ fn check_invariants(fx: &Fx, seen: &mut HashMap<JobId, JobState>) {
 
 fn one_run(seed: u64) {
     let mut fx = Fx::with_policy(&format!("prop-{seed}"), |p| {
-        p.limits.wait_s = 50;
-        p.limits.priority_max = 9;
         p.retry.max_attempts = 3;
     });
     fx.store
@@ -127,6 +125,7 @@ fn one_run(seed: u64) {
     fx.limits = SubmitLimits {
         max_queued: 20,
         per_client_queued: 20,
+        wait_s: 50,
     };
     let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let mut jobs: Vec<Job> = Vec::new();

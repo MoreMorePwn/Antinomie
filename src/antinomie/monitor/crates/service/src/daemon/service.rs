@@ -5,7 +5,7 @@
 //!
 //! Every request is parsed with the contract's own types (unknown members are
 //! refused, with the member named), checked against the op's permissions,
-//! then served from the job store, the staging store, the policies, the lane
+//! then served from the job store, the staging store, the presets, the lane
 //! and the recording reads. `sample.path` is honoured only for a caller in
 //! the same process: over the socket a file arrives through `upload.*`, so no
 //! client can make the daemon open a path of its choosing.
@@ -20,7 +20,7 @@ use crate::{
         spec::{JobSpec, ReportFormat, Route, StaticCheck},
         status::*,
     },
-    config::{ServiceConfig, SharedPolicies},
+    config::{ServiceConfig, SharedPresets},
     intake::Intake,
     lane::LaneDir,
     query::{QueryApi, QueryService, context::ReadContext, request::RecordingRead},
@@ -73,7 +73,7 @@ pub struct Service {
     pub options: BackendOptions,
     pub config: RwLock<ServiceConfig>,
     pub store: Arc<Store>,
-    pub policies: Arc<SharedPolicies>,
+    pub presets: Arc<SharedPresets>,
     pub intake: Arc<Intake>,
     pub lanes: LaneDir,
     pub query: QueryService,
@@ -179,15 +179,16 @@ impl Service {
 
     pub(super) fn submit_context<'a>(
         &'a self,
-        policies: &'a crate::config::PolicySet,
+        presets: &'a crate::config::PresetSet,
     ) -> SubmitContext<'a> {
         let config = self.config.read().unwrap_or_else(|p| p.into_inner());
         SubmitContext {
-            policies,
+            presets,
             intake: &*self.intake,
             limits: SubmitLimits {
                 max_queued: config.queue.max_queued,
                 per_client_queued: config.queue.per_client_queued,
+                wait_s: config.queue.wait_s,
             },
             on_duplicate: None,
         }
@@ -201,22 +202,22 @@ impl Service {
                 "the daemon does not open files a client names; send the file with upload.begin, upload.put and upload.finish, then submit sample.upload_id",
             ));
         }
-        let policies = self.policies.snapshot();
+        let presets = self.presets.snapshot();
         let submitted = self
             .store
-            .submit(&ctx.caller, spec, &self.submit_context(&policies))?;
+            .submit(&ctx.caller, spec, &self.submit_context(&presets))?;
         self.wake_lane();
         to_value(&submitted)
     }
 
     fn retry(&self, value: Value, ctx: &CallContext) -> Result<Value, ApiError> {
         let request: JobRetryParams = params(value)?;
-        let policies = self.policies.snapshot();
+        let presets = self.presets.snapshot();
         let submitted = self.store.retry(
             &ctx.caller,
             &request.job_id,
             request.overrides.as_ref(),
-            &self.submit_context(&policies),
+            &self.submit_context(&presets),
         )?;
         self.wake_lane();
         to_value(&submitted)
@@ -374,8 +375,9 @@ impl Service {
         })
     }
 
-    pub fn capabilities(&self, caller: &Caller) -> Capabilities {
-        let set = self.policies.snapshot();
+    /// The same for every caller: the presets list what each needs.
+    pub fn capabilities(&self, _caller: &Caller) -> Capabilities {
+        let set = self.presets.snapshot();
         let mut caps = Capabilities {
             api_version: crate::API_VERSION,
             app_version: antinomie_monitor_core::api::APP_VERSION.into(),
@@ -432,29 +434,27 @@ impl Service {
             ],
         };
         for name in set.names() {
-            let Some(policy) = crate::config::PolicyLookup::get(&*set, name) else {
+            let Some(preset) = crate::config::PresetLookup::get(&*set, name) else {
                 continue;
             };
-            if !policy.allows(&caller.client_id, Scope::Submit) {
-                continue;
-            }
             caps.max_sample_bytes = caps
                 .max_sample_bytes
-                .max(self.intake.max_sample_bytes(&policy));
-            for kind in &policy.policy.sample.accept_types {
+                .max(self.intake.max_sample_bytes(&preset));
+            for kind in &preset.preset.accepts.types {
                 if !caps.accept_types.contains(kind) {
                     caps.accept_types.push(kind.clone());
                 }
             }
-            for arch in &policy.policy.sample.accept_arch {
+            for arch in &preset.preset.accepts.arch {
                 if !caps.accept_arch.contains(arch) {
                     caps.accept_arch.push(arch.clone());
                 }
             }
-            for route in &policy.policy.network.allowed_routes {
-                if matches!(route, Route::Drop | Route::InetSim) && !caps.routes.contains(route) {
-                    caps.routes.push(*route);
-                }
+        }
+        // The routes this node runs: none is live before 0.9.1.
+        for route in [Route::Drop, Route::InetSim] {
+            if !caps.routes.contains(&route) {
+                caps.routes.push(route);
             }
         }
         caps
@@ -600,7 +600,7 @@ impl Service {
                 artifacts::report(self, &request, caller)
             }
             Op::PolicyList => to_value(&PolicyList {
-                policies: self.policies.snapshot().list_for(caller),
+                policies: self.presets.snapshot().list_for(caller),
             }),
             Op::QueueStatus => to_value(&self.queue_status()?),
             Op::QueuePause => self.queue_pause(true),

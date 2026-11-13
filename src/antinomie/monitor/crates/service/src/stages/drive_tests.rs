@@ -239,7 +239,7 @@ fn bh_29_the_engine_names_the_jobs_caller_while_it_sends_and_launches() {
 
 #[test]
 fn the_run_limit_is_not_a_failure_for_the_job() {
-    let w = W::with("drive-limit", |p| p.run.timeout_s = 20);
+    let w = W::with("drive-limit", |p| p.program.run_time_s = 20);
     let job = w.fx.running(1);
     let mut waiter = w.engine(|fake| {
         restore_ok(fake);
@@ -351,10 +351,10 @@ fn a_permanent_error_is_not_retried_even_with_attempts_left() {
     let w = W::with("drive-permanent", |p| {
         p.retry.max_attempts = 5;
         p.retry.retry_on = crate::api::failure::FailureCode::ALL.to_vec();
-        p.evidence.core_dump = true;
+        p.dumps.core_dump_on_exit = true;
+        p.program.run_in = crate::api::spec::RunIn::GuestDesktop;
     });
-    let mut job = w.fx.running(1);
-    job.spec.overrides.run_in = Some(crate::api::spec::RunIn::GuestDesktop);
+    let job = w.fx.running(1);
     let mut waiter = w.engine(|fake| {
         restore_ok(fake);
         upload_ok(fake);
@@ -867,7 +867,7 @@ fn the_job_limit_stops_a_job_that_is_still_in_a_stage_and_fails_it_with_the_watc
     // job_hard_s = timeout_s + 1800 = 1805 s. The layer wait takes 1799 s and
     // the restore, which takes 10 s more, crosses the limit.
     let w = W::with("drive-hard", |p| {
-        p.run.timeout_s = 5;
+        p.program.run_time_s = 5;
         p.retry.retry_on = FailureCode::ALL.to_vec();
         p.retry.max_attempts = 5;
     });

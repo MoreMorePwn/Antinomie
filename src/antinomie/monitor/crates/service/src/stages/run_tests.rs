@@ -215,7 +215,7 @@ fn a_program_killed_by_a_signal_is_signaled_with_its_core_flag() {
 
 #[test]
 fn the_run_limit_stops_the_run_once_and_is_not_a_failure() {
-    let w = W::with("run-limit", |p| p.run.timeout_s = 20);
+    let w = W::with("run-limit", |p| p.program.run_time_s = 20);
     let job = w.fx.running(1);
     let mut waiter = w.engine(|fake| {
         restore_ok(fake);
@@ -244,7 +244,7 @@ fn the_run_limit_stops_the_run_once_and_is_not_a_failure() {
 
 #[test]
 fn a_run_that_ignores_stop_run_is_guest_lost_after_the_grace() {
-    let w = W::with("run-ignores", |p| p.run.timeout_s = 20);
+    let w = W::with("run-ignores", |p| p.program.run_time_s = 20);
     let job = w.fx.running(1);
     let mut waiter = w.engine(|fake| {
         restore_ok(fake);
@@ -440,7 +440,7 @@ fn sixty_seconds_without_the_engine_is_the_watchdogs_silence() {
 
 #[test]
 fn an_engine_that_keeps_answering_is_never_silent() {
-    let w = W::with("run-chatty", |p| p.run.timeout_s = 150);
+    let w = W::with("run-chatty", |p| p.program.run_time_s = 150);
     let job = w.fx.running(1);
     let mut waiter = w.engine(|fake| {
         restore_ok(fake);

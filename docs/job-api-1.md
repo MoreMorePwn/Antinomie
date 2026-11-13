@@ -42,7 +42,7 @@ in a request fails with `invalid_argument` naming the field.
 | `capabilities` | What this service can do now | `runs.see_all` |
 | `health` | Liveness, readiness and engine counters | `runs.see_all` |
 | `upload.begin`, `upload.put`, `upload.finish` | Staged sample upload; chunks are strictly sequential (`offset` must equal `received`, else `conflict`) | `runs.submit` or `samples.add` |
-| `job.submit` | Validate synchronously, then queue a job. A spec that fails a check of the run still returns a `Job` with `state: rejected` and `failure` set; malformed JSON, a value out of range or outside the policy is `invalid_argument` | `runs.submit`, and the permission of each run option (see Permissions) |
+| `job.submit` | Validate synchronously, then queue a job. A spec that fails a check of the run still returns a `Job` with `state: rejected` and `failure` set; malformed JSON or a value out of range is `invalid_argument`, an unknown preset `preset_denied`, a reserved preset key away from its default `unsupported` | `runs.submit`, and the permission of each run option (see Permissions) |
 | `job.get`, `job.list` | One job; jobs filtered by `state`, `outcome`, `sha256`, `label`, `since_ms` | `runs.see_all` |
 | `job.cancel` | Cancel a queued or running job | `runs.submit` for the caller's own job, `runs.manage_any` for any |
 | `job.retry` | Start a new job from a finished job's spec | `runs.submit`, and `runs.see_all` for another client's job |
@@ -53,7 +53,7 @@ in a request fails with `invalid_argument` naming the field.
 | `sample.add` | Store a file in the library without running it | `samples.add` |
 | `sample.download` | The library archive of a sample (an AES zip, never the plaintext) | `samples.download` |
 | `sample.tag` | Set tags on a sample | `samples.tag` |
-| `policy.list`, `queue.status`, `vm.list`, `base.list` | Policies the caller may use; queue and lane state; VMs and installed bases | `runs.see_all` |
+| `policy.list`, `queue.status`, `vm.list`, `base.list` | Every preset (`{policies: [{name, title, description, digest, built_in, offered_to, needs, missing, unavailable}]}`: the permissions its options need, the ones the caller lacks, what the node does not have); queue and lane state; VMs and installed bases | `runs.see_all` |
 | `queue.pause`, `queue.resume` | Stop or resume starting new jobs | `queue.manage` |
 | `custody.verify` | Verify the custody chain of one sample or the whole library | `custody.verify` |
 
@@ -70,30 +70,45 @@ must not invent operations in them.
 ## Job spec
 
 Exactly one of `sample.sha256`, `sample.path` (local-only) or `sample.upload_id`
-is set. Every other field is optional; an absent field takes the policy's value,
-then the system default.
+is set. Every other field is optional. The preset gives every run option;
+`overrides` change them.
 
 | Field | Meaning |
 |---|---|
 | `name` | File name hint, 1 to 128 bytes, no `/`, no NUL |
-| `policy` | Policy name, default `default` |
-| `priority` | 0 to 9, default 5; higher starts first; the policy sets a ceiling |
+| `policy` | The preset's name, default `standard` (the member keeps this name until the run API). Five presets are built in: `standard`, `quick-look`, `deep`, `interactive`, `live-network`; more are `<data>/presets/<name>.toml` |
+| `priority` | 0 to 9, default 5; higher starts first; the caller's limit, when it has one, is a ceiling |
 | `labels` | At most 16 pairs; key 1 to 32 bytes of `[a-z0-9._-]`, value up to 128 bytes |
 | `idempotency_key` | See conventions |
-| `overrides.timeout_s` | Wall-clock limit of the run, 5 to the policy's `max_run_s`. Reaching it ends the run normally (`end_reason: time_limit`; `run exec` in the CLI names the same end `run_limit` in `run.end_reason`) |
-| `overrides.args`, `overrides.env` | At most 64 each; arguments up to 4096 bytes; `K=V` entries |
-| `overrides.run_as` | `user` (default), `root` (needs policy permission) or `{uid, gid}` |
-| `overrides.run_in` | `app_terminal` only in version 1; `guest_desktop` and `guest_desktop_terminal` fail `unsupported` |
-| `overrides.route` | `drop` or `inet_sim` in version 1; the others fail `unsupported` with `details.reason = "live_route_not_in_v1"` |
-| `overrides.network_capture`, `memory_dump`, `core_dump` | Evidence to keep; `core_dump` is a boolean or `{max_mib, timeout_ms}` |
-| `overrides.static_checks` | `none`, `triage`, or a list of check names; run on the host, on the library copy, in the `analyse` stage |
-| `overrides.static_time_limit_min` | Minutes per analysis tool, 0 to 480 |
-| `overrides.detection` | `{yara, sigma, ids}` booleans |
-| `overrides.reports`, `report_bundle`, `report_defang` | Report formats (`html`, `pdf`, `json`, `misp`, `stix`, `md`), the evidence bundle, defanging of indicators (default true) |
-| `overrides.keep_on_failure` | Keep the VM as it is when the job fails; the lane is then quarantined (needs policy permission) |
+| `overrides` | A partial preset: the same tables and keys as a preset file, `{"program": {"run_time_s": 600}, "report": {"formats": ["html", "json", "pdf"]}}`. `title`, `description` and `offered_to` are not run options. See below |
+
+The keys of `overrides`, by table (each optional; the full format, defaults and
+ranges are in [service configuration](service-config.md)):
+
+| Table | Keys |
+|---|---|
+| `program` | `run_time_s` (5 to 1800; reaching it ends the run normally, `end_reason: time_limit`), `arguments` and `environment` (at most 64 each; `NAME=value`), `working_directory`, `guest_path` (`{name}` is the sample's file name), `user` (`normal`, `root`, `nobody`, `custom` with `uid` and `gid`), and the reserved `source`, `executable`, `run_in`, `preload`, `extra_files` |
+| `network` | `capture`, `route` (`drop`, `inet_sim`, `internet`, `nat`, `tor`, `vpn[:NAME]`, `socks5[:NAME]`), the reserved `private_addresses`, `abuse_filter` |
+| `dumps` | `memory_dump_on_exit`, `core_dump_on_exit`, `core_budget_mib` (64 to 1024), `core_deadline_ms`, `dump_when_suspicious`, `minimum_tier`, `trigger_memory_dump`, `trigger_core`, `read_non_resident_pages`, `max_dumps` (1 to 8), `dumps_apart_s` (0 to 3600), the reserved `disk_dump` |
+| `static_analysis` | `enabled`, `triage_checks`, `deep_checks`, `time_limit_per_tool_min` (0: each tool's own, up to 480), `ghidra_disassembly`, `required_checks`, `limits.*`, the reserved `rebuilt_file_mib`, `rebuilt_run_mib` |
+| `triage`, `detection`, `report` | `triage.enabled`; `detection.yara`, `sigma`, `ids`, `check_online`; `report.formats` (`html`, `pdf`, `json`, `misp`, `stix`, `md`), `bundle`, `defang`; the reserved `triage.written_*`, `earlier_*`, `detection.scan_every_min`, `report.sections` |
+| `vm` | `lane_group`, `keep_on_failure` (refused `unavailable_on_node`), `allow_control` |
+| `accepts`, `duplicates`, `record`, `verdict`, `retry`, `required_stages` | As in the file |
+
+**The Custom rule.** An override that changes a value makes the run Custom; an
+override equal to the preset's value changes nothing. A Custom run's `policy`
+object is `{name: "custom", digest, based_on: {name, digest}, changes: [...]}`
+(`digest` is the SHA-256 of its resolved options, `changes` the dotted keys it
+changed); a run of an unchanged preset has `{name, digest}`. The stored spec
+keeps the preset's name and only the changed keys in `overrides`; every
+resolved option is frozen with the job. A preset locks nothing: only the
+caller's permissions, the node and the caller's limits do (see "How
+`job.submit` is checked"). A key 0.9.0 reserves is accepted at its default
+only; another value is `unsupported` with `details.reason = "reserved"` and
+`field` the key ("arrives with 0.9.1").
 
 The sample size limit is the smallest of the engine's 256 MiB maximum, the
-policy's `max_sample_mib` and a quarter of the lane VM's RAM;
+preset's `accepts.max_sample_mib` and a quarter of the lane VM's RAM;
 `capabilities.max_sample_bytes` reports it.
 
 ## Job states
@@ -107,7 +122,7 @@ policy's `max_sample_mib` and a quarter of the lane VM's RAM;
 | `partial` | yes | A recording and a report exist, but a requested piece is missing or incomplete. `failure` is null; `warnings` list each piece |
 | `failed` | yes | No usable recording, or a required stage failed after retries |
 | `cancelled` | yes | Stopped by request; whatever was recorded is kept and flagged |
-| `rejected` | yes | Refused at submit by validation or policy; consumed no lane time |
+| `rejected` | yes | Refused at submit (a permission, the node, a limit, the sample); consumed no lane time |
 
 `outcome` is null while the job is not terminal and equals `state` afterwards.
 
@@ -115,13 +130,13 @@ policy's `max_sample_mib` and a quarter of the lane VM's RAM;
 has handed it to the host work pool: `name` (`triage`, `static:<tool>`,
 `detection`, `assess`, `report`), `state` (`queued`, `running`, `done`,
 `failed`, `timed_out`, `skipped`), `after` (the items it waits for),
-`expected_s` and its `basis` (`median`, `estimate`, `fixed`, `policy`),
+`expected_s` and its `basis` (`median`, `estimate`, `fixed`, `policy`: a fixed limit the preset sets),
 `limit_s`, `started_ms`, `finished_ms` and `note`. `queue.status` has
 `host_pool`: `workers`, `queued` (the pool's queue length), `running`, `jobs`
 and `waiting_for` (why the head waits, when it waits for memory).
 
-The policy is frozen at submit: a job whose policy has gone or now denies it ends
-`failed` with `preset_denied`. When the job starts, prechecks also asks again
+The preset is frozen at submit: a job whose preset changed or went away since
+keeps the options it froze. When the job starts, prechecks asks again
 whether its client still holds every permission the run uses; one taken away
 while the job waited (a watch folder's `permissions` changed by a reload) ends it
 `failed` with `permission_denied`.
@@ -162,7 +177,7 @@ for engine scope), `gseq` (across the service, persisted, never reused), `ts_ms`
 | `job.run` | `{run_id, pid?, route}` |
 | `job.warning` | `{code, text}` |
 | `job.artifact` | `{artifact}` |
-| `job.trigger` | `{trigger?, note?}`: the policy's dump trigger took a dump (`trigger`: rule, tier, summary, syscall, pid, at_ms, and the `memory` and `core` dump with state, size, capture_id, error; no host path) or did less than asked (`note`) |
+| `job.trigger` | `{trigger?, note?}`: the preset's dump trigger took a dump (`trigger`: rule, tier, summary, syscall, pid, at_ms, and the `memory` and `core` dump with state, size, capture_id, error; no host path) or did less than asked (`note`) |
 | `job.assessment` | `{assessment}` |
 | `job.requeued` | `{attempt, reason}`; a `job.state` event with `state: queued` follows |
 | `job.finished` | `{outcome, failure?}`; the last event of a job |
@@ -184,10 +199,10 @@ Every failed operation returns `{"error": {"code", "message", "field?", "retryab
 | `unauthenticated` | 401 | Added by the HTTP layer only |
 | `forbidden` | 403 | Added by the HTTP layer only |
 | `permission_denied` | 403 | The caller lacks a permission; `details.needs` lists it (also inside a rejected job's `failure`) |
-| `preset_denied` | 403 | The policy (the preset of later versions) is unknown to the caller or not offered to it; `details.preset` |
+| `preset_denied` | 403 | There is no such preset (or, from 0.9.1, it is retired or not offered to the caller's role); `details.preset`. Nothing is stored |
 | `limit_exceeded` | 403 | A value above a limit (priority, run time); `details.field`, `details.limit`, `details.source` |
 | `unavailable_on_node` | 409 | The node does not have what the request needs (a live route, a kept VM); `details.what` |
-| `not_found` | 404 | Job, artifact, sample, upload, policy, run or recording missing |
+| `not_found` | 404 | Job, artifact, sample, upload, run or recording missing |
 | `conflict` | 409 | Idempotency key reused with another spec; the job is not in a state that allows the op; `details.reason = "cursor_stale"` |
 | `precondition_failed` | 412 | For example `job.retry` of a job that is not terminal; `details.reason = "layer_pending"` or `"recording_open"` |
 | `payload_too_large` | 413 | Upload or sample above the limit; a read range above its limit |
@@ -217,24 +232,25 @@ features of 0.9.1 (cases, interactive sessions, presets, kept VMs).
 | `queue.manage` | `queue.pause`, `queue.resume`, `watch.scan` |
 | `lanes.reset` | `lane.reset`, `lane.unquarantine` |
 | `custody.verify` | `custody.verify` |
-| `route.internet`, `route.tor`, `route.vpn`, `route.socks5` | A job on that live route (then refused `unavailable_on_node`: no live route is set up for the service before 0.9.1) |
-| `run.as_root` | `run_as` root, or a UID or GID below 1000 |
-| `evidence.core_dump` | A core on exit, or a core taken by the policy's dump trigger |
-| `evidence.memory_dump` | A memory dump on exit, or one taken by the policy's dump trigger |
-| `lookup.online` | A job under a policy with `online_ioc = true` |
-| `run.keep_vm` | `keep_on_failure: true` (then refused `unavailable_on_node`: keeping a VM arrives with 0.9.1) |
+| `route.internet`, `route.nat`, `route.tor`, `route.vpn`, `route.socks5` | A run on that live route (then refused `unavailable_on_node`: no live route is set up for the service before 0.9.1) |
+| `run.as_root` | `program.user` root, or a custom UID or GID below 1000 |
+| `evidence.core_dump` | `dumps.core_dump_on_exit`, or a trigger core (`dump_when_suspicious` with `trigger_core`) |
+| `evidence.memory_dump` | `dumps.memory_dump_on_exit`, or a trigger memory dump |
+| `lookup.online` | `detection.check_online` |
+| `run.keep_vm` | `vm.keep_on_failure` (then refused `unavailable_on_node`: keeping a VM arrives with 0.9.1) |
 
-Reserved: `cases.create`, `runs.share`, `cases.join_any`, `runs.annotate`,
-`indicators.mark_fp`, `route.nat`, `route.lan`, `route.unfiltered`,
-`evidence.disk_dump`, `interactive.watch`, `interactive.control`,
+`route.lan` (`network.private_addresses`), `route.unfiltered`
+(`network.abuse_filter = false`) and `evidence.disk_dump` (`dumps.disk_dump`)
+are checked too, for keys 0.9.0 reserves at their default. Reserved:
+`cases.create`, `runs.share`, `cases.join_any`, `runs.annotate`,
+`indicators.mark_fp`, `interactive.watch`, `interactive.control`,
 `presets.manage`, `lanes.extend_keep`, `node.manage`.
 
 The four scopes of earlier drafts map to permissions as follows: `read` is
 `runs.see_all`; `submit` is `samples.add` and `runs.submit`;
 `artifacts:sensitive` is `evidence.view`, `evidence.download` and
 `samples.download`; `manage` is `runs.manage_any`, `samples.tag`,
-`runs.delete`, `queue.manage`, `lanes.reset` and `custody.verify`. A policy
-file's `[access] scopes` keeps this spelling until presets replace policies.
+`runs.delete`, `queue.manage`, `lanes.reset` and `custody.verify`.
 
 `runs.see_all` sees every job on the node (one trust domain per node).
 
@@ -243,23 +259,25 @@ file's `[access] scopes` keeps this spelling until presets replace policies.
 1. `runs.submit`, else `permission_denied` (nothing stored);
 2. the shape and range of every value, else `invalid_argument` (nothing
    stored);
-3. the policy is offered to the caller (`[access] clients`), else a rejected
-   job with `preset_denied`;
-4. every run option that adds risk has its permission, on the job as it will
-   run (the policy's defaults included): the route, the user, core and memory
+3. the preset exists, else `preset_denied` (nothing stored). `offered_to`
+   names roles, which 0.9.0 callers do not have: it locks nothing;
+4. the overrides resolve onto the preset (the Custom rule) and every resolved
+   value is in its range, else `invalid_argument` naming the field
+   (`overrides.program.run_time_s`); a reserved key away from its default is
+   `unsupported` (nothing stored);
+5. every run option that adds risk has its permission, on the run as it will
+   run (the preset's values included): the route, the user, core and memory
    dumps (also those the dump trigger takes), Check online, keeping the VM.
-   Else a rejected job with `permission_denied` and `details.needs` listing
-   every missing permission;
-5. the node has it (a live route, a kept VM), else a rejected job with
-   `unavailable_on_node`;
-6. the limits: `priority` up to the policy's `priority_max`, `timeout_s` up to
-   its `max_run_s`, else a rejected job with `limit_exceeded`;
-7. the policy's own switches and ceilings (arguments, environment, root,
-   allowed routes, dump switches, core size, detection engines), else
-   `invalid_argument` naming the field (nothing stored);
-8. the sample (intake: size, type, architecture), else a rejected job with the
-   `sample_*` code. Intake comes last because it archives the sample: a
-   refused job adds nothing to the library.
+   Else a rejected job with `permission_denied`, `field` the preset key
+   (`network.route`) and `details.needs` listing every missing permission;
+6. the node has it (a live route, a kept VM, the lane group), else a rejected
+   job with `unavailable_on_node`;
+7. the caller's limits, when it has any: `priority` up to `priority_max`,
+   `program.run_time_s` up to `max_run_s`, else a rejected job with
+   `limit_exceeded` (`details.source: "caller"`);
+8. the sample (intake: size, type, architecture against `[accepts]`), else a
+   rejected job with the `sample_*` code. Intake comes last because it archives
+   the sample: a refused job adds nothing to the library.
 
 ## Local socket
 
@@ -335,7 +353,7 @@ from the same code direct mode runs, so the CLI prints the same objects either w
 |---|---|
 | `sample.list` | `{samples, next_cursor}`, newest first. Besides `q`, `tag`, `limit` (1 to 1000, default 100) and `cursor`: `tags[]` (more `KIND=VALUE` tags the sample must also have), `all` (include samples whose archive was removed), `custody` (fill `custody_ok`). A tag is `KIND=VALUE` (`verdict`, `category`, `technique`, `custom`); a bare value is a custom tag |
 | `sample.get` | The `Sample` object plus `sha1`, `md5`, `description`, `removed_ms` and `custody` (the chain's summary). `origins`, `events` and `runs` (booleans) add those lists |
-| `sample.add` | Takes `sample.upload_id` only. `sample.path` and `sample.sha256` are `invalid_argument` on the socket (the daemon opens no path a client names). The type and architecture come from the bytes; no policy applies. The custody entry names the caller (`local:<uid>`). The answer is `sample.get`'s object plus `new` |
+| `sample.add` | Takes `sample.upload_id` only. `sample.path` and `sample.sha256` are `invalid_argument` on the socket (the daemon opens no path a client names). The type and architecture come from the bytes; no preset applies. The custody entry names the caller (`local:<uid>`). The answer is `sample.get`'s object plus `new` |
 | `sample.tag` | Sets the whole tag list (`[{kind, value}]`); the custody entry `edited` (tags) names the caller. The answer is the `Sample` object |
 | `sample.download` | `sha256` and an optional `range {offset, len}` (at most 1 MiB; default the first MiB). The answer is `{sha256, format: "zip-aes256", password: "infected", size, range {offset, len, data}}` with `data` Base64 of the AES archive (never the plaintext). The first range (`offset` 0) writes one custody entry `exported`. Needs `samples.download` |
 | `vm.list` | `{vms: [{id, name, base_identity, lane}]}` from the engine's latest snapshot; the lane VM carries its lane |
@@ -378,9 +396,10 @@ page that would not fit a 2 MiB line is `payload_too_large` and the command asks
 again for fewer rows.
 
 `job.retry` makes a new job from a finished one: the spec the client first sent,
-the sample named by its library hash, no idempotency key, the given `overrides`
-replacing the original's one field at a time, the current policy, and
-`repeat_of` set. The job must be terminal (`precondition_failed` otherwise); the
+the sample named by its library hash, no idempotency key, and `repeat_of` set.
+A run of an unchanged preset uses the preset as it is now; a Custom run uses
+its resolved options as overrides of the preset it was based on (it is Custom
+again). The given `overrides` (a partial preset) are merged on top, key by key. The job must be terminal (`precondition_failed` otherwise); the
 caller needs `runs.submit`, and `runs.see_all` for another client's job.
 
 **Lane operations** (an addition of this binding; section 5.3 has none for lanes,
@@ -400,7 +419,7 @@ run late. Each sends `lane.state` with the reason.
 `job.delete` (`runs.delete`) removes an ended job's row, events, artifacts and folder
 and answers `{deleted: true}`. A job that has not ended is a `conflict`. With
 `with_recording: true` the job's recording is deleted first through the engine's
-own run deletion (custody actor `auto:policy-<policy>`); a recording that a
+own run deletion (custody actor `auto:policy-<preset>`); a recording that a
 `recording.*` read has open, or whose artifacts are still being written, is a
 `precondition_failed` with `details.reason = "recording_open"` and nothing is
 removed. Without `with_recording` the recording stays where it is.
@@ -410,7 +429,7 @@ CLI's `auto watch` and `auto gc`):
 
 | Op | Permission | Params | Result |
 |---|---|---|---|
-| `watch.list` | `runs.see_all` | none | `{folders: [{path, policy, state, detail, taken, rejected, refused: [{name, reason}], pending, last_scan_ms, paused_until_ms}]}`; `state` is `watching`, `paused`, `held`, `refused` or `error` |
+| `watch.list` | `runs.see_all` | none | `{folders: [{path, preset, state, detail, taken, rejected, refused: [{name, reason}], pending, last_scan_ms, paused_until_ms}]}`; `state` is `watching`, `paused`, `held`, `refused` or `error` |
 | `watch.scan` | `queue.manage` | none | The same, after a scan made now (waits at most 30 s) |
 | `gc.run` | `runs.delete` | `dry_run?` (default false) | `{dry_run, now_ms, actions: [{kind, job, run, detail, bytes, done}], skipped: [{kind, job, why}], errors[], freed_bytes}`; `kind` is `recording`, `job`, `upload` or `rejected_file` |
 
@@ -632,7 +651,7 @@ the read is cancelled.
   `partial: true` and `total_exact: false`. A recording that is `live` is refused
   with `recording_open`; `finalizing` and `interrupted` recordings are read.
 - `recording.summary` is the report summary of the export (`Summary` without the
-  policy `label` and `score`): the same builder as `antinomie-cli report`, so the
+  preset's `label` and `score`): the same builder as `antinomie-cli report`, so the
   counts are the window's. `recording.indicators.list` rows are the report's
   indicators with the dataset verdict; with `defang: true` the `value` is the
   defanged form and `raw_indicators` is false.

@@ -5,10 +5,10 @@
 //!
 //! 1. open the staged file with `O_NOFOLLOW`, require a regular file, `fstat`
 //!    its size;
-//! 2. refuse above `min(MAX_SAMPLE, policy.max_sample_mib, specimen_ram_bound)`
+//! 2. refuse above `min(MAX_SAMPLE, accepts.max_sample_mib, specimen_ram_bound)`
 //!    with `sample_too_large`;
 //! 3. read at most that many bytes, detect the type and architecture, apply
-//!    `accept_types` and `accept_arch` (`sample_type_denied`,
+//!    the preset's `accepts.types` and `accepts.arch` (`sample_type_denied`,
 //!    `sample_arch_denied`);
 //! 4. add to the library with origin `Added`, source `Automation`, and the
 //!    caller as custody actor;
@@ -22,7 +22,7 @@ pub mod staging;
 
 use crate::{
     api::{failure::FailureCode, ids::Sha256Hex, job::JobSample, spec::SampleSource},
-    config::LoadedPolicy,
+    config::LoadedPreset,
     store::{IntakeError, SampleAdmission},
 };
 use antinomie_monitor_core::{
@@ -56,10 +56,10 @@ fn deny(code: FailureCode, message: impl Into<String>) -> IntakeError {
 }
 
 /// The largest sample a job may carry: the minimum of `MAX_SAMPLE`, the
-/// policy's `max_sample_mib` and the VM RAM bound (design 5.4.1). This is
+/// preset's `accepts.max_sample_mib` and the VM RAM bound (design 5.4.1). This is
 /// `capabilities.max_sample_bytes` for the lane.
-pub fn size_limit(policy_max_mib: u32, lane_ram_mib: Option<u32>) -> u64 {
-    let mut limit = MAX_SAMPLE.min(u64::from(policy_max_mib) << 20);
+pub fn size_limit(preset_max_mib: u32, lane_ram_mib: Option<u32>) -> u64 {
+    let mut limit = MAX_SAMPLE.min(u64::from(preset_max_mib) << 20);
     if let Some(ram) = lane_ram_mib {
         limit = limit.min(specimen_ram_bound(ram));
     }
@@ -71,21 +71,22 @@ fn classify(bytes: &[u8]) -> (&'static str, Option<&'static str>) {
     samples::detect_type(bytes)
 }
 
-fn check_type(policy: &LoadedPolicy, kind: &str, arch: Option<&str>) -> Result<(), IntakeError> {
-    let sample = &policy.policy.sample;
-    if !sample.accept_types.iter().any(|t| t == "any" || t == kind) {
+fn check_type(preset: &LoadedPreset, kind: &str, arch: Option<&str>) -> Result<(), IntakeError> {
+    let accepts = &preset.preset.accepts;
+    let name = preset.base_name();
+    if !accepts.types.iter().any(|t| t == "any" || t == kind) {
         return Err(deny(
             FailureCode::SampleTypeDenied,
-            format!("policy {} does not accept type {kind}", policy.name),
+            format!("preset {name} does not accept type {kind}"),
         ));
     }
     // A type with no architecture (a script) has nothing to check.
     if let Some(arch) = arch
-        && !sample.accept_arch.iter().any(|a| a == "any" || a == arch)
+        && !accepts.arch.iter().any(|a| a == "any" || a == arch)
     {
         return Err(deny(
             FailureCode::SampleArchDenied,
-            format!("policy {} does not accept architecture {arch}", policy.name),
+            format!("preset {name} does not accept architecture {arch}"),
         ));
     }
     Ok(())
@@ -104,9 +105,9 @@ impl Intake {
         &self.staging
     }
 
-    /// `capabilities.max_sample_bytes` for a policy.
-    pub fn max_sample_bytes(&self, policy: &LoadedPolicy) -> u64 {
-        size_limit(policy.policy.sample.max_sample_mib, self.lane_ram_mib)
+    /// `capabilities.max_sample_bytes` for a preset.
+    pub fn max_sample_bytes(&self, preset: &LoadedPreset) -> u64 {
+        size_limit(preset.preset.accepts.max_sample_mib, self.lane_ram_mib)
     }
 
     fn library(&self) -> Result<Library, IntakeError> {
@@ -122,7 +123,7 @@ impl Intake {
     fn library_sample(
         &self,
         sha256: &Sha256Hex,
-        policy: &LoadedPolicy,
+        preset: &LoadedPreset,
     ) -> Result<JobSample, IntakeError> {
         let library = self.library()?;
         let record = library
@@ -130,7 +131,7 @@ impl Intake {
             .map_err(|e| deny(FailureCode::SampleMissing, e))?
             .filter(|record| record.removed_ms.is_none())
             .ok_or_else(|| deny(FailureCode::SampleMissing, "the library has no such sample"))?;
-        let limit = self.max_sample_bytes(policy);
+        let limit = self.max_sample_bytes(preset);
         if record.size > limit {
             return Err(deny(
                 FailureCode::SampleTooLarge,
@@ -138,7 +139,7 @@ impl Intake {
             ));
         }
         let arch = (!record.arch.is_empty()).then_some(record.arch.as_str());
-        check_type(policy, &record.file_type, arch)?;
+        check_type(preset, &record.file_type, arch)?;
         Ok(JobSample {
             sha256: sha256.clone(),
             size: record.size,
@@ -154,7 +155,7 @@ impl Intake {
         path: &Path,
         shown_name: &str,
         name_hint: Option<&str>,
-        policy: &LoadedPolicy,
+        preset: &LoadedPreset,
         actor: &str,
     ) -> Result<JobSample, IntakeError> {
         let file = open_nofollow(path, false).map_err(|e| {
@@ -163,7 +164,7 @@ impl Intake {
                 format!("the file cannot be opened: {e}"),
             )
         })?;
-        self.sample_from_file(file, shown_name, name_hint, policy, actor)
+        self.sample_from_file(file, shown_name, name_hint, preset, actor)
     }
 
     /// Steps 1 to 4 for a file the caller already opened (a watch folder
@@ -174,7 +175,7 @@ impl Intake {
         mut file: std::fs::File,
         shown_name: &str,
         name_hint: Option<&str>,
-        policy: &LoadedPolicy,
+        preset: &LoadedPreset,
         actor: &str,
     ) -> Result<JobSample, IntakeError> {
         let info = file
@@ -183,7 +184,7 @@ impl Intake {
         if !info.is_file() {
             return Err(deny(FailureCode::SampleMissing, "not a regular file"));
         }
-        let limit = self.max_sample_bytes(policy);
+        let limit = self.max_sample_bytes(preset);
         if info.len() > limit {
             return Err(deny(
                 FailureCode::SampleTooLarge,
@@ -202,7 +203,7 @@ impl Intake {
             ));
         }
         let (kind, arch) = classify(&bytes);
-        check_type(policy, kind, arch)?;
+        check_type(preset, kind, arch)?;
         // Only the name goes into the origin, never the host path.
         let origin = NewOrigin {
             kind: OriginKind::Added,
@@ -246,7 +247,7 @@ impl Intake {
 impl Intake {
     /// `sample.add` over the socket: store a finished upload of `client` in
     /// the library without running it. The type and architecture are read
-    /// from the bytes; no policy applies (the sample is not a job), only
+    /// from the bytes; no preset applies (the sample is not a job), only
     /// `MAX_SAMPLE`. The staged copy goes away once the library holds the
     /// bytes. Returns the SHA-256 and whether the sample is new.
     pub fn add_upload(
@@ -326,11 +327,11 @@ impl SampleAdmission for Intake {
         &self,
         source: &SampleSource,
         name: Option<&str>,
-        policy: &LoadedPolicy,
+        preset: &LoadedPreset,
         actor: &str,
     ) -> Result<JobSample, IntakeError> {
         if let Some(sha256) = &source.sha256 {
-            return self.library_sample(sha256, policy);
+            return self.library_sample(sha256, preset);
         }
         if let Some(upload) = &source.upload_id {
             let staged = self.staging.sealed(actor, upload).map_err(|e| {
@@ -344,7 +345,7 @@ impl SampleAdmission for Intake {
                 &staged.path,
                 &shown,
                 name.or(staged.name.as_deref()),
-                policy,
+                preset,
                 actor,
             )?;
             // The library holds the only copy now.
@@ -353,7 +354,7 @@ impl SampleAdmission for Intake {
         }
         if let Some(path) = &source.path {
             let path = Path::new(path);
-            return self.file_sample(path, &display_name(path), name, policy, actor);
+            return self.file_sample(path, &display_name(path), name, preset, actor);
         }
         Err(deny(FailureCode::SampleMissing, "the spec names no sample"))
     }

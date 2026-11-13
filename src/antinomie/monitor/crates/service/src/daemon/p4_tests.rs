@@ -11,7 +11,7 @@ use crate::{
     api::{
         error::ErrorCode,
         job::{JobState, Outcome},
-        ops::{Caller, Scope},
+        ops::Caller,
     },
     config::service::{DeleteAfter, OnDuplicate, Watch},
     server::{CallContext, Handler, Transport},
@@ -26,14 +26,16 @@ fn drop_folder(svc: &super::tests::Svc, name: &str) -> (PathBuf, Watch) {
     fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
     let watch = Watch {
         path: folder.clone(),
-        policy: "default".into(),
+        preset: "standard".into(),
         recursive: false,
         delete_after: DeleteAfter::Move,
         on_duplicate: None,
-        policy_by_dir: false,
+        preset_by_dir: false,
         allow_group_write: false,
         watch_rate: 10,
         permissions: Vec::new(),
+        policy: None,
+        policy_by_dir: None,
     };
     (folder, watch)
 }
@@ -57,7 +59,7 @@ fn names(dir: &std::path::Path) -> Vec<String> {
 }
 
 #[test]
-fn a_watched_file_becomes_a_queued_job_of_the_policys_actor() {
+fn a_watched_file_becomes_a_queued_job_of_the_presets_actor() {
     let svc = svc("watch-job", |_| {});
     let (folder, watch) = drop_folder(&svc, "drop-here");
     fs::write(folder.join("hello.sh"), SCRIPT).unwrap();
@@ -71,7 +73,7 @@ fn a_watched_file_becomes_a_queued_job_of_the_policys_actor() {
     assert_eq!(jobs.len(), 1, "{listed}");
     let job = &jobs[0];
     assert_eq!(job["state"], "queued");
-    assert_eq!(job["client_id"], "auto:policy-default");
+    assert_eq!(job["client_id"], "auto:policy-standard");
     assert_eq!(job["labels"]["watch"], "drop-here");
     assert_eq!(job["sample"]["type"], "sh");
     assert_eq!(job["sample"]["name"], "hello.sh");
@@ -85,7 +87,7 @@ fn a_watched_file_becomes_a_queued_job_of_the_policys_actor() {
     let sha = job["sample"]["sha256"].as_str().unwrap();
     let events = library.events(sha).unwrap();
     let added = events.first().expect("an Added entry");
-    assert_eq!(added.by, "auto:policy-default");
+    assert_eq!(added.by, "auto:policy-standard");
     let text = format!("{:?}", added.event);
     assert!(
         text.contains("Automation") && !text.contains("drop-here"),
@@ -95,9 +97,7 @@ fn a_watched_file_becomes_a_queued_job_of_the_policys_actor() {
 
 #[test]
 fn a_file_the_policy_does_not_accept_is_rejected_and_never_reaches_the_library() {
-    let svc = svc("watch-reject", |p| {
-        p.sample.accept_types = vec!["elf".into()]
-    });
+    let svc = svc("watch-reject", |p| p.accepts.types = vec!["elf".into()]);
     let (folder, watch) = drop_folder(&svc, "drop");
     fs::write(folder.join("script.sh"), SCRIPT).unwrap();
     let env = ServiceEnv(svc.service.clone());
@@ -159,11 +159,10 @@ fn a_duplicate_the_folder_denies_is_rejected_with_the_failure_code() {
 }
 
 #[test]
-fn a_policy_that_does_not_allow_the_actor_leaves_the_file_where_it_is() {
-    let svc = svc("watch-access", |p| {
-        p.access.clients = vec!["local:*".into()]
-    });
-    let (folder, watch) = drop_folder(&svc, "drop");
+fn a_watch_folder_whose_preset_is_gone_leaves_the_file_where_it_is() {
+    let svc = svc("watch-gone", |_| {});
+    let (folder, mut watch) = drop_folder(&svc, "drop");
+    watch.preset = "gone".into();
     fs::write(folder.join("a.sh"), SCRIPT).unwrap();
     let env = ServiceEnv(svc.service.clone());
     let mut watcher = Watcher::new(&svc.dir.join("data").join("inbox"));
@@ -177,7 +176,7 @@ fn a_policy_that_does_not_allow_the_actor_leaves_the_file_where_it_is() {
             .detail
             .as_deref()
             .unwrap()
-            .contains("access.clients")
+            .contains("does not exist")
     );
 }
 
@@ -212,7 +211,7 @@ fn the_watch_caller_holds_runs_submit_and_its_folder_permissions() {
 fn watch_and_gc_operations_check_their_permissions() {
     let svc = svc("ops-scopes", |_| {});
     let reader = CallContext {
-        caller: Caller::from_scopes("local:1", &[Scope::Read]),
+        caller: Caller::new("local:1", &[crate::api::ops::Permission::RunsSeeAll]),
         cancel: Default::default(),
         transport: Transport::Socket,
     };

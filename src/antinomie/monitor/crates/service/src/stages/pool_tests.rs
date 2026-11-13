@@ -78,7 +78,6 @@ fn make_held_rig(w: &W, workers: u32, triage: Hooked) -> Rig {
     let pool = HostPool::new(PoolEnv {
         store: Arc::clone(&store),
         lanes: LaneDir::new(&w.fx.dir.join("service")),
-        policies: Arc::new(w.fx.policies.clone()),
         triage: Arc::new(triage),
         tags: Arc::new(crate::stages::host::NoTags),
         evidence: crate::waiter::load_artifacts,
@@ -458,6 +457,7 @@ fn triage_plan() -> super::plan::HostPlan {
     super::plan::HostPlan {
         static_checks: Vec::new(),
         static_limit_min: None,
+        static_limits: Default::default(),
         required_checks: Vec::new(),
         triage: true,
         engines: Vec::new(),
@@ -541,9 +541,8 @@ fn an_item_at_two_point_one_times_its_estimate_is_stopped_at_twice() {
 #[test]
 fn time_in_the_engine_queue_does_not_count_against_a_static_item() {
     let w = world_with("pool-static-queue", |p| {
-        p.analysis.static_checks =
-            crate::api::spec::StaticChecks::Names(vec![crate::api::spec::StaticCheck::Metadata]);
-        p.analysis.required_stages = Vec::new();
+        p.static_analysis.triage_checks = vec![crate::api::spec::StaticCheck::Metadata];
+        p.required_stages = Vec::new();
     });
     let job = arrived(&w, 1);
     let entry = |state: &str| -> antinomie_monitor_core::analysis::AnalysisReport {
@@ -567,8 +566,8 @@ fn time_in_the_engine_queue_does_not_count_against_a_static_item() {
             .ok("rep-q");
     });
     let fresh = w.job(&job.id);
-    let frozen = w.fx.store.frozen_policy(&job.id).unwrap();
-    let plan = super::plan::hosted(&fresh, &frozen.policy);
+    let frozen = w.fx.store.frozen_preset(&job.id).unwrap();
+    let plan = super::plan::hosted(&frozen.preset);
     let work = Mutex::new(JobWork::new(plan, Outcome::Succeeded));
     let kind = ItemKind::Static(vec![
         antinomie_monitor_core::analysis::AnalysisKind::Metadata,
@@ -587,9 +586,8 @@ fn time_in_the_engine_queue_does_not_count_against_a_static_item() {
 #[test]
 fn t0471_a_static_item_is_stopped_at_the_deadline_and_waits_for_the_stop() {
     let w = world_with("pool-static-deadline", |p| {
-        p.analysis.static_checks =
-            crate::api::spec::StaticChecks::Names(vec![crate::api::spec::StaticCheck::Metadata]);
-        p.analysis.required_stages = Vec::new();
+        p.static_analysis.triage_checks = vec![crate::api::spec::StaticCheck::Metadata];
+        p.required_stages = Vec::new();
     });
     let job = arrived(&w, 1);
     let entry = |state: &str| -> antinomie_monitor_core::analysis::AnalysisReport {
@@ -614,8 +612,8 @@ fn t0471_a_static_item_is_stopped_at_the_deadline_and_waits_for_the_stop() {
         *keep.lock().unwrap() = Some(fake.sent_log());
     });
     let fresh = w.job(&job.id);
-    let frozen = w.fx.store.frozen_policy(&job.id).unwrap();
-    let plan = super::plan::hosted(&fresh, &frozen.policy);
+    let frozen = w.fx.store.frozen_preset(&job.id).unwrap();
+    let plan = super::plan::hosted(&frozen.preset);
     let work = Mutex::new(JobWork::new(plan, Outcome::Succeeded));
     let kind = ItemKind::Static(vec![
         antinomie_monitor_core::analysis::AnalysisKind::Metadata,

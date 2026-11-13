@@ -33,11 +33,11 @@ use antinomie_service::{
         failure::FailureCode,
         ids::{LaneId, Sha256Hex},
         job::{EndReason, JobSample, JobState, RecordingPhase},
-        ops::{Caller, Scope},
+        ops::{Caller, Permission},
         spec::{JobSpec, SampleSource},
     },
     clock::SystemClock,
-    config::{LoadedPolicy, Policy, PolicySet},
+    config::{LoadedPreset, Preset, PresetSet},
     lane::{LaneDir, LaneFile, ProcFs, Processes},
     stages::{
         Driven, Hosted, LaneEnv, LaneStages, NoHostChecks,
@@ -47,6 +47,13 @@ use antinomie_service::{
     waiter::{Phase, Waiter, phase},
 };
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
+
+/// What the job API 1 scopes `read` and `submit` became.
+const READ_SUBMIT: [Permission; 3] = [
+    Permission::RunsSeeAll,
+    Permission::SamplesAdd,
+    Permission::RunsSubmit,
+];
 
 const SCRIPT: &str = "#!/bin/sh\necho lane-stage-check\nsleep 1\necho done\n";
 
@@ -59,7 +66,7 @@ impl SampleAdmission for Admit {
         &self,
         _: &SampleSource,
         _: Option<&str>,
-        _: &LoadedPolicy,
+        _: &LoadedPreset,
         _: &str,
     ) -> Result<JobSample, IntakeError> {
         Ok(self.sample.clone())
@@ -208,18 +215,13 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
         architecture: None,
         name: "lane-check.sh".into(),
     };
-    let mut policy = Policy::default();
-    policy.vm.lane_vm = Some(vm_id.clone());
-    policy.sample.accept_types = vec!["sh".into(), "elf".into()];
-    policy.run.timeout_s = 30;
-    let policies = PolicySet::single(LoadedPolicy {
-        name: "default".into(),
-        digest: "test".into(),
-        policy,
-    });
+    let mut preset = Preset::default();
+    preset.accepts.types = vec!["sh".into(), "elf".into()];
+    preset.program.run_time_s = 30;
+    let policies = PresetSet::single(LoadedPreset::named("standard", "test", preset));
     let store = Store::open(&service).expect("store");
     let admit = Admit { sample };
-    let caller = Caller::from_scopes("local:1000", &[Scope::Read, Scope::Submit]);
+    let caller = Caller::new("local:1000", &READ_SUBMIT);
 
     let procs = ProcFs;
     for round in 1..=2 {
@@ -228,13 +230,13 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
             "labels": {"round": round.to_string()},
         }))
         .unwrap();
-        // Same sample twice: the duplicate rule of the default policy is `run`.
+        // Same sample twice: the duplicate rule of Standard is `run`.
         let submitted = store
             .submit(
                 &caller,
                 spec,
                 &SubmitContext {
-                    policies: &policies,
+                    presets: &policies,
                     intake: &admit,
                     limits: SubmitLimits::default(),
                     on_duplicate: None,
@@ -253,7 +255,7 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
             env: LaneEnv {
                 store: &store,
                 lanes: &lanes,
-                policies: &policies,
+                revert: Default::default(),
                 callers: &antinomie_service::config::callers::LocalOnly,
                 procs: &procs,
                 host: &NoHostChecks,
@@ -370,36 +372,32 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
             1_794_000_000_000,
         ))
         .unwrap();
-    let mut policy = Policy::default();
-    policy.vm.lane_vm = Some(vm_id.clone());
-    policy.sample.accept_types = vec!["sh".into()];
-    policy.run.timeout_s = 60;
+    let mut policy = Preset::default();
+    policy.accepts.types = vec!["sh".into()];
+    policy.program.run_time_s = 60;
     // The host stages on the private data directory: a few static checks in
     // bubblewrap, the Triage scan, no detection engines (the private
     // directory has no rule packs), three report formats.
-    policy.analysis.static_checks = antinomie_service::api::spec::StaticChecks::Names(vec![
+    policy.static_analysis.triage_checks = vec![
         antinomie_service::api::spec::StaticCheck::Metadata,
         antinomie_service::api::spec::StaticCheck::Strings,
         antinomie_service::api::spec::StaticCheck::Entropy,
-    ]);
-    policy.analysis.static_time_limit_min = Some(1);
-    policy.analysis.detection = antinomie_service::config::policy::Detection {
+    ];
+    policy.static_analysis.time_limit_per_tool_min = 1;
+    policy.detection = antinomie_service::config::preset::Detection {
         yara: false,
         sigma: false,
         ids: false,
+        ..Default::default()
     };
     policy.report.formats = vec![
         antinomie_service::api::spec::ReportFormat::Html,
         antinomie_service::api::spec::ReportFormat::Json,
         antinomie_service::api::spec::ReportFormat::Md,
     ];
-    let policies = PolicySet::single(LoadedPolicy {
-        name: "default".into(),
-        digest: "test".into(),
-        policy,
-    });
+    let policies = PresetSet::single(LoadedPreset::named("standard", "test", policy));
     let store = Store::open(&service).expect("store");
-    let caller = Caller::from_scopes("local:1000", &[Scope::Read, Scope::Submit]);
+    let caller = Caller::new("local:1000", &READ_SUBMIT);
     let procs = ProcFs;
 
     // job name, script, timeout_s, what must happen
@@ -419,7 +417,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
         let sha = sample.sha256.to_string();
         let spec: JobSpec = serde_json::from_value(serde_json::json!({
             "sample": {"sha256": sha},
-            "overrides": {"timeout_s": timeout_s},
+            "overrides": {"program": {"run_time_s": timeout_s}},
         }))
         .unwrap();
         let admit = Admit { sample };
@@ -428,7 +426,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
                 &caller,
                 spec,
                 &SubmitContext {
-                    policies: &policies,
+                    presets: &policies,
                     intake: &admit,
                     limits: SubmitLimits::default(),
                     on_duplicate: None,
@@ -455,7 +453,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
                         .cancel(
                             &job.id,
                             Some("vm test"),
-                            &Caller::from_scopes("local:1000", &[Scope::Read, Scope::Submit]),
+                            &Caller::new("local:1000", &READ_SUBMIT),
                         )
                         .expect("cancel");
                 });
@@ -465,7 +463,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
                 env: LaneEnv {
                     store: &store,
                     lanes: &lanes,
-                    policies: &policies,
+                    revert: Default::default(),
                     callers: &antinomie_service::config::callers::LocalOnly,
                     procs: &procs,
                     host: &NoHostChecks,

@@ -73,7 +73,7 @@ pub trait LaneRunner {
     fn profile(&mut self) -> Option<LaneProfile> {
         None
     }
-    /// The `vm.lane_vm` of the job's policy.
+    /// The lane VM of the job's lane group (`[lanes] vm`).
     fn lane_vm(&self, _job: &Job) -> Option<String> {
         None
     }

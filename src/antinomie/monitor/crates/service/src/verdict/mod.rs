@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The assessment and the label (design 4.9): the facts a finished job has,
-//! the default mapping to a label, and the policy's own rules.
+//! the default mapping to a label, and the preset's own rules.
 //!
 //! `clean_observed` is deliberately not "clean": it says that nothing was seen
 //! in this run. The `basis` sentence always carries the reason for the label,
@@ -15,7 +15,7 @@ use crate::{
         assessment::{Assessment, AssessmentKind, Counts, DetectionHit, KeyBehaviour, Label, Tier},
         job::EndReason,
     },
-    config::policy::{VerdictMapping, VerdictPolicy},
+    config::preset::{VerdictMapping, VerdictSettings},
 };
 use antinomie_monitor_core::report::{Detection, Technique};
 pub use expr::{Expr, ExprError};
@@ -187,13 +187,13 @@ pub struct Verdict {
     pub basis: String,
 }
 
-/// A policy's mapping, compiled: the default of 4.9.2 or the rules.
+/// A preset's mapping, compiled: the default of 4.9.2 or the rules.
 #[derive(Clone, Debug)]
 pub struct Mapping {
     rules: Vec<(Expr, Label, Option<u8>, String)>,
 }
 
-/// Why a policy's mapping cannot be used.
+/// Why a preset's mapping cannot be used.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MappingError {
     #[error("verdict.mapping: `{0}` is not a mapping; the only name is `default`")]
@@ -218,9 +218,9 @@ impl MappingError {
 }
 
 impl Mapping {
-    /// Compile the policy's `[verdict]`. An empty rule list is the default
+    /// Compile the preset's `[verdict]`. An empty rule list is the default
     /// mapping.
-    pub fn compile(policy: &VerdictPolicy) -> Result<Self, MappingError> {
+    pub fn compile(policy: &VerdictSettings) -> Result<Self, MappingError> {
         match &policy.mapping {
             VerdictMapping::Name(name) if name == "default" => {}
             VerdictMapping::Name(name) => return Err(MappingError::UnknownName(name.clone())),

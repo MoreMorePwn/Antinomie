@@ -54,7 +54,8 @@ pub struct InitPlan {
     pub base_identity: String,
     pub snapshot: String,
     pub replace: bool,
-    /// The guest revision the policies need (15 when one allows core dumps).
+    /// The guest revision the preset files need (15 when one takes a core on
+    /// exit, 16 for a trigger core).
     pub need_revision: Option<u32>,
 }
 

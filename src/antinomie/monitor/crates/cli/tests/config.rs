@@ -100,32 +100,47 @@ fn write(data: &std::path::Path, name: &str, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
-const POLICY: &str = r#"
-[vm]
-lane_vm = "auto-1"
+const PRESET: &str = r#"
+title = "CI"
+[program]
+run_time_s = 120
 [network]
-allowed_routes = ["drop", "inet_sim"]
+route = "inet_sim"
 "#;
 
 #[test]
 fn validate_accepts_good_files_and_a_data_directory_with_none() {
     let root = scratch("validate-ok");
     let data = root.join("data");
-    // Nothing written yet: the defaults, with a warning that no policy exists.
+    // Nothing written yet: the defaults and the built-in presets, with a
+    // warning that the lane VM is not made yet.
     let (code, out) = cli(&data, &["validate"]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(out["result"]["ok"], true);
     assert_eq!(out["result"]["problems"][0]["severity"], "warning");
+    assert_eq!(
+        out["result"]["presets"],
+        serde_json::json!([
+            "deep",
+            "interactive",
+            "live-network",
+            "quick-look",
+            "standard"
+        ])
+    );
     assert!(!data.exists(), "validate reads only");
 
     write(&data, "service.toml", "[queue]\nmax_queued = 10\n");
-    write(&data, "policies/default.toml", POLICY);
-    write(&data, "policies/ci.toml", POLICY);
+    write(&data, "presets/ci.toml", PRESET);
+    write(&data, "presets/nightly.toml", PRESET);
     let (code, out) = cli(&data, &["validate"]);
     assert_eq!(code, 0, "{out}");
-    assert_eq!(
-        out["result"]["policies"],
-        serde_json::json!(["ci", "default"])
+    let presets = out["result"]["presets"].as_array().unwrap();
+    assert_eq!(presets.len(), 7, "{out}");
+    let files = out["result"]["files"].to_string();
+    assert!(
+        files.contains("presets/ci.toml") && files.contains("built-in/standard"),
+        "{files}"
     );
     // The lane VM is not in this data directory: a warning, not an error.
     let warnings = out["result"]["problems"].as_array().unwrap();
@@ -135,8 +150,9 @@ fn validate_accepts_good_files_and_a_data_directory_with_none() {
             .iter()
             .any(|p| p["message"].as_str().unwrap().contains("auto-1"))
     );
-    let (code, one) = cli(&data, &["validate", "--policy", "ci"]);
+    let (code, one) = cli(&data, &["validate", "--preset", "ci"]);
     assert_eq!(code, 0, "{one}");
+    assert_eq!(one["result"]["presets"], serde_json::json!(["ci"]));
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -147,10 +163,10 @@ fn validate_reports_every_problem_with_its_line_and_exits_4() {
     write(&data, "service.toml", "[daemon]\nlanes = 5\n");
     write(
         &data,
-        "policies/bad.toml",
-        "[vm]\nlane_vm = \"auto-1\"\n[network]\nallowed_routes = [\"drop\", \"internet\"]\n[run]\ntimeout_s = 9000\n",
+        "presets/bad.toml",
+        "title = \"Bad\"\n[network]\nroute = \"internet\"\n[program]\nrun_time_s = 9000\n",
     );
-    write(&data, "policies/typo.toml", "[repart]\nx = 1\n");
+    write(&data, "presets/typo.toml", "[repart]\nx = 1\n");
     let (code, out) = cli(&data, &["validate"]);
     assert_eq!(code, 4, "{out}");
     assert_eq!(out["error"]["code"], "invalid_argument");
@@ -163,16 +179,19 @@ fn validate_reports_every_problem_with_its_line_and_exits_4() {
             .clone()
     };
     assert_eq!(find("service.toml", "must be 1 to 4")["line"], 2);
-    assert_eq!(find("policies/bad.toml", "not in v1")["line"], 4);
-    assert_eq!(find("policies/bad.toml", "above run.max_run_s")["line"], 6);
-    assert_eq!(find("policies/typo.toml", "unknown field")["line"], 1);
     assert_eq!(
-        find("policies/typo.toml", "unknown field")["severity"],
+        find("presets/bad.toml", "not set up on this node")["line"],
+        3
+    );
+    assert_eq!(find("presets/bad.toml", "5 to 1800 seconds")["line"], 5);
+    assert_eq!(find("presets/typo.toml", "unknown field")["line"], 1);
+    assert_eq!(
+        find("presets/typo.toml", "unknown field")["severity"],
         "error"
     );
 
-    // --policy limits the policy checks to one file; the service file is still read.
-    let (code, one) = cli(&data, &["validate", "--policy", "typo"]);
+    // --preset limits the preset checks to one file; the service file is still read.
+    let (code, one) = cli(&data, &["validate", "--preset", "typo"]);
     assert_eq!(code, 4);
     let files: Vec<_> = one["error"]["details"]["problems"]
         .as_array()
@@ -181,10 +200,10 @@ fn validate_reports_every_problem_with_its_line_and_exits_4() {
         .map(|p| p["file"].as_str().unwrap().to_owned())
         .collect();
     assert!(
-        files.contains(&"policies/typo.toml".to_owned())
-            && !files.contains(&"policies/bad.toml".to_owned())
+        files.contains(&"presets/typo.toml".to_owned())
+            && !files.contains(&"presets/bad.toml".to_owned())
     );
-    let (code, none) = cli(&data, &["validate", "--policy", "nothing"]);
+    let (code, none) = cli(&data, &["validate", "--preset", "nothing"]);
     assert_eq!(code, 4, "{none}");
     std::fs::remove_dir_all(&root).unwrap();
 }
@@ -195,8 +214,8 @@ fn validate_prints_file_line_and_message_for_a_person() {
     let data = root.join("data");
     write(
         &data,
-        "policies/bad.toml",
-        "[vm]\nlane_vm = \"a\"\n[sample]\nmax_sample_mib = 999\n",
+        "presets/bad.toml",
+        "title = \"Bad\"\n\n[accepts]\nmax_sample_mib = 999\n",
     );
     let output = Command::new(env!("CARGO_BIN_EXE_antinomie-cli"))
         .args([
@@ -212,8 +231,26 @@ fn validate_prints_file_line_and_message_for_a_person() {
     assert_eq!(output.status.code(), Some(4));
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(
-        text.contains("policies/bad.toml:4:1: error: sample.max_sample_mib: must be 1 to 256"),
+        text.contains("presets/bad.toml:4:1: error: accepts.max_sample_mib: must be 1 to 256"),
         "{text}"
     );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn validate_refuses_a_0_9_0_policies_folder_naming_the_new_keys() {
+    let root = scratch("validate-policies");
+    let data = root.join("data");
+    write(
+        &data,
+        "policies/default.toml",
+        "[run]\ntimeout_s = 300\nallow_root = false\n",
+    );
+    let (code, out) = cli(&data, &["validate"]);
+    assert_eq!(code, 4, "{out}");
+    let text = out["error"]["details"]["problems"].to_string();
+    assert!(text.contains("policies/ is replaced by presets/"), "{text}");
+    assert!(text.contains("program.run_time_s"), "{text}");
+    assert!(text.contains("run.as_root"), "{text}");
     std::fs::remove_dir_all(&root).unwrap();
 }

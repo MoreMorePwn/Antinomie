@@ -7,7 +7,7 @@ use crate::{
         job::{EndReason, Job, JobState, Outcome, WaitingFor},
         status::PauseReason,
     },
-    config::{Policy, service::Resources},
+    config::{Preset, service::Resources},
     lane::tests::VM,
     resources::{Floors, Governor, LOW_MEMORY_ALERT_EVERY_MS, Probes, ResourceChecks, Shortage},
     stages::{
@@ -140,7 +140,7 @@ fn memory_below_the_floor_makes_a_job_wait_for_resources() {
     let machine = Machine::healthy();
     let fx = Fx::new("res-mem");
     let job = job(&fx);
-    let policy = Policy::default();
+    let policy = Preset::default();
     let c = checks(&machine, true);
     assert_eq!(c.check(&job, &policy), Ok(()));
     *machine.mem_mib.lock().unwrap() = Some(3071);
@@ -162,8 +162,8 @@ fn memory_below_the_floor_makes_a_job_wait_for_resources() {
 fn disk_must_hold_the_floor_and_the_jobs_estimate_on_every_path() {
     let machine = Machine::healthy();
     let fx = Fx::new("res-disk");
-    let mut job = job(&fx);
-    let policy = Policy::default();
+    let job = job(&fx);
+    let policy = Preset::default();
     let c = checks(&machine, true);
     // 20 GiB floor + 4 GiB capture quota.
     machine.disk("/data", 23);
@@ -180,17 +180,13 @@ fn disk_must_hold_the_floor_and_the_jobs_estimate_on_every_path() {
     let (_, text) = wait_of(c.check(&job, &policy));
     assert!(text.contains("/rec"), "{text}");
     machine.disk("/rec", 500);
-    // A memory dump adds the VM's RAM (1 GiB here), by policy or by the spec.
-    machine.disk("/data", 24);
-    job.spec.overrides.memory_dump = Some(true);
-    assert!(c.check(&job, &policy).is_err());
-    machine.disk("/data", 25);
-    assert_eq!(c.check(&job, &policy), Ok(()));
-    let mut dumping = Policy::default();
-    dumping.evidence.memory_dump = true;
-    job.spec.overrides.memory_dump = None;
+    // A memory dump adds the VM's RAM (1 GiB here).
+    let mut dumping = Preset::default();
+    dumping.dumps.memory_dump_on_exit = true;
     machine.disk("/data", 24);
     assert!(c.check(&job, &dumping).is_err());
+    machine.disk("/data", 25);
+    assert_eq!(c.check(&job, &dumping), Ok(()));
 }
 
 #[test]
@@ -199,7 +195,7 @@ fn kvm_is_a_dependency_when_it_is_required() {
     machine.kvm.store(false, Ordering::SeqCst);
     let fx = Fx::new("res-kvm");
     let job = job(&fx);
-    let policy = Policy::default();
+    let policy = Preset::default();
     let (why, text) = wait_of(checks(&machine, true).check(&job, &policy));
     assert_eq!(why, WaitingFor::Dependency);
     assert!(text.contains("/dev/kvm"));
@@ -470,7 +466,7 @@ fn a_floor_that_fails_after_the_claim_sends_the_job_back_to_the_queue() {
 struct Draining(Arc<AtomicBool>);
 
 impl HostChecks for Draining {
-    fn check(&self, _: &Job, _: &Policy) -> Result<(), HostProblem> {
+    fn check(&self, _: &Job, _: &Preset) -> Result<(), HostProblem> {
         Ok(())
     }
     fn low_disk(&self) -> Option<String> {

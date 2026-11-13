@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `job.retry` (design 5.3): a new job from a finished job's spec. The spec is
-//! the one the client sent (the canonical submitted spec, 5.2), with the
-//! sample now named by its library hash (an upload or a local path was
-//! consumed by the first job) and the idempotency key dropped. `overrides`
-//! replace the original's override fields one by one. The new job goes through
-//! the whole of `job.submit` (policy, ceilings, quotas) under the current
-//! policy, except the duplicate rule: a retry asks to run again. Its
-//! `repeat_of` is the old job.
+//! `job.retry` (design 5.3; Run again in the presets specification): a new job
+//! from a finished one. The spec is the one the client sent (the canonical
+//! submitted spec, 5.2), with the sample now named by its library hash (an
+//! upload or a local path was consumed by the first job) and the idempotency
+//! key dropped. A run of an unchanged preset runs again with the preset as it
+//! is now; a Custom run runs again with its resolved options (every key of
+//! its frozen preset as overrides of the preset it was based on), so it is
+//! Custom again. `overrides` (a partial preset) are merged on top. The new job
+//! goes through the whole of `job.submit` (preset, permissions, node, limits),
+//! except the duplicate rule: a retry asks to run again. Its `repeat_of` is
+//! the old job.
 
 use super::{R, Store, SubmitContext, db, model::from_json};
 use crate::api::{
@@ -16,7 +19,19 @@ use crate::api::{
     ops::{Caller, Permission},
     spec::{JobSpec, Overrides, SampleSource},
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+/// Merge `changes` into `into`, table by table.
+fn merge(into: &mut Map<String, Value>, changes: &Map<String, Value>) {
+    for (key, change) in changes {
+        match (into.get_mut(key), change) {
+            (Some(Value::Object(inner)), Value::Object(more)) => merge(inner, more),
+            _ => {
+                into.insert(key.clone(), change.clone());
+            }
+        }
+    }
+}
 
 impl Store {
     /// `job.retry`. The old job must be terminal and have an archived sample.
@@ -56,19 +71,27 @@ impl Store {
                 |row| row.get(0),
             )
             .map_err(db)?;
+        let frozen = self.frozen_preset(id)?;
         let mut value: Value = from_json(&canon)?;
         if let Some(object) = value.as_object_mut() {
             object.remove("idempotency_key");
+            if let Some(base) = &frozen.based_on {
+                // A Custom run: its resolved options onto the preset it was
+                // based on.
+                object.insert("policy".into(), Value::String(base.name.clone()));
+                object.insert("overrides".into(), frozen.preset.to_json());
+                if let Some(Value::Object(options)) = object.get_mut("overrides") {
+                    for key in crate::config::preset::NOT_RUN_OPTIONS {
+                        options.remove(key);
+                    }
+                }
+            }
             if let Some(changes) = overrides {
-                let changes = serde_json::to_value(changes).map_err(super::internal)?;
                 let merged = object
                     .entry("overrides")
                     .or_insert_with(|| Value::Object(Default::default()));
-                if let (Some(merged), Some(changes)) = (merged.as_object_mut(), changes.as_object())
-                {
-                    for (key, change) in changes {
-                        merged.insert(key.clone(), change.clone());
-                    }
+                if let Some(merged) = merged.as_object_mut() {
+                    merge(merged, &changes.0);
                 }
             }
         }

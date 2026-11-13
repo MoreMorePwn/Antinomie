@@ -4,7 +4,7 @@
 //!
 //! * the owner on the local socket, `local:<uid>`, holds every permission
 //!   (as it held every scope);
-//! * a watch folder submits as `auto:policy-<policy>` with `runs.submit` and
+//! * a watch folder submits as `auto:policy-<preset>` with `runs.submit` and
 //!   the folder's `permissions` from `service.toml`.
 //!
 //! Prechecks asks [`CallerLookup`] again when a run starts, so a permission
@@ -22,7 +22,7 @@ pub const LOCAL_PREFIX: &str = "local:";
 /// The client id prefix of a watch folder.
 pub const WATCH_PREFIX: &str = "auto:policy-";
 
-/// The caller a watch folder acts as: a client named for the policy, with
+/// The caller a watch folder acts as: a client named for the preset, with
 /// `runs.submit` and the folder's own `permissions`.
 pub fn watch_caller(policy: &str, permissions: &[Permission]) -> Caller {
     let mut caller = Caller::new(format!("{WATCH_PREFIX}{policy}"), &[Permission::RunsSubmit]);
@@ -53,7 +53,7 @@ impl CallerLookup for LocalOnly {
 
 /// The permissions `client_id` holds under `config`: every one for the
 /// local owner; for a watch client `runs.submit` and the `permissions` of the
-/// folders that submit to its policy (or choose it by subfolder) and, when
+/// folders that submit to its preset (or choose it by subfolder) and, when
 /// the job carries the `watch` label, whose label is that one.
 pub fn permissions_now(
     config: &ServiceConfig,
@@ -67,7 +67,7 @@ pub fn permissions_now(
     let label = labels.get("watch");
     let mut held: BTreeSet<Permission> = [Permission::RunsSubmit].into();
     for folder in &config.inbox.watch {
-        if (folder.policy == policy || folder.policy_by_dir)
+        if (folder.preset == policy || folder.preset_by_dir)
             && label.is_none_or(|label| *label == folder.label())
         {
             held.extend(folder.permissions.iter().copied());
@@ -82,7 +82,7 @@ mod tests {
     use crate::config::service::Watch;
 
     fn folder(path: &str, policy: &str, permissions: &[Permission]) -> Watch {
-        let mut watch: Watch = toml::from_str(&format!("path = {path:?}\npolicy = {policy:?}"))
+        let mut watch: Watch = toml::from_str(&format!("path = {path:?}\npreset = {policy:?}"))
             .expect("a watch folder");
         watch.permissions = permissions.to_vec();
         watch

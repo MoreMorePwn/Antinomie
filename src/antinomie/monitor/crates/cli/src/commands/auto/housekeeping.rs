@@ -71,7 +71,7 @@ fn watch_text(list: &Value) -> String {
             };
             vec![
                 cell(f, "path"),
-                cell(f, "policy"),
+                cell(f, "preset"),
                 format!("{}{detail}", cell(f, "state")),
                 cell(f, "taken"),
                 cell(f, "rejected"),
@@ -85,7 +85,7 @@ fn watch_text(list: &Value) -> String {
     }
     let mut out = table(
         &[
-            "FOLDER", "POLICY", "STATE", "TAKEN", "REJECTED", "REFUSED", "WAITING",
+            "FOLDER", "PRESET", "STATE", "TAKEN", "REJECTED", "REFUSED", "WAITING",
         ],
         &rows,
     );
@@ -119,7 +119,7 @@ pub fn watch(command: &Watch, context: &Context) -> Result<Reply, CliError> {
                 .iter()
                 .map(|w| {
                     json!({
-                        "path": w.path, "policy": w.policy, "state": "daemon not running",
+                        "path": w.path, "preset": w.preset, "state": "daemon not running",
                         "detail": null, "taken": 0, "rejected": 0, "refused": [],
                         "pending": 0,
                     })

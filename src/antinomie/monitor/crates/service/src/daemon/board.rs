@@ -181,7 +181,7 @@ impl LaneBoard {
     }
 
     /// Whether `job` goes to `me` now (see the module text). `lane_vm` is the
-    /// job's policy's `vm.lane_vm`.
+    /// lane VM of the job's lane group (`[lanes] vm`).
     pub fn decide(
         &self,
         me: &LaneId,
@@ -194,7 +194,7 @@ impl LaneBoard {
             let Some(mine) = posts.get(me) else {
                 return Eligibility::Ready;
             };
-            // The base of the policy's lane VM, when it is one of the lanes'.
+            // The base of the lane group's VM, when it is one of the lanes'.
             let base = lane_vm.and_then(|name| {
                 posts.values().find_map(|post| {
                     post.profile

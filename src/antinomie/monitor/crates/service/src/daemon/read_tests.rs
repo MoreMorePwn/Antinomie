@@ -6,10 +6,7 @@
 
 use super::tests::{Svc, call, me, socket_ctx, submit_upload, svc, svc_logged, upload};
 use crate::{
-    api::{
-        error::ErrorCode,
-        ops::{Caller, Scope},
-    },
+    api::{error::ErrorCode, ops::Caller},
     query::{
         ReadContext,
         request::RecordingRead,
@@ -76,7 +73,7 @@ fn rwx_run(data: &Data) -> Run {
 
 fn reader() -> CallContext {
     CallContext {
-        caller: Caller::from_scopes("local:1", &[Scope::Read]),
+        caller: Caller::new("local:1", &[crate::api::ops::Permission::RunsSeeAll]),
         cancel: Default::default(),
         transport: Transport::Socket,
     }
@@ -265,7 +262,13 @@ fn bytes_the_sample_produced_need_the_sensitive_scope_over_the_socket() {
 fn a_reader_without_read_is_refused_every_recording_read() {
     let svc = svc("noread", |_| {});
     let nobody = CallContext {
-        caller: Caller::from_scopes("local:2", &[Scope::Submit]),
+        caller: Caller::new(
+            "local:2",
+            &[
+                crate::api::ops::Permission::SamplesAdd,
+                crate::api::ops::Permission::RunsSubmit,
+            ],
+        ),
         cancel: Default::default(),
         transport: Transport::Socket,
     };

@@ -27,9 +27,15 @@ pub fn actor_of(job: &Job) -> String {
 }
 
 /// The actor of an entry the service writes on its own account (a tag it
-/// sets on a sample): `auto:policy-<name>`, else the job's own actor.
+/// sets on a sample): `auto:policy-<preset>` (the preset a Custom run was
+/// based on), else the job's own actor.
 pub fn automation_actor(job: &Job) -> String {
-    let actor = format!("auto:policy-{}", job.policy.name);
+    let preset = job
+        .policy
+        .based_on
+        .as_ref()
+        .map_or(&job.policy.name, |base| &base.name);
+    let actor = format!("auto:policy-{preset}");
     if actor::is_valid(&actor) {
         actor
     } else {
@@ -37,24 +43,14 @@ pub fn automation_actor(job: &Job) -> String {
     }
 }
 
-fn route_name(route: Route) -> String {
-    serde_json::to_value(route)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
 /// Write the `automation` entry of a job to its sample's custody log, under
-/// the job's actor. The job must have its sample (`job.sample`).
-pub fn record_automation(data_dir: &Path, job: &Job) -> Result<(), String> {
+/// the job's actor, with the route its preset uses. The job must have its
+/// sample (`job.sample`).
+pub fn record_automation(data_dir: &Path, job: &Job, route: &Route) -> Result<(), String> {
     let sample = job.sample.as_ref().ok_or("the job has no sample yet")?;
     let by = actor_of(job);
     let library = Library::open_patient(data_dir)?.with_actor(&by)?;
-    let route = job
-        .spec
-        .overrides
-        .route
-        .map_or("drop".to_owned(), route_name);
+    let route = route.to_string();
     library.record_event(
         sample.sha256.as_str(),
         &by,

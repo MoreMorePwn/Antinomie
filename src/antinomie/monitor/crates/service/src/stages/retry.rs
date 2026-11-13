@@ -3,11 +3,11 @@
 //!
 //! A failure is retried when all of these hold:
 //!
-//! 1. its code is in the policy's `retry_on` (default `vm_start_failed`,
+//! 1. its code is in the preset's `retry_on` (default `vm_start_failed`,
 //!    `guest_unreachable`, `upload_failed`, `guest_lost`);
 //! 2. its code is not **permanent**. Some errors cannot be cured by running
-//!    the same job again, and the policy cannot make them retryable: a bad
-//!    sample or policy, a missing base or VM, a revert that failed (the lane
+//!    the same job again, and the preset cannot make them retryable: a bad
+//!    sample or preset, a missing base or VM, a revert that failed (the lane
 //!    is quarantined instead), a changed lane, a cancel, a desktop run with a
 //!    core dump. `launch_failed` is permanent unless the engine's words name a
 //!    transient cause (terminal capacity);
@@ -15,20 +15,20 @@
 //!    sample that kills the guest twice is final, and the job says so;
 //! 4. the job has an attempt left (the store decides: `max_attempts`).
 //!
-//! The wait before the next attempt is the policy's `backoff_s` list (the
+//! The wait before the next attempt is the preset's `backoff_s` list (the
 //! first entry after the first failure, the last entry for every later one),
 //! plus or minus 20 percent. The jitter comes from the job id and the attempt,
 //! so it is spread across jobs and repeatable in a test.
 use crate::{
     api::{failure::Failure, failure::FailureCode, ids::JobId},
-    config::policy::RetryPolicy,
+    config::preset::Retry,
 };
 use std::hash::{Hash, Hasher};
 
 /// Why a failure is final.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FinalReason {
-    /// The policy does not list the code.
+    /// The preset does not list the code.
     NotListed,
     /// Running the same job again cannot help.
     Permanent,
@@ -55,7 +55,7 @@ pub enum Decision {
     Final(FinalReason),
 }
 
-/// Codes no policy can make retryable.
+/// Codes no preset can make retryable.
 fn permanent(code: FailureCode) -> bool {
     matches!(
         code,
@@ -100,12 +100,7 @@ pub fn transient_launch(failure: &Failure) -> bool {
 }
 
 /// `history` is the codes of the job's earlier failed attempts, oldest first.
-pub fn decide(
-    failure: &Failure,
-    policy: &RetryPolicy,
-    history: &[FailureCode],
-    job: &JobId,
-) -> Decision {
+pub fn decide(failure: &Failure, policy: &Retry, history: &[FailureCode], job: &JobId) -> Decision {
     let code = failure.code;
     if permanent(code) {
         return Decision::Final(FinalReason::Permanent);
@@ -125,7 +120,7 @@ pub fn decide(
 }
 
 /// The wait before the next attempt after the `failures`-th failure.
-pub fn backoff(policy: &RetryPolicy, failures: usize, job: &JobId) -> u32 {
+pub fn backoff(policy: &Retry, failures: usize, job: &JobId) -> u32 {
     let Some(last) = policy.backoff_s.len().checked_sub(1) else {
         return 0;
     };
@@ -153,7 +148,7 @@ mod tests {
 
     #[test]
     fn listed_transient_codes_are_retried_with_the_first_backoff() {
-        let policy = RetryPolicy::default();
+        let policy = Retry::default();
         for code in [
             FailureCode::VmStartFailed,
             FailureCode::GuestUnreachable,
@@ -174,7 +169,7 @@ mod tests {
 
     #[test]
     fn a_code_the_policy_does_not_list_is_final() {
-        let policy = RetryPolicy::default();
+        let policy = Retry::default();
         assert_eq!(
             decide(&failure(FailureCode::RecordingFailed), &policy, &[], &job()),
             Decision::Final(FinalReason::NotListed)
@@ -187,9 +182,9 @@ mod tests {
 
     #[test]
     fn permanent_codes_stay_final_even_when_the_policy_lists_them() {
-        let policy = RetryPolicy {
+        let policy = Retry {
             retry_on: FailureCode::ALL.to_vec(),
-            ..RetryPolicy::default()
+            ..Retry::default()
         };
         for code in [
             FailureCode::SampleMissing,
@@ -215,7 +210,7 @@ mod tests {
 
     #[test]
     fn launch_failed_is_retried_only_for_a_transient_cause() {
-        let mut policy = RetryPolicy::default();
+        let mut policy = Retry::default();
         policy.retry_on.push(FailureCode::LaunchFailed);
         let refused = Failure::new(
             FailureCode::LaunchFailed,
@@ -239,14 +234,14 @@ mod tests {
         ));
         // Not listed: final whatever the text says.
         assert_eq!(
-            decide(&busy, &RetryPolicy::default(), &[], &job()),
+            decide(&busy, &Retry::default(), &[], &job()),
             Decision::Final(FinalReason::NotListed)
         );
     }
 
     #[test]
     fn guest_lost_and_recording_failed_are_allowed_once() {
-        let mut policy = RetryPolicy::default();
+        let mut policy = Retry::default();
         policy.retry_on.push(FailureCode::RecordingFailed);
         for code in [FailureCode::GuestLost, FailureCode::RecordingFailed] {
             assert!(matches!(
@@ -272,7 +267,7 @@ mod tests {
 
     #[test]
     fn the_backoff_list_is_walked_then_its_last_entry_repeats() {
-        let policy = RetryPolicy {
+        let policy = Retry {
             max_attempts: 5,
             backoff_s: vec![30, 120],
             retry_on: vec![],
@@ -281,7 +276,7 @@ mod tests {
         assert!((24..=36).contains(&backoff(&policy, 1, &j)));
         assert!((96..=144).contains(&backoff(&policy, 2, &j)));
         assert!((96..=144).contains(&backoff(&policy, 9, &j)));
-        let none = RetryPolicy {
+        let none = Retry {
             backoff_s: vec![],
             ..policy
         };
@@ -290,7 +285,7 @@ mod tests {
 
     #[test]
     fn the_jitter_is_spread_over_jobs_and_repeatable() {
-        let policy = RetryPolicy {
+        let policy = Retry {
             max_attempts: 3,
             backoff_s: vec![1000],
             retry_on: vec![],

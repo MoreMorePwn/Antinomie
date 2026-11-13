@@ -3,30 +3,34 @@
 //! ("How a submit is checked, in order"), on the run as it will run:
 //!
 //! 1. the caller may submit at all (`runs.submit`; [`super::submit`]);
-//! 2. the policy (the preset of 0.9.0) is offered to the caller, else
-//!    `preset_denied`;
-//! 3. every value is in its range (`JobSpec::validate_shape`, before this);
-//! 4. every risky option has its permission, else `permission_denied` naming
+//! 2. the request's shape (`JobSpec::validate_shape`);
+//! 3. the preset exists, else `preset_denied` ([`super::submit`]; `offered_to`
+//!    names roles, and 0.9.0 callers have none, so it locks nothing);
+//! 4. the overrides resolve onto the preset (the Custom rule) and every value
+//!    is valid, else `invalid_argument` naming the field; a key 0.9.0 reserves
+//!    away from its default is `unsupported` ("arrives with 0.9.1");
+//! 5. every risky option has its permission, else `permission_denied` naming
 //!    them in `details.needs`;
-//! 5. the node has what the run needs, else `unavailable_on_node`;
-//! 6. the values are within the limits, else `limit_exceeded`;
-//! 7. last, the policy's own ceilings and switches, which presets replace
-//!    (card P-A2): a value outside them is `invalid_argument` naming the
-//!    field, and nothing is stored.
+//! 6. the node has what the run needs, else `unavailable_on_node`;
+//! 7. the values are within the caller's limits, else `limit_exceeded`.
 //!
-//! A refusal of steps 2 to 6 becomes a `rejected` job carrying the code, the
-//! field and the details; nothing here touches the store. The sample checks
-//! (intake) come after these, because intake archives the sample: a refused
-//! run adds nothing to the library.
+//! Steps 3 and 4 store nothing; a refusal of steps 5 to 7 becomes a
+//! `rejected` job carrying the code, the field and the details. Nothing here
+//! touches the store. The sample checks (intake) come after these, because
+//! intake archives the sample: a refused run adds nothing to the library.
 
 use crate::{
     api::{
-        error::ApiError,
+        error::{ApiError, ErrorCode, ErrorReason},
         failure::FailureCode,
-        ops::{Caller, Permission, Scope},
-        spec::{CoreDump, DetectionSelection, JobSpec, Overrides, Route, RunAs, RunAsName, RunIn},
+        ops::{Caller, Permission},
+        spec::{JobSpec, Overrides, Route},
     },
-    config::{LoadedPolicy, Policy},
+    config::{
+        LoadedPreset, Preset,
+        preset::changed_options,
+        validate::{self, Severity},
+    },
 };
 use serde_json::{Map, Value, json};
 
@@ -56,8 +60,8 @@ impl Reject {
     }
 }
 
-/// Why `resolve` refused: a `rejected` job, or a request error (a value
-/// outside the policy) that stores nothing.
+/// Why `resolve` refused: a `rejected` job, or a request error (a value out
+/// of range, a reserved key) that stores nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Refusal {
     Rejected(Reject),
@@ -72,7 +76,7 @@ impl From<Reject> for Refusal {
 
 pub const DEFAULT_PRIORITY: u8 = 5;
 
-/// A permission a resolved run uses, and the request field that asked for it
+/// A permission a resolved run uses, and the preset key that asks for it
 /// (`None` for `runs.submit`, which every run uses).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Used {
@@ -80,12 +84,11 @@ pub struct Used {
     pub field: Option<&'static str>,
 }
 
-/// The permissions a resolved spec uses under `policy`, in the order of the
-/// access specification: submit, route, user, core and memory dumps (also
-/// those the policy's dump trigger would take), Check online, keep the VM.
-/// Prechecks asks the same list again when the run starts.
-pub fn permissions_used(spec: &JobSpec, policy: &Policy) -> Vec<Used> {
-    let o = &spec.overrides;
+/// The permissions the options of `preset` use, in the order of the access
+/// specification: submit, route, user, core and memory dumps (also those the
+/// dump trigger takes), Check online, keep the VM. Prechecks asks the same
+/// list again when the run starts.
+pub fn permissions_used(preset: &Preset) -> Vec<Used> {
     let mut used = vec![Used {
         permission: Permission::RunsSubmit,
         field: None,
@@ -98,63 +101,55 @@ pub fn permissions_used(spec: &JobSpec, policy: &Policy) -> Vec<Used> {
             });
         }
     };
-    if let Some(permission) = route_permission(o.route.unwrap_or(policy.network.route)) {
-        add(permission, "overrides.route");
+    let network = &preset.network;
+    if let Some(permission) = route_permission(&network.route) {
+        add(permission, "network.route");
     }
-    if o.run_as.as_ref().is_some_and(privileged)
-        || (o.run_as.is_none() && policy.run.run_as == RunAsName::Root)
-    {
-        add(Permission::RunAsRoot, "overrides.run_as");
+    if network.private_addresses {
+        add(Permission::RouteLan, "network.private_addresses");
     }
-    let core = match o.core_dump {
-        Some(CoreDump::Switch(on)) => on,
-        Some(CoreDump::Limits(_)) => true,
-        None => policy.evidence.core_dump,
-    };
-    let trigger = policy.evidence.trigger();
-    if core {
-        add(Permission::EvidenceCoreDump, "overrides.core_dump");
+    if !network.abuse_filter {
+        add(Permission::RouteUnfiltered, "network.abuse_filter");
+    }
+    if preset.program.privileged() {
+        add(Permission::RunAsRoot, "program.user");
+    }
+    let dumps = &preset.dumps;
+    let trigger = dumps.trigger();
+    if dumps.core_dump_on_exit {
+        add(Permission::EvidenceCoreDump, "dumps.core_dump_on_exit");
     }
     if trigger.as_ref().is_some_and(|t| t.core) {
-        add(
-            Permission::EvidenceCoreDump,
-            "policy.evidence.dump_trigger_kind",
-        );
+        add(Permission::EvidenceCoreDump, "dumps.trigger_core");
     }
-    if o.memory_dump.unwrap_or(policy.evidence.memory_dump) {
-        add(Permission::EvidenceMemoryDump, "overrides.memory_dump");
+    if dumps.memory_dump_on_exit {
+        add(Permission::EvidenceMemoryDump, "dumps.memory_dump_on_exit");
     }
     if trigger.as_ref().is_some_and(|t| t.memory) {
-        add(
-            Permission::EvidenceMemoryDump,
-            "policy.evidence.dump_trigger_kind",
-        );
+        add(Permission::EvidenceMemoryDump, "dumps.trigger_memory_dump");
     }
-    if policy.analysis.online_ioc {
-        add(Permission::LookupOnline, "policy.analysis.online_ioc");
+    if dumps.disk_dump {
+        add(Permission::EvidenceDiskDump, "dumps.disk_dump");
     }
-    if o.keep_on_failure == Some(true) {
-        add(Permission::RunKeepVm, "overrides.keep_on_failure");
+    if preset.detection.check_online {
+        add(Permission::LookupOnline, "detection.check_online");
+    }
+    if preset.vm.keep_on_failure {
+        add(Permission::RunKeepVm, "vm.keep_on_failure");
     }
     used
 }
 
 /// The permission a route needs: none for `drop` and `inet_sim` (nothing
 /// leaves the lab), its `route.*` permission for a live route.
-pub fn route_permission(route: Route) -> Option<Permission> {
+pub fn route_permission(route: &Route) -> Option<Permission> {
     match route {
         Route::Drop | Route::InetSim => None,
         Route::Internet => Some(Permission::RouteInternet),
+        Route::Nat => Some(Permission::RouteNat),
         Route::Tor => Some(Permission::RouteTor),
-        Route::Vpn => Some(Permission::RouteVpn),
-        Route::Socks5 => Some(Permission::RouteSocks5),
-    }
-}
-
-fn privileged(run_as: &RunAs) -> bool {
-    match run_as {
-        RunAs::Named(name) => *name == RunAsName::Root,
-        RunAs::Ids(ids) => ids.uid < 1000 || ids.gid < 1000,
+        Route::Vpn(_) => Some(Permission::RouteVpn),
+        Route::Socks5(_) => Some(Permission::RouteSocks5),
     }
 }
 
@@ -174,224 +169,172 @@ pub fn missing_permissions(missing: &[Used]) -> Reject {
     .detail("needs", Value::Array(needs))
 }
 
-fn limit(field: &str, limit: u64, message: String) -> Refusal {
+/// Something the node does not have for a run: the preset key, what is
+/// missing (`details.what`) and a sentence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeRefusal {
+    pub field: &'static str,
+    pub what: String,
+    pub message: String,
+}
+
+/// What this node lacks for the options of `preset`: no live route is set
+/// up for the service before 0.9.1, a kept VM arrives with 0.9.1, and the
+/// lane group must be the node's (`[lanes] group`).
+pub fn node_refusals(preset: &Preset, lane_group: &str) -> Vec<NodeRefusal> {
+    let mut out = Vec::new();
+    let route = &preset.network.route;
+    if route.is_live() {
+        out.push(NodeRefusal {
+            field: "network.route",
+            what: format!("route.{}", route.kind()),
+            message: format!(
+                "route {route} is not set up on this node; live routes arrive with 0.9.1"
+            ),
+        });
+    }
+    if preset.vm.keep_on_failure {
+        out.push(NodeRefusal {
+            field: "vm.keep_on_failure",
+            what: "keep_vm".into(),
+            message: "keeping a VM arrives with 0.9.1".into(),
+        });
+    }
+    if preset.vm.lane_group != lane_group {
+        out.push(NodeRefusal {
+            field: "vm.lane_group",
+            what: format!("lane_group.{}", preset.vm.lane_group),
+            message: format!(
+                "lane group {} is not set up on this node",
+                preset.vm.lane_group
+            ),
+        });
+    }
+    out
+}
+
+fn limit(field: &str, limit: u64, message: String) -> Reject {
     Reject::new(FailureCode::LimitExceeded, Some(field), message)
         .detail("field", json!(field))
         .detail("limit", json!(limit))
-        .detail("source", json!("policy"))
-        .into()
+        .detail("source", json!("caller"))
 }
 
-fn invalid(field: &str, message: impl Into<String>) -> Refusal {
-    Refusal::Invalid(ApiError::invalid_argument(field, message))
+/// A run as admission settled it: the spec as stored (the preset's name, the
+/// priority, the overrides reduced to the keys that changed a value) and the
+/// preset it freezes (the named one, or Custom).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Resolved {
+    pub spec: JobSpec,
+    pub preset: LoadedPreset,
 }
 
-/// Check `spec` in the documented order and fill in the policy's defaults.
-/// The result is the resolved spec a [`Job`](crate::api::job::Job) carries.
-pub fn resolve(spec: &JobSpec, caller: &Caller, loaded: &LoadedPolicy) -> Result<JobSpec, Refusal> {
-    let policy = &loaded.policy;
-    // Is the policy offered to this caller?
-    if !loaded.allows(&caller.client_id, Scope::Submit) {
-        return Err(Reject::new(
-            FailureCode::PresetDenied,
-            Some("policy"),
-            format!("policy {} is not available to this caller", loaded.name),
-        )
-        .detail("preset", json!(loaded.name))
-        .into());
+/// Steps 3 to 7 at once: [`settle`], then [`check`].
+pub fn resolve(
+    spec: &JobSpec,
+    caller: &Caller,
+    base: &LoadedPreset,
+    lane_group: &str,
+) -> Result<Resolved, Refusal> {
+    let resolved = settle(spec, caller, base).map_err(Refusal::Invalid)?;
+    check(&resolved, caller, lane_group)?;
+    Ok(resolved)
+}
+
+/// Step 4: resolve the overrides of `spec` onto `base` (the Custom rule: any
+/// changed value makes the run Custom, based on the preset), check every
+/// value and the reserved keys, and fill in the priority. An error stores
+/// nothing.
+pub fn settle(spec: &JobSpec, caller: &Caller, base: &LoadedPreset) -> Result<Resolved, ApiError> {
+    let preset = base
+        .apply(&spec.overrides.0)
+        .map_err(|error| ApiError::invalid_argument(&error.field, error.message))?;
+    // A preset was checked when it was loaded; Custom options are checked
+    // here.
+    let custom = preset.based_on.is_some();
+    if let Some(problem) = validate::check_options(&preset.preset)
+        .into_iter()
+        .find(|p| custom && p.severity == Severity::Error)
+    {
+        let key = problem.key.unwrap_or_default();
+        return Err(ApiError::invalid_argument(
+            &format!("overrides.{key}"),
+            problem.message,
+        ));
     }
-    let o = &spec.overrides;
-    let route = o.route.unwrap_or(policy.network.route);
-    let run_as = o.run_as.clone().unwrap_or(RunAs::Named(policy.run.run_as));
+    if let Some((key, message)) = validate::reserved(&preset.preset)
+        .into_iter()
+        .find(|_| custom)
+    {
+        return Err(
+            ApiError::new(ErrorCode::Unsupported, format!("{key}: {message}"))
+                .with_field(key)
+                .with_reason(ErrorReason::Reserved),
+        );
+    }
+    let priority = spec.priority.unwrap_or_else(|| {
+        DEFAULT_PRIORITY.min(caller.limits.priority_max.unwrap_or(DEFAULT_PRIORITY))
+    });
+    Ok(Resolved {
+        spec: JobSpec {
+            sample: spec.sample.clone(),
+            name: spec.name.clone(),
+            policy: Some(base.name.clone()),
+            priority: Some(priority),
+            labels: spec.labels.clone(),
+            idempotency_key: spec.idempotency_key.clone(),
+            overrides: Overrides(changed_options(&base.preset, &preset.preset)),
+        },
+        preset,
+    })
+}
 
+/// Steps 5 to 7 on a settled run: permissions, the node (`lane_group` is
+/// the node's), the caller's limits. A refusal is a `rejected` job.
+pub fn check(resolved: &Resolved, caller: &Caller, lane_group: &str) -> Result<(), Reject> {
+    let options = &resolved.preset.preset;
     // Does every risky option have its permission?
-    let missing: Vec<Used> = permissions_used(spec, policy)
+    let missing: Vec<Used> = permissions_used(options)
         .into_iter()
         .filter(|u| !caller.has(u.permission))
         .collect();
     if !missing.is_empty() {
-        return Err(missing_permissions(&missing).into());
+        return Err(missing_permissions(&missing));
     }
 
-    // Does the node have it? No live route is set up for the service yet,
-    // and a kept VM arrives with 0.9.1.
-    if route_permission(route).is_some() {
+    // Does the node have it?
+    if let Some(refusal) = node_refusals(options, lane_group).into_iter().next() {
         return Err(Reject::new(
             FailureCode::UnavailableOnNode,
-            Some("overrides.route"),
-            format!(
-                "route {} is not set up on this node; live routes arrive with 0.9.1",
-                route_name(route)
-            ),
+            Some(refusal.field),
+            refusal.message,
         )
-        .detail("what", json!(format!("route.{}", route_name(route))))
-        .into());
-    }
-    if o.keep_on_failure == Some(true) {
-        return Err(Reject::new(
-            FailureCode::UnavailableOnNode,
-            Some("overrides.keep_on_failure"),
-            "keeping a VM arrives with 0.9.1",
-        )
-        .detail("what", json!("keep_vm"))
-        .into());
+        .detail("what", json!(refusal.what)));
     }
 
-    // Within the limits? Until limits per caller (P-A5) the policy holds them.
-    let priority = spec
-        .priority
-        .unwrap_or_else(|| DEFAULT_PRIORITY.min(policy.limits.priority_max));
-    if priority > policy.limits.priority_max {
-        return Err(limit(
-            "priority",
-            u64::from(policy.limits.priority_max),
-            format!(
-                "priority {priority} is above the limit of {} (policy {})",
-                policy.limits.priority_max, loaded.name
-            ),
-        ));
-    }
-    if let Some(timeout) = o.timeout_s
-        && timeout > policy.run.max_run_s
+    // Within the caller's limits? (Set per caller in service.toml.)
+    let limits = &caller.limits;
+    let priority = resolved.spec.priority.unwrap_or(DEFAULT_PRIORITY);
+    if let Some(most) = limits.priority_max
+        && priority > most
     {
         return Err(limit(
-            "overrides.timeout_s",
-            u64::from(policy.run.max_run_s),
+            "priority",
+            u64::from(most),
+            format!("priority {priority} is above the limit of {most}"),
+        ));
+    }
+    if let Some(longest) = limits.max_run_s
+        && options.program.run_time_s > longest
+    {
+        return Err(limit(
+            "program.run_time_s",
+            u64::from(longest),
             format!(
-                "a run of {timeout} s is above the limit of {} s (policy {})",
-                policy.run.max_run_s, loaded.name
+                "a run of {} s is above the limit of {longest} s",
+                options.program.run_time_s
             ),
         ));
     }
-
-    let (core_dump, detection) = policy_ceilings(o, loaded, route, &run_as)?;
-    Ok(JobSpec {
-        sample: spec.sample.clone(),
-        name: spec.name.clone(),
-        policy: Some(loaded.name.clone()),
-        priority: Some(priority),
-        labels: spec.labels.clone(),
-        idempotency_key: spec.idempotency_key.clone(),
-        overrides: Overrides {
-            timeout_s: Some(o.timeout_s.unwrap_or(policy.run.timeout_s)),
-            args: o.args.clone(),
-            env: o.env.clone(),
-            run_as: Some(run_as),
-            run_in: Some(RunIn::AppTerminal),
-            route: Some(route),
-            network_capture: Some(o.network_capture.unwrap_or(policy.network.capture)),
-            memory_dump: Some(o.memory_dump.unwrap_or(policy.evidence.memory_dump)),
-            core_dump: Some(core_dump),
-            static_checks: Some(
-                o.static_checks
-                    .clone()
-                    .unwrap_or_else(|| policy.analysis.static_checks.clone()),
-            ),
-            static_time_limit_min: o
-                .static_time_limit_min
-                .or(policy.analysis.static_time_limit_min),
-            detection: Some(detection),
-            reports: Some(
-                o.reports
-                    .clone()
-                    .unwrap_or_else(|| policy.report.formats.clone()),
-            ),
-            report_bundle: Some(o.report_bundle.unwrap_or(policy.report.bundle)),
-            report_defang: Some(o.report_defang.unwrap_or(policy.report.defang)),
-            keep_on_failure: Some(o.keep_on_failure.unwrap_or(false)),
-        },
-    })
-}
-
-/// The policy's own ceilings and switches, checked after the permissions
-/// (presets replace them, card P-A2). A value outside them is
-/// `invalid_argument` naming the field. Returns the resolved core dump and
-/// detection selection.
-fn policy_ceilings(
-    o: &Overrides,
-    loaded: &LoadedPolicy,
-    route: Route,
-    run_as: &RunAs,
-) -> Result<(CoreDump, DetectionSelection), Refusal> {
-    let policy = &loaded.policy;
-    if o.args.is_some() && !policy.run.args_allowed {
-        return Err(invalid(
-            "overrides.args",
-            "this policy does not allow program arguments",
-        ));
-    }
-    if o.env.is_some() && !policy.run.env_allowed {
-        return Err(invalid(
-            "overrides.env",
-            "this policy does not allow environment variables",
-        ));
-    }
-    if o.run_as.is_some() && privileged(run_as) && !policy.run.allow_root {
-        return Err(invalid(
-            "overrides.run_as",
-            "root or an id below 1000 needs run.allow_root in the policy",
-        ));
-    }
-    if !policy.network.allowed_routes.contains(&route) {
-        return Err(invalid(
-            "overrides.route",
-            format!(
-                "route {} is not allowed by policy {}",
-                route_name(route),
-                loaded.name
-            ),
-        ));
-    }
-    // A switch the policy leaves off cannot be turned on by a job.
-    if o.memory_dump == Some(true) && !policy.evidence.memory_dump {
-        return Err(invalid(
-            "overrides.memory_dump",
-            "this policy does not allow memory dumps",
-        ));
-    }
-    let core_dump = match o.core_dump {
-        None => CoreDump::Switch(policy.evidence.core_dump),
-        Some(CoreDump::Switch(true)) | Some(CoreDump::Limits(_)) if !policy.evidence.core_dump => {
-            return Err(invalid(
-                "overrides.core_dump",
-                "this policy does not allow core dumps",
-            ));
-        }
-        Some(CoreDump::Limits(limits)) if limits.max_mib > policy.evidence.core_max_mib => {
-            return Err(invalid(
-                "overrides.core_dump",
-                format!(
-                    "above the policy's core_max_mib of {}",
-                    policy.evidence.core_max_mib
-                ),
-            ));
-        }
-        Some(asked) => asked,
-    };
-    let asked = o.detection.unwrap_or_default();
-    for (name, want, have) in [
-        ("yara", asked.yara, policy.analysis.detection.yara),
-        ("sigma", asked.sigma, policy.analysis.detection.sigma),
-        ("ids", asked.ids, policy.analysis.detection.ids),
-    ] {
-        if want == Some(true) && !have {
-            return Err(invalid(
-                "overrides.detection",
-                format!("this policy does not run the {name} engine"),
-            ));
-        }
-    }
-    let detection = DetectionSelection {
-        yara: asked.yara.or(Some(policy.analysis.detection.yara)),
-        sigma: asked.sigma.or(Some(policy.analysis.detection.sigma)),
-        ids: asked.ids.or(Some(policy.analysis.detection.ids)),
-    };
-    Ok((core_dump, detection))
-}
-
-fn route_name(route: Route) -> String {
-    serde_json::to_value(route)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
+    Ok(())
 }

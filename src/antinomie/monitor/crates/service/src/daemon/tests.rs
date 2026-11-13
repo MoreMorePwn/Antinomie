@@ -14,11 +14,11 @@ use crate::{
         error::{ApiError, ErrorCode, ErrorReason},
         ids::{JobId, Sha256Hex},
         job::{Job, JobState, Outcome},
-        ops::{Caller, Scope},
+        ops::Caller,
         status::{Accelerator, Owner},
     },
     clock::SystemClock,
-    config::{LoadedPolicy, Policy, PolicySet, ServiceConfig, SharedPolicies, service::Shutdown},
+    config::{LoadedPreset, Preset, PresetSet, ServiceConfig, SharedPresets, service::Shutdown},
     intake::{Intake, staging::StagingStore},
     lane::LaneDir,
     query::QueryService,
@@ -48,7 +48,7 @@ impl Drop for Svc {
     }
 }
 
-pub(super) fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
+pub(super) fn svc(name: &str, edit: impl FnOnce(&mut Preset)) -> Svc {
     svc_logged(name, edit, Arc::new(|_: &str| {}))
 }
 
@@ -56,22 +56,19 @@ pub(super) fn svc(name: &str, edit: impl FnOnce(&mut Policy)) -> Svc {
 /// service knows the jobs of the store, as the daemon's does.
 pub(super) fn svc_logged(
     name: &str,
-    edit: impl FnOnce(&mut Policy),
+    edit: impl FnOnce(&mut Preset),
     log: crate::audit::AuditLog,
 ) -> Svc {
     let dir = scratch(&format!("daemon-{name}"));
     let data = dir.join("data");
     std::fs::create_dir_all(&data).unwrap();
     let store = Arc::new(Store::open(&data.join("service")).unwrap());
-    let mut policy = Policy::default();
-    policy.vm.lane_vm = Some("auto-1".into());
-    policy.sample.accept_types = vec!["sh".into(), "elf".into()];
-    edit(&mut policy);
-    let policies = Arc::new(SharedPolicies::new(PolicySet::single(LoadedPolicy {
-        name: "default".into(),
-        digest: "digest".into(),
-        policy,
-    })));
+    let mut preset = Preset::default();
+    preset.accepts.types = vec!["sh".into(), "elf".into()];
+    edit(&mut preset);
+    let presets = Arc::new(SharedPresets::new(PresetSet::single(LoadedPreset::named(
+        "standard", "digest", preset,
+    ))));
     let (staging, _) = StagingStore::open(
         &data.join("inbox"),
         &data,
@@ -96,7 +93,7 @@ pub(super) fn svc_logged(
         options,
         config: RwLock::new(ServiceConfig::default()),
         store,
-        policies,
+        presets,
         intake,
         lanes: LaneDir::new(&data.join("service")),
         owner: Owner::Daemon,
@@ -270,7 +267,7 @@ fn unknown_reserved_and_unserved_ops_are_told_apart() {
 fn every_op_checks_its_permission() {
     let svc = svc("scopes", |_| {});
     let reader = CallContext {
-        caller: Caller::from_scopes("local:1", &[Scope::Read]),
+        caller: Caller::new("local:1", &[crate::api::ops::Permission::RunsSeeAll]),
         cancel: Default::default(),
         transport: Transport::Socket,
     };
@@ -333,12 +330,14 @@ fn a_retry_is_a_new_job_that_repeats_a_finished_one_with_the_overrides() {
     let again = call(
         &svc,
         "job.retry",
-        json!({"job_id": job.id, "overrides": {"timeout_s": 30}}),
+        json!({"job_id": job.id, "overrides": {"program": {"run_time_s": 30}}}),
     )
     .unwrap();
     assert_eq!(again["state"], "queued");
     assert_eq!(again["repeat_of"], json!(job.id));
-    assert_eq!(again["spec"]["overrides"]["timeout_s"], 30);
+    assert_eq!(again["spec"]["overrides"]["program"]["run_time_s"], 30);
+    assert_eq!(again["policy"]["name"], "custom");
+    assert_eq!(again["policy"]["based_on"]["name"], "standard");
     assert_ne!(again["id"], json!(job.id));
     assert_eq!(again["sample"]["sha256"], json!(job.sample.unwrap().sha256));
     // Run again is runs.submit on a run the caller can see: another client
@@ -355,7 +354,7 @@ fn a_retry_is_a_new_job_that_repeats_a_finished_one_with_the_overrides() {
     assert_eq!(error.code, ErrorCode::PermissionDenied);
     assert_eq!(error.details["needs"], json!(["runs.see_all"]));
     let stranger = CallContext {
-        caller: Caller::from_scopes("local:4242", &[Scope::Read, Scope::Submit]),
+        caller: Caller::new("local:4242", &crate::store::tests::READ_SUBMIT),
         cancel: Default::default(),
         transport: Transport::Socket,
     };
@@ -386,7 +385,7 @@ fn the_queue_pauses_and_resumes_and_capabilities_follow_the_policies() {
     assert_eq!(caps["lanes"], 1);
     assert_eq!(caps["accept_types"], json!(["sh", "elf"]));
     assert_eq!(caps["routes"], json!(["drop", "inet_sim"]));
-    // min(256 MiB, the policy's 64 MiB, a quarter of 512 MiB of lane RAM).
+    // min(256 MiB, the preset's 64 MiB, a quarter of 512 MiB of lane RAM).
     assert_eq!(
         caps["max_sample_bytes"],
         crate::intake::size_limit(64, Some(512))
@@ -397,8 +396,9 @@ fn the_queue_pauses_and_resumes_and_capabilities_follow_the_policies() {
             .unwrap()
             .contains(&json!("events.resume"))
     );
-    let policies = call(&svc, "policy.list", json!({})).unwrap();
-    assert_eq!(policies["policies"][0]["name"], "default");
+    let presets = call(&svc, "policy.list", json!({})).unwrap();
+    assert_eq!(presets["policies"][0]["name"], "standard");
+    assert_eq!(presets["policies"][0]["needs"], json!([]));
 }
 
 #[test]

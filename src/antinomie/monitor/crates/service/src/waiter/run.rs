@@ -994,8 +994,8 @@ pub(crate) fn route_of(request: &ExecRequest, run: &RunSummary) -> Route {
         RouteKind::Internet => Route::Internet,
         RouteKind::InetSim => Route::InetSim,
         RouteKind::Tor => Route::Tor,
-        RouteKind::Vpn => Route::Vpn,
-        RouteKind::Socks5 => Route::Socks5,
+        RouteKind::Vpn => Route::Vpn(None),
+        RouteKind::Socks5 => Route::Socks5(None),
     }
 }
 

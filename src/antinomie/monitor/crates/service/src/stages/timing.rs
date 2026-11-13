@@ -10,9 +10,9 @@
 //! | `fixed` | the stage's fixed limit of design 4.1, when the input size is not known |
 //!
 //! The limit is `daemon.host_time_factor` (default 2) times the expected
-//! time, at least [`MIN_LIMIT`]. A policy that sets
-//! `analysis.static_time_limit_min` (or a job that overrides it) gives the
-//! static tools that fixed limit instead (`policy`). Time an item spends in the
+//! time, at least [`MIN_LIMIT`]. A `static_analysis.time_limit_per_tool_min`
+//! above 0 (of the preset, or of a Custom run) gives the static tools that
+//! fixed limit instead (`policy`). Time an item spends in the
 //! pool's queue, waiting for memory or in the engine's own analysis queue does
 //! not count against its limit.
 use super::{

@@ -103,8 +103,7 @@ CASES = tuple(EXPECTED)
 # GiB free on the data folder (antinomie-service resources.rs).
 DISK_FLOOR_GIB = 1
 DISK_QUOTA_GIB = 1
-POLICY = {("sample", "accept_types"): '["elf", "sh"]', ("run", "allow_root"): "true",
-          ("retry", "backoff_s"): "[10, 10]"}
+PRESET = {("retry", "backoff_s"): "[10, 10]"}
 
 
 def cases(text):
@@ -206,7 +205,7 @@ class Case:
         (self.work.data / "service.toml").write_text(
             av.service_toml(lanes=1, require_kvm=self.accel == "kvm", min_free_disk_gib=min_free_disk_gib,
                             socket=self.work.socket_override()))
-        av.edit_policy(self.work, "t7", POLICY)
+        av.edit_preset(self.work, "t7", PRESET)
         code, _, err = self.cli.run("config", "validate", timeout=300)
         if code != 0:
             raise av.Failure(f"config validate exit {code}: {err.strip()[-300:]}")
@@ -215,7 +214,7 @@ class Case:
         return av.write_guest_script(self.work.samples / f"{name}.sh", body)
 
     def submit(self, program, **kwargs):
-        return av.submit(self.cli, program, policy="t7", timeout_run=kwargs.pop("timeout_run", 120), **kwargs)
+        return av.submit(self.cli, program, preset="t7", timeout_run=kwargs.pop("timeout_run", 120), **kwargs)
 
     def wait(self, job, until=av.is_terminal, timeout=JOB_TIMEOUT_S):
         return av.wait_job(self.cli, job["id"], timeout * self.factor, until=until, watch=self.watch,
@@ -466,7 +465,7 @@ def main(argv=None):
         return 0 if holds else 1
     checks = av.Checks(work, f"T7 faults ({', '.join(args.case)}), TCG={accel == 'tcg'}")
     if args.dry_run:
-        steps = [f"{name}: own data folder, base copy, auto init, policy t7 {POLICY}; expected: {EXPECTED[name]}"
+        steps = [f"{name}: own data folder, base copy, auto init, preset t7 {PRESET}; expected: {EXPECTED[name]}"
                  for name in args.case]
         if "disk-full" in args.case and not args.quota_dir:
             steps.append("disk-full namespace: " + shlex.join(quota_argv(Path(__file__).resolve(), argv,

@@ -120,9 +120,9 @@ impl Store {
         })
     }
 
-    /// The policy a job froze when it was submitted (design 5.6): what the
-    /// pipeline checks the job against, whatever the files say now.
-    pub fn frozen_policy(&self, id: &JobId) -> R<crate::config::LoadedPolicy> {
+    /// The preset a job froze when it was submitted (design 5.6), with every
+    /// option resolved: what the pipeline runs, whatever the files say now.
+    pub fn frozen_preset(&self, id: &JobId) -> R<crate::config::LoadedPreset> {
         load_terms(&self.conn(), id.as_str())
     }
 

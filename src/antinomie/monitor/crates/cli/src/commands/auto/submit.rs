@@ -56,28 +56,31 @@ pub struct Submit {
     /// A sample already in the library, by its SHA-256.
     #[arg(long, value_name = "HEX")]
     pub sha256: Option<String>,
-    /// The policy [default: default].
+    /// The preset [default: standard]; the other flags change its options
+    /// (the run is then Custom).
     #[arg(long)]
     pub policy: Option<String>,
-    /// 0 to 9; higher starts first (the policy sets a ceiling).
+    /// 0 to 9; higher starts first.
     #[arg(long)]
     pub priority: Option<u8>,
     /// A label of the job (repeatable).
     #[arg(long = "label", value_name = "KEY=VALUE")]
     pub labels: Vec<String>,
-    /// The run limit in seconds (the policy's `max_run_s` is the ceiling).
+    /// The run time in seconds, 5 to 1800 (`program.run_time_s`).
     #[arg(long, value_name = "SECONDS")]
     pub timeout_run: Option<u32>,
-    /// Program arguments.
+    /// Program arguments (`program.arguments`).
     #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "ARG")]
     pub args: Vec<String>,
-    /// An environment entry (repeatable; the policy must allow them).
+    /// An environment entry (repeatable); replaces the preset's environment
+    /// (a PATH is added when none is given).
     #[arg(long = "env", value_name = "KEY=VALUE")]
     pub env: Vec<String>,
-    /// `user`, `root` or `UID:GID`.
+    /// `user`, `root`, `nobody` or `UID:GID` (root or an id below 1000 needs
+    /// the run.as_root permission).
     #[arg(long = "as", value_name = "WHO")]
     pub run_as: Option<String>,
-    /// `drop` or `inet_sim`.
+    /// `drop` or `inet_sim` (a live route is not set up on this node).
     #[arg(long, value_name = "ROUTE")]
     pub route: Option<String>,
     /// Static checks on the host: `none`, `triage`, or names (`strings,entropy`).
@@ -135,10 +138,35 @@ fn pairs(list: &[String], field: &str) -> Result<serde_json::Map<String, Value>,
     Ok(out)
 }
 
+/// The eleven Triage checks of `--static triage`.
+const TRIAGE_CHECKS: [&str; 11] = [
+    "metadata",
+    "structures",
+    "strings",
+    "regex",
+    "entropy",
+    "hardening",
+    "rules",
+    "identification",
+    "capabilities",
+    "embedded",
+    "unpacking",
+];
+
+/// The deep checks a `--static` list may name.
+const DEEP_CHECKS: [&str; 3] = ["disassembly", "decompilation", "floss"];
+
 /// The spec of the job, without its sample.
 pub fn spec_of(arguments: &Submit) -> Result<Value, CliError> {
     let mut spec = json!({"sample": {}});
+    // A partial preset: tables of keys.
     let mut overrides = serde_json::Map::new();
+    let mut set = |table: &str, key: &str, value: Value| {
+        let entry = overrides
+            .entry(table.to_owned())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        entry[key] = value;
+    };
     if let Some(policy) = &arguments.policy {
         spec["policy"] = json!(policy);
     }
@@ -155,49 +183,64 @@ pub fn spec_of(arguments: &Submit) -> Result<Value, CliError> {
         spec["name"] = json!(name);
     }
     if let Some(seconds) = arguments.timeout_run {
-        overrides.insert("timeout_s".into(), json!(seconds));
+        set("program", "run_time_s", json!(seconds));
     }
     if !arguments.args.is_empty() {
-        overrides.insert("args".into(), json!(arguments.args));
+        set("program", "arguments", json!(arguments.args));
     }
     if !arguments.env.is_empty() {
-        overrides.insert("env".into(), json!(arguments.env));
+        set("program", "environment", json!(arguments.env));
     }
     if let Some(who) = &arguments.run_as {
-        let value = match who.as_str() {
-            "user" | "root" => json!(who),
+        match who.as_str() {
+            "user" => set("program", "user", json!("normal")),
+            "root" | "nobody" => set("program", "user", json!(who)),
             ids => {
                 let (uid, gid) = ids
                     .split_once(':')
                     .and_then(|(u, g)| Some((u.parse::<u32>().ok()?, g.parse::<u32>().ok()?)))
                     .ok_or_else(|| {
-                        CliError::invalid("--as takes user, root or UID:GID").with_field("as")
+                        CliError::invalid("--as takes user, root, nobody or UID:GID")
+                            .with_field("as")
                     })?;
-                json!({"uid": uid, "gid": gid})
+                set("program", "user", json!("custom"));
+                set("program", "uid", json!(uid));
+                set("program", "gid", json!(gid));
             }
-        };
-        overrides.insert("run_as".into(), value);
+        }
     }
     if let Some(route) = &arguments.route {
-        overrides.insert("route".into(), json!(route));
+        set("network", "route", json!(route));
     }
     if arguments.no_static {
-        overrides.insert("static_checks".into(), json!("none"));
+        set("static_analysis", "enabled", json!(false));
     } else if let Some(checks) = &arguments.static_checks {
-        let value = match checks.as_str() {
-            "none" | "triage" => json!(checks),
-            list => json!(list.split(',').map(str::trim).collect::<Vec<_>>()),
-        };
-        overrides.insert("static_checks".into(), value);
+        match checks.as_str() {
+            "none" => set("static_analysis", "enabled", json!(false)),
+            "triage" => {
+                set("static_analysis", "enabled", json!(true));
+                set("static_analysis", "triage_checks", json!(TRIAGE_CHECKS));
+                set("static_analysis", "deep_checks", json!([]));
+            }
+            list => {
+                let names: Vec<&str> = list.split(',').map(str::trim).collect();
+                let (deep, triage): (Vec<&str>, Vec<&str>) = names
+                    .into_iter()
+                    .partition(|name| DEEP_CHECKS.contains(name));
+                set("static_analysis", "enabled", json!(true));
+                set("static_analysis", "triage_checks", json!(triage));
+                set("static_analysis", "deep_checks", json!(deep));
+            }
+        }
     }
     if !arguments.formats.is_empty() {
-        overrides.insert("reports".into(), json!(arguments.formats));
+        set("report", "formats", json!(arguments.formats));
     }
     if arguments.evidence_bundle {
-        overrides.insert("report_bundle".into(), json!(true));
+        set("report", "bundle", json!(true));
     }
     if arguments.defang || arguments.no_defang {
-        overrides.insert("report_defang".into(), json!(arguments.defang));
+        set("report", "defang", json!(arguments.defang));
     }
     if !overrides.is_empty() {
         spec["overrides"] = Value::Object(overrides);
@@ -567,9 +610,12 @@ mod tests {
                 "sample": {}, "policy": "fast", "priority": 7, "labels": {"ci": "yes"},
                 "idempotency_key": "k1",
                 "overrides": {
-                    "timeout_s": 60, "args": ["-v", "x"], "run_as": {"uid": 1000, "gid": 100},
-                    "route": "inet_sim", "static_checks": ["strings", "entropy"],
-                    "reports": ["html", "json"], "report_bundle": true, "report_defang": false
+                    "program": {"run_time_s": 60, "arguments": ["-v", "x"], "user": "custom",
+                                "uid": 1000, "gid": 100},
+                    "network": {"route": "inet_sim"},
+                    "static_analysis": {"enabled": true, "triage_checks": ["strings", "entropy"],
+                                        "deep_checks": []},
+                    "report": {"formats": ["html", "json"], "bundle": true, "defang": false}
                 }
             })
         );
@@ -579,7 +625,29 @@ mod tests {
             s
         })
         .unwrap();
-        assert_eq!(spec.overrides.timeout_s, Some(60));
+        assert_eq!(spec.overrides.0["program"]["run_time_s"], json!(60));
+        // The overrides resolve onto Standard: a Custom run.
+        let standard = antinomie_service::config::PresetLookup::get(
+            &antinomie_service::config::PresetSet::built_in(),
+            "standard",
+        )
+        .unwrap();
+        let custom = standard.apply(&spec.overrides.0).unwrap();
+        assert_eq!(custom.name, "custom");
+        assert_eq!(custom.preset.program.ids(), (1000, 100));
+        let names = |flags: &[&str]| {
+            spec_of(&parse(&[&["f"], flags].concat())).unwrap()["overrides"].clone()
+        };
+        assert_eq!(
+            names(&["--as", "nobody", "--static", "strings,floss"]),
+            json!({"program": {"user": "nobody"},
+                   "static_analysis": {"enabled": true, "triage_checks": ["strings"],
+                                       "deep_checks": ["floss"]}})
+        );
+        assert_eq!(
+            names(&["--as", "user", "--no-static"]),
+            json!({"program": {"user": "normal"}, "static_analysis": {"enabled": false}})
+        );
     }
 
     #[test]
@@ -591,7 +659,7 @@ mod tests {
         assert!(Wrapper::try_parse_from(["submit"]).is_err());
         assert!(Wrapper::try_parse_from(["submit", "f", "--sha256", "aa"]).is_err());
         assert!(Wrapper::try_parse_from(["submit", "f", "--defang", "--no-defang"]).is_err());
-        assert!(spec_of(&parse(&["f", "--as", "nobody"])).is_err());
+        assert!(spec_of(&parse(&["f", "--as", "somebody"])).is_err());
         assert!(spec_of(&parse(&["f", "--label", "novalue"])).is_err());
     }
 

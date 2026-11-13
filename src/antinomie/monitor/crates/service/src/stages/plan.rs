@@ -1,32 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! What a job asks for, settled against its frozen policy (design 4.4, 4.1
-//! `launch`): the numbers every stage uses and the exact `ExecRequest` of
-//! audit G7.
+//! What a job runs, read from its frozen preset (every option resolved,
+//! design 4.1 `launch`): the numbers every stage uses and the exact
+//! `ExecRequest` of audit G7.
 use crate::{
     api::{
         failure::FailureCode,
-        job::{Job, Stage},
-        spec::{
-            CoreDump, ReportFormat, Route, RunAs, RunAsName, RunIn, StaticCheck, StaticChecks,
-            StaticPreset,
-        },
+        job::Stage,
+        spec::{ReportFormat, Route, RunIn},
     },
-    config::{Policy, policy::RevertMode},
+    config::{Preset, preset::kind_of, service::RevertMode},
 };
 use antinomie_monitor_core::{
     ExecRequest, RunIn as CoreRunIn,
-    analysis::{AnalysisKind, AnalysisSelection, detection::Engine as DetectionEngine},
+    analysis::{
+        AnalysisKind, AnalysisLimits, AnalysisSelection, detection::Engine as DetectionEngine,
+    },
     report::Format as ReportEngineFormat,
     route::RouteKind,
-    samples::guest_path_of,
 };
 use std::time::Duration;
 
-/// The default PATH `run exec` also adds when the spec has none.
+/// The PATH a run gets when the preset's environment has none (as `run
+/// exec`).
 pub const DEFAULT_PATH: &str = "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-
-/// `core_timeout_ms` when nothing else says (the engine's default, 5 s).
-pub const CORE_TIMEOUT_MS: u32 = 5000;
 
 /// Guest revision that takes a core dump on exit (`worker_guest.rs:170-180`).
 pub const CORE_REVISION: u32 = 15;
@@ -38,27 +34,30 @@ pub const TRIGGER_CORE_REVISION: u32 = 16;
 /// Guest revision that reads non-resident pages into a core on request.
 pub const NONRESIDENT_REVISION: u32 = 22;
 
-/// The job's settings after the spec's overrides met the policy.
+/// The job's settings: its preset's options and the lane's revert.
 #[derive(Clone, Debug)]
 pub struct Effective {
-    /// The run limit (`run_s`).
+    /// The run limit (`program.run_time_s`).
     pub run_limit: Duration,
+    /// How the lane is made clean (`[lanes] revert` of service.toml).
     pub revert: RevertMode,
-    pub revert_after: bool,
     /// The launch, without `path` and `sample`.
     pub request: ExecRequest,
-    /// A guest directory for the sample (`run.guest_dir`).
-    pub guest_dir: String,
+    /// Where the sample lands (`program.guest_path`, `{name}` the sample's
+    /// file name).
+    pub guest_path: String,
 }
 
-fn core_kind(route: Route) -> RouteKind {
+fn core_kind(route: &Route) -> RouteKind {
     match route {
         Route::Drop => RouteKind::Drop,
         Route::Internet => RouteKind::Internet,
         Route::InetSim => RouteKind::InetSim,
         Route::Tor => RouteKind::Tor,
-        Route::Vpn => RouteKind::Vpn,
-        Route::Socks5 => RouteKind::Socks5,
+        Route::Vpn(_) => RouteKind::Vpn,
+        Route::Socks5(_) => RouteKind::Socks5,
+        // Refused at submit (no NAT lane before 0.9.1): never planned.
+        Route::Nat => RouteKind::Drop,
     }
 }
 
@@ -70,68 +69,60 @@ fn core_run_in(run_in: RunIn) -> CoreRunIn {
     }
 }
 
-/// Settle `job`'s spec against `policy` (the policy the job froze).
-pub fn effective(job: &Job, policy: &Policy) -> Effective {
-    let o = &job.spec.overrides;
-    let run_as = o.run_as.clone().unwrap_or(RunAs::Named(policy.run.run_as));
-    let (uid, gid) = match run_as {
-        RunAs::Named(RunAsName::User) => (1000, 1000),
-        RunAs::Named(RunAsName::Root) => (0, 0),
-        RunAs::Ids(ids) => (ids.uid, ids.gid),
-    };
-    let mut env = o.env.clone().unwrap_or_default();
+/// The settings of a run of `preset` (the job's frozen preset) on a lane
+/// that reverts with `revert`.
+pub fn effective(preset: &Preset, revert: RevertMode) -> Effective {
+    let program = &preset.program;
+    let dumps = &preset.dumps;
+    let (uid, gid) = program.ids();
+    let mut env = program.environment.clone();
     if !env.iter().any(|item| item.starts_with("PATH=")) {
         env.push(DEFAULT_PATH.into());
     }
-    let (core, core_max_mib, core_timeout_ms) = match o.core_dump {
-        None => (
-            policy.evidence.core_dump,
-            policy.evidence.core_max_mib,
-            CORE_TIMEOUT_MS,
-        ),
-        Some(CoreDump::Switch(on)) => (on, policy.evidence.core_max_mib, CORE_TIMEOUT_MS),
-        Some(CoreDump::Limits(limits)) => (true, limits.max_mib, limits.timeout_ms),
-    };
-    let trigger = policy.evidence.trigger();
+    let trigger = dumps.trigger();
     let trigger_core = trigger.as_ref().is_some_and(|plan| plan.core);
+    let core = dumps.core_dump_on_exit;
     let request = ExecRequest {
         path: String::new(),
-        args: o.args.clone().unwrap_or_default(),
-        cwd: policy.run.guest_dir.clone(),
+        args: program.arguments.clone(),
+        cwd: program.working_directory.clone(),
         env,
         uid,
         gid,
         // Guest-side static analysis is not run in jobs (4.1, `analyse`).
         analysis: AnalysisSelection::default(),
-        run_in: core_run_in(o.run_in.unwrap_or(policy.run.run_in)),
-        capture_network: o.network_capture.unwrap_or(policy.network.capture),
-        memory_dump_on_exit: o.memory_dump.unwrap_or(policy.evidence.memory_dump),
+        run_in: core_run_in(program.run_in),
+        capture_network: preset.network.capture,
+        memory_dump_on_exit: dumps.memory_dump_on_exit,
         core_dump_on_exit: core,
-        core_max_size: (core || trigger_core).then(|| core_max_mib.saturating_mul(1 << 20)),
-        core_timeout_ms: (core || trigger_core).then_some(core_timeout_ms),
+        core_max_size: (core || trigger_core)
+            .then(|| dumps.core_budget_mib.saturating_mul(1 << 20)),
+        core_timeout_ms: (core || trigger_core).then_some(dumps.core_deadline_ms),
         dump_trigger: trigger,
-        core_nonresident: policy.evidence.core_nonresident && trigger_core,
+        core_nonresident: dumps.read_non_resident_pages && trigger_core,
         debug_on_start: false,
-        route: Some(core_kind(o.route.unwrap_or(policy.network.route))),
+        route: Some(core_kind(&preset.network.route)),
         host_copy: None,
         sample: None,
         preloaded: Vec::new(),
     };
     Effective {
-        run_limit: Duration::from_secs(u64::from(o.timeout_s.unwrap_or(policy.run.timeout_s))),
-        revert: policy.vm.revert,
-        revert_after: policy.vm.revert_after,
+        run_limit: Duration::from_secs(u64::from(program.run_time_s)),
+        revert,
         request,
-        guest_dir: policy.run.guest_dir.clone(),
+        guest_path: program.guest_path.clone(),
     }
 }
 
-/// Where the sample lands in the guest: the library rule (`/tmp/<sha8>-<name>`,
-/// 48 characters of a safe name) in the policy's directory.
-pub fn guest_path(guest_dir: &str, sha256: &str, name: &str) -> String {
-    let default = guest_path_of(sha256, name);
-    let leaf = default.rsplit('/').next().unwrap_or("sample");
-    format!("{}/{leaf}", guest_dir.trim_end_matches('/'))
+/// Where the sample lands in the guest: the library's file name of the sample
+/// (`<sha8>-<name>`, 48 characters of a safe name) for `{name}` in the
+/// preset's `program.guest_path`.
+pub fn guest_path(template: &str, sha256: &str, name: &str) -> String {
+    crate::config::preset::Program {
+        guest_path: template.to_owned(),
+        ..Default::default()
+    }
+    .sample_path(sha256, name)
 }
 
 /// `upload_s` (4.1): 60 seconds plus one second per 10 MiB.
@@ -152,22 +143,25 @@ pub const CLEANUP_WAIT: Duration = Duration::from_secs(60);
 /// limit"): the engine's own bound is not published, so the stage assumes this.
 pub const TOOL_OWN_LIMIT_MIN: u32 = 5;
 
-/// What the host stages do for a job, settled against its frozen policy.
+/// What the host stages do for a job, from its frozen preset.
 #[derive(Clone, Debug)]
 pub struct HostPlan {
     /// The static checks of the host-side analysis; empty: none.
     pub static_checks: Vec<AnalysisKind>,
-    /// A fixed limit in minutes for every tool, when the policy or the job
-    /// set one; `None`: each tool's limit comes from its expected time.
+    /// A fixed limit in minutes for every tool, when the preset sets one;
+    /// `None`: each tool's limit comes from its expected time.
     pub static_limit_min: Option<u32>,
-    /// Checks whose timeout fails the stage (`analysis.required_checks`).
+    /// The engine's size limits and the Ghidra choice
+    /// (`static_analysis.limits`, `ghidra_disassembly`).
+    pub static_limits: AnalysisLimits,
+    /// Checks whose timeout fails the stage (`static_analysis.required_checks`).
     pub required_checks: Vec<AnalysisKind>,
     pub triage: bool,
     pub engines: Vec<DetectionEngine>,
     pub formats: Vec<ReportFormat>,
     pub bundle: bool,
     pub defang: bool,
-    /// Stages whose failure fails the job (`analysis.required_stages`).
+    /// Stages whose failure fails the job (`required_stages`).
     pub required: Vec<Stage>,
     pub retry_analysis: bool,
     pub max_attempts: u32,
@@ -189,25 +183,6 @@ impl HostPlan {
     }
 }
 
-fn kind_of(check: StaticCheck) -> AnalysisKind {
-    match check {
-        StaticCheck::Metadata => AnalysisKind::Metadata,
-        StaticCheck::Structures => AnalysisKind::Structures,
-        StaticCheck::Strings => AnalysisKind::Strings,
-        StaticCheck::Regex => AnalysisKind::Regex,
-        StaticCheck::Entropy => AnalysisKind::Entropy,
-        StaticCheck::Hardening => AnalysisKind::Hardening,
-        StaticCheck::Rules => AnalysisKind::Rules,
-        StaticCheck::Identification => AnalysisKind::Identification,
-        StaticCheck::Capabilities => AnalysisKind::Capabilities,
-        StaticCheck::Disassembly => AnalysisKind::Disassembly,
-        StaticCheck::Decompilation => AnalysisKind::Decompilation,
-        StaticCheck::Embedded => AnalysisKind::Embedded,
-        StaticCheck::Floss => AnalysisKind::Floss,
-        StaticCheck::Unpacking => AnalysisKind::Unpacking,
-    }
-}
-
 /// The report format of the job API as the report builder names it.
 pub fn format_of(format: ReportFormat) -> ReportEngineFormat {
     match format {
@@ -220,51 +195,32 @@ pub fn format_of(format: ReportFormat) -> ReportEngineFormat {
     }
 }
 
-/// Settle the host stages of `job` against `policy` (the policy it froze).
-pub fn hosted(job: &Job, policy: &Policy) -> HostPlan {
-    let o = &job.spec.overrides;
-    let checks = o
-        .static_checks
-        .clone()
-        .unwrap_or_else(|| policy.analysis.static_checks.clone());
-    let static_checks = match checks {
-        StaticChecks::Preset(StaticPreset::None) => Vec::new(),
-        StaticChecks::Preset(StaticPreset::Triage) => AnalysisKind::TRIAGE.to_vec(),
-        StaticChecks::Names(names) => names.into_iter().map(kind_of).collect(),
-    };
-    let wanted = o.detection.unwrap_or_default();
-    let detection = &policy.analysis.detection;
+/// The host stages of a run of `preset` (the job's frozen preset).
+pub fn hosted(preset: &Preset) -> HostPlan {
+    let s = &preset.static_analysis;
+    let detection = &preset.detection;
     let mut engines = Vec::new();
-    for (engine, asked, allowed) in [
-        (DetectionEngine::Yara, wanted.yara, detection.yara),
-        (DetectionEngine::Ids, wanted.ids, detection.ids),
-        (DetectionEngine::Sigma, wanted.sigma, detection.sigma),
+    for (engine, on) in [
+        (DetectionEngine::Yara, detection.yara),
+        (DetectionEngine::Ids, detection.ids),
+        (DetectionEngine::Sigma, detection.sigma),
     ] {
-        if asked.unwrap_or(allowed) {
+        if on {
             engines.push(engine);
         }
     }
     HostPlan {
-        static_checks,
-        static_limit_min: o
-            .static_time_limit_min
-            .or(policy.analysis.static_time_limit_min),
-        required_checks: policy
-            .analysis
-            .required_checks
-            .iter()
-            .map(|c| kind_of(*c))
-            .collect(),
-        triage: policy.analysis.triage,
+        static_checks: s.checks().into_iter().map(kind_of).collect(),
+        static_limit_min: s.fixed_limit_min(),
+        static_limits: s.engine_limits(),
+        required_checks: s.required_checks.iter().map(|c| kind_of(*c)).collect(),
+        triage: preset.triage.enabled,
         engines,
-        formats: o
-            .reports
-            .clone()
-            .unwrap_or_else(|| policy.report.formats.clone()),
-        bundle: o.report_bundle.unwrap_or(policy.report.bundle),
-        defang: o.report_defang.unwrap_or(policy.report.defang),
-        required: policy.analysis.required_stages.clone(),
-        retry_analysis: policy.retry.retry_on.contains(&FailureCode::AnalysisFailed),
-        max_attempts: policy.retry.max_attempts,
+        formats: preset.report.formats.clone(),
+        bundle: preset.report.bundle,
+        defang: preset.report.defang,
+        required: preset.required_stages.clone(),
+        retry_analysis: preset.retry.retry_on.contains(&FailureCode::AnalysisFailed),
+        max_attempts: preset.retry.max_attempts,
     }
 }

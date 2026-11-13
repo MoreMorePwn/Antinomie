@@ -17,11 +17,11 @@ use crate::{
         failure::{Failure, FailureCode},
         ids::{JobId, LaneId, Sha256Hex},
         job::{Job, JobSample, JobState, Outcome, Stage, Submitted, WaitingFor},
-        ops::{Caller, Scope},
+        ops::{Caller, Permission},
         spec::{JobSpec, SampleSource},
     },
     clock::ManualClock,
-    config::{LoadedPolicy, Policy, PolicySet, service::OnDuplicate},
+    config::{LoadedPreset, Preset, PresetSet, service::OnDuplicate},
     store::submit::SubmitContext,
 };
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
@@ -42,7 +42,7 @@ impl SampleAdmission for FakeIntake {
         &self,
         source: &SampleSource,
         _name: Option<&str>,
-        policy: &LoadedPolicy,
+        preset: &LoadedPreset,
         _actor: &str,
     ) -> Result<JobSample, IntakeError> {
         let err = |code, message: &str| IntakeError {
@@ -57,10 +57,10 @@ impl SampleAdmission for FakeIntake {
             .samples
             .get(sha.as_str())
             .ok_or_else(|| err(FailureCode::SampleMissing, "no such sample"))?;
-        if !policy.policy.sample.accept_types.contains(&sample.kind) {
+        if !preset.preset.accepts.types.contains(&sample.kind) {
             return Err(err(FailureCode::SampleTypeDenied, "type not accepted"));
         }
-        if sample.size > u64::from(policy.policy.sample.max_sample_mib) << 20 {
+        if sample.size > u64::from(preset.preset.accepts.max_sample_mib) << 20 {
             return Err(err(FailureCode::SampleTooLarge, "too large"));
         }
         Ok(sample.clone())
@@ -71,7 +71,7 @@ pub(crate) struct Fx {
     pub dir: PathBuf,
     pub store: Store,
     pub clock: Arc<ManualClock>,
-    pub policies: PolicySet,
+    pub policies: PresetSet,
     pub intake: FakeIntake,
     pub limits: SubmitLimits,
 }
@@ -83,15 +83,12 @@ pub(crate) fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-pub(crate) fn policy(name: &str, edit: impl FnOnce(&mut Policy)) -> LoadedPolicy {
-    let mut policy = Policy::default();
-    policy.vm.lane_vm = Some("auto-1".into());
-    edit(&mut policy);
-    LoadedPolicy {
-        name: name.into(),
-        digest: format!("digest-of-{name}-{}", policy.run.timeout_s),
-        policy,
-    }
+/// A preset of `name`: Standard's options with `edit` applied.
+pub(crate) fn policy(name: &str, edit: impl FnOnce(&mut Preset)) -> LoadedPreset {
+    let mut preset = Preset::default();
+    edit(&mut preset);
+    let digest = format!("digest-of-{name}-{}", preset.program.run_time_s);
+    LoadedPreset::named(name, digest, preset)
 }
 
 impl Fx {
@@ -99,7 +96,7 @@ impl Fx {
         Self::with_policy(name, |_| {})
     }
 
-    pub fn with_policy(name: &str, edit: impl FnOnce(&mut Policy)) -> Self {
+    pub fn with_policy(name: &str, edit: impl FnOnce(&mut Preset)) -> Self {
         let dir = scratch(name);
         let clock = Arc::new(ManualClock::new(T0));
         let store = Store::open_with_clock(&dir.join("service"), clock.clone()).unwrap();
@@ -140,7 +137,7 @@ impl Fx {
             dir,
             store,
             clock,
-            policies: PolicySet::single(policy("default", edit)),
+            policies: PresetSet::single(policy("standard", edit)),
             intake: FakeIntake { samples },
             limits: SubmitLimits::default(),
         }
@@ -148,7 +145,7 @@ impl Fx {
 
     pub fn ctx(&self) -> SubmitContext<'_> {
         SubmitContext {
-            policies: &self.policies,
+            presets: &self.policies,
             intake: &self.intake,
             limits: self.limits,
             on_duplicate: None,
@@ -163,9 +160,11 @@ impl Fx {
         self.store.submit(who, spec, &self.ctx())
     }
 
-    /// A queued job for sample `n`.
+    /// A queued job for sample `n`, submitted by the owner (every
+    /// permission, so a preset that takes dumps runs).
     pub fn queued(&self, n: u8) -> Job {
-        let submitted = self.submit(spec(n));
+        let owner = Caller::with_every_permission("local:1000");
+        let submitted = self.submit_as(&owner, spec(n)).unwrap();
         assert_eq!(
             submitted.job.state,
             JobState::Queued,
@@ -196,15 +195,33 @@ pub(crate) fn lane() -> LaneId {
     LaneId::new(1)
 }
 
-/// A caller with the permissions of the job API 1 scopes `read` and
-/// `submit` (no run option that adds risk).
+/// What the job API 1 scopes `read` and `submit` became.
+pub(crate) const READ_SUBMIT: [Permission; 3] = [
+    Permission::RunsSeeAll,
+    Permission::SamplesAdd,
+    Permission::RunsSubmit,
+];
+
+/// What `manage` became.
+pub(crate) const MANAGE: [Permission; 6] = [
+    Permission::RunsManageAny,
+    Permission::SamplesTag,
+    Permission::RunsDelete,
+    Permission::QueueManage,
+    Permission::LanesReset,
+    Permission::CustodyVerify,
+];
+
+/// A caller that sees and submits runs (no run option that adds risk).
 pub(crate) fn caller(uid: u32) -> Caller {
-    Caller::from_scopes(format!("local:{uid}"), &[Scope::Read, Scope::Submit])
+    Caller::new(format!("local:{uid}"), &READ_SUBMIT)
 }
 
-/// A caller with the permissions of `read`, `submit` and `manage`.
+/// A caller that also manages runs, samples, the queue and the lanes.
 pub(crate) fn manager() -> Caller {
-    Caller::from_scopes("local:0", &[Scope::Read, Scope::Submit, Scope::Manage])
+    let mut caller = Caller::new("local:0", &READ_SUBMIT);
+    caller.permissions.extend(MANAGE);
+    caller
 }
 
 pub(crate) fn spec(n: u8) -> JobSpec {
@@ -230,8 +247,8 @@ pub(crate) fn keyed(n: u8, key: &str) -> JobSpec {
     }
 }
 
-pub(crate) fn on_dup(policy: &mut Policy, mode: OnDuplicate) {
-    policy.sample.on_duplicate = mode;
+pub(crate) fn on_dup(preset: &mut Preset, mode: OnDuplicate) {
+    preset.duplicates.on_duplicate = mode;
 }
 
 /// The event types of a job, in order.

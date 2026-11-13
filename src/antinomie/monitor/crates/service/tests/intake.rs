@@ -13,11 +13,11 @@ use antinomie_service::{
         failure::FailureCode,
         ids::{Sha256Hex, UploadId},
         job::JobState,
-        ops::{Caller, Scope, UploadBeginParams},
+        ops::{Caller, Permission, UploadBeginParams},
         spec::{JobSpec, SampleSource},
     },
     clock::ManualClock,
-    config::{LoadedPolicy, Policy, PolicySet},
+    config::{LoadedPreset, Preset, PresetSet},
     intake::{
         Intake, display_name, size_limit,
         staging::{MAX_CHUNK, MAX_OPEN_PER_CLIENT, StagingStore, UPLOAD_TTL_MS},
@@ -95,15 +95,12 @@ impl Fx {
     }
 }
 
-fn policy(edit: impl FnOnce(&mut Policy)) -> LoadedPolicy {
-    let mut policy = Policy::default();
-    policy.vm.lane_vm = Some("auto-1".into());
-    edit(&mut policy);
-    LoadedPolicy {
-        name: "default".into(),
-        digest: "d".repeat(64),
-        policy,
-    }
+/// Standard's options, ELF files only (as the 0.9.0 default), with `edit`.
+fn policy(edit: impl FnOnce(&mut Preset)) -> LoadedPreset {
+    let mut preset = Preset::default();
+    preset.accepts.types = vec!["elf".into()];
+    edit(&mut preset);
+    LoadedPreset::named("standard", "d".repeat(64), preset)
 }
 
 /// A 64-byte ELF header for `machine` (0x3e is x86-64, 0xb7 AArch64).
@@ -499,7 +496,7 @@ fn a_staged_elf_becomes_a_library_sample_with_its_origin_and_actor() {
 }
 
 #[test]
-fn type_and_architecture_are_checked_against_the_policy() {
+fn type_and_architecture_are_checked_against_the_preset() {
     let fx = Fx::new("types");
     let default = policy(|_| {});
     let script = fx.upload(ME, None, b"#!/bin/sh\necho hi\n");
@@ -530,10 +527,10 @@ fn type_and_architecture_are_checked_against_the_policy() {
     // A denied upload stays staged (the caller may delete it or let it expire).
     assert!(fx.staging.sealed(ME, &script).is_ok());
 
-    // Policies that accept more.
+    // Presets that accept more.
     let loose = policy(|p| {
-        p.sample.accept_types = vec!["elf".into(), "sh".into()];
-        p.sample.accept_arch = vec!["x86_64".into(), "AArch64".into()];
+        p.accepts.types = vec!["elf".into(), "sh".into()];
+        p.accepts.arch = vec!["x86_64".into(), "AArch64".into()];
     });
     // A script has no architecture, so accept_arch does not apply to it.
     let sample = fx
@@ -547,8 +544,8 @@ fn type_and_architecture_are_checked_against_the_policy() {
             .is_ok()
     );
     let any = policy(|p| {
-        p.sample.accept_types = vec!["any".into()];
-        p.sample.accept_arch = vec!["any".into()];
+        p.accepts.types = vec!["any".into()];
+        p.accepts.arch = vec!["any".into()];
     });
     assert!(
         fx.intake()
@@ -569,7 +566,7 @@ fn the_size_limit_is_the_minimum_of_three_bounds() {
 
     let fx = Fx::new("limit");
     let two_mib = fx.upload(ME, None, &elf(0x3e, 2 << 20));
-    let one_mib = policy(|p| p.sample.max_sample_mib = 1);
+    let one_mib = policy(|p| p.accepts.max_sample_mib = 1);
     assert_eq!(
         denied(
             fx.intake()
@@ -780,15 +777,15 @@ fn submit_with_an_upload_id_queues_a_job_and_uses_up_the_upload() {
     let fx = Fx::new("submit");
     let clock = fx.clock.clone();
     let store = Store::open_with_clock(&fx.data.join("service"), clock).unwrap();
-    let policies = PolicySet::single(policy(|_| {}));
+    let policies = PresetSet::single(policy(|_| {}));
     let intake = fx.intake();
     let ctx = antinomie_service::store::SubmitContext {
-        policies: &policies,
+        presets: &policies,
         intake: &intake,
         limits: SubmitLimits::default(),
         on_duplicate: None,
     };
-    let me = Caller::from_scopes(ME, &[Scope::Submit]);
+    let me = Caller::new(ME, &[Permission::SamplesAdd, Permission::RunsSubmit]);
     let id = fx.upload(ME, Some("run-me"), &elf(0x3e, 64));
     let spec = JobSpec {
         sample: source_upload(&id),

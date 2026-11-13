@@ -144,9 +144,24 @@ pub struct JobSample {
     pub name: String,
 }
 
-/// The frozen policy: its name and the digest of the exact content used.
+/// The preset a run froze: its name and the digest of the exact content
+/// used; for a Custom run (any override that changed a value) the name
+/// `custom`, the digest of the resolved options, the preset it was based on
+/// and the keys it changed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PolicyRef {
+pub struct PresetRef {
+    pub name: String,
+    pub digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub based_on: Option<PresetBase>,
+    /// Dotted keys of the preset format (`program.run_time_s`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<String>,
+}
+
+/// The preset a Custom run started from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PresetBase {
     pub name: String,
     pub digest: String,
 }
@@ -209,7 +224,7 @@ pub struct JobRun {
     /// The signal number when it was killed by one.
     pub signal: Option<i32>,
     pub core_dumped: bool,
-    /// The dumps the policy's dump trigger took, in order; empty when the
+    /// The dumps the preset's dump trigger took, in order; empty when the
     /// trigger is off or took none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<JobTrigger>,
@@ -269,7 +284,8 @@ pub struct Job {
     pub client_id: String,
     pub spec: JobSpec,
     pub sample: Option<JobSample>,
-    pub policy: PolicyRef,
+    /// The preset (the member keeps its 0.9.0 name until the run API).
+    pub policy: PresetRef,
     pub lane: Option<LaneId>,
     pub vm: Option<JobVm>,
     pub run: Option<JobRun>,
@@ -297,7 +313,7 @@ pub enum HostItemState {
     Running,
     Done,
     /// It ended with a problem (a warning of the job, or its failure when the
-    /// policy requires the stage).
+    /// preset requires the stage).
     Failed,
     /// It passed its time limit and was stopped.
     TimedOut,
@@ -319,10 +335,10 @@ pub struct HostItem {
     /// of the item and an estimate from the input size, else the fixed limit.
     pub expected_s: u64,
     /// Where `expected_s` came from: `median`, `estimate`, `fixed` or
-    /// `policy` (a fixed limit the policy or the job set).
+    /// `policy` (a fixed limit the preset sets; the name stays for the wire).
     pub basis: String,
     /// Its own time limit (seconds): `daemon.host_time_factor` x
-    /// `expected_s`, or the policy's fixed limit. Time in the queue does not
+    /// `expected_s`, or the preset's fixed limit. Time in the queue does not
     /// count.
     pub limit_s: u64,
     pub started_ms: Option<u64>,

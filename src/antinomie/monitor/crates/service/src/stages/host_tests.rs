@@ -135,15 +135,15 @@ impl HostTriage for Hooked {
     }
 }
 
-/// A policy for host tests: no static analysis (the fake engine would have
+/// A preset for host tests: no static analysis (the fake engine would have
 /// to script it), no detection engines (no tools on the build machine).
-pub(super) fn quiet(p: &mut crate::config::Policy) {
-    p.analysis.static_checks =
-        crate::api::spec::StaticChecks::Preset(crate::api::spec::StaticPreset::None);
-    p.analysis.detection = crate::config::policy::Detection {
+pub(super) fn quiet(p: &mut crate::config::Preset) {
+    p.static_analysis.enabled = false;
+    p.detection = crate::config::preset::Detection {
         yara: false,
         sigma: false,
         ids: false,
+        ..Default::default()
     };
 }
 
@@ -151,7 +151,7 @@ pub(super) fn world(name: &str) -> W {
     world_with(name, |_| {})
 }
 
-pub(super) fn world_with(name: &str, edit: impl FnOnce(&mut crate::config::Policy)) -> W {
+pub(super) fn world_with(name: &str, edit: impl FnOnce(&mut crate::config::Preset)) -> W {
     let mut w = W::with(name, |p| {
         quiet(p);
         edit(p);
@@ -444,7 +444,7 @@ fn a_collected_job_is_analysed_reported_and_finished() {
 #[test]
 fn the_assessment_event_is_sent_once_and_the_label_follows_the_policy_rules() {
     let w = world_with("host-rules", |p| {
-        p.verdict.rule = vec![crate::config::policy::VerdictRule {
+        p.verdict.rule = vec![crate::config::preset::VerdictRule {
             when: "counts.processes >= 1".into(),
             label: Label::Malicious,
             score: Some(88),
@@ -471,7 +471,7 @@ fn the_assessment_event_is_sent_once_and_the_label_follows_the_policy_rules() {
 fn tag_library_writes_the_label_and_the_policy_onto_the_sample_and_is_off_by_default() {
     let w = world_with("host-tags", |p| {
         p.verdict.tag_library = true;
-        p.verdict.rule = vec![crate::config::policy::VerdictRule {
+        p.verdict.rule = vec![crate::config::preset::VerdictRule {
             when: "counts.processes >= 1".into(),
             label: Label::Suspicious,
             score: None,
@@ -485,7 +485,7 @@ fn tag_library_writes_the_label_and_the_policy_onto_the_sample_and_is_off_by_def
     assert_eq!(
         tags,
         vec![
-            (sha.clone(), "auto:policy=default".to_owned()),
+            (sha.clone(), "auto:preset=standard".to_owned()),
             (sha, "auto:label=suspicious".to_owned())
         ]
     );
@@ -560,8 +560,8 @@ fn a_policy_without_formats_skips_report_and_a_policy_without_work_skips_analyse
     assert!(!w.fx.store.job_dir(&job.id).join("artifacts").exists());
 
     let w = world_with("host-skip2", |p| {
-        p.analysis.triage = false;
-        p.analysis.required_stages = Vec::new();
+        p.triage.enabled = false;
+        p.required_stages = Vec::new();
     });
     let job = collected(&w, 1);
     let mut waiter = w.engine(|_| {});
@@ -604,7 +604,7 @@ fn a_missing_recording_fails_a_required_analyse_stage() {
 
 #[test]
 fn a_failed_scan_in_a_stage_the_policy_does_not_require_is_a_warning_and_partial() {
-    let mut w = world_with("host-soft", |p| p.analysis.required_stages = Vec::new());
+    let mut w = world_with("host-soft", |p| p.required_stages = Vec::new());
     hook(&mut w, |h| {
         h.index = Some(Box::new(|_| Err("the index is damaged".into())))
     });
@@ -634,7 +634,7 @@ fn a_failed_scan_in_a_stage_the_policy_does_not_require_is_a_warning_and_partial
 
 #[test]
 fn a_run_whose_scan_failed_still_gets_its_digest_and_a_partial_one_is_a_warning() {
-    let mut w = world_with("host-digest", |p| p.analysis.required_stages = Vec::new());
+    let mut w = world_with("host-digest", |p| p.required_stages = Vec::new());
     hook(&mut w, |h| {
         h.index = Some(Box::new(|_| Err("the index is damaged".into())))
     });
@@ -668,7 +668,7 @@ fn a_run_whose_scan_failed_still_gets_its_digest_and_a_partial_one_is_a_warning(
 #[test]
 fn a_report_that_cannot_be_written_fails_a_required_report_and_degrades_otherwise() {
     let mut w = world_with("host-write", |p| {
-        p.analysis.required_stages = vec![Stage::Analyse, Stage::Report];
+        p.required_stages = vec![Stage::Analyse, Stage::Report];
     });
     hook(&mut w, |h| {
         h.write_error = Some("no space left on device".into())
@@ -854,9 +854,9 @@ fn without_the_retry_the_first_failure_ends_the_job() {
 #[test]
 fn engines_run_after_the_scan_and_a_failed_or_skipped_one_is_reported() {
     let mut w = world_with("host-detect", |p| {
-        p.analysis.detection.yara = true;
-        p.analysis.detection.ids = true;
-        p.analysis.required_stages = Vec::new();
+        p.detection.yara = true;
+        p.detection.ids = true;
+        p.required_stages = Vec::new();
     });
     hook(&mut w, |h| {
         h.detect = Some(Box::new(|| {
@@ -896,7 +896,7 @@ fn engines_run_after_the_scan_and_a_failed_or_skipped_one_is_reported() {
 
 #[test]
 fn a_required_stage_fails_when_an_engine_fails() {
-    let mut w = world_with("host-detect2", |p| p.analysis.detection.yara = true);
+    let mut w = world_with("host-detect2", |p| p.detection.yara = true);
     hook(&mut w, |h| {
         h.detect = Some(Box::new(|| {
             Ok(vec![(
@@ -922,13 +922,14 @@ fn report_entry(id: &str, state: &str) -> antinomie_monitor_core::analysis::Anal
     .unwrap()
 }
 
-fn static_policy(p: &mut crate::config::Policy) {
-    p.analysis.static_checks = crate::api::spec::StaticChecks::Names(vec![
+fn static_policy(p: &mut crate::config::Preset) {
+    p.static_analysis.enabled = true;
+    p.static_analysis.triage_checks = vec![
         crate::api::spec::StaticCheck::Metadata,
         crate::api::spec::StaticCheck::Strings,
-    ]);
-    p.analysis.static_time_limit_min = Some(1);
-    p.analysis.required_stages = Vec::new();
+    ];
+    p.static_analysis.time_limit_per_tool_min = 1;
+    p.required_stages = Vec::new();
 }
 
 #[test]
@@ -1029,7 +1030,7 @@ fn a_refused_or_unfinished_static_analysis_is_a_problem_not_a_stop() {
 fn a_required_stage_fails_on_a_static_analysis_problem() {
     let w = world_with("host-static-req", |p| {
         static_policy(p);
-        p.analysis.required_stages = vec![Stage::Analyse];
+        p.required_stages = vec![Stage::Analyse];
     });
     let job = collected(&w, 1);
     let mut waiter = w.engine(|fake| {
@@ -1069,9 +1070,9 @@ fn analyse_with(
     let w = world_with(name, |p| {
         static_policy(p);
         if required_stage {
-            p.analysis.required_stages = vec![Stage::Analyse];
+            p.required_stages = vec![Stage::Analyse];
         }
-        p.analysis.required_checks = required_checks;
+        p.static_analysis.required_checks = required_checks;
     });
     let job = collected(&w, 1);
     // Both tools' items get the same report.

@@ -24,7 +24,7 @@ use crate::{
         failure::{Failure, FailureCode},
         job::{Job, Revert, Stage},
     },
-    config::policy::RevertMode,
+    config::service::RevertMode,
     engine::Engine,
     lane::{QemuRecord, recover::announce_quarantine},
     store::JobPatch,

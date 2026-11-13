@@ -89,9 +89,9 @@ impl<E: Engine> LaneStages<'_, E> {
         let frozen = self
             .env
             .store
-            .frozen_policy(&job.id)
+            .frozen_preset(&job.id)
             .map_err(|e| self.store_error(Stage::Prechecks, e))?;
-        let limit = plan::effective(job, &frozen.policy).run_limit;
+        let limit = plan::effective(&frozen.preset, self.env.revert).run_limit;
         self.waiter.deadline_in(job_hard(limit));
         self.cancel_hook(job);
         Ok(())
@@ -357,9 +357,9 @@ impl<E: Engine> LaneStages<'_, E> {
             return Driven::Aborted(error);
         }
         let store = self.env.store;
-        let policy = match store.frozen_policy(&job.id) {
-            Ok(frozen) => frozen.policy.retry,
-            Err(_) => crate::config::policy::RetryPolicy::default(),
+        let policy = match store.frozen_preset(&job.id) {
+            Ok(frozen) => frozen.preset.retry,
+            Err(_) => crate::config::preset::Retry::default(),
         };
         let history = store.previous_failures(&job.id).unwrap_or_default();
         match retry::decide(&failure, &policy, &history, &job.id) {

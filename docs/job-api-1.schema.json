@@ -23,7 +23,7 @@
             "string",
             "null"
           ],
-          "description": "Policy name; default `default`."
+          "description": "The preset's name; default `standard`. (The member keeps its 0.9.0\nname until the run API.)"
         },
         "priority": {
           "type": [
@@ -33,7 +33,7 @@
           "format": "uint8",
           "minimum": 0,
           "maximum": 255,
-          "description": "0 to 9, higher starts first; default 5; the policy sets a ceiling."
+          "description": "0 to 9, higher starts first; default 5; the caller's limit sets a\nceiling."
         },
         "labels": {
           "type": "object",
@@ -56,7 +56,7 @@
       "required": [
         "sample"
       ],
-      "description": "What a caller submits with `job.submit`, and the resolved form a [`Job`]\ncarries (policy defaults filled in; `sample.path` removed for remote\ncallers; `sample.sha256` always set after prechecks).\n\n[`Job`]: super::job::Job"
+      "description": "What a caller submits with `job.submit`, and the form a [`Job`] carries\n(the preset's name and the priority filled in, `overrides` reduced to the\nkeys that changed a value; `sample.path` removed for remote callers;\n`sample.sha256` always set after prechecks). The run's resolved options\nare its frozen preset.\n\n[`Job`]: super::job::Job"
     },
     "SampleSource": {
       "type": "object",
@@ -106,320 +106,8 @@
     },
     "Overrides": {
       "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "timeout_s": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0,
-          "description": "Wall-clock limit of the run in seconds, 5 to the policy `max_run_s`\n(default policy 300, maximum 1800). Reaching it ends the run normally\n(`end_reason: time_limit`); it is not a failure."
-        },
-        "args": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          },
-          "description": "Program arguments, at most 64, each at most 4096 bytes."
-        },
-        "env": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          },
-          "description": "`K=V` entries, at most 64."
-        },
-        "run_as": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RunAs"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "run_in": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RunIn"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "route": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Route"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "network_capture": {
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "description": "Packet capture for the run; default true on a VM with a network card."
-        },
-        "memory_dump": {
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "description": "VM memory after the run's tree ends."
-        },
-        "core_dump": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CoreDump"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "static_checks": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StaticChecks"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "static_time_limit_min": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0,
-          "description": "Minutes per analysis tool, 0 to 480 (`TIME_LIMIT_MAX_MINUTES`)."
-        },
-        "detection": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DetectionSelection"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "reports": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/ReportFormat"
-          }
-        },
-        "report_bundle": {
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "description": "Evidence bundle zip."
-        },
-        "report_defang": {
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "description": "Defang indicators in HTML, PDF and Markdown; default true (B-W10)."
-        },
-        "keep_on_failure": {
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "description": "Leave the VM as the failed run left it, for inspection. Needs the\n`run.keep_vm` permission; `true` is refused `unavailable_on_node`:\nkeeping a VM arrives with 0.9.1."
-        }
-      },
-      "description": "The per-job overrides of the policy (design 5.4.1). `overrides.base` and\n`overrides.stealth` of revision 1 are removed: the lane VM fixes both."
-    },
-    "RunAs": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/RunAsName"
-        },
-        {
-          "$ref": "#/$defs/RunAsIds"
-        }
-      ],
-      "description": "A guest identity: `user` (UID/GID 1000, the default), `root` (needs the\n`run.as_root` permission, as does an id below 1000) or explicit ids."
-    },
-    "RunAsName": {
-      "type": "string",
-      "enum": [
-        "user",
-        "root"
-      ]
-    },
-    "RunAsIds": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "uid": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "gid": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "uid",
-        "gid"
-      ]
-    },
-    "RunIn": {
-      "type": "string",
-      "enum": [
-        "app_terminal",
-        "guest_desktop",
-        "guest_desktop_terminal"
-      ],
-      "description": "How the program is run in the guest. v1 supports `app_terminal` only\n(decided B-H24); the other two are reserved and fail `unsupported`."
-    },
-    "Route": {
-      "type": "string",
-      "enum": [
-        "drop",
-        "internet",
-        "inet_sim",
-        "tor",
-        "vpn",
-        "socks5"
-      ],
-      "description": "A network route by the engine's own serde spelling (`RouteKind`). `drop`\nand `inet_sim` need no permission; a live route needs its `route.*`\npermission and is then refused `unavailable_on_node` (no route is set up\nfor the service before 0.9.1)."
-    },
-    "CoreDump": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/$defs/CoreLimits"
-        }
-      ],
-      "description": "A process core on exit: a switch, or its limits."
-    },
-    "CoreLimits": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "max_mib": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "timeout_ms": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "max_mib",
-        "timeout_ms"
-      ]
-    },
-    "StaticChecks": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/StaticPreset"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/StaticCheck"
-          }
-        }
-      ],
-      "description": "Host-side static analysis of the library copy, run in the `analyse` stage:\n`none`, `triage` (the engine's eleven-tool set) or a list of checks."
-    },
-    "StaticPreset": {
-      "type": "string",
-      "enum": [
-        "none",
-        "triage"
-      ]
-    },
-    "StaticCheck": {
-      "type": "string",
-      "enum": [
-        "metadata",
-        "structures",
-        "strings",
-        "regex",
-        "entropy",
-        "hardening",
-        "rules",
-        "identification",
-        "capabilities",
-        "disassembly",
-        "decompilation",
-        "embedded",
-        "floss",
-        "unpacking"
-      ],
-      "description": "The names of `AnalysisKind` in lower snake case (`analysis/types.rs:7`)."
-    },
-    "DetectionSelection": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "yara": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "sigma": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "ids": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "description": "Which detection engines run on the evidence."
-    },
-    "ReportFormat": {
-      "type": "string",
-      "enum": [
-        "html",
-        "pdf",
-        "json",
-        "misp",
-        "stix",
-        "md"
-      ],
-      "description": "A report format (`report.get`, `overrides.reports`)."
+      "additionalProperties": true,
+      "description": "The per-run overrides: a partial preset, with the same tables and keys as\na preset file (`{\"program\": {\"run_time_s\": 600}}`). Any override that\nchanges a value makes the run Custom (the presets specification, \"The\nCustom rule\"); a stored run keeps the changed keys only."
     },
     "Job": {
       "type": "object",
@@ -525,7 +213,8 @@
           ]
         },
         "policy": {
-          "$ref": "#/$defs/PolicyRef"
+          "$ref": "#/$defs/PresetRef",
+          "description": "The preset (the member keeps its 0.9.0 name until the run API)."
         },
         "lane": {
           "anyOf": [
@@ -734,7 +423,40 @@
       ],
       "description": "The library sample of a job, once archived."
     },
-    "PolicyRef": {
+    "PresetRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "based_on": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PresetBase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Dotted keys of the preset format (`program.run_time_s`)."
+        }
+      },
+      "required": [
+        "name",
+        "digest"
+      ],
+      "description": "The preset a run froze: its name and the digest of the exact content\nused; for a Custom run (any override that changed a value) the name\n`custom`, the digest of the resolved options, the preset it was based on\nand the keys it changed."
+    },
+    "PresetBase": {
       "type": "object",
       "properties": {
         "name": {
@@ -748,7 +470,7 @@
         "name",
         "digest"
       ],
-      "description": "The frozen policy: its name and the digest of the exact content used."
+      "description": "The preset a Custom run started from."
     },
     "LaneId": {
       "type": "string",
@@ -848,7 +570,7 @@
           "items": {
             "$ref": "#/$defs/JobTrigger"
           },
-          "description": "The dumps the policy's dump trigger took, in order; empty when the\ntrigger is off or took none."
+          "description": "The dumps the preset's dump trigger took, in order; empty when the\ntrigger is off or took none."
         },
         "trigger_notes": {
           "type": "array",
@@ -1044,7 +766,7 @@
               "type": "null"
             }
           ],
-          "description": "Null only when the policy explicitly disables the mapping."
+          "description": "Null only when the preset explicitly disables the mapping."
         },
         "score": {
           "type": [
@@ -1054,7 +776,7 @@
           "format": "uint8",
           "minimum": 0,
           "maximum": 255,
-          "description": "0 to 100 from the policy formula; null when no rule sets one."
+          "description": "0 to 100 from the preset formula; null when no rule sets one."
         },
         "families": {
           "type": "array",
@@ -1137,7 +859,7 @@
         "clean_observed",
         "inconclusive"
       ],
-      "description": "The policy label (design 4.9.2)."
+      "description": "The label (design 4.9.2)."
     },
     "Counts": {
       "type": "object",
@@ -1469,13 +1191,13 @@
         },
         "basis": {
           "type": "string",
-          "description": "Where `expected_s` came from: `median`, `estimate`, `fixed` or\n`policy` (a fixed limit the policy or the job set)."
+          "description": "Where `expected_s` came from: `median`, `estimate`, `fixed` or\n`policy` (a fixed limit the preset sets; the name stays for the wire)."
         },
         "limit_s": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0,
-          "description": "Its own time limit (seconds): `daemon.host_time_factor` x\n`expected_s`, or the policy's fixed limit. Time in the queue does not\ncount."
+          "description": "Its own time limit (seconds): `daemon.host_time_factor` x\n`expected_s`, or the preset's fixed limit. Time in the queue does not\ncount."
         },
         "started_ms": {
           "type": [
@@ -1527,7 +1249,7 @@
         {
           "type": "string",
           "const": "failed",
-          "description": "It ended with a problem (a warning of the job, or its failure when the\npolicy requires the stage)."
+          "description": "It ended with a problem (a warning of the job, or its failure when the\npreset requires the stage)."
         },
         {
           "type": "string",
@@ -1646,7 +1368,8 @@
           ]
         },
         "policy": {
-          "$ref": "#/$defs/PolicyRef"
+          "$ref": "#/$defs/PresetRef",
+          "description": "The preset (the member keeps its 0.9.0 name until the run API)."
         },
         "lane": {
           "anyOf": [
@@ -2313,6 +2036,11 @@
         "failed"
       ]
     },
+    "Route": {
+      "type": "string",
+      "pattern": "^(drop|inet_sim|internet|nat|tor|(vpn|socks5)(:[A-Za-z0-9._-]{1,64})?)$",
+      "description": "A network route: drop, inet_sim, internet, nat, tor, vpn[:NAME], socks5[:NAME]."
+    },
     "LaneState": {
       "type": "string",
       "enum": [
@@ -2905,7 +2633,7 @@
           "items": {
             "$ref": "#/$defs/Route"
           },
-          "description": "Routes a caller may request under its policies (v1: a subset of\n`drop` and `inet_sim`)."
+          "description": "The routes this node runs: `drop` and `inet_sim` (no live route is\nset up before 0.9.1)."
         },
         "report_formats": {
           "type": "array",
@@ -2961,6 +2689,38 @@
         "queries",
         "features"
       ]
+    },
+    "ReportFormat": {
+      "type": "string",
+      "enum": [
+        "html",
+        "pdf",
+        "json",
+        "misp",
+        "stix",
+        "md"
+      ],
+      "description": "A report format (`report.get`, `overrides.reports`)."
+    },
+    "StaticCheck": {
+      "type": "string",
+      "enum": [
+        "metadata",
+        "structures",
+        "strings",
+        "regex",
+        "entropy",
+        "hardening",
+        "rules",
+        "identification",
+        "capabilities",
+        "disassembly",
+        "decompilation",
+        "embedded",
+        "floss",
+        "unpacking"
+      ],
+      "description": "The names of `AnalysisKind` in lower snake case (`analysis/types.rs:7`)."
     },
     "DetectionCaps": {
       "type": "object",
@@ -3490,27 +3250,66 @@
       ],
       "description": "`Snapshot.health.read_gaps` reduced to numbers a client can chart."
     },
-    "PolicySummary": {
+    "PresetSummary": {
       "type": "object",
       "properties": {
         "name": {
           "type": "string"
         },
+        "title": {
+          "type": "string"
+        },
         "description": {
           "type": "string"
         },
-        "ceilings": {
-          "type": "object",
-          "additionalProperties": true,
-          "description": "The policy's ceilings by key (`max_run_s`, `max_sample_mib`, ...)."
+        "digest": {
+          "type": "string"
+        },
+        "built_in": {
+          "type": "boolean",
+          "description": "One of the five presets that ship with the service (read-only)."
+        },
+        "offered_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The roles that see it on Submit (a list, not a lock)."
+        },
+        "needs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "description": "The permissions its options need, beside `runs.submit`."
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "description": "The ones of `needs` the caller lacks."
+        },
+        "unavailable": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What this node does not have for it (\"route tor is not set up on\nthis node\"); a run of it is refused `unavailable_on_node`."
         }
       },
       "required": [
         "name",
+        "title",
         "description",
-        "ceilings"
+        "digest",
+        "built_in",
+        "offered_to",
+        "needs",
+        "missing",
+        "unavailable"
       ],
-      "description": "A policy a caller may use (`policy.list`); never secrets."
+      "description": "A preset (`policy.list`): what its options need and whether the caller and\nthe node have it."
     },
     "VmSummary": {
       "type": "object",
@@ -3542,7 +3341,7 @@
         "id",
         "name"
       ],
-      "description": "A VM a policy can use (`vm.list`); lane VMs carry `lane`."
+      "description": "A VM a preset can use (`vm.list`); lane VMs carry `lane`."
     },
     "BaseSummary": {
       "type": "object",
@@ -3717,7 +3516,7 @@
         "client_id",
         "permissions"
       ],
-      "description": "Who is asking. The CLI uses the OS user (`local:<uid>`, every\npermission), a watch folder its policy (`auto:policy-<name>`, `runs.submit`\nand the folder's `permissions`); a later web layer fills it from\nauthentication (`web:<user_id>`). The service never trusts a\nclient-supplied value."
+      "description": "Who is asking. The CLI uses the OS user (`local:<uid>`, every\npermission), a watch folder its preset (`auto:policy-<name>`, `runs.submit`\nand the folder's `permissions`); a later web layer fills it from\nauthentication (`web:<user_id>`). The service never trusts a\nclient-supplied value."
     },
     "Limits": {
       "type": "object",
@@ -3770,7 +3569,7 @@
           "description": "Runs running at once."
         }
       },
-      "description": "The limits a caller brings (the access specification's \"Limits per role,\nchangeable per person\"). Unset means the caller adds no limit of its own;\nthe node's and the policy's ceilings still apply. Nothing sets them before\nlimits per caller arrive (card P-A5), which also reads them."
+      "description": "The limits a caller brings (the access specification's \"Limits per role,\nchangeable per person\"). Unset means the caller adds no limit of its own;\nthe node's ceilings still apply. Admission reads `priority_max`,\n`max_run_s` and `max_queued` when they are set; nothing sets them before\nlimits per caller arrive (card P-A5)."
     },
     "UploadBeginParams": {
       "type": "object",
@@ -4422,13 +4221,14 @@
         "policies": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/PolicySummary"
+            "$ref": "#/$defs/PresetSummary"
           }
         }
       },
       "required": [
         "policies"
-      ]
+      ],
+      "description": "`policy.list` (named `preset.list` from the run API): every preset."
     },
     "VmList": {
       "type": "object",
@@ -4537,8 +4337,8 @@
         },
         {
           "type": "string",
-          "const": "run_mode_not_in_v1",
-          "description": "`unsupported`: a desktop run mode in a v1 job."
+          "const": "reserved",
+          "description": "`unsupported`: a preset key 0.9.0 reserves, set away from its default\n(\"arrives with 0.9.1\")."
         },
         {
           "type": "string",
@@ -5451,7 +5251,7 @@
         "ioc_dataset_count",
         "basis"
       ],
-      "description": "`recording.summary`: the assessment fields of the JSON report summary (5.4.3\nwithout the policy `label` and `score`, which belong to a job)."
+      "description": "`recording.summary`: the assessment fields of the JSON report summary (5.4.3\nwithout the preset `label` and `score`, which belong to a job)."
     },
     "Page2": {
       "type": "object",

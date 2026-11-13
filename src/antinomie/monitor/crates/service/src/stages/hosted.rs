@@ -12,13 +12,13 @@
 //! | The stages end with | The job |
 //! |---|---|
 //! | all of them worked | the outcome `collect` found (`succeeded`, or `partial` for incomplete evidence) |
-//! | a problem in a stage the policy does not require | `partial`, one warning per problem |
-//! | a failure in a required stage (`analysis.required_stages`) | `failed`, `analysis_failed` |
+//! | a problem in a stage the preset does not require | `partial`, one warning per problem |
+//! | a failure in a required stage (`required_stages`) | `failed`, `analysis_failed` |
 //! | a cancel | `cancelled`; the recording and the reports written so far are kept |
 //! | a shutdown cancel | back in the queue (a new attempt: the VM runs again) |
 //! | a signal or a dead engine | untouched: the lane file keeps the `collected` entry, and recovery resumes the job at `analyse` ([`LaneStages::resume_host`]) |
 //!
-//! `analysis_failed` is retried in place when the policy lists it in
+//! `analysis_failed` is retried in place when the preset lists it in
 //! `retry.retry_on` (4.7.2: "`analyse` and `report` only, no VM re-run"), up to
 //! `max_attempts` runs of the two stages, with no backoff: the cause is not a
 //! machine that needs time.
@@ -124,9 +124,9 @@ impl<E: Engine> LaneStages<'_, E> {
         self.cancel_point(job)?;
         let store = self.env.store;
         let frozen = store
-            .frozen_policy(&job.id)
+            .frozen_preset(&job.id)
             .map_err(|e| self.store_error(Stage::Analyse, e))?;
-        let plan = plan::hosted(job, &frozen.policy);
+        let plan = plan::hosted(&frozen.preset);
         let items = items_for(&plan);
         let inputs = timing::inputs_of(job, self.env.triage.load_scale());
         let rules = Timing::default();
@@ -161,17 +161,18 @@ impl<E: Engine> LaneStages<'_, E> {
 
     /// `[verdict] tag_library` (coordinator decision for 0.9.0, design
     /// 4.9.3): the sample gets the library tags `auto:label=<label>` and
-    /// `auto:policy=<name>`, written under the automation actor
+    /// `auto:preset=<name>` (the preset a Custom run was based on), written
+    /// under the automation actor
     /// (`auto:policy-<name>`) in its custody chain. A tag that cannot be
     /// written is a warning; the job does not fail for it.
-    pub(super) fn tag_library(&mut self, job: &Job, frozen: &crate::config::LoadedPolicy) {
-        if !frozen.policy.verdict.tag_library {
+    pub(super) fn tag_library(&mut self, job: &Job, frozen: &crate::config::LoadedPreset) {
+        if !frozen.preset.verdict.tag_library {
             return;
         }
         let Ok(fresh) = self.env.store.get(&job.id) else {
             return;
         };
-        let mut tags = vec![format!("auto:policy={}", frozen.name)];
+        let mut tags = vec![format!("auto:preset={}", frozen.base_name())];
         if let Some(label) = fresh.assessment.as_ref().and_then(|a| a.label) {
             let name = serde_json::to_value(label)
                 .ok()

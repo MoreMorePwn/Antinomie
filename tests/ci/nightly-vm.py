@@ -127,8 +127,6 @@ def auto_job(cli, base, work, failures):
     check(code == 0 and bool(lane), f"auto: auto init exit {code}", failures)
     if code != 0:
         return
-    policy = data / "policies" / "default.toml"
-    policy.write_text(auto_vm.set_toml_key(policy.read_text(), "sample", "accept_types", '["elf", "sh"]'))
     (data / "service.toml").write_text(auto_vm.service_toml(min_free_disk_gib=2))
     program = work / "auto-job.sh"
     program.write_text(AUTO_PROGRAM)

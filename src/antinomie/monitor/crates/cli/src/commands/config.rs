@@ -26,19 +26,23 @@ pub enum Config {
     /// Change one setting. VALUE is JSON when it parses (`true`, `12`), else
     /// text. Takes the engine lock, so it refuses while a window or daemon runs.
     Set { key: String, value: String },
-    /// Check `service.toml` and `policies/*.toml`: unknown keys, ceilings, the
-    /// v1 routes, and the lane VM (its network and snapshots). Prints each
-    /// problem with its line; exit 4 when there is an error. Reads only.
+    /// Check `service.toml` and the presets (the five built in and
+    /// `presets/*.toml`): unknown keys, the node ceilings, the keys 0.9.0
+    /// reserves, live routes, and the lanes against the lane VM (its network
+    /// and snapshots). A 0.9.0 `policies/` folder is an error naming the new
+    /// key of each old one. Prints each problem with its line; exit 4 when
+    /// there is an error. Reads only.
     Validate {
-        /// Check this policy's file only (the service file is still checked).
+        /// Check this preset only (its file, or a built-in one; the service
+        /// file is still checked).
         #[arg(long)]
-        policy: Option<String>,
+        preset: Option<String>,
     },
 }
 
-fn validate(policy: Option<&str>, context: &Context) -> Result<Reply, CliError> {
+fn validate(preset: Option<&str>, context: &Context) -> Result<Reply, CliError> {
     let data = context.data_dir();
-    let report = config::validate::load(data, &DiskVms::open(data), policy);
+    let report = config::validate::load(data, &DiskVms::open(data), preset);
     let problems: Vec<serde_json::Value> = report
         .problems
         .iter()
@@ -62,12 +66,13 @@ fn validate(policy: Option<&str>, context: &Context) -> Result<Reply, CliError> 
         }
         .to_owned(),
     ];
-    files.extend(
-        report
-            .policies
-            .keys()
-            .map(|name| format!("policies/{name}.toml")),
-    );
+    files.extend(report.presets.values().map(|preset| {
+        if preset.built_in {
+            format!("built-in/{}", preset.name)
+        } else {
+            format!("presets/{}.toml", preset.name)
+        }
+    }));
     let warnings = report
         .problems
         .iter()
@@ -82,7 +87,7 @@ fn validate(policy: Option<&str>, context: &Context) -> Result<Reply, CliError> 
     Ok(Reply::value(json!({
         "ok": true,
         "files": files,
-        "policies": report.policies.keys().collect::<Vec<_>>(),
+        "presets": report.presets.keys().collect::<Vec<_>>(),
         "problems": problems,
     }))
     .with_human(human))
@@ -164,7 +169,7 @@ pub fn run(config: &Config, context: &Context) -> Result<Reply, CliError> {
     match config {
         Config::Get { key } => get(key.as_deref(), context),
         Config::Set { key, value } => set(key, value, context),
-        Config::Validate { policy } => validate(policy.as_deref(), context),
+        Config::Validate { preset } => validate(preset.as_deref(), context),
         Config::Path => {
             let data = context.data_dir();
             let paths = [

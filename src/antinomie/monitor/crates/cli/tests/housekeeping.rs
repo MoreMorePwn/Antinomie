@@ -37,7 +37,7 @@ fn watch_list_without_a_daemon_names_the_configured_folders() {
     std::fs::create_dir_all(root.join("data")).unwrap();
     std::fs::write(
         root.join("data/service.toml"),
-        "[[inbox.watch]]\npath = \"/srv/drop/one\"\npolicy = \"default\"\n[[inbox.watch]]\npath = \"/srv/drop/two\"\n",
+        "[[inbox.watch]]\npath = \"/srv/drop/one\"\npreset = \"standard\"\n[[inbox.watch]]\npath = \"/srv/drop/two\"\n",
     )
     .unwrap();
     let (code, out, err) = cli(&root, &["auto", "watch", "list"]);

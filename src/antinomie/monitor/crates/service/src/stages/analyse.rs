@@ -13,18 +13,19 @@
 //!    `antinomie-cli triage/detect` call (`antinomie_triage`); they run on a
 //!    worker thread bounded by the item's limit and a cancel flag.
 //! 3. **The assessment** (item `assess`): the Triage summary and the
-//!    detections go through the policy's verdict mapping ([`crate::verdict`]);
+//!    detections go through the preset's verdict mapping ([`crate::verdict`]);
 //!    the result is stored with the job (`job.assessment`). It is computed
 //!    here and not in `report`, so a job that asks for no report still has
 //!    its label (departure from 4.1, which has `report` build it).
 //!
 //! A static check that ran out of time or stopped short is not a problem of
 //! the stage: it is a job warning (`static_check_incomplete`) and the job ends
-//! `partial`, unless the policy lists the check in `analysis.required_checks`
-//! (default none), when it is a problem like any other.
+//! `partial`, unless the preset lists the check in
+//! `static_analysis.required_checks` (default none), when it is a problem
+//! like any other.
 //!
-//! A step that fails is a *problem*. If the policy requires the `analyse`
-//! stage (`analysis.required_stages`) the stage fails `analysis_failed`;
+//! A step that fails is a *problem*. If the preset requires the `analyse`
+//! stage (`required_stages`) the stage fails `analysis_failed`;
 //! otherwise each problem is a job warning, the job ends `partial`, and a job
 //! whose Triage scan failed gets the label `inconclusive`.
 use super::{
@@ -41,8 +42,8 @@ use crate::{
 use antinomie_monitor_core::{
     Command,
     analysis::{
-        AnalysisKind, AnalysisLimits, AnalysisReport, AnalysisSectionState, AnalysisSelection,
-        AnalysisState, detection::Engine as DetectionEngine,
+        AnalysisKind, AnalysisReport, AnalysisSectionState, AnalysisSelection, AnalysisState,
+        detection::Engine as DetectionEngine,
     },
     report::{Choices, Part},
 };
@@ -96,7 +97,7 @@ impl StaticOutcome {
     }
 
     /// A timeout of the whole analysis: which check it cut is not known, so
-    /// it fails the stage only when the policy requires some check.
+    /// it fails the stage only when the preset requires some check.
     fn unfinished(plan: &HostPlan, text: String) -> Self {
         if plan.required_checks.is_empty() {
             Self {
@@ -114,7 +115,7 @@ fn check_name(kind: AnalysisKind) -> String {
 }
 
 /// Read the sections of a finished report: a check that ran out of time or
-/// stopped short is `soft`, and `hard` when the policy requires it.
+/// stopped short is `soft`, and `hard` when the preset requires it.
 fn judge_report(plan: &HostPlan, report: &AnalysisReport) -> StaticOutcome {
     let mut out = StaticOutcome::default();
     for section in &report.sections {
@@ -257,7 +258,7 @@ impl<E: Engine> LaneStages<'_, E> {
             .map(|k| check_name(*k))
             .collect::<Vec<_>>()
             .join(" and ");
-        // The engine's own limit per tool: the policy's fixed one (stretched
+        // The engine's own limit per tool: the preset's fixed one (stretched
         // on a loaded host like the guest waits), else the item's whole limit
         // so the item's own deadline is the one that ends it.
         let minutes = match plan.static_limit_min {
@@ -272,7 +273,7 @@ impl<E: Engine> LaneStages<'_, E> {
             enabled: true,
             checks: group.to_vec(),
             time_limit_minutes: minutes,
-            limits: AnalysisLimits::default(),
+            limits: plan.static_limits,
         };
         self.progress(
             job,
@@ -419,7 +420,7 @@ impl<E: Engine> LaneStages<'_, E> {
         })
     }
 
-    /// The detection item: the policy's engines over the indexed run. A
+    /// The detection item: the preset's engines over the indexed run. A
     /// skipped engine is a warning at once; the problems are returned, with
     /// whether the limit ended the item.
     pub(super) fn detection_item(
@@ -497,7 +498,7 @@ impl<E: Engine> LaneStages<'_, E> {
     ) -> Result<(), StageStop> {
         let store = self.env.store;
         let frozen = store
-            .frozen_policy(&job.id)
+            .frozen_preset(&job.id)
             .map_err(|e| self.store_error(Stage::Analyse, e))?;
         let current = store
             .get(&job.id)
@@ -505,7 +506,7 @@ impl<E: Engine> LaneStages<'_, E> {
         let end_reason = current.run.as_ref().and_then(|run| run.end_reason);
         let triage: &dyn HostTriage = self.env.triage;
         let datasets = triage.ioc_datasets();
-        let mapping = match Mapping::compile(&frozen.policy.verdict) {
+        let mapping = match Mapping::compile(&frozen.preset.verdict) {
             Ok(mapping) => mapping,
             Err(error) => {
                 problems.push(format!("the verdict mapping cannot be used: {error}"));
@@ -550,7 +551,7 @@ impl<E: Engine> LaneStages<'_, E> {
         Ok(())
     }
 
-    /// Every finished run gets its digest, whatever the policy asked of
+    /// Every finished run gets its digest, whatever the preset asked of
     /// Triage: when the scan left none (not planned, failed, out of time), a
     /// budgeted read makes it, partial when the budget ended it. Never fails
     /// the stage; what is missing is a warning of the job, which the caller

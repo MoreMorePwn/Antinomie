@@ -9,7 +9,7 @@
 //! | `lane-N` (2 to [`MAX_LANES`]) | `<data>/lanes/N/` (core's lane N, [`core_lanes::MIN_LANE`] and up) | `BackendOptions { data_dir: lanes/N, shared_root: Some(<data>), owner.lane: Some(N) }` |
 //!
 //! The lane files of every lane are lane 1's (`<data>/service/lanes/lane-N.json`),
-//! as are the job store, `service.toml`, the policies and the host work pool.
+//! as are the job store, `service.toml`, the presets and the host work pool.
 //! A lane engine reads lane 1's engine settings and route settings (core
 //! resolves `settings.json` and `network/routes.json` of a lane folder into
 //! lane 1's), so the lanes are configured once. Core numbers the lanes the

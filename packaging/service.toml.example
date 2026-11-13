@@ -17,6 +17,17 @@ shutdown_host_grace_s = 120
 max_queued = 1000
 per_client_queued = 100
 paused_on_start = false
+wait_s = 3600                # how long a run may wait for resources before it fails
+
+# The lanes of this node (one lane group in 0.9.0). Presets name the group in
+# vm.lane_group; `auto init` makes the VM and its clean snapshot.
+[lanes]
+group = "x86_64"
+vm = "auto-1"                # lane 1's VM, checked by config validate
+revert = "snapshot_disk"     # or "snapshot_full", "reset"
+revert_to = "auto-clean"
+# stealth = "realistic-desktop"   # the profile the VM must have; unset: any
+network = "routed"           # or "isolated", "disconnected"; never "nat"
 
 [resources]
 min_free_disk_gib = 20
@@ -33,7 +44,8 @@ keep_failed = true
 # writable by others). Add it to ReadWritePaths in the unit.
 # [[inbox.watch]]
 # path = "/srv/drop/default"
-# policy = "default"
+# preset = "standard"        # runs it unchanged; preset_by_dir = true picks it by subfolder
+# permissions = []           # beside runs.submit, e.g. ["evidence.core_dump"]
 # delete_after = "move"      # or "delete", "keep"
 
 # A copy of job.json and the reports for every finished job.

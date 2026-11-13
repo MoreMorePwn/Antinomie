@@ -333,51 +333,11 @@ impl std::fmt::Display for Permission {
     }
 }
 
-/// The four scopes of job API 1 before the permission list. They stay only
-/// as the spelling of a policy file's `[access] scopes` (until presets
-/// replace policies); each means the permissions it became.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
-pub enum Scope {
-    #[serde(rename = "read")]
-    Read,
-    #[serde(rename = "submit")]
-    Submit,
-    #[serde(rename = "artifacts:sensitive")]
-    ArtifactsSensitive,
-    #[serde(rename = "manage")]
-    Manage,
-}
-
-impl Scope {
-    /// The permissions a scope became (the access specification's column
-    /// "In 0.9.0"): `read` sees every run; `submit` adds samples and starts
-    /// runs; `artifacts:sensitive` reads, downloads evidence and samples;
-    /// `manage` cancels any run, tags samples, deletes runs, pauses the
-    /// queue, resets lanes and verifies custody.
-    pub fn permissions(self) -> &'static [Permission] {
-        use Permission as P;
-        match self {
-            Self::Read => &[P::RunsSeeAll],
-            Self::Submit => &[P::SamplesAdd, P::RunsSubmit],
-            Self::ArtifactsSensitive => &[P::EvidenceView, P::EvidenceDownload, P::SamplesDownload],
-            Self::Manage => &[
-                P::RunsManageAny,
-                P::SamplesTag,
-                P::RunsDelete,
-                P::QueueManage,
-                P::LanesReset,
-                P::CustodyVerify,
-            ],
-        }
-    }
-}
-
 /// The limits a caller brings (the access specification's "Limits per role,
 /// changeable per person"). Unset means the caller adds no limit of its own;
-/// the node's and the policy's ceilings still apply. Nothing sets them before
-/// limits per caller arrive (card P-A5), which also reads them.
+/// the node's ceilings still apply. Admission reads `priority_max`,
+/// `max_run_s` and `max_queued` when they are set; nothing sets them before
+/// limits per caller arrive (card P-A5).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
@@ -405,7 +365,7 @@ impl Limits {
 }
 
 /// Who is asking. The CLI uses the OS user (`local:<uid>`, every
-/// permission), a watch folder its policy (`auto:policy-<name>`, `runs.submit`
+/// permission), a watch folder its preset (`auto:policy-<name>`, `runs.submit`
 /// and the folder's `permissions`); a later web layer fills it from
 /// authentication (`web:<user_id>`). The service never trusts a
 /// client-supplied value.
@@ -431,15 +391,6 @@ impl Caller {
     /// A caller holding every permission the engine checks.
     pub fn with_every_permission(client_id: impl Into<String>) -> Self {
         Self::new(client_id, &Permission::ALL)
-    }
-
-    /// A caller described by job API 1 scopes: the permissions they became.
-    pub fn from_scopes(client_id: impl Into<String>, scopes: &[Scope]) -> Self {
-        let permissions: Vec<Permission> = scopes
-            .iter()
-            .flat_map(|scope| scope.permissions().iter().copied())
-            .collect();
-        Self::new(client_id, &permissions)
     }
 
     pub fn has(&self, permission: Permission) -> bool {
@@ -773,9 +724,10 @@ pub struct SampleTagParams {
     pub tags: Vec<Tag>,
 }
 
+/// `policy.list` (named `preset.list` from the run API): every preset.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PolicyList {
-    pub policies: Vec<super::status::PolicySummary>,
+    pub policies: Vec<super::status::PresetSummary>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -821,57 +773,21 @@ mod tests {
     }
 
     #[test]
-    fn the_four_scopes_map_to_the_documented_permissions() {
-        let keys =
-            |scope: Scope| -> Vec<&str> { scope.permissions().iter().map(|p| p.key()).collect() };
-        assert_eq!(keys(Scope::Read), ["runs.see_all"]);
-        assert_eq!(keys(Scope::Submit), ["samples.add", "runs.submit"]);
-        assert_eq!(
-            keys(Scope::ArtifactsSensitive),
-            ["evidence.view", "evidence.download", "samples.download"]
-        );
-        assert_eq!(
-            keys(Scope::Manage),
-            [
-                "runs.manage_any",
-                "samples.tag",
-                "runs.delete",
-                "queue.manage",
-                "lanes.reset",
-                "custody.verify"
-            ]
-        );
-        let reader = Caller::from_scopes("web:7", &[Scope::Read, Scope::ArtifactsSensitive]);
-        assert_eq!(reader.permissions.len(), 4);
-        assert!(reader.has(Permission::EvidenceView) && !reader.has(Permission::RunsSubmit));
-    }
-
-    #[test]
-    fn each_operation_needs_the_permissions_its_scope_became() {
-        for op in [
-            Op::JobSubmit,
-            Op::JobRetry,
-            Op::SampleAdd,
-            Op::UploadBegin,
-            Op::JobDelete,
-            Op::SampleTag,
-            Op::QueuePause,
-            Op::QueueResume,
-            Op::CustodyVerify,
-            Op::SampleDownload,
-            Op::JobGet,
-            Op::Health,
+    fn each_operation_needs_its_permissions() {
+        use Permission as P;
+        for (op, needs) in [
+            (Op::JobSubmit, &[P::RunsSubmit][..]),
+            (Op::JobRetry, &[P::RunsSubmit]),
+            (Op::SampleAdd, &[P::SamplesAdd]),
+            (Op::JobDelete, &[P::RunsDelete]),
+            (Op::SampleTag, &[P::SamplesTag]),
+            (Op::QueuePause, &[P::QueueManage]),
+            (Op::CustodyVerify, &[P::CustodyVerify]),
+            (Op::SampleDownload, &[P::SamplesDownload]),
+            (Op::JobGet, &[P::RunsSeeAll]),
+            (Op::Health, &[P::RunsSeeAll]),
         ] {
-            // Every permission an op accepts belongs to the scope it needed.
-            let old = match op {
-                Op::JobSubmit | Op::JobRetry | Op::SampleAdd | Op::UploadBegin => Scope::Submit,
-                Op::SampleDownload => Scope::ArtifactsSensitive,
-                Op::JobGet | Op::Health => Scope::Read,
-                _ => Scope::Manage,
-            };
-            for needed in op.needs() {
-                assert!(old.permissions().contains(needed), "{op:?}: {needed}");
-            }
+            assert_eq!(op.needs(), needs, "{op:?}");
         }
         // Cancel: an own job with runs.submit, any with runs.manage_any.
         assert_eq!(

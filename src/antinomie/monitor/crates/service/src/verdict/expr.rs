@@ -231,7 +231,7 @@ pub struct Expr {
 }
 
 /// The longest expression and the deepest parenthesis nesting accepted. A
-/// rule is a sentence; without these a hostile policy file (found by the
+/// rule is a sentence; without these a hostile preset file (found by the
 /// `label_expr` fuzz target) overflows the stack while parsing, evaluating
 /// or dropping a chain or a nest of tens of thousands of terms.
 pub const MAX_LEN: usize = 2048;

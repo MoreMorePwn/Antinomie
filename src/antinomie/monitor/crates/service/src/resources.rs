@@ -27,7 +27,7 @@ use crate::{
         job::{Job, WaitingFor},
         status::PauseReason,
     },
-    config::{Policy, service::Resources},
+    config::{Preset, service::Resources},
     stages::{HostChecks, HostProblem},
     store::Store,
 };
@@ -194,15 +194,11 @@ impl ResourceChecks<'_> {
 }
 
 impl HostChecks for ResourceChecks<'_> {
-    fn check(&self, job: &Job, policy: &Policy) -> Result<(), HostProblem> {
+    fn check(&self, _job: &Job, preset: &Preset) -> Result<(), HostProblem> {
         if let Some(shortage) = self.kvm() {
             return Err(HostProblem::Wait(WaitingFor::Dependency, shortage.words()));
         }
-        let dump = job
-            .spec
-            .overrides
-            .memory_dump
-            .unwrap_or(policy.evidence.memory_dump);
+        let dump = preset.dumps.memory_dump_on_exit;
         if let Some(shortage) = self.memory().or_else(|| self.disk(self.estimate_gib(dump))) {
             return Err(HostProblem::Wait(WaitingFor::Resources, shortage.words()));
         }

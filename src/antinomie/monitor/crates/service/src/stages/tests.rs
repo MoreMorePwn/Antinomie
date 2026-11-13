@@ -82,14 +82,24 @@ pub(super) struct W {
     pub(super) triage: Box<dyn super::host::HostTriage>,
     pub(super) tags: TagLog,
     pub(super) callers: Box<dyn crate::config::callers::CallerLookup>,
+    /// `[lanes] revert` of the node.
+    pub(super) revert: crate::config::service::RevertMode,
 }
 
 impl W {
+    /// A world whose lanes revert with `revert`.
+    pub(super) fn reverting(name: &str, revert: crate::config::service::RevertMode) -> Self {
+        Self {
+            revert,
+            ..Self::new(name)
+        }
+    }
+
     pub(super) fn new(name: &str) -> Self {
         Self::with(name, |_| {})
     }
 
-    pub(super) fn with(name: &str, edit: impl FnOnce(&mut crate::config::Policy)) -> Self {
+    pub(super) fn with(name: &str, edit: impl FnOnce(&mut crate::config::Preset)) -> Self {
         let fx = Fx::with_policy(name, edit);
         let lanes = LaneDir::new(&fx.dir.join("service"));
         lanes.save(&file()).unwrap();
@@ -103,6 +113,7 @@ impl W {
             )),
             tags: TagLog::default(),
             callers: Box::new(crate::config::callers::LocalOnly),
+            revert: Default::default(),
             evidence: Box::new(|_| {
                 Ok(Some(antinomie_monitor_core::RunArtifacts {
                     network_state: antinomie_monitor_core::RunArtifactState::Complete,
@@ -141,7 +152,7 @@ impl W {
             env: LaneEnv {
                 store: &self.fx.store,
                 lanes: &self.lanes,
-                policies: &self.fx.policies,
+                revert: self.revert,
                 callers: self.callers.as_ref(),
                 procs: &self.procs,
                 host: self.host.as_ref(),
@@ -155,10 +166,10 @@ impl W {
     }
 
     pub(super) fn prepared(&self, job: &Job) -> Prepared {
-        let frozen = self.fx.store.frozen_policy(&job.id).unwrap();
+        let frozen = self.fx.store.frozen_preset(&job.id).unwrap();
         Prepared {
-            effective: plan::effective(job, &frozen.policy),
-            policy: frozen,
+            effective: plan::effective(&frozen.preset, self.revert),
+            preset: frozen,
             lane: self.lanes.load(&lane()).unwrap().unwrap(),
         }
     }
@@ -228,15 +239,15 @@ pub(super) fn code(stop: &StageStop) -> FailureCode {
 // ---- plan ---------------------------------------------------------------
 
 #[test]
-fn the_launch_request_is_the_policys_unless_the_spec_overrides_it() {
-    let w = W::new("plan");
-    let job = w.fx.running(1);
-    let policy = crate::config::Policy::default();
-    let plain = plan::effective(&job, &policy);
+fn the_launch_request_is_the_presets() {
+    use crate::config::{preset::User, service::RevertMode};
+    let preset = crate::config::Preset::default();
+    let plain = plan::effective(&preset, RevertMode::SnapshotDisk);
     let r = &plain.request;
     assert_eq!((r.uid, r.gid), (1000, 1000));
     assert_eq!(r.cwd, "/tmp");
-    assert!(r.args.is_empty() && r.env == [plan::DEFAULT_PATH]);
+    assert!(r.args.is_empty());
+    assert_eq!(r.env, ["PATH=/bin:/sbin:/usr/bin:/usr/sbin", "TERM=xterm"]);
     assert!(r.capture_network && !r.memory_dump_on_exit && !r.core_dump_on_exit);
     assert_eq!(
         r.route,
@@ -245,92 +256,130 @@ fn the_launch_request_is_the_policys_unless_the_spec_overrides_it() {
     assert!(!r.analysis.enabled && !r.debug_on_start && r.host_copy.is_none());
     assert!(r.dump_trigger.is_none(), "the trigger is off by default");
     assert_eq!(plain.run_limit, Duration::from_secs(300));
+    assert_eq!(plain.revert, RevertMode::SnapshotDisk);
+    assert_eq!(plain.guest_path, "/tmp/{name}");
 
-    let mut job = job;
-    job.spec.overrides.timeout_s = Some(30);
-    job.spec.overrides.args = Some(vec!["-x".into()]);
-    job.spec.overrides.env = Some(vec!["A=1".into(), "PATH=/bin".into()]);
-    job.spec.overrides.run_as = Some(crate::api::spec::RunAs::Named(
-        crate::api::spec::RunAsName::Root,
-    ));
-    job.spec.overrides.core_dump = Some(crate::api::spec::CoreDump::Limits(
-        crate::api::spec::CoreLimits {
-            max_mib: 8,
-            timeout_ms: 1234,
-        },
-    ));
-    job.spec.overrides.memory_dump = Some(true);
-    job.spec.overrides.network_capture = Some(false);
-    job.spec.overrides.route = Some(crate::api::spec::Route::InetSim);
-    let set = plan::effective(&job, &policy);
+    let mut custom = preset.clone();
+    let p = &mut custom.program;
+    p.run_time_s = 30;
+    p.arguments = vec!["-x".into()];
+    p.environment = vec!["A=1".into()];
+    p.working_directory = "/var/tmp".into();
+    p.user = User::Root;
+    custom.dumps.core_dump_on_exit = true;
+    custom.dumps.core_budget_mib = 128;
+    custom.dumps.core_deadline_ms = 1234;
+    custom.dumps.memory_dump_on_exit = true;
+    custom.network.capture = false;
+    custom.network.route = crate::api::spec::Route::InetSim;
+    let set = plan::effective(&custom, RevertMode::Reset);
     let r = &set.request;
     assert_eq!(set.run_limit, Duration::from_secs(30));
+    assert_eq!(set.revert, RevertMode::Reset);
     assert_eq!((r.uid, r.gid), (0, 0));
     assert_eq!(r.args, ["-x"]);
-    assert_eq!(r.env, ["A=1", "PATH=/bin"], "an explicit PATH is kept");
+    assert_eq!(r.cwd, "/var/tmp", "the preset's working directory");
+    assert_eq!(r.env, ["A=1", plan::DEFAULT_PATH], "a PATH is added");
     assert!(r.core_dump_on_exit && r.memory_dump_on_exit && !r.capture_network);
     assert_eq!(
         (r.core_max_size, r.core_timeout_ms),
-        (Some(8 << 20), Some(1234))
+        (Some(128 << 20), Some(1234))
     );
     assert_eq!(
         r.route,
         Some(antinomie_monitor_core::route::RouteKind::InetSim)
     );
+    custom.program.user = User::Nobody;
+    let r = plan::effective(&custom, RevertMode::Reset).request;
+    assert_eq!((r.uid, r.gid), (65534, 65534));
+    custom.program.user = User::Custom;
+    custom.program.uid = 1234;
+    custom.program.gid = 1500;
+    let r = plan::effective(&custom, RevertMode::Reset).request;
+    assert_eq!((r.uid, r.gid), (1234, 1500));
 }
 
 #[test]
-fn the_policys_dump_trigger_is_in_the_launch_request_with_a_core_budget() {
-    use crate::config::policy::{TriggerKind, TriggerSetting};
+fn the_presets_dump_trigger_is_in_the_launch_request_with_its_limits() {
     use antinomie_monitor_core::dump_trigger::TriggerTier;
-    let w = W::new("plan-trigger");
-    let job = w.fx.running(1);
-    let mut policy = crate::config::Policy::default();
-    policy.evidence.dump_trigger = TriggerSetting::High;
-    let r = plan::effective(&job, &policy).request;
+    let revert = crate::config::service::RevertMode::SnapshotDisk;
+    let mut preset = crate::config::Preset::default();
+    preset.dumps.dump_when_suspicious = true;
+    preset.dumps.max_dumps = 4;
+    preset.dumps.dumps_apart_s = 90;
+    let r = plan::effective(&preset, revert).request;
     let plan = r.dump_trigger.expect("the trigger is armed");
     assert_eq!(plan.min_tier, TriggerTier::High);
     assert!(plan.core && !plan.memory);
-    // The core of a trigger has the policy's budget though no exit core is asked.
+    assert_eq!((plan.max_dumps, plan.cooldown_secs), (4, 90));
+    // The core of a trigger has the preset's budget though no exit core is asked.
     assert!(!r.core_dump_on_exit);
     assert_eq!(
         (r.core_max_size, r.core_timeout_ms),
-        (Some(64 << 20), Some(plan::CORE_TIMEOUT_MS))
+        (Some(256 << 20), Some(5000))
     );
-    policy.evidence.dump_trigger_kind = TriggerKind::Memory;
-    let r = plan::effective(&job, &policy).request;
+    preset.dumps.trigger_core = false;
+    preset.dumps.trigger_memory_dump = true;
+    let r = plan::effective(&preset, revert).request;
     assert!(r.dump_trigger.is_some_and(|plan| plan.memory && !plan.core));
     assert_eq!((r.core_max_size, r.core_timeout_ms), (None, None));
 }
 
 #[test]
 fn non_resident_pages_are_asked_only_for_the_cores_of_a_trigger() {
-    use crate::config::policy::TriggerSetting;
-    let w = W::new("plan-nonresident");
-    let job = w.fx.running(1);
-    let mut policy = crate::config::Policy::default();
-    policy.evidence.core_nonresident = true;
-    assert!(!plan::effective(&job, &policy).request.core_nonresident);
-    policy.evidence.core_dump = true;
-    assert!(!plan::effective(&job, &policy).request.core_nonresident);
-    policy.evidence.dump_trigger = TriggerSetting::High;
-    assert!(plan::effective(&job, &policy).request.core_nonresident);
-    policy.evidence.core_nonresident = false;
-    assert!(!plan::effective(&job, &policy).request.core_nonresident);
+    let revert = crate::config::service::RevertMode::SnapshotDisk;
+    let mut preset = crate::config::Preset::default();
+    preset.dumps.read_non_resident_pages = true;
+    assert!(!plan::effective(&preset, revert).request.core_nonresident);
+    preset.dumps.core_dump_on_exit = true;
+    assert!(!plan::effective(&preset, revert).request.core_nonresident);
+    preset.dumps.dump_when_suspicious = true;
+    assert!(plan::effective(&preset, revert).request.core_nonresident);
+    preset.dumps.read_non_resident_pages = false;
+    assert!(!plan::effective(&preset, revert).request.core_nonresident);
 }
 
 #[test]
-fn the_guest_path_follows_the_library_rule_in_the_policys_directory() {
+fn the_host_stages_take_the_presets_checks_limits_and_ghidra_choice() {
+    use antinomie_monitor_core::analysis::AnalysisKind;
+    let mut preset = crate::config::Preset::default();
+    let plan = plan::hosted(&preset);
+    assert_eq!(plan.static_checks, AnalysisKind::TRIAGE);
+    assert_eq!(plan.static_limit_min, None, "0 is each tool's own limit");
+    assert!(!plan.static_limits.ghidra_disassembly);
+    assert_eq!(plan.static_limits.rows, 2048);
+    preset.static_analysis.deep_checks = vec![crate::api::spec::StaticCheck::Floss];
+    preset.static_analysis.time_limit_per_tool_min = 7;
+    preset.static_analysis.ghidra_disassembly = true;
+    preset.static_analysis.limits.rows_per_check = 4096;
+    preset.detection.sigma = false;
+    let plan = plan::hosted(&preset);
+    assert_eq!(plan.static_checks.len(), 12);
+    assert_eq!(plan.static_checks.last(), Some(&AnalysisKind::Floss));
+    assert_eq!(plan.static_limit_min, Some(7));
+    assert!(plan.static_limits.ghidra_disassembly);
+    assert_eq!(plan.static_limits.rows, 4096);
+    assert_eq!(plan.engines.len(), 2);
+    preset.static_analysis.enabled = false;
+    assert!(plan::hosted(&preset).static_checks.is_empty());
+}
+
+#[test]
+fn the_guest_path_puts_the_library_name_for_name_in_the_presets_path() {
     let sha = "ab".repeat(32);
     assert_eq!(
-        plan::guest_path("/tmp", &sha, "evil one!.exe"),
+        plan::guest_path("/tmp/{name}", &sha, "evil one!.exe"),
         "/tmp/abababab-evil_one_.exe"
     );
     assert_eq!(
-        plan::guest_path("/var/tmp/", &sha, ""),
+        plan::guest_path("/var/tmp/{name}", &sha, ""),
         "/var/tmp/abababab-sample"
     );
-    assert!(plan::guest_path("/tmp", &sha, &"n".repeat(100)).len() <= "/tmp/abababab-".len() + 48);
+    assert_eq!(plan::guest_path("/opt/run.bin", &sha, "x"), "/opt/run.bin");
+    assert!(
+        plan::guest_path("/tmp/{name}", &sha, &"n".repeat(100)).len()
+            <= "/tmp/abababab-".len() + 48
+    );
     assert_eq!(plan::upload_wait(0), 60 * SECOND);
     assert_eq!(plan::upload_wait(25 << 20), 62 * SECOND);
 }
@@ -338,12 +387,12 @@ fn the_guest_path_follows_the_library_rule_in_the_policys_directory() {
 // ---- prechecks ----------------------------------------------------------
 
 #[test]
-fn prechecks_hand_over_the_frozen_policy_the_settings_and_the_lane() {
+fn prechecks_hand_over_the_frozen_preset_the_settings_and_the_lane() {
     let w = W::new("pre-ok");
     let job = w.fx.running(1);
     let mut waiter = w.engine(|_| {});
     let prepared = w.stages(&mut waiter).prechecks(&job).unwrap();
-    assert_eq!(prepared.policy.name, "default");
+    assert_eq!(prepared.preset.name, "standard");
     assert_eq!(prepared.lane.vm_id, VM);
     assert_eq!(prepared.effective.run_limit, Duration::from_secs(300));
     assert!(
@@ -353,22 +402,22 @@ fn prechecks_hand_over_the_frozen_policy_the_settings_and_the_lane() {
 }
 
 #[test]
-fn a_policy_that_is_gone_or_closed_to_the_client_denies_the_job() {
-    let mut w = W::new("pre-policy");
+fn a_waiting_run_keeps_its_preset_when_the_preset_changes_or_goes() {
+    let mut w = W::new("pre-preset");
     let job = w.fx.running(1);
     let mut waiter = w.engine(|_| {});
-    // Gone.
-    w.fx.policies = crate::config::PolicySet::default();
-    let stop = w.stages(&mut waiter).prechecks(&job).unwrap_err();
-    assert_eq!(code(&stop), FailureCode::PresetDenied);
-    assert_eq!(stop.failure().unwrap().stage, Stage::Prechecks);
-    assert_eq!(stop.failure().unwrap().details["preset"], "default");
-    // Closed to this client.
-    w.fx.policies = crate::config::PolicySet::single(crate::store::tests::policy("default", |p| {
-        p.access.clients = vec!["web:*".into()];
-    }));
-    let stop = w.stages(&mut waiter).prechecks(&job).unwrap_err();
-    assert_eq!(code(&stop), FailureCode::PresetDenied);
+    // Gone from the files (retired): the run keeps what it froze.
+    w.fx.policies = crate::config::PresetSet::default();
+    let prepared = w.stages(&mut waiter).prechecks(&job).unwrap();
+    assert_eq!(prepared.preset.name, "standard");
+    assert_eq!(prepared.effective.run_limit, Duration::from_secs(300));
+    // Changed: still the frozen options.
+    w.fx.policies =
+        crate::config::PresetSet::single(crate::store::tests::policy("standard", |p| {
+            p.program.run_time_s = 60;
+        }));
+    let prepared = w.stages(&mut waiter).prechecks(&job).unwrap();
+    assert_eq!(prepared.effective.run_limit, Duration::from_secs(300));
 }
 
 /// What a client holds now, as a reloaded `service.toml` would say.
@@ -387,7 +436,7 @@ impl crate::config::callers::CallerLookup for Holds {
 #[test]
 fn prechecks_refuse_a_run_whose_client_lost_a_permission_it_uses() {
     use crate::api::ops::Permission;
-    let mut w = W::with("pre-perm", |p| p.evidence.core_dump = true);
+    let mut w = W::with("pre-perm", |p| p.dumps.core_dump_on_exit = true);
     let mut who = crate::store::tests::caller(1000);
     who.permissions.insert(Permission::EvidenceCoreDump);
     let queued =
@@ -437,7 +486,7 @@ fn prechecks_refuse_a_run_whose_client_lost_a_permission_it_uses() {
 pub(super) struct Host(pub(super) Option<HostProblem>);
 
 impl HostChecks for Host {
-    fn check(&self, _: &Job, _: &crate::config::Policy) -> Result<(), HostProblem> {
+    fn check(&self, _: &Job, _: &crate::config::Preset) -> Result<(), HostProblem> {
         self.0.clone().map_or(Ok(()), Err)
     }
 }
@@ -721,9 +770,10 @@ fn a_disk_restore_is_the_whole_revert_and_the_job_learns_the_vm() {
 
 #[test]
 fn snapshot_full_resumes_the_guest_and_reset_restarts_it() {
-    let w = W::with("prov-full", |p| {
-        p.vm.revert = crate::config::policy::RevertMode::SnapshotFull
-    });
+    let w = W::reverting(
+        "prov-full",
+        crate::config::service::RevertMode::SnapshotFull,
+    );
     let job = w.fx.running(1);
     let mut waiter = w.engine(restore_ok);
     provision(&w, &mut waiter, &job).unwrap();
@@ -734,9 +784,7 @@ fn snapshot_full_resumes_the_guest_and_reset_restarts_it() {
     );
     assert_eq!(w.job(&job.id).vm.unwrap().revert, Revert::SnapshotFull);
 
-    let w = W::with("prov-reset", |p| {
-        p.vm.revert = crate::config::policy::RevertMode::Reset;
-    });
+    let w = W::reverting("prov-reset", crate::config::service::RevertMode::Reset);
     let job = w.fx.running(1);
     let mut waiter = w.engine(|fake| {
         fake.on("Reset").after(3 * SECOND).ok("VM reset");
@@ -1005,9 +1053,10 @@ fn a_guest_that_never_answers_is_guest_unreachable_and_three_in_a_row_quarantine
 
 #[test]
 fn a_vm_that_fails_to_start_is_vm_start_failed_and_counts() {
-    let w = W::with("prov-start-fails", |p| {
-        p.vm.revert = crate::config::policy::RevertMode::Reset
-    });
+    let w = W::reverting(
+        "prov-start-fails",
+        crate::config::service::RevertMode::Reset,
+    );
     let job = w.fx.running(1);
     let mut waiter = w.engine(|fake| {
         fake.on("Reset").ok("reset");
@@ -1044,7 +1093,7 @@ fn a_vm_that_fails_to_start_is_vm_start_failed_and_counts() {
 
 #[test]
 fn a_core_dump_needs_a_guest_of_revision_15() {
-    let w = W::with("prov-core", |p| p.evidence.core_dump = true);
+    let w = W::with("prov-core", |p| p.dumps.core_dump_on_exit = true);
     let job = w.fx.running(1);
     let mut old = w.engine(|fake| {
         fake.on("RestoreVmSnapshot")
@@ -1359,13 +1408,22 @@ fn a_refused_unanswered_or_vanished_launch_fails_with_launch_failed() {
 
 #[test]
 fn a_core_dump_in_a_desktop_run_is_refused_before_the_engine_is_asked() {
-    let w = W::with("launch-desktop-core", |p| {
-        p.evidence.core_dump = true;
-    });
-    let mut job = w.fx.running(1);
-    job.spec.overrides.run_in = Some(crate::api::spec::RunIn::GuestDesktop);
+    // A desktop run is a reserved preset value (refused at submit); the
+    // launch still refuses the pair if a request carried it.
+    let w = W::with("launch-desktop-core", |p| p.dumps.core_dump_on_exit = true);
+    let job = w.fx.running(1);
+    let mut prepared = w.prepared(&job);
+    prepared.effective.request.run_in = antinomie_monitor_core::RunIn::GuestDesktop;
+    let provisioned = Provisioned {
+        vm_id: VM.into(),
+        boot_id: Some("b2".into()),
+        guest_revision: Some(21),
+    };
     let mut waiter = w.engine(execute_ok);
-    let stop = launch(&w, &mut waiter, &job).unwrap_err();
+    let stop = w
+        .stages(&mut waiter)
+        .launch(&job, &prepared, &provisioned)
+        .unwrap_err();
     assert_eq!(code(&stop), FailureCode::LaunchFailed);
     assert!(waiter.engine_mut().sent().is_empty());
 }

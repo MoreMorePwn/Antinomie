@@ -91,14 +91,11 @@ def strategies(text):
     return chosen
 
 
-def policy_name(mode):
-    return "t6-" + mode.replace("_", "-")
-
-
-def policy_changes(mode):
-    return {("sample", "accept_types"): '["elf", "sh"]', ("run", "allow_root"): "true",
-            ("vm", "revert"): f'"{mode}"',
-            ("vm", "revert_to"): f'"{FULL_SNAPSHOT if mode == "snapshot_full" else "auto-clean"}"'}
+def lane_changes(mode):
+    """The [lanes] of service.toml for a strategy (Standard accepts scripts; the
+    owner may run as root)."""
+    return {("lanes", "revert"): f'"{mode}"',
+            ("lanes", "revert_to"): f'"{FULL_SNAPSHOT if mode == "snapshot_full" else "auto-clean"}"'}
 
 
 def parser():
@@ -114,7 +111,7 @@ def plan(args):
         if mode == "snapshot_full":
             steps.append(f"daemon stopped: snapshot restore auto-1 auto-clean --yes; snapshot create auto-1 "
                          f"{FULL_SNAPSHOT} --mode full; point service/lanes/lane-1.json at it")
-        steps.append(f"policies/{policy_name(mode)}.toml: {policy_changes(mode)}; config validate --policy")
+        steps.append(f"service.toml: {lane_changes(mode)}; config validate")
         steps.append(f"{mode}: auto daemon; seed (as root), probe, probe; daemon SIGTERM")
     steps.append("delete the VM data")
     return steps
@@ -144,13 +141,17 @@ def prepare_full(cli, work, args, vm, factor, checks):
 
 def run_strategy(cli, work, args, factor, checks, mode, daemon, watch):
     """'pass', 'fail' or 'blocked'."""
-    name = policy_name(mode)
-    av.edit_policy(work, name, policy_changes(mode))
-    code, parsed, err = cli.run("config", "validate", "--policy", name, timeout=300)
+    service = work.data / "service.toml"
+    original = service.read_text()
+    edited = original
+    for (section, key), value in lane_changes(mode).items():
+        edited = av.set_toml_key(edited, section, key, value)
+    service.write_text(edited)
+    code, parsed, err = cli.run("config", "validate", timeout=300)
     if code != 0:
         words = json.dumps(parsed)[:600] if parsed else err.strip()[-600:]
-        checks.say(f"BLOCKED {mode}: config validate --policy {name} exit {code}: {words}")
-        work.policy(name).unlink()
+        checks.say(f"BLOCKED {mode}: config validate exit {code}: {words}")
+        service.write_text(original)
         return "blocked"
     token = f"t6-{mode}-{secrets.token_hex(4)}"
     seed = av.write_guest_script(work.samples / f"seed-{mode}.sh", SEED.replace("TOKEN", token))
@@ -160,7 +161,7 @@ def run_strategy(cli, work, args, factor, checks, mode, daemon, watch):
     try:
         jobs = []
         for step, program in enumerate((seed, probe, probe), start=1):
-            job = av.submit(cli, program, policy=name, timeout_run=60, run_as="root", name=f"{mode}-{step}")
+            job = av.submit(cli, program, timeout_run=60, run_as="root", name=f"{mode}-{step}")
             job = av.wait_job(cli, job["id"], JOB_TIMEOUT_S * factor, watch=watch, daemon=daemon)
             jobs.append(job)
             run = job.get("run") or {}

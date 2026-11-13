@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `service.toml`, `policies/*.toml` and their validation (card P3-3, design
-//! 2.4.2 and 4.4): unknown keys, ceilings, the v1 routes, and the checks that
-//! need the lane VM.
+//! `service.toml`, the presets (built in and `presets/*.toml`) and their
+//! validation (card P3-3, presets of ANT-T0490): the format, unknown keys,
+//! the node ceilings, the keys 0.9.0 reserves, the lanes of `service.toml`
+//! against the lane VM, and the refusal of a 0.9.0 `policies/` folder.
 
 // `ApiError` is the contract's error type (large by design, see the crate root).
 #![allow(clippy::result_large_err)]
 
 use antinomie_service::config::{
-    DEFAULT_POLICY, NoVms, PolicyLookup, Severity, SharedPolicies, VmCatalog, VmFacts, VmNet,
-    validate::{self, parse_policy, parse_service},
+    NoVms, PresetLookup, PresetSet, Severity, SharedPresets, VmCatalog, VmFacts, VmNet,
+    builtin::{BUILT_IN, STANDARD},
+    preset::{Preset, User},
+    validate::{self, parse_preset, parse_service},
 };
 use std::{fs, path::PathBuf};
 
@@ -33,8 +36,9 @@ fn lane(network: VmNet, snapshots: &[&str]) -> Vms {
     }])
 }
 
-fn problems(text: &str, catalog: &dyn VmCatalog) -> Vec<String> {
-    let (_, problems) = parse_policy("p", "policies/p.toml", text, catalog);
+/// The errors of a preset file `presets/p.toml`.
+fn problems(text: &str) -> Vec<String> {
+    let (_, problems) = parse_preset("p", "presets/p.toml", text);
     problems
         .iter()
         .filter(|p| p.severity == Severity::Error)
@@ -43,42 +47,199 @@ fn problems(text: &str, catalog: &dyn VmCatalog) -> Vec<String> {
 }
 
 fn with(text: &str, from: &str, to: &str) -> String {
-    assert!(text.contains(from), "{from} is not in the default policy");
+    assert!(text.contains(from), "{from} is not in the text");
     text.replacen(from, to, 1)
 }
 
 fn scratch(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("ant-svc-config-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(root.join("policies")).unwrap();
+    fs::create_dir_all(root.join("presets")).unwrap();
     root
 }
 
-#[test]
-fn the_shipped_default_policy_is_valid_on_a_clean_lane() {
-    let catalog = lane(VmNet::Routed, &["auto-clean"]);
-    assert_eq!(problems(DEFAULT_POLICY, &catalog), Vec::<String>::new());
-    // Without a data directory the lane checks are skipped, not failed.
-    assert_eq!(problems(DEFAULT_POLICY, &NoVms), Vec::<String>::new());
+/// The errors of `load` on a data folder with this `service.toml`.
+fn lane_problems(service: &str, catalog: &dyn VmCatalog) -> Vec<String> {
+    let root = scratch(&format!("lanes-{}", service.len()));
+    fs::write(root.join("service.toml"), service).unwrap();
+    let report = validate::load(&root, catalog, None);
+    let _ = fs::remove_dir_all(&root);
+    report
+        .problems
+        .iter()
+        .filter(|p| p.severity == Severity::Error)
+        .map(|p| p.to_string())
+        .collect()
 }
 
 #[test]
-fn an_empty_policy_takes_the_design_defaults_but_needs_a_lane_vm() {
-    let found = problems("", &NoVms);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("vm.lane_vm is required"));
+fn the_five_built_in_presets_parse_and_pass_every_check() {
+    let names: Vec<&str> = BUILT_IN.iter().map(|(name, _)| *name).collect();
+    assert_eq!(
+        names,
+        [
+            "standard",
+            "quick-look",
+            "deep",
+            "interactive",
+            "live-network"
+        ]
+    );
+    let set = PresetSet::built_in();
+    assert_eq!(set.len(), 5);
+    for (name, text) in BUILT_IN {
+        // As a file under another name, each passes every check but the
+        // live route (no route is set up on this node).
+        let (loaded, found) = parse_preset("copy", "presets/copy.toml", text);
+        let errors: Vec<String> = found
+            .iter()
+            .filter(|p| p.severity == Severity::Error)
+            .map(|p| p.to_string())
+            .collect();
+        if name == "live-network" {
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert!(errors[0].contains("route tor is not set up on this node"));
+        } else {
+            assert!(errors.is_empty(), "{name}: {errors:?}");
+        }
+        assert!(
+            found.iter().all(|p| p.severity == Severity::Error),
+            "{name} warns: {found:?}"
+        );
+        let built = set.get(name).unwrap();
+        assert!(built.built_in);
+        assert_eq!(built.preset, loaded.unwrap().preset);
+        assert!(validate::reserved(&built.preset).is_empty(), "{name}");
+    }
+    // Standard is every default, written out.
+    assert_eq!(
+        set.get("standard").unwrap().preset,
+        Preset {
+            title: "Standard".into(),
+            description: "Five minutes, nothing leaves the lab, HTML and JSON report".into(),
+            ..Preset::default()
+        }
+    );
+}
+
+#[test]
+fn the_built_in_presets_hold_the_values_of_the_specification() {
+    use antinomie_service::api::spec::{ReportFormat, Route, StaticCheck};
+    use antinomie_service::config::preset::TRIAGE_CHECKS;
+    let set = PresetSet::built_in();
+    let get = |name: &str| set.get(name).unwrap().preset.clone();
+    let (standard, quick, deep, interactive, live) = (
+        get("standard"),
+        get("quick-look"),
+        get("deep"),
+        get("interactive"),
+        get("live-network"),
+    );
+    let run_times: Vec<u32> = [&standard, &quick, &deep, &interactive, &live]
+        .iter()
+        .map(|p| p.program.run_time_s)
+        .collect();
+    assert_eq!(run_times, [300, 120, 900, 600, 600]);
+    let routes: Vec<Route> = [&standard, &quick, &deep, &interactive, &live]
+        .iter()
+        .map(|p| p.network.route.clone())
+        .collect();
+    assert_eq!(
+        routes,
+        [
+            Route::Drop,
+            Route::Drop,
+            Route::InetSim,
+            Route::Drop,
+            Route::Tor
+        ]
+    );
+    assert!(
+        [&standard, &quick, &deep, &interactive, &live]
+            .iter()
+            .all(|p| p.network.capture)
+    );
+    // Static analysis.
+    assert_eq!(standard.static_analysis.checks(), TRIAGE_CHECKS);
+    assert_eq!(
+        quick.static_analysis.checks(),
+        [
+            StaticCheck::Metadata,
+            StaticCheck::Strings,
+            StaticCheck::Hardening,
+            StaticCheck::Rules,
+            StaticCheck::Identification
+        ]
+    );
+    assert_eq!(deep.static_analysis.checks().len(), 14);
+    // Detection: YARA, Sigma, IDS / YARA / all / YARA, Sigma / YARA, IDS.
+    let engines = |p: &Preset| (p.detection.yara, p.detection.sigma, p.detection.ids);
+    assert_eq!(engines(&standard), (true, true, true));
+    assert_eq!(engines(&quick), (true, false, false));
+    assert_eq!(engines(&deep), (true, true, true));
+    assert_eq!(engines(&interactive), (true, true, false));
+    assert_eq!(engines(&live), (true, false, true));
+    // Deep: the dumps and the report.
+    assert!(deep.dumps.core_dump_on_exit && deep.dumps.dump_when_suspicious);
+    let trigger = deep.dumps.trigger().unwrap();
+    assert!(trigger.memory && trigger.core);
+    assert_eq!(
+        trigger.min_tier,
+        antinomie_monitor_core::dump_trigger::TriggerTier::Medium
+    );
+    assert_eq!(
+        deep.report.formats,
+        [ReportFormat::Html, ReportFormat::Json, ReportFormat::Pdf]
+    );
+    assert!(deep.report.bundle);
+    // Allow taking control: off for Quick look only.
+    assert!(!quick.vm.allow_control);
+    assert!(standard.vm.allow_control && deep.vm.allow_control);
+    assert!(interactive.vm.allow_control && live.vm.allow_control);
+}
+
+#[test]
+fn the_listing_names_what_each_built_in_preset_needs() {
+    use antinomie_service::api::ops::{Caller, Permission};
+    let set = PresetSet::built_in();
+    let plain = Caller::new("local:1", &[Permission::RunsSubmit]);
+    let listed = set.list_for(&plain);
+    let find = |name: &str| listed.iter().find(|p| p.name == name).unwrap();
+    assert!(find("standard").needs.is_empty());
+    assert!(find("quick-look").needs.is_empty());
+    assert_eq!(
+        find("deep").needs,
+        [Permission::EvidenceCoreDump, Permission::EvidenceMemoryDump]
+    );
+    assert_eq!(find("deep").missing, find("deep").needs);
+    assert_eq!(find("live-network").needs, [Permission::RouteTor]);
+    assert_eq!(
+        find("live-network").unavailable,
+        ["route tor is not set up on this node; live routes arrive with 0.9.1"]
+    );
+    assert_eq!(find("standard").title, "Standard");
+    assert!(find("standard").built_in);
+    let owner = Caller::with_every_permission("local:0");
+    assert!(set.list_for(&owner).iter().all(|p| p.missing.is_empty()));
+}
+
+#[test]
+fn an_empty_preset_is_standard_and_valid() {
+    assert_eq!(problems(""), Vec::<String>::new());
+    let (loaded, _) = parse_preset("p", "presets/p.toml", "");
+    assert_eq!(loaded.unwrap().preset, Preset::default());
 }
 
 #[test]
 fn unknown_keys_are_errors_with_a_line_number() {
-    let text = with(DEFAULT_POLICY, "[report]\n", "[report]\nformats_typo = 1\n");
-    let found = problems(&text, &NoVms);
+    let text = with(STANDARD, "[report]\n", "[report]\nformats_typo = 1\n");
+    let found = problems(&text);
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(
         found[0].contains("unknown field `formats_typo`"),
         "{found:?}"
     );
-    assert!(found[0].starts_with("policies/p.toml:"), "{found:?}");
+    assert!(found[0].starts_with("presets/p.toml:"), "{found:?}");
     let line = text
         .lines()
         .position(|l| l.starts_with("formats_typo"))
@@ -89,214 +250,284 @@ fn unknown_keys_are_errors_with_a_line_number() {
         "{found:?} line {line}"
     );
     // Also in a nested table and in service.toml.
+    let found = problems("[static_analysis.limits]\nrows = 5\n");
+    assert!(found[0].contains("unknown field `rows`"), "{found:?}");
     let (_, found) = parse_service("service.toml", "[daemon]\nlanes = 1\nthreads = 2\n");
     assert!(found[0].message.contains("unknown field `threads`"));
     assert_eq!(found[0].line, Some(3));
 }
 
 #[test]
-fn only_drop_and_inet_sim_routes_are_valid() {
-    for route in ["internet", "tor", "vpn", "socks5"] {
-        let text = with(
-            DEFAULT_POLICY,
-            r#"allowed_routes = ["drop", "inet_sim"]"#,
-            &format!(r#"allowed_routes = ["drop", "{route}"]"#),
-        );
-        let found = problems(&text, &NoVms);
+fn a_0_9_0_policy_key_in_a_preset_names_its_new_home() {
+    let found = problems(
+        "[run]\ntimeout_s = 60\nallow_root = true\n[network]\nallowed_routes = [\"drop\"]\n",
+    );
+    assert_eq!(found.len(), 3, "{found:?}");
+    assert!(
+        found.iter().any(|f| f.contains("presets/p.toml:2:")
+            && f.contains("run.timeout_s")
+            && f.contains("`program.run_time_s`")),
+        "{found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|f| f.contains("the permission `run.as_root`"))
+    );
+    assert!(found.iter().any(|f| f.contains("network.allowed_routes")));
+    let found = problems("[vm]\nrevert_after = true\n");
+    assert!(found[0].contains("never acted on"), "{found:?}");
+}
+
+#[test]
+fn the_node_ceilings_and_ranges_are_enforced() {
+    for (text, key) in [
+        ("[program]\nrun_time_s = 4\n", "program.run_time_s"),
+        ("[program]\nrun_time_s = 1801\n", "program.run_time_s"),
+        (
+            "[accepts]\nmax_sample_mib = 257\n",
+            "accepts.max_sample_mib",
+        ),
+        ("[accepts]\nmax_sample_mib = 0\n", "accepts.max_sample_mib"),
+        ("[accepts]\ntypes = [\"pdf\"]\n", "accepts.types"),
+        ("[accepts]\narch = []\n", "accepts.arch"),
+        (
+            "[program]\nworking_directory = \"tmp\"\n",
+            "program.working_directory",
+        ),
+        ("[program]\nguest_path = \"/tmp/\"\n", "program.guest_path"),
+        ("[program]\nenvironment = [\"=x\"]\n", "program.environment"),
+        ("[dumps]\ncore_budget_mib = 32\n", "dumps.core_budget_mib"),
+        ("[dumps]\ncore_budget_mib = 1025\n", "dumps.core_budget_mib"),
+        ("[dumps]\ncore_deadline_ms = 0\n", "dumps.core_deadline_ms"),
+        ("[dumps]\nmax_dumps = 9\n", "dumps.max_dumps"),
+        ("[dumps]\ndumps_apart_s = 3601\n", "dumps.dumps_apart_s"),
+        (
+            "[dumps]\ndump_when_suspicious = true\ntrigger_core = false\n",
+            "dumps.dump_when_suspicious",
+        ),
+        (
+            "[static_analysis]\ntime_limit_per_tool_min = 481\n",
+            "static_analysis.time_limit_per_tool_min",
+        ),
+        (
+            "[static_analysis]\ntriage_checks = [\"floss\"]\n",
+            "static_analysis.triage_checks",
+        ),
+        (
+            "[static_analysis]\ndeep_checks = [\"strings\"]\n",
+            "static_analysis.deep_checks",
+        ),
+        (
+            "[static_analysis.limits]\nrows_per_check = 10\n",
+            "static_analysis.limits.rows_per_check",
+        ),
+        (
+            "[static_analysis.limits]\nfloss_largest_file_mib = 65\n",
+            "static_analysis.limits.floss_largest_file_mib",
+        ),
+        ("[vm]\nlane_group = \"a b\"\n", "vm.lane_group"),
+        ("offered_to = [\"Lead\"]\n", "offered_to"),
+        ("[retry]\nmax_attempts = 0\n", "retry.max_attempts"),
+    ] {
+        let found = problems(text);
+        assert_eq!(found.len(), 1, "{text}: {found:?}");
+        assert!(found[0].contains(key), "{text}: {found:?}");
+    }
+    // The edges are accepted.
+    for text in [
+        "[program]\nrun_time_s = 5\n",
+        "[program]\nrun_time_s = 1800\nuser = \"nobody\"\n",
+        "[program]\nuser = \"custom\"\nuid = 0\ngid = 0\n",
+        "[dumps]\ncore_budget_mib = 1024\nmax_dumps = 8\ndumps_apart_s = 0\n",
+        "[static_analysis]\ntime_limit_per_tool_min = 480\nghidra_disassembly = true\n",
+        "[accepts]\ntypes = [\"any\"]\narch = [\"any\"]\nmax_sample_mib = 256\n",
+    ] {
+        assert_eq!(problems(text), Vec::<String>::new(), "{text}");
+    }
+    let (loaded, _) = parse_preset("p", "presets/p.toml", "[program]\nuser = \"nobody\"\n");
+    assert_eq!(loaded.unwrap().preset.program.user, User::Nobody);
+}
+
+#[test]
+fn reserved_keys_are_accepted_at_their_default_only() {
+    // Every reserved key written at its default: Standard is valid.
+    assert_eq!(problems(STANDARD), Vec::<String>::new());
+    for (text, key) in [
+        ("[program]\nsource = \"guest_path\"\n", "program.source"),
+        (
+            "[program]\nexecutable = \"/bin/ls\"\n",
+            "program.executable",
+        ),
+        (
+            "[program]\npreload = [{ sample = \"ab\", how = \"ld_preload\" }]\n",
+            "program.preload",
+        ),
+        (
+            "[program]\nextra_files = [{ sample = \"ab\", guest_path = \"/tmp/x\" }]\n",
+            "program.extra_files",
+        ),
+        ("[program]\nrun_in = \"guest_desktop\"\n", "program.run_in"),
+        ("[record]\nscope = \"whole_vm\"\n", "record.scope"),
+        (
+            "[record]\nscreenshot_every_s = 30\n",
+            "record.screenshot_every_s",
+        ),
+        (
+            "[network]\nprivate_addresses = true\n",
+            "network.private_addresses",
+        ),
+        ("[network]\nabuse_filter = false\n", "network.abuse_filter"),
+        ("[dumps]\ndisk_dump = true\n", "dumps.disk_dump"),
+        (
+            "[static_analysis]\nrebuilt_file_mib = 8\n",
+            "static_analysis.rebuilt_file_mib",
+        ),
+        (
+            "[static_analysis]\nrebuilt_run_mib = 8\n",
+            "static_analysis.rebuilt_run_mib",
+        ),
+        (
+            "[triage]\nwritten_per_file_mib = 8\n",
+            "triage.written_per_file_mib",
+        ),
+        (
+            "[triage]\nwritten_per_run_mib = 8\n",
+            "triage.written_per_run_mib",
+        ),
+        (
+            "[triage]\nearlier_per_file_mib = 8\n",
+            "triage.earlier_per_file_mib",
+        ),
+        (
+            "[triage]\nearlier_per_run_mib = 8\n",
+            "triage.earlier_per_run_mib",
+        ),
+        (
+            "[detection]\nscan_every_min = 2\n",
+            "detection.scan_every_min",
+        ),
+        ("[report]\nsections = [\"summary\"]\n", "report.sections"),
+        ("[vm]\nkeep_on_failure = true\n", "vm.keep_on_failure"),
+    ] {
+        let found = problems(text);
+        assert_eq!(found.len(), 1, "{text}: {found:?}");
+        assert!(found[0].contains(key), "{found:?}");
+        assert!(found[0].contains("0.9.1"), "{found:?}");
+    }
+}
+
+#[test]
+fn a_live_route_is_not_set_up_on_this_node() {
+    for route in ["internet", "nat", "tor", "vpn", "vpn:work", "socks5:p"] {
+        let found = problems(&format!("[network]\nroute = \"{route}\"\n"));
         assert_eq!(found.len(), 1, "{route}: {found:?}");
-        assert!(found[0].contains("not in v1"), "{found:?}");
+        assert!(found[0].contains("not set up on this node"), "{found:?}");
         assert!(found[0].contains(route), "{found:?}");
     }
-    // The default route must be one of the allowed ones.
-    let text = with(
-        DEFAULT_POLICY,
-        r#"allowed_routes = ["drop", "inet_sim"]"#,
-        r#"allowed_routes = ["drop"]"#,
+    assert_eq!(
+        problems("[network]\nroute = \"inet_sim\"\n"),
+        Vec::<String>::new()
     );
-    let text = with(
-        &text,
-        r#"route          = "drop""#,
-        r#"route          = "inet_sim""#,
-    );
-    let found = problems(&text, &NoVms);
+    let found = problems("[network]\nroute = \"carrier_pigeon\"\n");
+    assert!(found[0].contains("unknown route"), "{found:?}");
+}
+
+#[test]
+fn a_required_stage_the_preset_skips_is_an_error() {
+    let skip_all = "[static_analysis]\nenabled = false\n[triage]\nenabled = false\n\
+                    [detection]\nyara = false\nsigma = false\nids = false\n";
+    let found = problems(skip_all);
     assert!(
         found
             .iter()
-            .any(|f| f.contains("not in network.allowed_routes")),
+            .any(|f| f.contains("required but this preset skips it")),
         "{found:?}"
     );
-    // A spelling that is not a route at all is a parse error.
-    let text = with(
-        DEFAULT_POLICY,
-        r#"route          = "drop""#,
-        r#"route          = "wormhole""#,
+    assert_eq!(
+        problems(&format!("required_stages = []\n{skip_all}")),
+        Vec::<String>::new()
     );
-    assert!(problems(&text, &NoVms)[0].contains("unknown variant"));
 }
 
 #[test]
-fn nat_is_never_valid() {
-    let text = with(
-        DEFAULT_POLICY,
-        r#"network      = "routed""#,
-        r#"network      = "nat""#,
-    );
-    let found = problems(&text, &NoVms);
-    assert!(
-        found.iter().any(|f| f.contains("nat is never valid")),
-        "{found:?}"
-    );
-    // A lane VM that uses NAT is refused too.
-    let found = problems(DEFAULT_POLICY, &lane(VmNet::Nat, &["auto-clean"]));
-    assert!(found.iter().any(|f| f.contains("uses NAT")), "{found:?}");
-}
-
-#[test]
-fn ceilings_are_enforced() {
-    let cases = [
-        (
-            "max_sample_mib = 64",
-            "max_sample_mib = 257",
-            "sample.max_sample_mib",
-        ),
-        (
-            "max_sample_mib = 64",
-            "max_sample_mib = 0",
-            "sample.max_sample_mib",
-        ),
-        (
-            "max_run_s    = 1800",
-            "max_run_s    = 1801",
-            "1800 second maximum",
-        ),
-        (
-            "timeout_s    = 300",
-            "timeout_s    = 3",
-            "at least 5 seconds",
-        ),
-        (
-            "core_max_mib = 64",
-            "core_max_mib = 1025",
-            "engine maximum of 1024",
-        ),
-        (
-            "# static_time_limit_min = 2",
-            "static_time_limit_min = 481 #",
-            "0 to 480",
-        ),
-        (
-            "priority_max          = 5",
-            "priority_max          = 10",
-            "0 to 9",
-        ),
-        ("max_attempts = 2", "max_attempts = 0", "at least 1"),
-        (
-            "max_concurrent        = 1",
-            "max_concurrent        = 2",
-            "one lane per node",
-        ),
-        (
-            r#"accept_types   = ["elf"]"#,
-            r#"accept_types   = ["elf", "docx"]"#,
-            "unknown type `docx`",
-        ),
-        (
-            r#"accept_arch    = ["x86_64"]"#,
-            r#"accept_arch    = ["z80"]"#,
-            "unknown architecture",
-        ),
-        (
-            r#"run_in       = "app_terminal""#,
-            r#"run_in       = "guest_desktop""#,
-            "app_terminal only",
-        ),
-        (
-            r#"guest_dir    = "/tmp""#,
-            r#"guest_dir    = "tmp""#,
-            "absolute path",
-        ),
-    ];
-    for (from, to, expect) in cases {
-        let found = problems(&with(DEFAULT_POLICY, from, to), &NoVms);
-        assert!(
-            found.iter().any(|f| f.contains(expect)),
-            "{from} -> {to}: {found:?}"
-        );
+fn preset_names_must_be_safe_and_not_built_in_or_custom() {
+    for bad in ["", ".hidden", "UPPER", "a b", "a/b", "custom"] {
+        assert!(!validate::valid_preset_name(bad), "{bad}");
     }
-    // timeout above max_run_s, and root without allow_root.
-    let text = with(DEFAULT_POLICY, "max_run_s    = 1800", "max_run_s    = 200");
-    assert!(
-        problems(&text, &NoVms)
-            .iter()
-            .any(|f| f.contains("above run.max_run_s"))
-    );
-    let text = with(
-        DEFAULT_POLICY,
-        r#"run_as       = "user""#,
-        r#"run_as       = "root""#,
-    );
-    assert!(
-        problems(&text, &NoVms)
-            .iter()
-            .any(|f| f.contains("allow_root"))
-    );
-}
-
-#[test]
-fn a_required_stage_the_policy_skips_is_an_error() {
-    let text = with(
-        DEFAULT_POLICY,
-        r#"static_checks         = "triage""#,
-        r#"static_checks         = "none""#,
-    );
-    let text = with(
-        &text,
-        "triage                = true",
-        "triage                = false",
-    );
-    let text = with(
-        &text,
-        "detection             = { yara = true, sigma = true, ids = true }",
-        "detection             = { yara = false, sigma = false, ids = false }",
-    );
-    let found = problems(&text, &NoVms);
+    assert!(validate::valid_preset_name("ci-fast_2.0"));
+    let (_, found) = parse_preset("Bad Name", "presets/x.toml", "");
     assert!(
         found
             .iter()
-            .any(|f| f.contains("analyse stage is required")),
+            .any(|p| p.message.contains("not a valid preset name"))
+    );
+    let (_, found) = parse_preset("standard", "presets/standard.toml", STANDARD);
+    assert!(
+        found
+            .iter()
+            .any(|p| p.message.contains("built-in preset and read-only")),
         "{found:?}"
     );
-    // The same policy with the stage not required is fine.
-    let text = with(
-        &text,
-        r#"required_stages       = ["analyse"]"#,
-        "required_stages       = []",
-    );
-    assert_eq!(problems(&text, &NoVms), Vec::<String>::new());
 }
 
 #[test]
-fn the_revert_mode_is_checked_against_the_lane_snapshots() {
+fn the_digest_is_the_sha256_of_the_file() {
+    let (preset, _) = parse_preset("mine", "presets/mine.toml", STANDARD);
+    let digest = preset.unwrap().digest;
+    assert_eq!(digest.len(), 64);
+    let again = parse_preset("mine", "presets/mine.toml", &format!("{STANDARD}\n"))
+        .0
+        .unwrap()
+        .digest;
+    assert_ne!(digest, again);
+}
+
+#[test]
+fn the_dump_trigger_takes_a_tier_and_what_to_take() {
+    use antinomie_monitor_core::dump_trigger::TriggerTier;
+    let (loaded, _) = parse_preset(
+        "p",
+        "presets/p.toml",
+        "[dumps]\ndump_when_suspicious = true\nminimum_tier = \"low\"\n\
+         trigger_memory_dump = true\ntrigger_core = false\nread_non_resident_pages = true\n",
+    );
+    let dumps = loaded.unwrap().preset.dumps;
+    let trigger = dumps.trigger().unwrap();
+    assert_eq!(trigger.min_tier, TriggerTier::Low);
+    assert!(trigger.memory && !trigger.core);
+    let found = problems("[dumps]\nminimum_tier = \"extreme\"\n");
+    assert!(found[0].contains("minimum_tier") || found[0].contains("unknown variant"));
+    // Non-resident pages need a trigger core: a warning otherwise.
+    let (_, found) = parse_preset(
+        "p",
+        "presets/p.toml",
+        "[dumps]\nread_non_resident_pages = true\n",
+    );
+    assert!(
+        found.iter().any(|p| p.severity == Severity::Warning
+            && p.to_string().contains("dumps.read_non_resident_pages")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn the_lanes_of_service_toml_are_checked_against_the_lane_vm() {
+    let clean = lane(VmNet::Routed, &["auto-clean"]);
+    assert_eq!(lane_problems("", &clean), Vec::<String>::new());
+    // Without the VM the lane checks are a warning, not an error.
+    assert_eq!(lane_problems("", &NoVms), Vec::<String>::new());
     // snapshot_* needs the named snapshot.
-    let found = problems(DEFAULT_POLICY, &lane(VmNet::Routed, &["other"]));
+    let found = lane_problems("", &lane(VmNet::Routed, &["other"]));
     assert!(
         found
             .iter()
             .any(|f| f.contains("no snapshot named `auto-clean`")),
         "{found:?}"
     );
-    let found = problems(DEFAULT_POLICY, &lane(VmNet::Routed, &[]));
-    assert!(
-        found.iter().any(|f| f.contains("no snapshot named")),
-        "{found:?}"
-    );
-    // reset is refused when the VM has snapshots (storage.rs:1227) and fine without.
-    let reset = with(
-        DEFAULT_POLICY,
-        r#"revert       = "snapshot_disk""#,
-        r#"revert       = "reset""#,
-    );
-    let found = problems(&reset, &lane(VmNet::Routed, &["auto-clean"]));
+    // reset is refused when the VM has snapshots and fine without.
+    let reset = "[lanes]\nrevert = \"reset\"\n";
+    let found = lane_problems(reset, &clean);
     assert!(
         found
             .iter()
@@ -304,48 +535,240 @@ fn the_revert_mode_is_checked_against_the_lane_snapshots() {
         "{found:?}"
     );
     assert_eq!(
-        problems(&reset, &lane(VmNet::Routed, &[])),
+        lane_problems(reset, &lane(VmNet::Routed, &[])),
         Vec::<String>::new()
     );
-}
-
-#[test]
-fn the_lane_vm_must_match_the_policy_network() {
-    let found = problems(DEFAULT_POLICY, &lane(VmNet::Isolated, &["auto-clean"]));
+    // The VM's network must be the lanes', and NAT never.
+    let found = lane_problems("", &lane(VmNet::Isolated, &["auto-clean"]));
     assert!(
         found
             .iter()
-            .any(|f| f.contains("is isolated, the policy requires routed")),
+            .any(|f| f.contains("is isolated, the lanes require routed")),
         "{found:?}"
     );
-    // A policy that allows inet_sim needs a routed VM.
-    let drop_only = with(
-        DEFAULT_POLICY,
-        r#"allowed_routes = ["drop", "inet_sim"]"#,
-        r#"allowed_routes = ["drop"]"#,
-    );
-    let drop_only = with(
-        &drop_only,
-        r#"network      = "routed""#,
-        r#"network      = "isolated""#,
-    );
-    assert_eq!(
-        problems(&drop_only, &lane(VmNet::Isolated, &["auto-clean"])),
-        Vec::<String>::new()
+    let found = lane_problems("[lanes]\nnetwork = \"nat\"\n", &NoVms);
+    assert!(
+        found.iter().any(|f| f.contains("nat is never valid")),
+        "{found:?}"
     );
     // stealth is checked, never applied.
     let mut vms = lane(VmNet::Routed, &["auto-clean"]);
     vms.0[0].stealth = Some("plain".into());
-    let text = with(
-        DEFAULT_POLICY,
-        r#"revert_after = false"#,
-        "revert_after = false\nstealth = \"realistic_desktop\"",
+    let found = lane_problems("[lanes]\nstealth = \"realistic_desktop\"\n", &vms);
+    assert!(
+        found.iter().any(|f| f.contains("lanes.stealth")),
+        "{found:?}"
+    );
+    // snapshot_full over a disk-only snapshot (BH-12, ANT-T0465).
+    let mut vms = lane(VmNet::Routed, &["auto-clean"]);
+    vms.0[0].disk_snapshots = vec!["auto-clean".into()];
+    let full = "[lanes]\nrevert = \"snapshot_full\"\n";
+    assert!(
+        lane_problems(full, &vms)
+            .iter()
+            .any(|f| f.contains("holds the disk only"))
     );
     assert!(
-        problems(&text, &vms)
+        !lane_problems(full, &clean)
             .iter()
-            .any(|f| f.contains("vm.stealth"))
+            .any(|f| f.contains("holds the disk only"))
     );
+}
+
+#[test]
+fn a_preset_needs_a_lane_group_and_a_routed_vm_of_this_node() {
+    let root = scratch("node");
+    fs::write(
+        root.join("presets").join("sim.toml"),
+        "[network]\nroute = \"inet_sim\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("presets").join("arm.toml"),
+        "[vm]\nlane_group = \"arm64\"\n",
+    )
+    .unwrap();
+    let report = validate::load(&root, &lane(VmNet::Isolated, &["auto-clean"]), None);
+    let messages: Vec<String> = report.errors().map(|p| p.to_string()).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("presets/arm.toml")
+                && m.contains("lane group `arm64` is not set up")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("presets/sim.toml") && m.contains("only drop is possible")),
+        "{messages:?}"
+    );
+    assert!(!report.presets.contains_key("arm") && !report.presets.contains_key("sim"));
+    // Another lane group in service.toml makes arm the usable one.
+    fs::write(root.join("service.toml"), "[lanes]\ngroup = \"arm64\"\n").unwrap();
+    let report = validate::load(&root, &NoVms, None);
+    assert!(report.presets.contains_key("arm"));
+    assert_eq!(report.preset_set().lane_group(), "arm64");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn load_reads_the_data_directory_and_checks_across_files() {
+    let root = scratch("load");
+    fs::write(root.join("presets").join("mine.toml"), STANDARD).unwrap();
+    fs::write(
+        root.join("presets").join("broken.toml"),
+        "[accepts]\nmax_sample_mib = 0\n",
+    )
+    .unwrap();
+    fs::write(root.join("presets").join("notes.txt"), "ignored").unwrap();
+    fs::write(
+        root.join("service.toml"),
+        "[[inbox.watch]]\npath = \"/srv/drop\"\npreset = \"missing\"\n",
+    )
+    .unwrap();
+    let report = validate::load(&root, &NoVms, None);
+    assert!(report.has_errors());
+    assert!(report.presets.contains_key("mine"));
+    assert!(report.presets.contains_key("standard"), "the built-in ones");
+    assert_eq!(report.presets.len(), 6);
+    // A preset with errors is not loaded.
+    assert!(!report.presets.contains_key("broken"));
+    let messages: Vec<String> = report.problems.iter().map(|p| p.to_string()).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.starts_with("presets/broken.toml:2:")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.starts_with("service.toml:3:")
+                && m.contains("preset `missing` does not exist")),
+        "{messages:?}"
+    );
+
+    // --preset NAME checks one file (or built-in preset) only; an unknown
+    // name is an error.
+    let one = validate::load(&root, &NoVms, Some("mine"));
+    assert!(!one.has_errors(), "{:?}", one.problems);
+    assert_eq!(one.presets.len(), 1);
+    let built = validate::load(&root, &NoVms, Some("deep"));
+    assert!(!built.has_errors() && built.presets.contains_key("deep"));
+    let none = validate::load(&root, &NoVms, Some("nothing"));
+    assert!(none.errors().any(|p| p.message == "no such preset"));
+
+    // An empty directory is the five built-in presets.
+    let empty = scratch("empty");
+    let report = validate::load(&empty, &NoVms, None);
+    assert!(!report.has_errors(), "{:?}", report.problems);
+    assert_eq!(report.presets.len(), 5);
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&empty);
+}
+
+#[test]
+fn a_0_9_0_policies_folder_is_refused_naming_each_new_key() {
+    let root = scratch("migrate");
+    fs::create_dir_all(root.join("policies")).unwrap();
+    fs::write(
+        root.join("policies").join("default.toml"),
+        "description = \"x\"\n[run]\ntimeout_s = 300\nargs_allowed = true\n\
+         [evidence]\ncore_dump = false\n[access]\nscopes = [\"submit\"]\n\
+         [limits]\nmax_jobs_per_day = 500\n",
+    )
+    .unwrap();
+    let report = validate::load(&root, &NoVms, None);
+    assert!(report.has_errors());
+    let messages: Vec<String> = report.errors().map(|p| p.to_string()).collect();
+    assert!(
+        messages[0].contains("policies/ is replaced by presets/"),
+        "{messages:?}"
+    );
+    for (key, home) in [
+        ("run.timeout_s", "`program.run_time_s`"),
+        (
+            "run.args_allowed",
+            "removed: a run may always change `program.arguments`",
+        ),
+        ("evidence.core_dump", "now `dumps.core_dump_on_exit`"),
+        ("access.scopes", "removed: the caller's permissions decide"),
+        ("limits.max_jobs_per_day", "`max_runs_per_day`"),
+    ] {
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.starts_with("policies/default.toml:")
+                    && m.contains(key)
+                    && m.contains(home)),
+            "{key}: {messages:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn watch_folders_take_preset_and_refuse_the_0_9_0_keys() {
+    let (config, found) = parse_service(
+        "service.toml",
+        "[[inbox.watch]]\npath = \"/srv/a\"\npreset = \"deep\"\npreset_by_dir = true\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+    let watch = &config.unwrap().inbox.watch[0];
+    assert_eq!(watch.preset, "deep");
+    assert!(watch.preset_by_dir);
+    let (config, _) = parse_service("service.toml", "[[inbox.watch]]\npath = \"/srv/a\"\n");
+    assert_eq!(config.unwrap().inbox.watch[0].preset, "standard");
+    let (_, found) = parse_service(
+        "service.toml",
+        "[[inbox.watch]]\npath = \"/srv/a\"\npolicy = \"default\"\npolicy_by_dir = true\n",
+    );
+    let messages: Vec<String> = found.iter().map(|p| p.to_string()).collect();
+    assert!(
+        messages.iter().any(|m| m.contains("renamed `preset`")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("renamed `preset_by_dir`")),
+        "{messages:?}"
+    );
+    // [queue] wait_s replaces the policy's limits.wait_s.
+    let (config, _) = parse_service("service.toml", "");
+    assert_eq!(config.unwrap().queue.wait_s, 3600);
+    let (_, found) = parse_service("service.toml", "[queue]\nwait_s = 0\n");
+    assert!(found.iter().any(|p| p.to_string().contains("queue.wait_s")));
+}
+
+#[test]
+fn a_reload_replaces_the_set_and_a_bad_reload_keeps_it() {
+    let root = scratch("reload");
+    let file = root.join("presets").join("mine.toml");
+    fs::write(&file, STANDARD).unwrap();
+    let shared = SharedPresets::new(Default::default());
+    assert_eq!(shared.reload(&root, &NoVms).unwrap(), 6);
+    let frozen = shared.get("mine").unwrap();
+    assert_eq!(frozen.preset.program.run_time_s, 300);
+
+    // An edit that is valid: the new set has the new digest, the held Arc the old.
+    fs::write(
+        &file,
+        with(STANDARD, "run_time_s = 300", "run_time_s = 120"),
+    )
+    .unwrap();
+    shared.reload(&root, &NoVms).unwrap();
+    let fresh = shared.get("mine").unwrap();
+    assert_eq!(fresh.preset.program.run_time_s, 120);
+    assert_ne!(fresh.digest, frozen.digest);
+    assert_eq!(frozen.preset.program.run_time_s, 300);
+
+    // A broken edit changes nothing.
+    fs::write(&file, "nonsense = 1").unwrap();
+    assert!(shared.reload(&root, &NoVms).is_err());
+    assert_eq!(shared.get("mine").unwrap().digest, fresh.digest);
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -376,7 +799,9 @@ fn service_toml_checks_lanes_safety_and_watch_folders() {
         "{messages:?}"
     );
     assert!(
-        messages.iter().any(|m| m.contains("reserved: live routes")),
+        messages
+            .iter()
+            .any(|m| m.contains("reserved: no live route")),
         "{messages:?}"
     );
     assert!(
@@ -514,259 +939,6 @@ fn processed_keep_days_and_the_results_mode_have_defaults_and_are_checked() {
     assert!(text.contains(":2:") && text.contains("world"), "{text}");
 }
 
-#[test]
-fn load_reads_the_data_directory_and_checks_across_files() {
-    let root = scratch("load");
-    fs::write(root.join("policies").join("default.toml"), DEFAULT_POLICY).unwrap();
-    fs::write(
-        root.join("policies").join("broken.toml"),
-        "[sample]\nmax_sample_mib = 0\n",
-    )
-    .unwrap();
-    fs::write(root.join("policies").join("notes.txt"), "ignored").unwrap();
-    fs::write(
-        root.join("service.toml"),
-        "[[inbox.watch]]\npath = \"/srv/drop\"\npolicy = \"missing\"\n",
-    )
-    .unwrap();
-    let report = validate::load(&root, &NoVms, None);
-    assert!(report.has_errors());
-    assert!(report.policies.contains_key("default"));
-    // A policy with errors is not loaded.
-    assert!(!report.policies.contains_key("broken"));
-    let messages: Vec<String> = report.problems.iter().map(|p| p.to_string()).collect();
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.starts_with("policies/broken.toml:2:")),
-        "{messages:?}"
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.starts_with("service.toml:3:")
-                && m.contains("policy `missing` does not exist")),
-        "{messages:?}"
-    );
-
-    // --policy NAME checks one file only; an unknown name is an error.
-    let one = validate::load(&root, &NoVms, Some("default"));
-    assert!(!one.has_errors(), "{:?}", one.problems);
-    let none = validate::load(&root, &NoVms, Some("nothing"));
-    assert!(none.errors().any(|p| p.message == "no such policy"));
-
-    // An empty directory is the defaults with a warning, not an error.
-    let empty = scratch("empty");
-    let report = validate::load(&empty, &NoVms, None);
-    assert!(!report.has_errors());
-    assert!(
-        report
-            .problems
-            .iter()
-            .any(|p| p.severity == Severity::Warning)
-    );
-}
-
-#[test]
-fn a_reload_replaces_the_set_and_a_bad_reload_keeps_it() {
-    let root = scratch("reload");
-    let file = root.join("policies").join("default.toml");
-    fs::write(&file, DEFAULT_POLICY).unwrap();
-    let shared = SharedPolicies::new(Default::default());
-    assert_eq!(shared.reload(&root, &NoVms).unwrap(), 1);
-    let frozen = shared.get("default").unwrap();
-    assert_eq!(frozen.policy.run.timeout_s, 300);
-
-    // An edit that is valid: the new set has the new digest, the held Arc the old.
-    fs::write(
-        &file,
-        with(DEFAULT_POLICY, "timeout_s    = 300", "timeout_s    = 120"),
-    )
-    .unwrap();
-    shared.reload(&root, &NoVms).unwrap();
-    let fresh = shared.get("default").unwrap();
-    assert_eq!(fresh.policy.run.timeout_s, 120);
-    assert_ne!(fresh.digest, frozen.digest);
-    assert_eq!(frozen.policy.run.timeout_s, 300);
-
-    // A broken edit changes nothing.
-    fs::write(&file, "nonsense = 1").unwrap();
-    assert!(shared.reload(&root, &NoVms).is_err());
-    assert_eq!(shared.get("default").unwrap().digest, fresh.digest);
-}
-
-#[test]
-fn the_digest_is_the_sha256_of_the_file() {
-    let (policy, _) = parse_policy("default", "policies/default.toml", DEFAULT_POLICY, &NoVms);
-    let digest = policy.unwrap().digest;
-    assert_eq!(digest.len(), 64);
-    let again = parse_policy(
-        "default",
-        "policies/default.toml",
-        &format!("{DEFAULT_POLICY}\n"),
-        &NoVms,
-    )
-    .0
-    .unwrap()
-    .digest;
-    assert_ne!(digest, again);
-}
-
-#[test]
-fn policy_names_must_be_safe() {
-    for bad in ["", ".hidden", "UPPER", "a b", "a/b"] {
-        assert!(!validate::valid_policy_name(bad), "{bad}");
-    }
-    assert!(validate::valid_policy_name("ci-fast_2.0"));
-    let (_, found) = parse_policy("Bad Name", "policies/x.toml", DEFAULT_POLICY, &NoVms);
-    assert!(
-        found
-            .iter()
-            .any(|p| p.message.contains("not a valid policy name"))
-    );
-}
-
-fn warnings(text: &str) -> Vec<String> {
-    let (_, problems) = parse_policy("p", "policies/p.toml", text, &NoVms);
-    problems
-        .iter()
-        .filter(|p| p.severity == Severity::Warning)
-        .map(|p| p.to_string())
-        .collect()
-}
-
-#[test]
-fn the_dump_trigger_is_off_by_default_and_takes_a_tier_and_a_kind() {
-    use antinomie_service::config::policy::{TriggerKind, TriggerSetting};
-    let (loaded, found) = parse_policy("p", "policies/p.toml", DEFAULT_POLICY, &NoVms);
-    assert!(
-        found.iter().all(|p| p.severity != Severity::Error),
-        "{found:?}"
-    );
-    let evidence = loaded.unwrap().policy.evidence;
-    assert_eq!(evidence.dump_trigger, TriggerSetting::Off);
-    assert!(evidence.trigger().is_none());
-    for (tier, kind) in [("low", "core"), ("medium", "memory"), ("high", "both")] {
-        let text = with(
-            DEFAULT_POLICY,
-            "dump_trigger      = \"off\"",
-            &format!("dump_trigger = \"{tier}\""),
-        );
-        let text = with(
-            &text,
-            "dump_trigger_kind = \"core\"",
-            &format!("dump_trigger_kind = \"{kind}\""),
-        );
-        assert_eq!(
-            problems(&text, &NoVms),
-            Vec::<String>::new(),
-            "{tier} {kind}"
-        );
-        let (loaded, _) = parse_policy("p", "policies/p.toml", &text, &NoVms);
-        let evidence = loaded.unwrap().policy.evidence;
-        let plan = evidence.trigger().expect("armed");
-        assert_eq!(plan.min_tier.label().to_ascii_lowercase(), tier);
-        assert_eq!(
-            (plan.memory, plan.core),
-            match evidence.dump_trigger_kind {
-                TriggerKind::Core => (false, true),
-                TriggerKind::Memory => (true, false),
-                TriggerKind::Both => (true, true),
-            }
-        );
-    }
-}
-
-#[test]
-fn a_bad_dump_trigger_value_or_budget_is_an_error() {
-    for (value, wanted) in [
-        ("urgent", "unknown variant `urgent`"),
-        ("", "unknown variant"),
-    ] {
-        let text = with(
-            DEFAULT_POLICY,
-            "dump_trigger      = \"off\"",
-            &format!("dump_trigger = \"{value}\""),
-        );
-        let found = problems(&text, &NoVms);
-        assert!(
-            found.iter().any(|p| p.contains(wanted)),
-            "{value:?}: {found:?}"
-        );
-    }
-    let text = with(
-        DEFAULT_POLICY,
-        "dump_trigger_kind = \"core\"",
-        "dump_trigger_kind = \"disk\"",
-    );
-    assert!(
-        problems(&text, &NoVms)
-            .iter()
-            .any(|p| p.contains("unknown variant `disk`"))
-    );
-    // A core trigger needs a core budget; a memory trigger does not.
-    let armed = with(
-        DEFAULT_POLICY,
-        "dump_trigger      = \"off\"",
-        "dump_trigger = \"high\"",
-    );
-    let no_budget = with(&armed, "core_max_mib = 64", "core_max_mib = 0");
-    assert!(
-        problems(&no_budget, &NoVms)
-            .iter()
-            .any(|p| p.contains("core_max_mib") && p.contains("at least 1"))
-    );
-    let memory = with(
-        &no_budget,
-        "dump_trigger_kind = \"core\"",
-        "dump_trigger_kind = \"memory\"",
-    );
-    assert_eq!(problems(&memory, &NoVms), Vec::<String>::new());
-}
-
-#[test]
-fn a_dump_kind_without_a_trigger_is_only_a_warning() {
-    let text = with(
-        DEFAULT_POLICY,
-        "dump_trigger_kind = \"core\"",
-        "dump_trigger_kind = \"both\"",
-    );
-    assert_eq!(problems(&text, &NoVms), Vec::<String>::new());
-    assert!(
-        warnings(&text)
-            .iter()
-            .any(|w| w.contains("dump_trigger_kind") && w.contains("no effect"))
-    );
-}
-
-#[test]
-fn core_nonresident_needs_a_core_trigger_and_is_a_warning_otherwise() {
-    let on = with(
-        DEFAULT_POLICY,
-        "core_nonresident  = false",
-        "core_nonresident  = true",
-    );
-    assert_eq!(problems(&on, &NoVms), Vec::<String>::new());
-    assert!(
-        warnings(&on)
-            .iter()
-            .any(|w| w.contains("core_nonresident") && w.contains("no effect"))
-    );
-    let armed = with(
-        &on,
-        "dump_trigger      = \"off\"",
-        "dump_trigger      = \"high\"",
-    );
-    assert_eq!(problems(&armed, &NoVms), Vec::<String>::new());
-    assert!(
-        !warnings(&armed)
-            .iter()
-            .any(|w| w.contains("core_nonresident"))
-    );
-    let policy: antinomie_service::config::Policy = toml::from_str(&armed).unwrap();
-    assert!(policy.evidence.core_nonresident);
-}
-
 /// BH-08 (bug hunt 0.9.0): `max_recordings_gib = 0` is a cap of 0 bytes, so
 /// every pass deletes every finished job's recording; it must be refused
 /// like the other zero sizes and periods.
@@ -777,40 +949,6 @@ fn bh_08_a_recordings_cap_of_zero_is_refused() {
         found
             .iter()
             .any(|p| p.severity == antinomie_service::config::Severity::Error),
-        "{found:?}"
-    );
-}
-
-/// BH-12, ANT-T0465: `snapshot_full` over a disk-only snapshot (what `auto
-/// init` takes) cannot resume a guest; `config validate` refuses it.
-#[test]
-fn snapshot_full_over_a_disk_snapshot_is_refused() {
-    let full = with(
-        DEFAULT_POLICY,
-        r#"revert       = "snapshot_disk""#,
-        r#"revert       = "snapshot_full""#,
-    );
-    let mut vms = lane(VmNet::Routed, &["auto-clean"]);
-    vms.0[0].disk_snapshots = vec!["auto-clean".into()];
-    let (_, found) = parse_policy("p", "policies/p.toml", &full, &vms);
-    assert!(
-        found
-            .iter()
-            .any(|p| p.severity == Severity::Error
-                && p.to_string().contains("holds the disk only")),
-        "{found:?}"
-    );
-    // Over a full snapshot, nothing to say.
-    let (_, found) = parse_policy(
-        "p",
-        "policies/p.toml",
-        &full,
-        &lane(VmNet::Routed, &["auto-clean"]),
-    );
-    assert!(
-        !found
-            .iter()
-            .any(|p| p.to_string().contains("holds the disk only")),
         "{found:?}"
     );
 }

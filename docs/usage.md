@@ -1809,9 +1809,9 @@ and the family Triage named.
 ### Dump when suspicious activity is seen
 
 The command line and Auto mode have the same trigger: `run exec --dump-trigger
-TIER [--dump-kind core|memory|both]`, and the policy keys `evidence.dump_trigger`
-and `evidence.dump_trigger_kind` (see [auto-mode.md](auto-mode.md)). Both are off
-by default. `--core-nonresident` (policy key `evidence.core_nonresident`) makes the
+TIER [--dump-kind core|memory|both]`, and the preset keys `dumps.dump_when_suspicious`,
+`minimum_tier`, `trigger_memory_dump` and `trigger_core` (see [auto-mode.md](auto-mode.md)). Both are off
+by default. `--core-nonresident` (preset key `dumps.read_non_resident_pages`) makes the
 trigger's cores read the pages that are not in memory too, as **Read non-resident
 pages** does (a revision-22 base; it needs a core or both trigger); the result reports what fired or that it was armed and nothing matched.
 
@@ -1986,7 +1986,7 @@ colour as a chip in HTML and a bar in PDF).
 display, and for Auto mode, where a sample goes in and a report comes out. This
 section takes you from install to a running daemon; the [Command line](#command-line-090)
 section below is the reference for every command and exit code, and [Auto mode](auto-mode.md)
-explains the pipeline, policies, retention and failure codes.
+explains the pipeline, presets, retention and failure codes.
 
 **Install.** The release archive holds `antinomie-monitor` (the window) and
 `antinomie-cli` side by side. `./install.sh` puts both on your path as `antinomie` and
@@ -2016,23 +2016,23 @@ echo $?     # 0 clean_observed, 30 suspicious, 31 malicious, 32 inconclusive, 10
 ```
 
 `auto init` makes a VM, boots it once, and takes the clean snapshot that every job
-starts from; it also writes `policies/default.toml`. The report files (HTML and JSON by
+starts from. A run uses the built-in preset Standard unless it names another. The report files (HTML and JSON by
 default) are in `./report`. See [Auto mode](#auto-mode-090) for the job commands.
 
 **The daemon.** For a queue that stays up, run `antinomie-cli --data-dir ~/auto auto
 daemon` (in the foreground; under systemd it is a service, see [Run it under
 systemd](auto-mode.md#run-it-under-systemd)). `auto submit`, `auto status`, `auto wait`
 and the other `auto` commands then talk to it over its socket, and `antinomie-cli ...
-config validate` checks `service.toml` and the policies before you reload it with
+config validate` checks `service.toml` and the presets before you reload it with
 `SIGHUP`.
 
 **Watch folders.** Add a folder to `service.toml` and every stable file dropped in it
-becomes a job under the policy you name:
+becomes a job of the preset you name, run unchanged:
 
 ```toml
 [[inbox.watch]]
 path = "/srv/drop/default"
-policy = "default"
+preset = "standard"
 ```
 
 Files that are still growing, links, devices and files of other users are never
@@ -2316,7 +2316,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   custom groups with their state; `rules enable ID` and `rules disable ID` switch
   one (`pack:ID` or `group:ID` when an id names both). Changing the selection
   takes the data-directory lock; listing does not.
-- `config path` prints the paths of `settings.json`, `service.toml` and `policies/`.
+- `config path` prints the paths of `settings.json`, `service.toml` and `presets/`.
   `config get [KEY]` prints one engine setting, or all of them; a dotted key reaches
   into an object (`disks.hide_dotfiles`) and the command takes no lock.
   `config set KEY VALUE` changes one (the value is JSON when it parses, else text) and
@@ -2327,9 +2327,11 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   capture quota (`quota_gib`), the VM shutdown timeout (`shutdown_timeout_s`) and the
   caps on earlier file bytes (`file_before_file_mib`, `file_before_run_mib`), which the
   CLI and the daemon start their engine with.
-  `config validate [--policy NAME]` checks `service.toml` and `policies/*.toml`
-  without starting anything (see [service configuration](service-config.md)); it
-  prints each problem as `file:line:column` and exits 4 when there is an error.
+  `config validate [--preset NAME]` checks `service.toml`, the five built-in
+  presets and `presets/*.toml` without starting anything (see
+  [service configuration](service-config.md)); it prints each problem as
+  `file:line:column` and exits 4 when there is an error. A 0.9.0 `policies/`
+  folder is an error that names the new key of each old one.
 - Watch folders (`auto watch`), retention (`auto gc`), result files (`[results]`) and
   the finish hook (`[notify] on_finish`) ship in 0.9.0 and are described under
   [Auto mode](#auto-mode-090). Webhooks are not part of 0.9.0. The job contract is
@@ -2343,7 +2345,7 @@ label come out. Give it a data folder of its own (`--data-dir`), never the one
 the window uses: one process owns a data folder at a time, and the daemon keeps
 it for as long as it runs.
 
-The pipeline, policies, retention, failure codes and troubleshooting are in
+The pipeline, presets, retention, failure codes and troubleshooting are in
 [Auto mode](auto-mode.md); this section lists the commands.
 
 **Pipelining.** The VM is free as soon as a job's recording is collected: the
@@ -2360,7 +2362,7 @@ foreground until it is stopped; put it in the background with your service
 manager or `&`. It owns the data folder (`run/owner.json` says "daemon" and names
 its socket), so the window, another daemon or a command that needs the engine on
 that folder is refused with exit 21 and told who owns it. It reads
-`service.toml` and `policies/` (see [service configuration](service-config.md)),
+`service.toml` and `presets/` (see [service configuration](service-config.md)),
 finishes what a crash left behind, runs the queue one job at a time on its lane,
 and serves the job API on `<data>/run/antinomie.sock`.
 
@@ -2368,7 +2370,7 @@ and serves the job API on `<data>/run/antinomie.sock`.
 |---|---|
 | `SIGTERM` or Ctrl-C | Stops taking jobs (queued jobs stay queued). A job that is past its VM stages finishes its analysis and report first, for up to 120 s (`[daemon] shutdown_host_grace_s`). A job still in the VM is stopped and put back in the queue without using an attempt |
 | a second one within 5 s | Stops at once, VM included (exit 130); the next start finishes the rest |
-| `SIGHUP` | Reads `policies/` and `service.toml` again; a file with an error keeps the old settings. Jobs already queued keep the policy they were submitted under |
+| `SIGHUP` | Reads `presets/` and `service.toml` again; a file with an error keeps the old settings. Jobs already queued keep the preset they were submitted with |
 | `SIGUSR1` | Writes the queue's state to the log |
 
 **Setting up the lane.** A lane is one VM kept for automation, with a clean
@@ -2385,9 +2387,11 @@ once and waits for the guest to answer and to finish booting (its root file syst
 mounted, so the initramfs no longer grows it to the lane disk; a Debian guest's
 start-up finished), stops it, waits until its disk has settled,
 takes the Disk snapshot `auto-clean` (`--snapshot`) and writes
-`<data>/service/lanes/lane-1.json`. When the folder has no policy yet it writes
-`policies/default.toml`, pointed at the new VM; that policy accepts ELF x86-64
-programs only (add `"sh"` to `[sample] accept_types` for shell scripts). A Debian
+`<data>/service/lanes/lane-1.json`. With another VM name or snapshot than
+`auto-1` and `auto-clean` it writes them as `[lanes] vm` and `revert_to` of a new
+`service.toml` (an existing one is left alone, and the command prints the lines
+to add). The presets need no file: Standard accepts ELF x86-64 programs and shell
+scripts. A Debian
 base needs a guest account: `--user NAME --password-stdin`, the password on
 standard input. A guest kernel that crashes in that first boot (the console shows
 a kernel `BUG` or oops, or the guest could not grow its file system) fails `auto
@@ -2417,7 +2421,7 @@ list`, `run show`, `run export`, `triage`, `detect`, `report`, `sample show
 
 | Command | What it does |
 |---|---|
-| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a job; prints the job. `--policy`, `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V`, `--as user\|root\|UID:GID`, `--route drop\|inet_sim` (only these two, by design: a job never uses another route, whereas `run exec --route` takes all six), `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--idempotency-key K`, `--name`. The policy decides what a job may change. `--wait` waits for the end and exits with the job's code; `--follow` also prints the job's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded job labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected job exits 13 |
+| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a job; prints the job. `--policy` (the preset, default `standard`), `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V` (replaces the preset's environment), `--as user\|root\|nobody\|UID:GID`, `--route drop\|inet_sim` (a live route is not set up on this node in 0.9.0, whereas `run exec --route` takes all six), `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--idempotency-key K`, `--name`. A flag that changes a preset value makes the run Custom; only your permissions and the node limit what a run may change. `--wait` waits for the end and exits with the job's code; `--follow` also prints the job's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded job labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected job exits 13 |
 | `auto status [JOB]` | One job, or the queue and the lanes |
 | `auto list` | Jobs, newest first: `--state`, `--outcome`, `--sha256`, `--label K[=V]`, `--since 24h`, `--limit`, `--cursor` |
 | `auto wait JOB...` | Waits until the jobs have ended (`--timeout` bounds it, exit 14) and exits with the worst code; `--verdict-exit` as above |
@@ -2425,9 +2429,9 @@ list`, `run show`, `run export`, `triage`, `detect`, `report`, `sample show
 | `auto result JOB` | The outcome, the label, its score and basis sentence, and the paths of the report files |
 | `auto artifacts JOB`, `auto fetch JOB KIND [--out PATH\|-]` | The job's artifacts; copy one (`html`, `json`, ..., or `report.bundle`) to a file, a folder or standard output |
 | `auto cancel JOB [--reason TEXT]` | A queued job is cancelled at once; a running one stops its run and VM and ends `cancelled` (its recording is kept) |
-| `auto retry JOB [--override KEY=VALUE]` | A new job from a finished one, with `repeat_of` set |
+| `auto retry JOB [--override TABLE.KEY=VALUE]` | A new job from a finished one, with `repeat_of` set: the preset as it is now, or a Custom run's resolved options; `--override program.run_time_s=60` changes one option |
 | `auto queue status\|pause\|resume` | The queue; a paused queue starts no job (running jobs finish) |
-| `auto policy list` | The policies you may submit to |
+| `auto policy list` | The presets (five built in, and `presets/*.toml`) with the permissions their options need |
 | `auto delete JOB [--with-recording]` | Removes a finished job: its record, events and artifacts (the sample stays in the library). `--with-recording` also deletes the job's recording, and the run of each earlier attempt that launched, through the run deletion the window uses; a recording a client is reading, or still being written, is refused |
 | `auto gc [--dry-run]` | Applies retention now (below) and prints what was deleted and what was skipped and why; `--dry-run` deletes nothing. Works with a daemon, or on its own when none runs |
 | `auto watch list` | The watch folders: state, files taken, files rejected, entries refused and why. Without a daemon, the folders `service.toml` names |
@@ -2450,7 +2454,7 @@ becomes a job:
 ```toml
 [[inbox.watch]]
 path = "/srv/drop/default"
-policy = "default"
+preset = "standard"
 delete_after = "move"       # processed files go to <data>/inbox/processed/
 ```
 
@@ -2462,12 +2466,12 @@ FIFO, a file with more than one hard link, a file of another user. It uses the
 folder only when it is yours and no one else can write to it (a group-writable folder
 needs `allow_group_write = true`; a folder anyone can write to is never used).
 Refused entries are left alone and listed by `auto watch list`. A file the intake
-rejects (wrong type, too large, a duplicate the policy denies) goes to
+rejects (wrong type, too large, a duplicate the preset denies) goes to
 `<data>/inbox/rejected/` with a `.reason` file and is not tried again. More than
 `watch_rate` (10) files a minute pauses the folder for a minute and raises an
-`engine.alert` `watch_flood`. `policy_by_dir = true` makes a subfolder named after
-a policy use that policy; other subfolders are ignored. The jobs carry the label
-`watch=<folder name>` and the custody actor `auto:policy-<policy>`. The keys are
+`engine.alert` `watch_flood`. `preset_by_dir = true` makes a subfolder named after
+a preset use that preset; other subfolders are ignored. The jobs carry the label
+`watch=<folder name>` and the custody actor `auto:policy-<preset>`. The keys are
 in [service configuration](service-config.md#watch-folders).
 
 **Results and the hook.** With `[results] dir` set, each job that ends leaves
@@ -2489,11 +2493,11 @@ written, the sample library or the custody chain. `auto gc --dry-run` shows the
 plan first; every deletion is logged with the job and run id.
 
 **The label.** A succeeded job has an assessment: the raw Triage assessment, the
-highest tier, a policy label (`malicious`, `suspicious`, `clean_observed`,
+highest tier, a label (`malicious`, `suspicious`, `clean_observed`,
 `inconclusive`), an optional score and the `basis` sentence that says why.
 `clean_observed` means "nothing seen in this run", not "clean". With `[verdict]
-tag_library = true` in a policy, the sample also gets the library tags
-`auto:label=<label>` and `auto:policy=<name>`, recorded in its custody chain under
+tag_library = true` in a preset, the sample also gets the library tags
+`auto:label=<label>` and `auto:preset=<name>`, recorded in its custody chain under
 the actor `auto:policy-<name>`.
 
 **Who can talk to the daemon.** Only you. The socket file can be opened only by
@@ -2509,7 +2513,7 @@ cannot wear the daemon down: 2 MiB per message, 16 requests at a time and 50 a
 second per connection, 64 connections, 64 event subscriptions, idle connections
 closed after 5 minutes, and a client that stops reading is dropped. Nothing the
 daemon does contacts the network on its own; a sample's traffic is dropped unless
-its policy chooses the simulated internet (`inet_sim`).
+its preset chooses the simulated internet (`inet_sim`).
 
 **Event streams.** Every change of a job is an event with a number: `seq` counts
 the events of one job, `gseq` counts every event of the daemon and never repeats.

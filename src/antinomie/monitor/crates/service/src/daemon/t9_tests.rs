@@ -37,11 +37,15 @@ fn an_unknown_member_is_refused_by_name_in_every_op_that_takes_a_spec() {
         (json!({"sample": {"upload_id": id, "evil": 1}}), "evil"),
         (
             json!({"sample": sample, "overrides": {"evil": true}}),
-            "evil",
+            "overrides",
+        ),
+        (
+            json!({"sample": sample, "overrides": {"program": {"evil": 1}}}),
+            "overrides.program.evil",
         ),
         (
             json!({"sample": sample, "overrides": {"static": {"evil": 1}}}),
-            "static",
+            "overrides.static",
         ),
         (json!({"sample": sample, "labels": {"a": 1}}), "params"),
         (json!({"sample": sample, "priority": -1}), "params"),
@@ -78,23 +82,36 @@ fn denied_field(reply: &Value) -> Option<String> {
     })
 }
 
-/// A job cannot ask for more than its policy and the node give, even for the
-/// owner who holds every permission: not a live route (not set up on this
-/// node), not root, not switches the policy leaves off, not a higher
-/// priority, not a longer run. The same through a
-/// retry's overrides, and a watched file brings no overrides at all.
+/// A run cannot ask for more than the node gives, even for the owner who
+/// holds every permission: not a live route (not set up on this node), not a
+/// kept VM, not a run past the node ceiling, not a key 0.9.0 reserves. The
+/// same through a retry's overrides, and a watched file brings no overrides
+/// at all. (A preset locks nothing else: the owner may run as root or take
+/// dumps.)
 #[test]
-fn no_override_climbs_above_the_policy_through_submit_retry_or_a_watch() {
+fn no_override_climbs_above_the_node_through_submit_retry_or_a_watch() {
     let svc = svc("t9-escalate", |_| {});
     let id = upload(&svc, SCRIPT);
     let escalations = [
-        (json!({"route": "tor"}), "overrides.route"),
-        (json!({"route": "internet"}), "overrides.route"),
-        (json!({"run_as": "root"}), "overrides.run_as"),
-        (json!({"run_as": {"uid": 0, "gid": 0}}), "overrides.run_as"),
-        (json!({"memory_dump": true}), "overrides.memory_dump"),
-        (json!({"core_dump": true}), "overrides.core_dump"),
-        (json!({"timeout_s": 999_999}), "overrides.timeout_s"),
+        (json!({"network": {"route": "tor"}}), "network.route"),
+        (json!({"network": {"route": "internet"}}), "network.route"),
+        (json!({"network": {"route": "nat"}}), "network.route"),
+        (
+            json!({"vm": {"keep_on_failure": true}}),
+            "vm.keep_on_failure",
+        ),
+        (
+            json!({"program": {"run_time_s": 999_999}}),
+            "overrides.program.run_time_s",
+        ),
+        (
+            json!({"program": {"run_in": "guest_desktop"}}),
+            "program.run_in",
+        ),
+        (
+            json!({"network": {"abuse_filter": false}}),
+            "network.abuse_filter",
+        ),
     ];
     for (overrides, field) in &escalations {
         let spec = json!({"sample": {"upload_id": id}, "overrides": overrides});
@@ -103,24 +120,19 @@ fn no_override_climbs_above_the_policy_through_submit_retry_or_a_watch() {
                 assert_eq!(reply["state"], "rejected", "{overrides}: {reply}");
                 assert_eq!(denied_field(&reply).as_deref(), Some(*field), "{reply}");
             }
-            // A value outside the policy is refused and stores nothing.
-            Err(error) => assert!(
-                matches!(
-                    error.code,
-                    ErrorCode::Unsupported | ErrorCode::InvalidArgument
-                ),
-                "{overrides}: {error:?}"
-            ),
+            // A value out of range or a reserved key is refused and stores
+            // nothing.
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.code,
+                        ErrorCode::Unsupported | ErrorCode::InvalidArgument
+                    ),
+                    "{overrides}: {error:?}"
+                );
+                assert_eq!(error.field.as_deref(), Some(*field), "{error:?}");
+            }
         }
-    }
-    let spec = json!({"sample": {"upload_id": id}, "priority": 9});
-    let reply = call(&svc, "job.submit", spec);
-    if let Ok(reply) = reply {
-        // Priority 9 is within the default policy's ceiling or it is denied.
-        assert!(matches!(
-            reply["state"].as_str(),
-            Some("queued") | Some("rejected")
-        ));
     }
 
     // A finished job retried with the same escalations is refused the same way.
@@ -152,13 +164,16 @@ fn no_override_climbs_above_the_policy_through_submit_retry_or_a_watch() {
                 assert_eq!(reply["state"], "rejected", "{overrides}: {reply}");
                 assert_eq!(denied_field(&reply).as_deref(), Some(*field), "{reply}");
             }
-            Err(error) => assert!(
-                matches!(
-                    error.code,
-                    ErrorCode::InvalidArgument | ErrorCode::Unsupported
-                ),
-                "{overrides}: {error:?}"
-            ),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.code,
+                        ErrorCode::InvalidArgument | ErrorCode::Unsupported
+                    ),
+                    "{overrides}: {error:?}"
+                );
+                assert_eq!(error.field.as_deref(), Some(*field), "{error:?}");
+            }
         }
     }
     let queued = call(&svc, "job.list", json!({"state": "queued"})).unwrap();
@@ -167,8 +182,8 @@ fn no_override_climbs_above_the_policy_through_submit_retry_or_a_watch() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|job| job["spec"]["overrides"]["route"].is_null()
-                && job["spec"]["overrides"]["run_as"].is_null()),
+            .all(|job| job["spec"]["overrides"]["network"].is_null()
+                && job["spec"]["overrides"]["vm"].is_null()),
         "{queued}"
     );
 }
@@ -179,14 +194,16 @@ fn drop_folder(svc: &super::tests::Svc, name: &str) -> (std::path::PathBuf, Watc
     fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
     let watch = Watch {
         path: folder.clone(),
-        policy: "default".into(),
+        preset: "standard".into(),
         recursive: false,
         delete_after: DeleteAfter::Move,
         on_duplicate: None,
-        policy_by_dir: false,
+        preset_by_dir: false,
         allow_group_write: false,
         watch_rate: 50,
         permissions: Vec::new(),
+        policy: None,
+        policy_by_dir: None,
     };
     (folder, watch)
 }

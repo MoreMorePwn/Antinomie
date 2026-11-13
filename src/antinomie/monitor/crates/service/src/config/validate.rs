@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Parsing and checking `service.toml` and `policies/*.toml` (design 2.4.2,
-//! 4.4). Every problem names the file, the line and the key.
+//! Parsing and checking `service.toml` and the presets (the built-in ones and
+//! `presets/*.toml`). Every problem names the file, the line and the key. A
+//! `policies/` folder of 0.9.0 is refused, each old key named with its new
+//! home (`migrate.rs`).
 
 use super::{
+    builtin,
     catalog::{VmCatalog, VmFacts, VmNet},
     locate::Locator,
-    policy::{LoadedPolicy, Policy, RevertMode, TriggerKind, TriggerSetting},
-    service::ServiceConfig,
+    migrate,
+    preset::{self, LoadedPreset, Preset, ProgramSource, RecordScope, ReportSections, User},
+    service::{Lanes, RevertMode, ServiceConfig},
 };
-use crate::api::{
-    job::Stage,
-    spec::{RunAsName, RunIn},
-};
+use crate::api::{job::Stage, spec::RunIn};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -28,7 +28,7 @@ pub enum Severity {
 pub struct Problem {
     pub severity: Severity,
     /// File name relative to the data directory (`service.toml`,
-    /// `policies/default.toml`).
+    /// `presets/triage.toml`; `built-in/<name>` for a built-in preset).
     pub file: String,
     pub line: Option<u32>,
     pub column: Option<u32>,
@@ -60,8 +60,10 @@ impl std::fmt::Display for Problem {
     }
 }
 
-/// The highest ceilings the engine and the contract allow.
+/// The node ceilings: the highest values the engine and the contract allow.
 pub const MAX_RUN_S: u32 = 1800;
+pub const MIN_RUN_S: u32 = 5;
+pub const MIN_CORE_MIB: u32 = 64;
 pub const MAX_CORE_MIB: u32 = 1024;
 pub const MAX_STATIC_MINUTES: u32 = 480;
 pub const MAX_SAMPLE_MIB: u32 = 256;
@@ -193,12 +195,16 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
             "above queue.max_queued, so it never applies",
         );
     }
+    if config.queue.wait_s == 0 {
+        sink.error("queue.wait_s", "must be at least 1");
+    }
     if config.safety.unsafe_routes_ack.is_some() {
         sink.error(
             "safety.unsafe_routes_ack",
-            "reserved: live routes are not in v1 (decided D6)",
+            "reserved: no live route is set up on this node before 0.9.1",
         );
     }
+    check_lanes(&config.lanes, sink);
     if config.query.scan_cache_mib != crate::query::catalogue::QueryLimits::default().scan_cache_mib
     {
         sink.error(
@@ -244,6 +250,15 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
         if watch.watch_rate == 0 {
             sink.error(&key("watch_rate"), "must be at least 1");
         }
+        if watch.policy.is_some() {
+            sink.error(
+                &key("policy"),
+                "renamed `preset` in 0.9.0 (policies became presets)",
+            );
+        }
+        if watch.policy_by_dir.is_some() {
+            sink.error(&key("policy_by_dir"), "renamed `preset_by_dir` in 0.9.0");
+        }
     }
     for dir in [
         &config.inbox.dir,
@@ -274,67 +289,247 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
 pub const WEBHOOKS_UNSUPPORTED: &str =
     "not supported in 0.9.0: webhooks are not delivered; use notify.on_finish or poll the job API";
 
-/// The name a policy file stands for: `[a-z0-9._-]`, 1 to 64 bytes, not
-/// starting with a dot.
-pub fn valid_policy_name(name: &str) -> bool {
+/// The name a preset file stands for: `[a-z0-9._-]`, 1 to 64 bytes, not
+/// starting with a dot, and not `custom` (the name of a Custom run).
+pub fn valid_preset_name(name: &str) -> bool {
     (1..=64).contains(&name.len())
         && !name.starts_with('.')
+        && name != preset::CUSTOM
         && name
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
 }
 
-/// Parse one policy file and run the checks of design 4.4. `catalog` answers
-/// the questions about the lane VM.
-pub fn parse_policy(
-    name: &str,
-    file: &str,
-    text: &str,
-    catalog: &dyn VmCatalog,
-) -> (Option<LoadedPolicy>, Vec<Problem>) {
-    let policy = match parse_failure(file, text, toml::from_str::<Policy>(text)) {
-        Ok(policy) => policy,
-        Err(problems) => return (None, problems),
-    };
+/// A role name in `offered_to`: `[a-z0-9_-]`, 1 to 32 bytes.
+fn valid_role(name: &str) -> bool {
+    (1..=32).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b))
+}
+
+/// Parse one preset file and run the checks that need only the file. A key
+/// of a 0.9.0 policy is named with its new home.
+pub fn parse_preset(name: &str, file: &str, text: &str) -> (Option<LoadedPreset>, Vec<Problem>) {
     let locator = Locator::new(text);
     let mut sink = Sink {
         file,
         locator: &locator,
         problems: Vec::new(),
     };
-    if !valid_policy_name(name) {
-        sink.error("description", "the file name is not a valid policy name");
+    if let Ok(value) = toml::from_str::<toml::Value>(text) {
+        for (key, home) in migrate::old_keys(&value) {
+            sink.error(&key, migrate::message(home));
+        }
+        if !sink.problems.is_empty() {
+            return (None, sink.problems);
+        }
     }
-    check_policy(&policy, catalog, &mut sink);
-    let digest = Sha256::digest(text.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let preset = match parse_failure(file, text, toml::from_str::<Preset>(text)) {
+        Ok(preset) => preset,
+        Err(problems) => return (None, problems),
+    };
+    if !valid_preset_name(name) {
+        sink.error(
+            "title",
+            "the file name is not a valid preset name ([a-z0-9._-], not `custom`)",
+        );
+    }
+    if builtin::is_built_in(name) {
+        sink.error(
+            "title",
+            format!("`{name}` is a built-in preset and read-only; copy it under another name"),
+        );
+    }
+    check_preset(&preset, &mut sink);
+    for (key, message) in reserved(&preset) {
+        sink.error(key, message);
+    }
+    if preset.vm.keep_on_failure {
+        sink.error("vm.keep_on_failure", "keeping a VM arrives with 0.9.1");
+    }
+    if preset.network.route.is_live() {
+        sink.error(
+            "network.route",
+            format!(
+                "route {} is not set up on this node; live routes arrive with 0.9.1",
+                preset.network.route
+            ),
+        );
+    }
     (
-        Some(LoadedPolicy {
+        Some(LoadedPreset {
             name: name.to_owned(),
-            digest,
-            policy,
+            digest: preset::sha256_hex(text.as_bytes()),
+            based_on: None,
+            changes: Vec::new(),
+            built_in: false,
+            preset,
         }),
         sink.problems,
     )
 }
 
-fn check_policy(policy: &Policy, catalog: &dyn VmCatalog, sink: &mut Sink<'_>) {
-    let sample = &policy.sample;
-    if !(1..=MAX_SAMPLE_MIB).contains(&sample.max_sample_mib) {
+/// The five built-in presets, parsed. They are checked by the tests; a
+/// built-in that does not parse is left out.
+pub fn built_in_presets() -> BTreeMap<String, Arc<LoadedPreset>> {
+    builtin::BUILT_IN
+        .iter()
+        .filter_map(|(name, text)| {
+            let preset: Preset = toml::from_str(text).ok()?;
+            Some((
+                (*name).to_owned(),
+                Arc::new(LoadedPreset {
+                    name: (*name).to_owned(),
+                    digest: preset::sha256_hex(text.as_bytes()),
+                    based_on: None,
+                    changes: Vec::new(),
+                    built_in: true,
+                    preset,
+                }),
+            ))
+        })
+        .collect()
+}
+
+/// A preset key 0.9.0 accepts only at its default, and why.
+pub type Reserved = (&'static str, String);
+
+fn arrives(default: &str) -> String {
+    format!("arrives with 0.9.1; 0.9.0 accepts only {default}")
+}
+
+/// The keys of `preset` that 0.9.0 cannot act on yet and that are not at
+/// their default (the specification's "Preset keys 0.9.0 reserves"). A live
+/// route and `vm.keep_on_failure` are node refusals, not listed here.
+pub fn reserved(preset: &Preset) -> Vec<Reserved> {
+    let mut out = Vec::new();
+    let p = &preset.program;
+    let mut check = |held: bool, key: &'static str, default: &str| {
+        if !held {
+            out.push((key, arrives(default)));
+        }
+    };
+    check(
+        p.source == ProgramSource::Upload,
+        "program.source",
+        "upload",
+    );
+    check(p.executable.is_empty(), "program.executable", "\"\"");
+    check(p.preload.is_empty(), "program.preload", "[]");
+    check(p.extra_files.is_empty(), "program.extra_files", "[]");
+    check(
+        p.run_in == RunIn::AppTerminal,
+        "program.run_in",
+        "app_terminal",
+    );
+    check(
+        preset.record.scope == RecordScope::Program,
+        "record.scope",
+        "program",
+    );
+    // The engine side of timed screenshots is ANT-T0487; its merge wires it.
+    check(
+        preset.record.screenshot_every_s == 0,
+        "record.screenshot_every_s",
+        "0 (off)",
+    );
+    check(
+        !preset.network.private_addresses,
+        "network.private_addresses",
+        "false",
+    );
+    check(preset.network.abuse_filter, "network.abuse_filter", "true");
+    check(!preset.dumps.disk_dump, "dumps.disk_dump", "false");
+    let s = &preset.static_analysis;
+    check(
+        s.rebuilt_file_mib == 16,
+        "static_analysis.rebuilt_file_mib",
+        "16",
+    );
+    check(
+        s.rebuilt_run_mib == 256,
+        "static_analysis.rebuilt_run_mib",
+        "256",
+    );
+    let t = &preset.triage;
+    check(
+        t.written_per_file_mib == 64,
+        "triage.written_per_file_mib",
+        "64",
+    );
+    check(
+        t.written_per_run_mib == 1024,
+        "triage.written_per_run_mib",
+        "1024",
+    );
+    check(
+        t.earlier_per_file_mib == 64,
+        "triage.earlier_per_file_mib",
+        "64",
+    );
+    check(
+        t.earlier_per_run_mib == 1024,
+        "triage.earlier_per_run_mib",
+        "1024",
+    );
+    check(
+        preset.detection.scan_every_min == 0,
+        "detection.scan_every_min",
+        "0 (off)",
+    );
+    check(
+        preset.report.sections == ReportSections::default(),
+        "report.sections",
+        "\"all\"",
+    );
+    out
+}
+
+/// The checks of a run's options after its overrides (the file checks
+/// without the reserved keys and the node): every problem with its key.
+pub fn check_options(preset: &Preset) -> Vec<Problem> {
+    let locator = Locator::new("");
+    let mut sink = Sink {
+        file: "overrides",
+        locator: &locator,
+        problems: Vec::new(),
+    };
+    check_preset(preset, &mut sink);
+    sink.problems
+}
+
+/// The checks of one preset's values: ranges, the node ceilings, keys that
+/// contradict each other.
+fn check_preset(preset: &Preset, sink: &mut Sink<'_>) {
+    if preset.title.len() > 64 {
+        sink.error("title", "at most 64 bytes");
+    }
+    if preset.description.len() > 512 {
+        sink.error("description", "at most 512 bytes");
+    }
+    for role in &preset.offered_to {
+        if !valid_role(role) {
+            sink.error(
+                "offered_to",
+                format!("`{role}` is not a role name ([a-z0-9_-], 1 to 32 bytes)"),
+            );
+        }
+    }
+    let accepts = &preset.accepts;
+    if !(1..=MAX_SAMPLE_MIB).contains(&accepts.max_sample_mib) {
         sink.error(
-            "sample.max_sample_mib",
-            format!("must be 1 to {MAX_SAMPLE_MIB}"),
+            "accepts.max_sample_mib",
+            format!("must be 1 to {MAX_SAMPLE_MIB} (the node ceiling)"),
         );
     }
-    if sample.accept_types.is_empty() {
-        sink.error("sample.accept_types", "must name at least one type");
+    if accepts.types.is_empty() {
+        sink.error("accepts.types", "must name at least one type");
     }
-    for kind in &sample.accept_types {
+    for kind in &accepts.types {
         if kind != "any" && !SAMPLE_TYPES.contains(&kind.as_str()) {
             sink.error(
-                "sample.accept_types",
+                "accepts.types",
                 format!(
                     "unknown type `{kind}`; the types are {}",
                     SAMPLE_TYPES.join(", ")
@@ -342,13 +537,13 @@ fn check_policy(policy: &Policy, catalog: &dyn VmCatalog, sink: &mut Sink<'_>) {
             );
         }
     }
-    if sample.accept_arch.is_empty() {
-        sink.error("sample.accept_arch", "must name at least one architecture");
+    if accepts.arch.is_empty() {
+        sink.error("accepts.arch", "must name at least one architecture");
     }
-    for arch in &sample.accept_arch {
+    for arch in &accepts.arch {
         if arch != "any" && !SAMPLE_ARCHES.contains(&arch.as_str()) {
             sink.error(
-                "sample.accept_arch",
+                "accepts.arch",
                 format!(
                     "unknown architecture `{arch}`; the values are {}",
                     SAMPLE_ARCHES.join(", ")
@@ -356,285 +551,267 @@ fn check_policy(policy: &Policy, catalog: &dyn VmCatalog, sink: &mut Sink<'_>) {
             );
         }
     }
-
-    let run = &policy.run;
-    if run.timeout_s < 5 {
-        sink.error("run.timeout_s", "at least 5 seconds");
+    check_program(&preset.program, sink);
+    check_dumps(preset, sink);
+    if !valid_lane_group(&preset.vm.lane_group) {
+        sink.error("vm.lane_group", "1 to 64 bytes of [A-Za-z0-9._-]");
     }
-    if run.max_run_s > MAX_RUN_S {
-        sink.error(
-            "run.max_run_s",
-            format!("above the {MAX_RUN_S} second maximum (decided B-H14)"),
-        );
-    }
-    if run.timeout_s > run.max_run_s {
-        sink.error("run.timeout_s", "above run.max_run_s");
-    }
-    if run.run_as == RunAsName::Root && !run.allow_root {
-        sink.error("run.run_as", "root needs run.allow_root = true");
-    }
-    if run.run_in != RunIn::AppTerminal {
-        sink.error(
-            "run.run_in",
-            "v1 supports app_terminal only (decided B-H24)",
-        );
-    }
-    if !run.guest_dir.starts_with('/') || run.guest_dir.contains('\0') {
-        sink.error("run.guest_dir", "must be an absolute path");
-    }
-
-    let network = &policy.network;
-    if network.allowed_routes.is_empty() {
-        sink.error("network.allowed_routes", "must name at least one route");
-    }
-    for route in &network.allowed_routes {
-        if !route.allowed_in_v1() {
-            sink.error(
-                "network.allowed_routes",
-                format!(
-                    "route {} is not in v1: only drop and inet_sim are allowed (decided D6)",
-                    route_name(*route)
-                ),
-            );
-        }
-    }
-    if !network.route.allowed_in_v1() {
-        sink.error(
-            "network.route",
-            format!(
-                "route {} is not in v1 (decided D6)",
-                route_name(network.route)
-            ),
-        );
-    } else if !network.allowed_routes.contains(&network.route) {
-        sink.error(
-            "network.route",
-            format!(
-                "route {} is not in network.allowed_routes",
-                route_name(network.route)
-            ),
-        );
-    }
-
-    if policy.evidence.core_max_mib > MAX_CORE_MIB {
-        sink.error(
-            "evidence.core_max_mib",
-            format!("above the engine maximum of {MAX_CORE_MIB} MiB"),
-        );
-    }
-    let trigger_core = policy.evidence.trigger().is_some_and(|plan| plan.core);
-    if policy.evidence.core_max_mib == 0 && (policy.evidence.core_dump || trigger_core) {
-        sink.error(
-            "evidence.core_max_mib",
-            "must be at least 1 with core_dump or a core dump_trigger",
-        );
-    }
-    if policy.evidence.core_nonresident && !trigger_core {
-        sink.warn(
-            "evidence.core_nonresident",
-            "has no effect without a core dump_trigger (an exit core reads resident pages only)",
-        );
-    }
-    if policy.evidence.dump_trigger == TriggerSetting::Off
-        && policy.evidence.dump_trigger_kind != TriggerKind::default()
-    {
-        sink.warn(
-            "evidence.dump_trigger_kind",
-            "has no effect while evidence.dump_trigger is off",
-        );
-    }
-    if policy
-        .analysis
-        .static_time_limit_min
-        .is_some_and(|minutes| minutes > MAX_STATIC_MINUTES)
-    {
-        sink.error(
-            "analysis.static_time_limit_min",
-            format!("0 to {MAX_STATIC_MINUTES}"),
-        );
-    }
-    for stage in &policy.analysis.required_stages {
+    check_static(preset, sink);
+    for stage in &preset.required_stages {
         let skipped = match stage {
-            Stage::Analyse => policy.analysis.analyse_skipped(),
-            Stage::Report => policy.report.formats.is_empty(),
+            Stage::Analyse => preset.analyse_skipped(),
+            Stage::Report => preset.report.formats.is_empty(),
             _ => false,
         };
         if skipped {
             sink.error(
-                "analysis.required_stages",
-                format!("the {stage:?} stage is required but this policy skips it").to_lowercase(),
+                "required_stages",
+                format!("the {stage:?} stage is required but this preset skips it").to_lowercase(),
             );
         }
     }
-    if let Err(error) = crate::verdict::Mapping::compile(&policy.verdict) {
+    if let Err(error) = crate::verdict::Mapping::compile(&preset.verdict) {
         sink.error(&error.key(), error.to_string());
     }
-    if policy.report.formats.is_empty() && !policy.report.bundle {
+    if preset.report.formats.is_empty() && !preset.report.bundle {
         sink.warn("report.formats", "no report is produced");
     }
-    if policy.retry.max_attempts == 0 {
+    if preset.retry.max_attempts == 0 {
         sink.error("retry.max_attempts", "must be at least 1");
     }
-    if policy.retry.max_attempts > 1 && policy.retry.backoff_s.is_empty() {
+    if preset.retry.max_attempts > 1 && preset.retry.backoff_s.is_empty() {
         sink.error("retry.backoff_s", "needs at least one delay when retrying");
     }
-    if policy.access.scopes.is_empty() {
-        sink.error("access.scopes", "must name at least one scope");
-    }
-    if policy.access.clients.is_empty() {
-        sink.error("access.clients", "must name at least one pattern");
-    }
-    let limits = &policy.limits;
-    if limits.priority_max > 9 {
-        sink.error("limits.priority_max", "0 to 9");
-    }
-    for (key, value) in [
-        ("limits.max_queued_per_client", limits.max_queued_per_client),
-        ("limits.max_jobs_per_day", limits.max_jobs_per_day),
-        ("limits.max_concurrent", limits.max_concurrent),
-        ("limits.wait_s", limits.wait_s),
-    ] {
-        if value == 0 {
-            sink.error(key, "must be at least 1");
-        }
-    }
-    if limits.max_concurrent > 1 {
+}
+
+fn absolute(path: &str) -> bool {
+    path.starts_with('/') && !path.contains('\0') && path.len() <= 4096
+}
+
+fn check_program(p: &preset::Program, sink: &mut Sink<'_>) {
+    if !absolute(&p.guest_path) || p.guest_path.ends_with('/') {
         sink.error(
-            "limits.max_concurrent",
-            "unsupported: one lane per node (decided D4)",
+            "program.guest_path",
+            "an absolute path of a file (`{name}` is the sample's file name)",
         );
     }
-
-    check_vm(policy, catalog, sink);
+    if !absolute(&p.working_directory) {
+        sink.error("program.working_directory", "must be an absolute path");
+    }
+    if p.arguments.len() > 64
+        || p.arguments
+            .iter()
+            .any(|a| a.len() > 4096 || a.contains('\0'))
+    {
+        sink.error(
+            "program.arguments",
+            "at most 64 arguments of 4096 bytes, no NUL",
+        );
+    }
+    if p.environment.len() > 64
+        || p.environment
+            .iter()
+            .any(|e| e.contains('\0') || e.split_once('=').is_none_or(|(k, _)| k.is_empty()))
+    {
+        sink.error(
+            "program.environment",
+            "at most 64 entries of the form NAME=value",
+        );
+    }
+    if p.user != User::Custom && (p.uid != 1000 || p.gid != 1000) {
+        sink.warn(
+            "program.uid",
+            "uid and gid apply with user = \"custom\" only",
+        );
+    }
+    if !(MIN_RUN_S..=MAX_RUN_S).contains(&p.run_time_s) {
+        sink.error(
+            "program.run_time_s",
+            format!("{MIN_RUN_S} to {MAX_RUN_S} seconds (the node ceiling)"),
+        );
+    }
 }
 
-fn route_name(route: crate::api::spec::Route) -> String {
-    serde_json::to_value(route)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
+fn check_dumps(preset: &Preset, sink: &mut Sink<'_>) {
+    let d = &preset.dumps;
+    if !(MIN_CORE_MIB..=MAX_CORE_MIB).contains(&d.core_budget_mib) {
+        sink.error(
+            "dumps.core_budget_mib",
+            format!("{MIN_CORE_MIB} to {MAX_CORE_MIB} MiB"),
+        );
+    }
+    let deadline_max = antinomie_monitor_core::core_limits::CORE_TIMEOUT_MAX_MS;
+    if !(1..=deadline_max).contains(&d.core_deadline_ms) {
+        sink.error("dumps.core_deadline_ms", format!("1 to {deadline_max} ms"));
+    }
+    let most = antinomie_monitor_core::dump_trigger::DumpTrigger::MAX_DUMPS;
+    if !(1..=most).contains(&d.max_dumps) {
+        sink.error("dumps.max_dumps", format!("1 to {most}"));
+    }
+    if d.dumps_apart_s > 3600 {
+        sink.error("dumps.dumps_apart_s", "0 to 3600 seconds");
+    }
+    if d.dump_when_suspicious && !d.trigger_memory_dump && !d.trigger_core {
+        sink.error(
+            "dumps.dump_when_suspicious",
+            "takes nothing: turn on trigger_memory_dump or trigger_core",
+        );
+    }
+    if d.read_non_resident_pages && !d.trigger().is_some_and(|t| t.core) {
+        sink.warn(
+            "dumps.read_non_resident_pages",
+            "has no effect without a trigger core (an exit core reads resident pages only)",
+        );
+    }
 }
 
-fn check_vm(policy: &Policy, catalog: &dyn VmCatalog, sink: &mut Sink<'_>) {
-    let vm = &policy.vm;
-    match vm.network.as_str() {
+fn check_static(preset: &Preset, sink: &mut Sink<'_>) {
+    let s = &preset.static_analysis;
+    for check in &s.triage_checks {
+        if !preset::TRIAGE_CHECKS.contains(check) {
+            sink.error(
+                "static_analysis.triage_checks",
+                format!("{check:?} is a deep check: list it in deep_checks").to_lowercase(),
+            );
+        }
+    }
+    for check in &s.deep_checks {
+        if !preset::DEEP_CHECKS.contains(check) {
+            sink.error(
+                "static_analysis.deep_checks",
+                "takes disassembly, decompilation and floss only",
+            );
+        }
+    }
+    if s.time_limit_per_tool_min > MAX_STATIC_MINUTES {
+        sink.error(
+            "static_analysis.time_limit_per_tool_min",
+            format!("0 to {MAX_STATIC_MINUTES}"),
+        );
+    }
+    let fields = antinomie_monitor_core::analysis::LIMIT_FIELDS;
+    for (key, setting, value) in s.limits.entries() {
+        if let Some(field) = fields.iter().find(|f| f.setting == setting)
+            && !(field.min..=field.max).contains(&value)
+        {
+            sink.error(
+                &format!("static_analysis.limits.{key}"),
+                format!(
+                    "{} to {} {} (the node ceiling)",
+                    field.min, field.max, field.unit
+                ),
+            );
+        }
+    }
+}
+
+/// A lane group's name: 1 to 64 bytes of `[A-Za-z0-9._-]`.
+pub fn valid_lane_group(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
+fn check_lanes(lanes: &Lanes, sink: &mut Sink<'_>) {
+    if !valid_lane_group(&lanes.group) {
+        sink.error("lanes.group", "1 to 64 bytes of [A-Za-z0-9._-]");
+    }
+    if lanes.vm.is_empty() {
+        sink.error("lanes.vm", "must name the lane VM");
+    }
+    match lanes.network.as_str() {
         "routed" | "isolated" | "disconnected" => {}
         "nat" => sink.error(
-            "vm.network",
-            "nat is never valid for jobs: NAT lets the guest reach host services",
+            "lanes.network",
+            "nat is never valid for a lane: NAT lets the guest reach host services",
         ),
         other => sink.error(
-            "vm.network",
+            "lanes.network",
             format!("`{other}` is not routed, isolated or disconnected"),
         ),
     }
-    if vm.revert.needs_snapshot() && vm.revert_to.is_empty() {
-        sink.error("vm.revert_to", "must name a snapshot");
+    if lanes.revert.needs_snapshot() && lanes.revert_to.is_empty() {
+        sink.error("lanes.revert_to", "must name a snapshot");
     }
-    let Some(lane_vm) = &vm.lane_vm else {
-        sink.error("vm", "vm.lane_vm is required");
-        return;
-    };
-    let non_drop = policy
-        .network
-        .allowed_routes
-        .iter()
-        .any(|route| *route != crate::api::spec::Route::Drop);
-    let Some(facts) = catalog.find(lane_vm) else {
-        sink.warn(
-            "vm.lane_vm",
-            format!("VM `{lane_vm}` was not found in this data directory"),
-        );
-        return;
-    };
-    check_vm_facts(policy, &facts, non_drop, sink);
 }
 
-fn check_vm_facts(policy: &Policy, facts: &VmFacts, non_drop: bool, sink: &mut Sink<'_>) {
-    let vm = &policy.vm;
+/// The lane VM against `[lanes]`; a VM not made yet is a warning.
+fn check_lane_vm(lanes: &Lanes, catalog: &dyn VmCatalog, sink: &mut Sink<'_>) -> Option<VmFacts> {
+    let Some(facts) = catalog.find(&lanes.vm) else {
+        sink.warn(
+            "lanes.vm",
+            format!(
+                "VM `{}` was not found in this data directory; `auto init` makes it",
+                lanes.vm
+            ),
+        );
+        return None;
+    };
     if facts.network == VmNet::Nat {
         sink.error(
-            "vm.lane_vm",
+            "lanes.vm",
             format!(
-                "VM `{}` uses NAT, which is never valid for jobs",
+                "VM `{}` uses NAT, which is never valid for a lane",
                 facts.name
             ),
         );
-    } else if facts.network.as_str() != vm.network && vm.network != "nat" {
+    } else if facts.network.as_str() != lanes.network && lanes.network != "nat" {
         sink.error(
-            "vm.network",
+            "lanes.network",
             format!(
-                "VM `{}` is {}, the policy requires {}",
+                "VM `{}` is {}, the lanes require {}",
                 facts.name,
                 facts.network.as_str(),
-                vm.network
+                lanes.network
             ),
         );
     }
-    if non_drop && facts.network != VmNet::Routed {
-        sink.error(
-            "network.allowed_routes",
-            format!(
-                "VM `{}` is not routed, so only drop is possible",
-                facts.name
-            ),
-        );
-    }
-    match vm.revert {
+    match lanes.revert {
         RevertMode::Reset if !facts.snapshots.is_empty() => sink.error(
-            "vm.revert",
+            "lanes.revert",
             format!(
                 "reset is refused on VM `{}`, which has snapshots (every Auto lane keeps \
-                 its clean snapshot): use `vm.revert = \"snapshot_disk\"`, which gives the \
+                 its clean snapshot): use `revert = \"snapshot_disk\"`, which gives the \
                  same clean disk",
                 facts.name
             ),
         ),
         RevertMode::SnapshotDisk | RevertMode::SnapshotFull
-            if !facts.snapshots.contains(&vm.revert_to) =>
+            if !facts.snapshots.contains(&lanes.revert_to) =>
         {
             sink.error(
-                "vm.revert_to",
+                "lanes.revert_to",
                 format!(
                     "VM `{}` has no snapshot named `{}`",
-                    facts.name, vm.revert_to
+                    facts.name, lanes.revert_to
                 ),
             );
         }
         // ANT-T0465 (user decision 2026-11-12): refused, not a warning.
-        RevertMode::SnapshotFull if facts.disk_snapshots.contains(&vm.revert_to) => sink.error(
-            "vm.revert",
+        RevertMode::SnapshotFull if facts.disk_snapshots.contains(&lanes.revert_to) => sink.error(
+            "lanes.revert",
             format!(
                 "snapshot `{}` of VM `{}` holds the disk only, so snapshot_full cannot \
                  resume a running guest from it; use snapshot_disk, or take a full \
                  snapshot (with memory)",
-                vm.revert_to, facts.name
+                lanes.revert_to, facts.name
             ),
         ),
         _ => {}
     }
-    if let (Some(want), Some(have)) = (&vm.stealth, &facts.stealth)
+    if let (Some(want), Some(have)) = (&lanes.stealth, &facts.stealth)
         && want != have
     {
         sink.error(
-            "vm.stealth",
+            "lanes.stealth",
             format!(
-                "VM `{}` has the profile `{have}`, the policy expects `{want}`",
+                "VM `{}` has the profile `{have}`, the lanes expect `{want}`",
                 facts.name
             ),
         );
     }
-    if let (Some(want), Some(have)) = (&vm.base, &facts.base_identity)
-        && want != have
-    {
-        sink.warn(
-            "vm.base",
-            format!(
-                "VM `{}` was made from base `{have}`, not `{want}`",
-                facts.name
-            ),
-        );
-    }
+    Some(facts)
 }
 
 /// Everything read from a data directory.
@@ -642,7 +819,8 @@ fn check_vm_facts(policy: &Policy, facts: &VmFacts, non_drop: bool, sink: &mut S
 pub struct ConfigReport {
     /// `None` when `service.toml` exists and does not parse.
     pub service: Option<ServiceConfig>,
-    pub policies: BTreeMap<String, Arc<LoadedPolicy>>,
+    /// The built-in presets and the files without errors.
+    pub presets: BTreeMap<String, Arc<LoadedPreset>>,
     pub problems: Vec<Problem>,
 }
 
@@ -655,6 +833,15 @@ impl ConfigReport {
 
     pub fn has_errors(&self) -> bool {
         self.errors().next().is_some()
+    }
+
+    /// The presets as a running service holds them.
+    pub fn preset_set(&self) -> super::PresetSet {
+        let group = self
+            .service
+            .as_ref()
+            .map_or(preset::DEFAULT_LANE_GROUP, |s| s.lanes.group.as_str());
+        super::PresetSet::new(self.presets.clone()).with_lane_group(group)
     }
 }
 
@@ -675,24 +862,19 @@ fn read(path: &Path, shown: &str, problems: &mut Vec<Problem>) -> Option<String>
     }
 }
 
-/// Read and check `<data>/service.toml` and `<data>/policies/*.toml`. A
-/// missing `service.toml` is the defaults; a missing policy directory is no
-/// policy. `only_policy` limits the policy checks to one file.
-pub fn load(data_dir: &Path, catalog: &dyn VmCatalog, only_policy: Option<&str>) -> ConfigReport {
-    let mut report = ConfigReport::default();
-    let service_path = data_dir.join("service.toml");
-    if service_path.exists() {
-        if let Some(text) = read(&service_path, "service.toml", &mut report.problems) {
-            let (config, problems) = parse_service("service.toml", &text);
-            report.service = config;
-            report.problems.extend(problems);
-        }
-    } else {
-        report.service = Some(ServiceConfig::default());
+fn file_problem(severity: Severity, file: &str, message: impl Into<String>) -> Problem {
+    Problem {
+        severity,
+        file: file.to_owned(),
+        line: None,
+        column: None,
+        key: None,
+        message: message.into(),
     }
+}
 
-    let dir = data_dir.join("policies");
-    let mut files: Vec<_> = std::fs::read_dir(&dir)
+fn toml_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)
         .map(|entries| {
             entries
                 .flatten()
@@ -702,75 +884,180 @@ pub fn load(data_dir: &Path, catalog: &dyn VmCatalog, only_policy: Option<&str>)
         })
         .unwrap_or_default();
     files.sort();
-    let mut found_only = only_policy.is_none();
-    for path in files {
+    files
+}
+
+/// A `policies/` folder of 0.9.0: refused, with every old key's new home.
+fn refuse_policies(data_dir: &Path, problems: &mut Vec<Problem>) {
+    let dir = data_dir.join("policies");
+    if !dir.is_dir() {
+        return;
+    }
+    problems.push(file_problem(
+        Severity::Error,
+        "policies",
+        "policies/ is replaced by presets/ in 0.9.0: write each policy as \
+         presets/<name>.toml with the keys below (default is now the built-in \
+         preset standard), then remove policies/",
+    ));
+    for path in toml_files(&dir) {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let shown = format!("policies/{name}");
+        let Some(text) = read(&path, &shown, problems) else {
+            continue;
+        };
+        let Ok(value) = toml::from_str::<toml::Value>(&text) else {
+            continue;
+        };
+        let locator = Locator::new(&text);
+        let mut sink = Sink {
+            file: &shown,
+            locator: &locator,
+            problems: Vec::new(),
+        };
+        for (key, home) in migrate::old_keys(&value) {
+            sink.error(&key, migrate::message(home));
+        }
+        problems.extend(sink.problems);
+    }
+}
+
+/// Read and check `<data>/service.toml` and `<data>/presets/*.toml`. A
+/// missing `service.toml` is the defaults; a missing preset directory is the
+/// built-in presets alone. `only_preset` limits the preset checks to one file
+/// (or one built-in preset).
+pub fn load(data_dir: &Path, catalog: &dyn VmCatalog, only_preset: Option<&str>) -> ConfigReport {
+    let mut report = ConfigReport::default();
+    let service_path = data_dir.join("service.toml");
+    let service_text = if service_path.exists() {
+        read(&service_path, "service.toml", &mut report.problems)
+    } else {
+        None
+    };
+    match &service_text {
+        Some(text) => {
+            let (config, problems) = parse_service("service.toml", text);
+            report.service = config;
+            report.problems.extend(problems);
+        }
+        None if !service_path.exists() => report.service = Some(ServiceConfig::default()),
+        None => {}
+    }
+    let service_locator = Locator::new(service_text.as_deref().unwrap_or(""));
+    let mut service_sink = Sink {
+        file: "service.toml",
+        locator: &service_locator,
+        problems: Vec::new(),
+    };
+    let lanes = report.service.as_ref().map(|s| s.lanes.clone());
+    let facts = lanes
+        .as_ref()
+        .and_then(|lanes| check_lane_vm(lanes, catalog, &mut service_sink));
+    report.problems.extend(service_sink.problems);
+    refuse_policies(data_dir, &mut report.problems);
+
+    let mut found_only = only_preset.is_none_or(builtin::is_built_in);
+    for (name, loaded) in built_in_presets() {
+        if only_preset.is_none_or(|only| only == name) {
+            report.presets.insert(name, loaded);
+        }
+    }
+    for path in toml_files(&data_dir.join("presets")) {
         let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
             continue;
         };
-        if only_policy.is_some_and(|only| only != name) {
+        if only_preset.is_some_and(|only| only != name) {
             continue;
         }
         found_only = true;
-        let shown = format!("policies/{name}.toml");
+        let shown = format!("presets/{name}.toml");
         let Some(text) = read(&path, &shown, &mut report.problems) else {
             continue;
         };
-        let (policy, problems) = parse_policy(name, &shown, &text, catalog);
+        let (preset, problems) = parse_preset(name, &shown, &text);
         let failed = problems.iter().any(|p| p.severity == Severity::Error);
         report.problems.extend(problems);
-        if let (Some(policy), false) = (policy, failed) {
-            report.policies.insert(name.to_owned(), Arc::new(policy));
+        if let (Some(preset), false) = (preset, failed) {
+            if let Some(problem) = node_problem(&preset, &shown, lanes.as_ref(), facts.as_ref()) {
+                report.problems.push(problem);
+                continue;
+            }
+            report.presets.insert(name.to_owned(), Arc::new(preset));
         }
     }
     if !found_only {
-        report.problems.push(Problem {
-            severity: Severity::Error,
-            file: format!("policies/{}.toml", only_policy.unwrap_or_default()),
-            line: None,
-            column: None,
-            key: None,
-            message: "no such policy".into(),
-        });
-    }
-    if only_policy.is_none() && report.policies.is_empty() && !report.has_errors() {
-        report.problems.push(Problem {
-            severity: Severity::Warning,
-            file: "policies".into(),
-            line: None,
-            column: None,
-            key: None,
-            message: "no policy is defined, so no job can be submitted".into(),
-        });
+        report.problems.push(file_problem(
+            Severity::Error,
+            &format!("presets/{}.toml", only_preset.unwrap_or_default()),
+            "no such preset",
+        ));
     }
 
-    // Cross-file: a watch folder names a policy that exists.
-    if let (Some(service), None) = (&report.service, only_policy) {
-        let mut cross = Vec::new();
-        if service_path.exists()
-            && let Ok(text) = std::fs::read_to_string(&service_path)
-        {
-            let locator = Locator::new(&text);
-            for (index, watch) in service.inbox.watch.iter().enumerate() {
-                if !report.policies.contains_key(&watch.policy)
-                    && !report
-                        .problems
-                        .iter()
-                        .any(|p| p.file.contains(&watch.policy))
-                {
-                    let key = format!("inbox.watch.{index}.policy");
-                    let (line, column) = locator.find(&key);
-                    cross.push(Problem {
-                        severity: Severity::Error,
-                        file: "service.toml".into(),
-                        line: Some(line),
-                        column: Some(column),
-                        key: Some(key),
-                        message: format!("policy `{}` does not exist", watch.policy),
-                    });
-                }
+    // Cross-file: a watch folder names a preset that exists.
+    if let (Some(service), None, Some(text)) = (&report.service, only_preset, &service_text) {
+        let locator = Locator::new(text);
+        let mut sink = Sink {
+            file: "service.toml",
+            locator: &locator,
+            problems: Vec::new(),
+        };
+        for (index, watch) in service.inbox.watch.iter().enumerate() {
+            if !report.presets.contains_key(&watch.preset)
+                && !report
+                    .problems
+                    .iter()
+                    .any(|p| p.file.contains(&watch.preset))
+            {
+                sink.error(
+                    &format!("inbox.watch.{index}.preset"),
+                    format!("preset `{}` does not exist", watch.preset),
+                );
             }
         }
-        report.problems.extend(cross);
+        report.problems.extend(sink.problems);
     }
     report
+}
+
+/// A preset file against the node: its lane group exists, and a route other
+/// than drop has a routed lane VM.
+fn node_problem(
+    preset: &LoadedPreset,
+    shown: &str,
+    lanes: Option<&Lanes>,
+    facts: Option<&VmFacts>,
+) -> Option<Problem> {
+    let lanes = lanes?;
+    let problem = |key: &str, message: String| Problem {
+        severity: Severity::Error,
+        file: shown.to_owned(),
+        line: None,
+        column: None,
+        key: Some(key.to_owned()),
+        message,
+    };
+    if preset.preset.vm.lane_group != lanes.group {
+        return Some(problem(
+            "vm.lane_group",
+            format!(
+                "lane group `{}` is not set up on this node (service.toml [lanes] group is `{}`)",
+                preset.preset.vm.lane_group, lanes.group
+            ),
+        ));
+    }
+    if let Some(facts) = facts
+        && preset.preset.network.route != crate::api::spec::Route::Drop
+        && facts.network != VmNet::Routed
+    {
+        return Some(problem(
+            "network.route",
+            format!(
+                "VM `{}` is not routed, so only drop is possible",
+                facts.name
+            ),
+        ));
+    }
+    None
 }

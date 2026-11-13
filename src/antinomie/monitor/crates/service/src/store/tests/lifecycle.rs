@@ -35,7 +35,7 @@ fn claim_order_is_priority_then_age() {
         Some(1)
     );
     assert_eq!(fx.store.get(&urgent.id).unwrap().queue_position, Some(2));
-    let mut fx2 = Fx::with_policy("order2", |p| p.limits.priority_max = 9);
+    let mut fx2 = Fx::new("order2");
     fx2.limits = SubmitLimits::default();
     let a = fx2.queued(1);
     fx2.clock.advance(5);
@@ -459,7 +459,8 @@ fn a_paused_queue_starts_nothing_and_says_so() {
 
 #[test]
 fn a_job_that_waits_too_long_fails_with_the_code_of_the_wait() {
-    let fx = Fx::with_policy("wait", |p| p.limits.wait_s = 100);
+    let mut fx = Fx::new("wait");
+    fx.limits.wait_s = 100;
     let cases = [
         (WaitingFor::Resources, FailureCode::HostResources),
         (WaitingFor::Dependency, FailureCode::DependencyMissing),
@@ -944,7 +945,7 @@ fn a_label_filter_pages_past_non_matching_jobs() {
 /// lane's architecture, a backoff). `claim_next` looks at 64 rows only.
 #[test]
 fn bh_01_a_job_the_lane_can_run_behind_64_it_cannot_is_still_claimed() {
-    let fx = Fx::with_policy("bh01", |p| p.limits.max_queued_per_client = 100);
+    let fx = Fx::new("bh01");
     for _ in 0..64 {
         fx.queued(1);
         fx.clock.advance(1);

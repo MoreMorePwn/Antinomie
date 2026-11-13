@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `job.submit` (design 5.3, 5.4.1, 5.6): validate synchronously, then store
 //! the job `queued`, or `rejected` with the failure that explains it. A
-//! caller without `runs.submit`, shape errors, an unknown policy, a value
-//! outside the policy, a full queue and the v1 restrictions are errors of the
-//! call and store nothing.
+//! caller without `runs.submit`, shape errors, an unknown preset, an invalid
+//! value, a reserved preset key and a full queue are errors of the call and
+//! store nothing.
 
 use super::{
     R, Store, Tx,
-    admission::{self, Refusal, Reject},
+    admission::{self, Reject, Resolved},
     canon::canonical,
     db,
     model::{JOB_COLUMNS, JobRow, assemble, load_job, name_of, to_json},
 };
 use crate::{
     api::{
-        error::{ApiError, ErrorCode, ErrorReason},
+        error::{ApiError, ErrorCode},
         event::EventBody,
         failure::{Failure, FailureCode},
         ids::JobId,
@@ -23,7 +23,7 @@ use crate::{
         spec::{JobSpec, SampleSource},
     },
     clock::new_job_id,
-    config::{LoadedPolicy, PolicyLookup, service::OnDuplicate},
+    config::{LoadedPreset, PresetSet, builtin::DEFAULT_PRESET, service::OnDuplicate},
 };
 use rusqlite::OptionalExtension;
 use serde_json::json;
@@ -31,11 +31,13 @@ use serde_json::json;
 /// An idempotency key is kept for 24 hours (design 5.2).
 pub const IDEMPOTENCY_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 
-/// The queue caps of `service.toml [queue]` (design 2.4.2).
+/// The queue caps and the wait of `service.toml [queue]` (design 2.4.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SubmitLimits {
     pub max_queued: u32,
     pub per_client_queued: u32,
+    /// How long a run may wait `queued` (`queue.wait_s`).
+    pub wait_s: u32,
 }
 
 impl Default for SubmitLimits {
@@ -43,6 +45,7 @@ impl Default for SubmitLimits {
         Self {
             max_queued: 1000,
             per_client_queued: 100,
+            wait_s: 3600,
         }
     }
 }
@@ -55,24 +58,24 @@ pub struct IntakeError {
 }
 
 /// The intake of design 4.2: find or archive the sample and check its size,
-/// type and architecture against the policy. `actor` is the custody actor
+/// type and architecture against the run's preset (`[accepts]`). `actor` is the custody actor
 /// (`local:<uid>`, `web:<user>`, `auto:policy-<name>`).
 pub trait SampleAdmission: Send + Sync {
     fn admit(
         &self,
         source: &SampleSource,
         name: Option<&str>,
-        policy: &LoadedPolicy,
+        preset: &LoadedPreset,
         actor: &str,
     ) -> Result<JobSample, IntakeError>;
 }
 
 /// What `submit` needs besides the spec.
 pub struct SubmitContext<'a> {
-    pub policies: &'a dyn PolicyLookup,
+    pub presets: &'a PresetSet,
     pub intake: &'a dyn SampleAdmission,
     pub limits: SubmitLimits,
-    /// A watch folder's `on_duplicate` replaces the policy's.
+    /// A watch folder's `on_duplicate` replaces the preset's.
     pub on_duplicate: Option<OnDuplicate>,
 }
 
@@ -152,19 +155,15 @@ impl Store {
                 "sample.path is local-only; upload the file and submit sample.upload_id",
             ));
         }
-        if let Some(unsupported) = spec.v1_unsupported() {
+        let preset_name = spec.policy.clone().unwrap_or_else(|| DEFAULT_PRESET.into());
+        let Some(base) = crate::config::PresetLookup::get(ctx.presets, &preset_name) else {
             return Err(ApiError::new(
-                ErrorCode::Unsupported,
-                format!("{} is not available in v1", unsupported.field),
+                ErrorCode::PresetDenied,
+                format!("there is no preset {preset_name}"),
             )
-            .with_field(unsupported.field)
-            .with_reason(ErrorReason::RunModeNotInV1));
-        }
-        let policy_name = spec.policy.clone().unwrap_or_else(|| "default".into());
-        let policy = ctx
-            .policies
-            .get(&policy_name)
-            .ok_or_else(|| ApiError::not_found("policy").with_field("policy"))?;
+            .with_field("policy")
+            .with_detail("preset", json!(preset_name)));
+        };
         let canon = canonical(&spec);
 
         if let Some(key) = &spec.idempotency_key {
@@ -176,28 +175,24 @@ impl Store {
                 });
             }
         }
-        self.check_queue_caps(caller, &policy, ctx.limits)?;
+        self.check_queue_caps(caller, ctx.limits)?;
 
         // The checks of the access specification, then intake (which may
-        // archive the sample). A value outside the policy stores nothing.
-        let resolved = match admission::resolve(&spec, caller, &policy) {
-            Err(Refusal::Invalid(error)) => return Err(error),
-            Err(Refusal::Rejected(reject)) => Err(reject),
-            Ok(resolved) => Ok(resolved),
-        };
-        let admitted = match resolved {
-            Err(reject) => Err(reject),
-            Ok(resolved) => ctx
-                .intake
-                .admit(
-                    &spec.sample,
-                    spec.name.as_deref(),
-                    &policy,
-                    &caller.client_id,
-                )
-                .map(|sample| (resolved, sample))
-                .map_err(|e| Reject::new(e.code, Some("sample"), e.message)),
-        };
+        // archive the sample). An invalid value stores nothing.
+        let resolved = admission::settle(&spec, caller, &base)?;
+        let admitted =
+            admission::check(&resolved, caller, ctx.presets.lane_group()).and_then(|()| {
+                ctx.intake
+                    .admit(
+                        &spec.sample,
+                        spec.name.as_deref(),
+                        &resolved.preset,
+                        &caller.client_id,
+                    )
+                    .map_err(|e| Reject::new(e.code, Some("sample"), e.message))
+            });
+        let preset = &resolved.preset;
+        let wait_s = ctx.limits.wait_s;
 
         self.write(|tx| {
             // The check above and this transaction are not atomic: look again.
@@ -210,14 +205,14 @@ impl Store {
                 });
             }
             let id = new_job_id(tx.now);
-            match admitted {
+            match &admitted {
                 Err(reject) => {
-                    insert_rejected(tx, &id, caller, &spec, &policy, &canon, reject)?;
+                    insert_rejected(tx, &id, caller, &resolved, &canon, reject.clone(), wait_s)?;
                 }
-                Ok((resolved, sample)) => {
+                Ok(sample) => {
                     let on_duplicate = ctx
                         .on_duplicate
-                        .unwrap_or(policy.policy.sample.on_duplicate);
+                        .unwrap_or(preset.preset.duplicates.on_duplicate);
                     let earlier = match retry_of {
                         Some(_) => None,
                         None => latest_finished(&tx.tx, sample.sha256.as_str())?,
@@ -234,7 +229,9 @@ impl Store {
                                         sample.sha256, earlier.id
                                     ),
                                 );
-                                insert_rejected(tx, &id, caller, &spec, &policy, &canon, reject)?;
+                                insert_rejected(
+                                    tx, &id, caller, &resolved, &canon, reject, wait_s,
+                                )?;
                                 return Ok(Submitted {
                                     job: load_job(&tx.tx, id.as_str())?,
                                     replayed: false,
@@ -244,8 +241,8 @@ impl Store {
                                 if matches!(
                                     earlier.state,
                                     JobState::Succeeded | JobState::Partial
-                                ) && (earlier.digest == policy.digest
-                                    || policy.policy.sample.reuse_across_policies) =>
+                                ) && (earlier.digest == preset.digest
+                                    || preset.preset.duplicates.reuse_across_presets) =>
                             {
                                 return Ok(Submitted {
                                     job: load_job(&tx.tx, &earlier.id)?,
@@ -258,7 +255,7 @@ impl Store {
                         }
                     }
                     insert_queued(
-                        tx, &id, caller, &resolved, &sample, &policy, &canon, repeat_of,
+                        tx, &id, caller, &resolved, sample, &canon, repeat_of, wait_s,
                     )?;
                 }
             }
@@ -274,14 +271,9 @@ impl Store {
         })
     }
 
-    /// Queue depth and per-client caps (design 2.4.2, 4.4): the smaller of the
-    /// node cap and the policy cap applies to a client.
-    fn check_queue_caps(
-        &self,
-        caller: &Caller,
-        policy: &LoadedPolicy,
-        limits: SubmitLimits,
-    ) -> R<()> {
+    /// Queue depth and per-client caps (design 2.4.2): the smaller of the
+    /// node cap and the caller's `max_queued` applies to a client.
+    fn check_queue_caps(&self, caller: &Caller, limits: SubmitLimits) -> R<()> {
         let conn = self.conn();
         let queued: u32 = conn
             .query_row(
@@ -303,7 +295,7 @@ impl Store {
             .map_err(db)?;
         let cap = limits
             .per_client_queued
-            .min(policy.policy.limits.max_queued_per_client);
+            .min(caller.limits.max_queued.unwrap_or(u32::MAX));
         if mine >= cap {
             return Err(ApiError::new(
                 ErrorCode::QuotaExceeded,
@@ -422,7 +414,8 @@ struct NewRow<'a> {
     caller: &'a Caller,
     spec: &'a JobSpec,
     canon: &'a str,
-    policy: &'a LoadedPolicy,
+    preset: &'a LoadedPreset,
+    wait_s: u32,
     sample: Option<&'a JobSample>,
     failure: Option<&'a Failure>,
     repeat_of: Option<&'a str>,
@@ -431,7 +424,7 @@ struct NewRow<'a> {
 fn insert(tx: &mut Tx<'_>, row: NewRow<'_>) -> R<()> {
     let terminal = row.state.is_terminal();
     let spec_json = to_json(row.spec)?;
-    let terms = to_json(row.policy)?;
+    let terms = to_json(row.preset)?;
     tx.tx
         .execute(
             "INSERT INTO jobs(id, created_ms, finished_ms, state, outcome, priority, wait_s,
@@ -447,12 +440,12 @@ fn insert(tx: &mut Tx<'_>, row: NewRow<'_>) -> R<()> {
                 name_of(&row.state),
                 row.state.outcome().map(|o| name_of(&o)),
                 row.spec.priority.unwrap_or(admission::DEFAULT_PRIORITY) as i64,
-                row.policy.policy.limits.wait_s,
-                row.policy.name,
-                row.policy.digest,
+                row.wait_s,
+                row.preset.name,
+                row.preset.digest,
                 terms,
                 row.sample.map(|s| s.sha256.as_str().to_owned()),
-                row.policy.policy.retry.max_attempts,
+                row.preset.preset.retry.max_attempts,
                 row.spec.idempotency_key,
                 row.caller.client_id,
                 row.repeat_of,
@@ -473,16 +466,16 @@ fn insert_queued(
     tx: &mut Tx<'_>,
     id: &JobId,
     caller: &Caller,
-    resolved: &JobSpec,
+    resolved: &Resolved,
     sample: &JobSample,
-    policy: &LoadedPolicy,
     canon: &str,
     repeat_of: Option<String>,
+    wait_s: u32,
 ) -> R<()> {
-    let mut spec = resolved.clone();
+    let mut spec = resolved.spec.clone();
     spec.sample = SampleSource {
         sha256: Some(sample.sha256.clone()),
-        path: resolved.sample.path.clone(),
+        path: resolved.spec.sample.path.clone(),
         upload_id: None,
     };
     insert(
@@ -493,7 +486,8 @@ fn insert_queued(
             caller,
             spec: &spec,
             canon,
-            policy,
+            preset: &resolved.preset,
+            wait_s,
             sample: Some(sample),
             failure: None,
             repeat_of: repeat_of.as_deref(),
@@ -503,14 +497,15 @@ fn insert_queued(
     tx.emit(Some(id), EventBody::JobCreated { job: Box::new(job) })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_rejected(
     tx: &mut Tx<'_>,
     id: &JobId,
     caller: &Caller,
-    spec: &JobSpec,
-    policy: &LoadedPolicy,
+    resolved: &Resolved,
     canon: &str,
     reject: Reject,
+    wait_s: u32,
 ) -> R<()> {
     let mut failure = Failure::new(
         reject.code,
@@ -525,17 +520,16 @@ fn insert_rejected(
     failure.retryable = false;
     failure.field = reject.field;
     failure.details = reject.details;
-    let mut stored = spec.clone();
-    stored.policy = Some(policy.name.clone());
     insert(
         tx,
         NewRow {
             id,
             state: JobState::Rejected,
             caller,
-            spec: &stored,
+            spec: &resolved.spec,
             canon,
-            policy,
+            preset: &resolved.preset,
+            wait_s,
             sample: None,
             failure: Some(&failure),
             repeat_of: None,

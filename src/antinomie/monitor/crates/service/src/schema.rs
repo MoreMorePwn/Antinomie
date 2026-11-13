@@ -47,7 +47,7 @@ pub fn generate() -> Value {
         status::QueueStatus,
         status::Capabilities,
         status::HealthStatus,
-        status::PolicySummary,
+        status::PresetSummary,
         status::VmSummary,
         status::BaseSummary,
         status::CustodyVerification,

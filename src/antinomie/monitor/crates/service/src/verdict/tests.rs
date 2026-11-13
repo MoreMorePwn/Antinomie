@@ -7,7 +7,7 @@ use crate::{
         assessment::{AssessmentKind, Counts, DetectionHit, Label, Tier},
         job::EndReason,
     },
-    config::policy::{VerdictMapping, VerdictPolicy, VerdictRule},
+    config::preset::{VerdictMapping, VerdictRule, VerdictSettings},
 };
 
 fn facts() -> Facts {
@@ -240,7 +240,7 @@ fn the_default_mapping_follows_the_table_in_order() {
 
 #[test]
 fn the_default_mapping_sets_no_score_and_says_when_no_datasets_were_loaded() {
-    let mapping = Mapping::compile(&VerdictPolicy::default()).unwrap();
+    let mapping = Mapping::compile(&VerdictSettings::default()).unwrap();
     assert!(mapping.is_default());
     let mut f = facts();
     f.assessment = AssessmentKind::ObservedOnly;
@@ -260,10 +260,10 @@ fn the_default_mapping_sets_no_score_and_says_when_no_datasets_were_loaded() {
     assert!(!mapping.judge(&none).basis.contains("datasets"));
 }
 
-// ---- policy rules ------------------------------------------------------
+// ---- preset rules ------------------------------------------------------
 
-fn rules(list: &[(&str, Label, Option<u8>)]) -> VerdictPolicy {
-    VerdictPolicy {
+fn rules(list: &[(&str, Label, Option<u8>)]) -> VerdictSettings {
+    VerdictSettings {
         mapping: VerdictMapping::Name("default".into()),
         rule: list
             .iter()
@@ -330,14 +330,14 @@ fn a_rule_without_a_score_leaves_the_score_null() {
 
 #[test]
 fn a_mapping_that_cannot_be_used_says_which_key() {
-    let table = VerdictPolicy {
+    let table = VerdictSettings {
         mapping: VerdictMapping::Table(Default::default()),
         rule: Vec::new(),
         tag_library: false,
     };
     let error = Mapping::compile(&table).unwrap_err();
     assert_eq!(error.key(), "verdict.mapping");
-    let named = VerdictPolicy {
+    let named = VerdictSettings {
         mapping: VerdictMapping::Name("strict".into()),
         rule: Vec::new(),
         tag_library: false,
@@ -377,14 +377,14 @@ when = "detections.engine == 'YARA'"
 label = "malicious"
 score = 95
 "#;
-    let policy: crate::config::Policy = toml::from_str(text).unwrap();
+    let policy: crate::config::Preset = toml::from_str(text).unwrap();
     assert_eq!(policy.verdict.rule.len(), 2);
     assert_eq!(policy.verdict.rule[1].label, Label::Malicious);
     assert!(Mapping::compile(&policy.verdict).is_ok());
-    let wrong: Result<crate::config::Policy, _> =
+    let wrong: Result<crate::config::Preset, _> =
         toml::from_str("[[verdict.rule]]\nwhen = \"x == 1\"\nlabel = \"clean\"\n");
     assert!(wrong.is_err(), "`clean` is not a label");
-    let unknown: Result<crate::config::Policy, _> =
+    let unknown: Result<crate::config::Preset, _> =
         toml::from_str("[[verdict.rule]]\nwhen = \"x\"\nlabel = \"malicious\"\nextra = 1\n");
     assert!(unknown.is_err(), "unknown keys are errors");
 }
@@ -397,7 +397,7 @@ fn the_assessment_object_carries_the_facts_the_label_and_the_basis() {
     f.families = vec!["Mirai".into()];
     f.counts.findings = 3;
     f.ioc_datasets = 2;
-    let verdict = Mapping::compile(&VerdictPolicy::default())
+    let verdict = Mapping::compile(&VerdictSettings::default())
         .unwrap()
         .judge(&f);
     let a = assessment_of(&f, &verdict);

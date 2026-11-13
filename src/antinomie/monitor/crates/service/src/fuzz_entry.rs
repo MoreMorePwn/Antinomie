@@ -8,7 +8,7 @@
 
 use crate::{
     api::spec::JobSpec,
-    config::{catalog::NoVms, validate},
+    config::validate,
     intake::staging::valid_name,
     verdict::{Expr, Facts},
     watch::{safety::looks_partial, settle::sanitize},
@@ -22,25 +22,36 @@ pub fn job_spec(data: &[u8]) {
         return;
     };
     let _ = spec.validate_shape();
-    let _ = spec.v1_unsupported();
     let text = serde_json::to_vec(&spec).expect("a spec encodes");
     let again: JobSpec = serde_json::from_slice(&text).expect("an encoded spec parses");
     assert_eq!(again, spec);
 }
 
-/// Policy and service TOML as an administrator's file: parse and run every
-/// check; problems are data, never a panic.
+/// Preset and service TOML as an administrator's file: parse and run every
+/// check; problems are data, never a panic. The same text as overrides of
+/// Standard goes through the Custom rule.
 pub fn config_toml(data: &[u8]) {
     let Ok(text) = std::str::from_utf8(data) else {
         return;
     };
-    let (policy, problems) = validate::parse_policy("fuzz", "fuzz.toml", text, &NoVms);
-    assert!(policy.is_some() || !problems.is_empty());
+    let (preset, problems) = validate::parse_preset("fuzz", "fuzz.toml", text);
+    assert!(preset.is_some() || !problems.is_empty());
+    if let Ok(serde_json::Value::Object(overrides)) =
+        toml::from_str::<toml::Value>(text).map(|v| serde_json::to_value(v).unwrap_or_default())
+        && let Some(standard) = crate::config::PresetLookup::get(
+            &crate::config::PresetSet::built_in(),
+            crate::config::builtin::DEFAULT_PRESET,
+        )
+        && let Ok(custom) = standard.apply(&overrides)
+    {
+        let _ = validate::check_options(&custom.preset);
+        let _ = validate::reserved(&custom.preset);
+    }
     let (service, problems) = validate::parse_service("service.toml", text);
     assert!(service.is_some() || !problems.is_empty());
 }
 
-/// The names a watch folder, an upload and a policy folder bring: cut the
+/// The names a watch folder, an upload and a preset file bring: cut the
 /// input at NUL and `/` into names and check each against the rules that keep
 /// it from becoming a path, a command or markup.
 pub fn watch_names(data: &[u8]) {
@@ -58,12 +69,12 @@ pub fn watch_names(data: &[u8]) {
             if valid_name(text) {
                 assert!(!text.contains(['/', '\0']) && !text.chars().any(char::is_control));
             }
-            let _ = validate::valid_policy_name(text);
+            let _ = validate::valid_preset_name(text);
         }
     }
 }
 
-/// The label expression grammar (`when` in the policy's verdict.rule): parse
+/// The label expression grammar (`when` in the preset's verdict.rule): parse
 /// arbitrary text and evaluate what parses against two extreme fact sets.
 pub fn label_expr(data: &[u8]) {
     let Ok(text) = std::str::from_utf8(data) else {
@@ -129,9 +140,10 @@ mod tests {
             b"[]",
             b"null",
             br#"{"sample":{"sha256":null}}"#,
-            br#"{"sample":{"path":"/x"},"labels":{"A":"b"},"overrides":{"timeout_s":4}}"#,
-            br#"{"sample":{"path":"/x"},"overrides":{"route":"tor","env":["x"]}}"#,
-            b"[vm]\nlane_vm = \"a\"\n[sample]\naccept_types = [1]\n",
+            br#"{"sample":{"path":"/x"},"labels":{"A":"b"},"overrides":{"program":{"run_time_s":4}}}"#,
+            br#"{"sample":{"path":"/x"},"overrides":{"network":{"route":"vpn:x"},"program":{"environment":["x"]}}}"#,
+            b"[vm]\nlane_vm = \"a\"\n[accepts]\ntypes = [1]\n",
+            b"[program]\nrun_time_s = 4\n[network]\nroute = \"socks5:\"\n",
             b"[[verdict.rule]]\nwhen = \"((((\"\n",
             b"a\0..\0\x1b[31m\0\xff\xfe\0.part\0",
             b"x = ",

@@ -6,9 +6,8 @@ use crate::{
     api::{
         failure::{Failure, FailureCode},
         job::{Job, Stage, WaitingFor},
-        ops::Scope,
     },
-    config::Policy,
+    config::Preset,
     engine::Engine,
     lane::{LaneFile, LaneProblem, check_lane, layer_pending, recover::announce_quarantine},
     store::{Eligibility, admission},
@@ -46,7 +45,7 @@ impl<E: Engine> LaneStages<'_, E> {
     /// specification, "Checked again when it starts"): a permission its client
     /// lost while the run waited refuses it `permission_denied`. A client the
     /// service does not configure keeps what it was admitted with.
-    fn recheck_permissions(&self, job: &Job, policy: &Policy) -> Result<(), StageStop> {
+    fn recheck_permissions(&self, job: &Job, preset: &Preset) -> Result<(), StageStop> {
         let Some(held) = self
             .env
             .callers
@@ -54,7 +53,7 @@ impl<E: Engine> LaneStages<'_, E> {
         else {
             return Ok(());
         };
-        let missing: Vec<_> = admission::permissions_used(&job.spec, policy)
+        let missing: Vec<_> = admission::permissions_used(preset)
             .into_iter()
             .filter(|used| !held.contains(&used.permission))
             .collect();
@@ -107,37 +106,18 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    /// The frozen policy still exists and still allows the job; the client
-    /// still holds every permission the run uses; the host has room; the lane
-    /// is usable (not quarantined, free, its clean snapshot unchanged).
+    /// The client still holds every permission the run uses (the preset the
+    /// run froze stays its own: a preset changed or removed since submit
+    /// does not change a waiting run); the host has room; the lane is usable
+    /// (not quarantined, free, its clean snapshot unchanged).
     pub fn prechecks(&mut self, job: &Job) -> Result<Prepared, StageStop> {
         let store = self.env.store;
         let frozen = store
-            .frozen_policy(&job.id)
+            .frozen_preset(&job.id)
             .map_err(|e| self.store_error(Stage::Prechecks, e))?;
-        let preset_denied = |message: &str| {
-            let mut failure = Failure::new(
-                FailureCode::PresetDenied,
-                Stage::Prechecks,
-                message,
-                Some(&frozen.name),
-            );
-            failure.field = Some("policy".into());
-            failure
-                .details
-                .insert("preset".into(), serde_json::json!(frozen.name));
-            StageStop::Failed(failure)
-        };
-        match self.env.policies.get(&frozen.name) {
-            None => return Err(preset_denied("the policy of the job no longer exists")),
-            Some(current) if !current.allows(&job.client_id, Scope::Submit) => {
-                return Err(preset_denied("the policy no longer allows this client"));
-            }
-            Some(_) => {}
-        }
-        self.recheck_permissions(job, &frozen.policy)?;
+        self.recheck_permissions(job, &frozen.preset)?;
 
-        match self.env.host.check(job, &frozen.policy) {
+        match self.env.host.check(job, &frozen.preset) {
             Ok(()) => {}
             Err(HostProblem::Wait(waiting_for, detail)) => {
                 return Err(StageStop::Wait {
@@ -222,9 +202,9 @@ impl<E: Engine> LaneStages<'_, E> {
                 LaneProblem::LayerPending | LaneProblem::Quarantined(_) => {}
             }
         }
-        let effective = plan::effective(job, &frozen.policy);
+        let effective = plan::effective(&frozen.preset, self.env.revert);
         Ok(Prepared {
-            policy: frozen,
+            preset: frozen,
             effective,
             lane: file,
         })

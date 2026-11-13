@@ -8,9 +8,9 @@ use crate::{
         artifact::{Artifact, ArtifactKind, MediaType},
         error::ApiError,
         ids::{ArtifactId, JobId, LaneId, Sha256Hex},
-        job::{Job, JobState, PolicyRef, Warning},
+        job::{Job, JobState, PresetBase, PresetRef, Warning},
     },
-    config::LoadedPolicy,
+    config::LoadedPreset,
 };
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Serialize, de::DeserializeOwned};
@@ -43,7 +43,7 @@ fn opt_json<T: DeserializeOwned>(text: Option<String>) -> R<Option<T>> {
 pub(crate) const JOB_COLUMNS: &str = "id, created_ms, started_ms, finished_ms, state, stage, outcome, \
     priority, waiting_for, policy_name, policy_digest, attempt, max_attempts, lane, client_id, \
     repeat_of, failure_json, spec_json, labels_json, sample_json, vm_json, run_json, \
-    recording_json, assessment_json, warnings_json";
+    recording_json, assessment_json, warnings_json, terms_json";
 
 /// The columns of [`JOB_COLUMNS`], read by position.
 pub(crate) struct JobRow {
@@ -72,6 +72,16 @@ pub(crate) struct JobRow {
     pub recording_json: Option<String>,
     pub assessment_json: Option<String>,
     pub warnings_json: String,
+    pub terms_json: String,
+}
+
+/// The parts of a frozen preset the job object shows.
+#[derive(serde::Deserialize)]
+struct FrozenRef {
+    #[serde(default)]
+    based_on: Option<PresetBase>,
+    #[serde(default)]
+    changes: Vec<String>,
 }
 
 impl JobRow {
@@ -102,6 +112,7 @@ impl JobRow {
             recording_json: row.get(22)?,
             assessment_json: row.get(23)?,
             warnings_json: row.get(24)?,
+            terms_json: row.get(25)?,
         })
     }
 
@@ -123,9 +134,14 @@ impl JobRow {
             client_id: self.client_id,
             spec: from_json(&self.spec_json)?,
             sample: opt_json(self.sample_json)?,
-            policy: PolicyRef {
-                name: self.policy_name,
-                digest: self.policy_digest,
+            policy: {
+                let frozen: FrozenRef = from_json(&self.terms_json)?;
+                PresetRef {
+                    name: self.policy_name,
+                    digest: self.policy_digest,
+                    based_on: frozen.based_on,
+                    changes: frozen.changes,
+                }
             },
             lane: self
                 .lane
@@ -230,8 +246,8 @@ pub(crate) fn assemble(conn: &Connection, row: JobRow) -> R<Job> {
     Ok(job)
 }
 
-/// The policy a job froze at submit.
-pub(crate) fn load_terms(conn: &Connection, id: &str) -> R<LoadedPolicy> {
+/// The preset a job froze at submit (its resolved options).
+pub(crate) fn load_terms(conn: &Connection, id: &str) -> R<LoadedPreset> {
     let text: String = conn
         .query_row("SELECT terms_json FROM jobs WHERE id = ?1", [id], |row| {
             row.get(0)

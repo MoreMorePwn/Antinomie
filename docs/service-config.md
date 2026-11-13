@@ -1,4 +1,4 @@
-# Service configuration and policies
+# Service configuration and presets
 
 [← Back to the overview](../README.md)
 
@@ -16,13 +16,13 @@ them; the program never rewrites them.
 | File | Purpose |
 |---|---|
 | `<data>/service.toml` | Daemon behaviour: socket, lanes, queue limits, inbox, retention, notifications, resource floors. Optional: without it every default applies. |
-| `<data>/policies/<name>.toml` | A class of jobs: what it accepts, how the lane VM is reset, run limits, allowed network routes, reports and retries. The file name is the policy name (`[a-z0-9._-]`). |
+| `<data>/presets/<name>.toml` | A preset: a named set of run options to start from (the program, the network, dumps, static analysis, detection, the report, what it accepts, retries). The file name is the preset name (`[a-z0-9._-]`, not `custom` and not a built-in one). Optional: five presets are built in. |
 
 An unknown key is an error, in both files. Check the files without starting
 anything:
 
 ```text
-antinomie-cli config validate [--policy NAME]
+antinomie-cli config validate [--preset NAME]
 ```
 
 Each problem is printed as `file:line:column: error|warning: message`. The exit
@@ -33,30 +33,50 @@ runs while a window or the daemon owns the data directory.
 
 ## What is checked
 
-- Keys and types, with the line of the key.
-- Ceilings: `sample.max_sample_mib` 1 to 256, `run.max_run_s` at most 1800,
-  `run.timeout_s` between 5 seconds and `max_run_s`, `evidence.core_max_mib` at
-  most 1024 (and at least 1 with a core `evidence.dump_trigger`; a
-  `dump_trigger_kind` or `core_nonresident` with the trigger off is a warning), `analysis.static_time_limit_min` 0 to 480, `limits.priority_max`
-  0 to 9.
-- Routes: in version 1 a job may use only `drop` and `inet_sim`. A policy that
-  lists `internet`, `tor`, `vpn` or `socks5` fails, as does a default
-  `network.route` outside `allowed_routes`. NAT is never valid for a job.
-- `run.run_in` must be `app_terminal`; `run.run_as = "root"` needs
-  `run.allow_root`.
-- `analysis.required_checks` lists static checks (default none) whose timeout fails the `analyse` stage.
-- `analysis.required_stages` must not name a stage the policy skips.
-- The lane VM (`vm.lane_vm`, found in the data directory): its network must match
-  `vm.network`; a policy that allows `inet_sim` needs a routed VM; `reset` is
-  refused when the VM has snapshots, which every Auto lane has (use `snapshot_disk`); `snapshot_disk` and `snapshot_full` need the
-  snapshot named by `vm.revert_to` (`snapshot_full` is refused over a
-  disk-only snapshot, from which it could only boot cold); `vm.stealth` is compared with the VM's
-  profile and never applied.
+- Keys and types, with the line of the key. A key of a 0.9.0 policy in a preset
+  is an error that names its new home (`run.timeout_s`: "presets have
+  `program.run_time_s`").
+- The node ceilings: `accepts.max_sample_mib` 1 to 256, `program.run_time_s` 5
+  to 1800, `dumps.core_budget_mib` 64 to 1024, `dumps.core_deadline_ms` 1 to
+  60000, `dumps.max_dumps` 1 to 8, `dumps.dumps_apart_s` 0 to 3600,
+  `static_analysis.time_limit_per_tool_min` 0 to 480, each
+  `static_analysis.limits.*` within the range of the app's Settings, at most 64
+  arguments and 64 `NAME=value` environment entries, absolute
+  `program.guest_path` and `program.working_directory`.
+- `dumps.dump_when_suspicious` must take something (`trigger_memory_dump` or
+  `trigger_core`); `read_non_resident_pages` without a trigger core is a
+  warning. `static_analysis.triage_checks` take the eleven Triage checks,
+  `deep_checks` only `disassembly`, `decompilation` and `floss`.
+- The keys 0.9.0 reserves are accepted at their default only, else an error
+  "arrives with 0.9.1": `program.source` (`upload`), `executable` (empty),
+  `preload` and `extra_files` (empty), `run_in` (`app_terminal`),
+  `record.scope` (`program`), `record.screenshot_every_s` (0),
+  `network.private_addresses` (false), `abuse_filter` (true),
+  `dumps.disk_dump` (false), `vm.keep_on_failure` (false),
+  `static_analysis.rebuilt_file_mib` (16) and `rebuilt_run_mib` (256),
+  `triage.written_*` and `earlier_*` (64 and 1024), `detection.scan_every_min`
+  (0), `report.sections` (`"all"`).
+- A live route (`internet`, `nat`, `tor`, `vpn[:NAME]`, `socks5[:NAME]`) is
+  "not set up on this node": no route is set up for the service before 0.9.1.
+  `drop` and `inet_sim` need nothing; `inet_sim` needs a routed lane VM.
+- `vm.lane_group` must be the node's (`[lanes] group`, default `x86_64`).
+- `required_stages` must not name a stage the preset skips.
+- The lanes (`[lanes]`, the VM `[lanes] vm` found in the data directory): its
+  network must match `[lanes] network`; `reset` is refused when the VM has
+  snapshots, which every Auto lane has (use `snapshot_disk`); `snapshot_disk`
+  and `snapshot_full` need the snapshot named by `[lanes] revert_to`
+  (`snapshot_full` is refused over a disk-only snapshot, from which it could
+  only boot cold); `[lanes] stealth` is compared with the VM's profile and
+  never applied. NAT is never valid for a lane.
 - `service.toml`: `daemon.lanes` 1 to 4 (default 1), no `safety.unsafe_routes_ack`
-  (reserved), absolute watch folder paths, watch folders that name a policy that
-  exists. `[[notify.webhooks]]` is an error ("not supported in 0.9.0"), and so is
+  (reserved), absolute watch folder paths, watch folders that name a preset that
+  exists (`policy` and `policy_by_dir` of 0.9.0 are errors naming `preset` and
+  `preset_by_dir`). `[[notify.webhooks]]` is an error ("not supported in 0.9.0"), and so is
   a `[query] scan_cache_mib` other than 1024: the daemon keeps 2 scans in memory
   whatever it says.
+- A `policies/` folder (0.9.0 before presets) is an error: each key of each
+  file is listed with its new home, and the daemon does not start until the
+  folder is gone. No converter ships.
 
 ## The daemon's keys
 
@@ -70,8 +90,13 @@ runs while a window or the daemon owns the data directory.
 | `[daemon] shutdown` | `cancel` | On the first `SIGTERM`/`SIGINT`: `cancel` sends a job in its lane stages back to the queue (attempt not counted); `drain` lets it run on for up to `drain_timeout_s` first |
 | `[daemon] drain_timeout_s` | 600 | See `shutdown = drain` |
 | `[daemon] shutdown_host_grace_s` | 120 | The host work pool goes on with the jobs it holds (their `analyse`, `report`, `cleanup` items) for this many seconds at shutdown; past it those jobs are left `running` and go back to the pool on the next start, in the same order (the VM does not run again) |
-| `[queue] max_queued`, `per_client_queued` | 1000, 100 | `job.submit` fails `quota_exceeded` above them (the smaller of `per_client_queued` and the policy's `max_queued_per_client` applies) |
+| `[queue] max_queued`, `per_client_queued` | 1000, 100 | `job.submit` fails `quota_exceeded` above them (the smaller of `per_client_queued` and the caller's `max_queued` limit applies) |
 | `[queue] paused_on_start` | false | Start with the queue paused (`queue.resume` starts it) |
+| `[queue] wait_s` | 3600 | How long a run may wait `queued` for resources, a dependency or a pending disk layer before it ends `failed` (was a policy's `limits.wait_s`) |
+| `[lanes] group` | `x86_64` | The lane group of this node: every lane belongs to it, and a preset names it in `vm.lane_group` |
+| `[lanes] vm` | `auto-1` | Lane 1's VM: what `config validate` checks, and the base the lane choice compares |
+| `[lanes] revert`, `revert_to` | `snapshot_disk`, `auto-clean` | How a lane is made clean when the next run starts (`snapshot_disk`, `snapshot_full` or `reset`) and the clean snapshot |
+| `[lanes] stealth`, `network` | unset, `routed` | The profile and the network card the lane VM must have; checked, never applied |
 | `[inbox] dir` | `<data>/inbox` | Where uploads are staged (`uploads/`), and where watched files go after intake (`processed/`) or on failure (`rejected/`) |
 | `[inbox] processed_keep_days` | 7 | Retention removes the plain files of `<inbox>/processed/` older than this many days (at least 1) |
 | `[resources] min_free_disk_gib`, `min_free_ram_mib`, `require_kvm` | 20, VM RAM + 2048, true | The floors of the queue: below one, jobs wait `queued` and the queue pauses (`low_disk`, `no_kvm`); checked every 5 s, and the disk every minute of a run. A `run/PAUSE` file pauses the queue within 5 s |
@@ -97,7 +122,7 @@ wins over the file, and a missing or faulty file means the default path.
 
 A second `SIGTERM`/`SIGINT` within 5 s interrupts every wait at once, stops the
 VM and exits 130; recovery at the next start finishes the rest. `SIGHUP` reads
-`policies/` and `service.toml` again (a file with an error keeps the old set);
+`presets/` and `service.toml` again (a file with an error keeps the old set);
 `SIGUSR1` writes the queue's state to the log.
 
 ## Several lanes
@@ -115,7 +140,7 @@ with its own lane VM, so N jobs run their VMs side by side.
   library, rules, tools, IOC data, Volatility plugins, engine settings
   (`settings.json`) and route settings (`network/routes.json`); only the data
   folder (lane 1) changes them. A lane keeps its VMs, runs and Tor state in its
-  own folder. The job store, `service.toml`, the policies and the lane files
+  own folder. The job store, `service.toml`, the presets and the lane files
   (`<data>/service/lanes/lane-N.json`) are the data folder's.
 - **Which lanes start.** Lane 1 always does. Lane N starts when it has a lane VM
   and when `MemAvailable` covers the RAM of the lane VMs that start before it
@@ -125,7 +150,7 @@ with its own lane VM, so N jobs run their VMs side by side.
   (`lanes: 2 of 3 started (lane-1, lane-2); lane-3 not started: the RAM floor
   is not met: ...`); `auto lane list` says it per lane.
 - **Which lane takes a job.** A free lane that can run it: the lane's base must
-  be the base of the policy's `vm.lane_vm` (when that VM is one of the lanes'),
+  be the base of `[lanes] vm` (when that VM is one of the lanes'),
   and an ELF must be of the lane's architecture (x86-64 also runs i386 programs,
   arm64 32-bit ARM ones). When several such lanes are free the least recently
   used takes it, so jobs spread over the lanes. A job no lane can run goes to a
@@ -149,31 +174,31 @@ with its own lane VM, so N jobs run their VMs side by side.
 ```toml
 [[inbox.watch]]
 path = "/srv/drop/default"      # absolute; the folder itself must not be a symbolic link
-policy = "default"              # an existing policy
+preset = "standard"             # an existing preset, run unchanged
 recursive = false               # follow subfolders (8 deep at most)
-policy_by_dir = false           # subfolders named after policies pick the policy
+preset_by_dir = false           # subfolders named after presets pick the preset
 delete_after = "move"           # move (to <inbox>/processed/), delete, or keep
-on_duplicate = "run"            # optional: replaces the policy's rule for this folder
+on_duplicate = "run"            # optional: replaces the preset's rule for this folder
 allow_group_write = false       # see below
 watch_rate = 10                 # new jobs a minute before the folder pauses
 permissions = []                # held beside runs.submit, e.g. ["evidence.core_dump"]
 ```
 
-A folder submits as the client `auto:policy-<policy>` holding `runs.submit` and
+A folder submits as the client `auto:policy-<preset>` holding `runs.submit` and
 the folder's `permissions` (dotted keys of the permission list; an unknown key
-fails the load). A job whose options, with the policy's defaults, need a
-permission the folder lacks is rejected `permission_denied` and the file is
-counted as rejected: a policy with `core_dump = true` or a core `dump_trigger`
-needs `"evidence.core_dump"`, a memory dump `"evidence.memory_dump"`,
-`online_ioc = true` `"lookup.online"`. A reload that takes a permission away
-also refuses the folder's jobs still waiting (`permission_denied` at prechecks).
+fails the load). A run whose preset options need a permission the folder lacks
+is rejected `permission_denied` and the file is counted as rejected: a preset
+with `core_dump_on_exit = true` or a trigger core needs `"evidence.core_dump"`
+(Deep needs it), a memory dump `"evidence.memory_dump"`, `check_online = true`
+`"lookup.online"`. A reload that takes a permission away also refuses the
+folder's jobs still waiting (`permission_denied` at prechecks).
 
 The daemon scans each folder every 2 seconds. A file is taken once its size,
 modification time and change time have been the same for 3 seconds (so a file
 that is still being copied in waits), and never while its name starts with `.` or
 ends in `.part`, `.tmp` or `.crdownload`. Files already there at the start are
 taken in name order. Nothing in a folder can change the job: there are no
-sidecar files, and the policy decides every limit and route.
+sidecar files, and the preset decides every option.
 
 What is refused, and what happens to it:
 
@@ -186,12 +211,11 @@ What is refused, and what happens to it:
 | A file with more than one hard link | Refused and left alone (it may be reachable from outside the folder) |
 | A file of another user | Refused and left alone; with `allow_group_write = true`, a file of the folder's group (when the daemon is in it) is taken |
 | A file intake rejects (type, architecture, size, the duplicate rule) | Moved to `<inbox>/rejected/<time>-<name>` with `<time>-<name>.reason` (the failure code and its words); not tried again |
-| The queue is full, or the policy does not let `auto:policy-<name>` submit | The file stays; the folder waits a minute and tries again |
+| The queue is full, or the preset no longer exists | The file stays; the folder waits a minute and tries again |
 | More than `watch_rate` files a minute | The folder pauses for a minute, `engine.alert` `watch_flood` |
 
-The job's client and its custody actor are `auto:policy-<policy>`, so a policy's
-`[access] clients` must allow it (the default `*` does) and the sample's custody chain
-shows who brought it. The library records the file's folder-relative name as
+The job's client and its custody actor are `auto:policy-<preset>`, so the
+sample's custody chain shows who brought it. The library records the file's folder-relative name as
 the origin, never the host path. A `keep`ed file is remembered by device, inode,
 size and modification time in `<inbox>/.watch-state.json`, so a restart does not
 take it again; a rewritten file is a new file. `SIGHUP` re-reads the folder list.
@@ -273,27 +297,34 @@ retry inside itself, or poll `[results] dir`. Webhooks are not part of 0.9.0.
 `suspicious`, `clean_observed`, `inconclusive`); `[[verdict.rule]]` entries (`when`,
 `label`, `score`) replace it with rules over a small field set. `[verdict]
 tag_library = true` (default false) tags the library sample with
-`auto:label=<label>` and `auto:policy=<name>` when a job of the policy ends, under
-the custody actor `auto:policy-<name>`; a tag that cannot be written is a job
-warning (`library_tag`), never a failure.
+`auto:label=<label>` and `auto:preset=<name>` when a run of the preset ends
+(a Custom run: the preset it was based on), under the custody actor
+`auto:policy-<name>`; a tag that cannot be written is a job warning
+(`library_tag`), never a failure.
 
-## Policies and running jobs
+## Presets and running jobs
 
-A job freezes the policy it was submitted under: the digest (SHA-256 of the
-file) and the parsed content are stored with the job. Editing a policy file, or
-reloading the daemon (`SIGHUP`), changes only jobs submitted afterwards. A reload
-with an error keeps the old policies.
+A job freezes the preset it was submitted with: its name, the digest (SHA-256
+of the file, or of the built-in text) and every option are stored with the
+job. Editing or removing a preset file, or reloading the daemon (`SIGHUP`),
+changes only jobs submitted afterwards: a waiting job keeps its preset. A
+reload with an error keeps the old presets.
 
-A spec may override a default only within the caller's permissions and the
-policy's ceiling. A policy not offered to the caller is a `rejected` job with
-`preset_denied`; an option the caller has no permission for (a live route,
-root, a core or memory dump, Check online, keeping the VM) with
+`overrides` in a submit are a partial preset (the same tables and keys as the
+file). An override that changes a value makes the run **Custom**: it stores
+the name `custom`, the digest of its resolved options, `based_on` (the
+preset's name and digest) and `changes` (the dotted keys it changed); an
+override equal to the preset's value changes nothing. A preset grants nothing
+and locks nothing: the run is checked as it will run, in this order. An
+unknown preset is refused `preset_denied`, a value out of range
+`invalid_argument` and a reserved key away from its default `unsupported`
+("arrives with 0.9.1"); nothing is stored for them. Then an option the caller
+has no permission for (a live route, root or an id below 1000, a core or
+memory dump, Check online, keeping the VM) is a `rejected` job with
 `permission_denied` naming every missing permission in `details.needs`; a live
-route or a kept VM, which the node does not have in 0.9.0, with
-`unavailable_on_node`; a priority or run time above the policy's limit with
-`limit_exceeded`. A switch the policy leaves off (`evidence.memory_dump`,
-`evidence.core_dump`, `run.allow_root`, a detection engine) cannot be turned on
-by a job: that request is refused `invalid_argument` and nothing is stored.
+route, a kept VM or a lane group other than the node's with
+`unavailable_on_node`; a priority or run time above the caller's limit (when
+one is set) with `limit_exceeded`.
 
 ## Uploads and intake
 
@@ -306,18 +337,19 @@ volume is mounted `noexec`.
 
 At `job.submit` the intake opens the sample without following links, refuses
 anything that is not a regular file, checks the size against the smallest of
-256 MiB, the policy's `max_sample_mib` and a quarter of the lane VM's RAM
-(`sample_too_large`), then the type and architecture against the policy
-(`sample_type_denied`, `sample_arch_denied`). Only then is the sample added to
+256 MiB, the preset's `accepts.max_sample_mib` and a quarter of the lane VM's RAM
+(`sample_too_large`), then the type and architecture against the preset's
+`[accepts]` (`sample_type_denied`, `sample_arch_denied`). Only then is the sample added to
 the library (origin: Added, source "Automation", the file name and never the
 host path) with the caller as custody actor. A script has no architecture, so
-`accept_arch` applies to ELF files only.
+`accepts.arch` applies to ELF files only.
 
 ## Job store
 
 `<data>/service/jobs.sqlite` (WAL) holds the queue and every job; each state
 change is one transaction that also stores its events. `jobs/<id>/events.ndjson`
-mirrors the events and `spec.json` holds the resolved spec. After a crash the
+mirrors the events and `spec.json` holds the stored spec (the preset's name,
+the priority and the changed options). After a crash the
 daemon puts a job left `running` back in the queue (once per job without using
 an attempt) and repairs the mirror files.
 
@@ -327,8 +359,9 @@ Every custody entry names who caused it: `app` and `analyst` in the window,
 `auto:policy-<name>`, `web:<user>` or `local:<uid>` in headless mode. A job's
 entries (`added`, `sent`, `run_started`, `run_ended`, `automation`) name its
 caller, on every lane at once; the tags the service sets name
-`auto:policy-<name>`. Entries of kind `automation` record the job, policy
-digest, route and submitter. The
+`auto:policy-<preset>`. Entries of kind `automation` record the job, the
+preset's name and digest (`custom` and the digest of the resolved options for
+a Custom run), the route and the submitter. The
 bundled `verify-custody.py` accepts them.
 
 ## Privacy, query and log

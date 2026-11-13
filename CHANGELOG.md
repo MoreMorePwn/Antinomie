@@ -15,27 +15,57 @@ x86 programs by their own table.
 
 ### Host
 
+- **Presets replace policies in Auto mode (ANT-T0490).**
+  - A preset is a named set of run options to start from, in the final format of
+    the 0.9.1 web: one table per part of Submit (`[program]`, `[network]`,
+    `[dumps]`, `[static_analysis]`, `[detection]`, `[report]` ...), every key with
+    the app's label and Standard's value as its default. Five presets are built
+    in and read-only: Standard (the 0.9.0 `default`), Quick look, Deep,
+    Interactive and Live network; more are `<data>/presets/<name>.toml`.
+    `packaging/presets/standard.toml.example` is Standard with every key.
+  - A preset grants nothing and locks nothing. `overrides` in a submit are a
+    partial preset (`{"program": {"run_time_s": 600}}`); a run whose overrides
+    change a value is Custom and records `custom`, `based_on` (the preset's name
+    and digest) and the keys it changed. Arguments, environment, the user (now
+    also `nobody` and custom ids), routes, dumps and engines are no longer policy
+    switches: only permissions, the node and the caller's limits refuse a run.
+  - Keys the 0.9.0 engine cannot act on yet are accepted at their default only
+    (else `unsupported`, "arrives with 0.9.1"); a live route in a preset file is
+    "not set up on this node". An unknown preset is `preset_denied`.
+  - The run takes the preset's working directory, user, guest path, core budget
+    and deadline, dump count and spacing, static analysis size limits and Ghidra
+    choice instead of fixed values. `vm.revert_after`, which was never acted on,
+    is gone: a lane is cleaned when the next run starts.
+  - The lane properties move to `[lanes]` of `service.toml` (`group`, `vm`,
+    `revert`, `revert_to`, `stealth`, `network`) and the run wait to
+    `[queue] wait_s`; `[access]`, `[limits]`, `allow_root`, `args_allowed`,
+    `env_allowed`, `allowed_routes` and `allow_keep_on_failure` leave. Watch
+    folders take `preset` and `preset_by_dir`. A waiting run keeps the preset it
+    froze when the file changes or goes.
+  - A `policies/` folder is refused: `config validate` names the new home of each
+    old key and the daemon does not start until the folder is gone.
+    `config validate --preset NAME`, `auto policy list` (the presets with what
+    they need) and `auto retry --override program.run_time_s=60` follow.
 - **Auto mode checks permissions, not scopes (ANT-T0489).**
   - The engine checks a list of permissions (`runs.submit`, `route.tor`,
     `run.as_root`, `evidence.core_dump`, `evidence.view` and 30 more) instead of the
     four scopes. A caller carries its permissions (and, unused until limits per
     caller, its limits). The owner on the local socket holds every permission. A
     watch folder submits with `runs.submit` and the folder's new `permissions` list in
-    `service.toml`: a folder whose policy takes cores needs
+    `service.toml`: a folder whose preset takes cores needs
     `permissions = ["evidence.core_dump"]`. The old scopes keep their meaning:
     `read` is `runs.see_all`, `submit` is `samples.add` and `runs.submit`,
     `artifacts:sensitive` is `evidence.view`, `evidence.download` and
     `samples.download`, `manage` is `runs.manage_any`, `samples.tag`, `runs.delete`,
     `queue.manage`, `lanes.reset` and `custody.verify`.
-  - `job.submit` checks, in order: the policy is offered to the caller, each run
-    option that adds risk has its permission (a live route, root or an id below
-    1000, core and memory dumps, also those of the dump trigger, Check online,
-    keeping the VM), the node has it, then the limits, then the policy's own
-    switches. Each refusal names what is missing.
+  - `job.submit` checks, in order: the preset exists, every value is valid, each
+    run option that adds risk has its permission (a live route, root or an id
+    below 1000, core and memory dumps, also those of the dump trigger, Check
+    online, keeping the VM), the node has it, then the limits. Each refusal names
+    what is missing.
   - New error and failure codes `permission_denied` (with `details.needs`),
     `preset_denied`, `limit_exceeded` and `unavailable_on_node`; `policy_denied` is
-    gone. A failure now carries `field` and `details`. A value outside the policy's
-    switches is refused `invalid_argument` and nothing is stored.
+    gone. A failure now carries `field` and `details`.
   - A live route asked by a job is refused `unavailable_on_node` (no route is set
     up for the service yet), after its `route.*` permission; it was `unsupported`.
     `keep_on_failure: true` is refused `unavailable_on_node`: keeping a VM arrives

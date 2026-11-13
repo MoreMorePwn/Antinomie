@@ -84,10 +84,13 @@ impl Default for Daemon {
 #[serde(deny_unknown_fields, default)]
 pub struct Queue {
     pub max_queued: u32,
-    /// Node-wide cap per `client_id`; a policy's `limits.max_queued_per_client`
-    /// is a lower ceiling and the smaller of the two applies.
+    /// Node-wide cap of queued runs per `client_id`.
     pub per_client_queued: u32,
     pub paused_on_start: bool,
+    /// How long a run may wait `queued` for resources, a dependency or a
+    /// pending disk layer before it ends `failed` (was the policy's
+    /// `limits.wait_s`).
+    pub wait_s: u32,
 }
 
 impl Default for Queue {
@@ -96,6 +99,56 @@ impl Default for Queue {
             max_queued: 1000,
             per_client_queued: 100,
             paused_on_start: false,
+            wait_s: 3600,
+        }
+    }
+}
+
+/// How the lane VM is made clean before a run (design 4.5.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevertMode {
+    #[default]
+    SnapshotDisk,
+    SnapshotFull,
+    Reset,
+}
+
+impl RevertMode {
+    pub fn needs_snapshot(self) -> bool {
+        !matches!(self, Self::Reset)
+    }
+}
+
+/// `[lanes]`: the lanes of this node, the properties 0.9.0 policies held in
+/// `[vm]`. 0.9.0 has one lane group: every lane belongs to it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Lanes {
+    /// The lane group's name, the one presets name in `vm.lane_group`.
+    pub group: String,
+    /// The lane VM (lane 1's, in the data folder): what `config validate`
+    /// checks and the base the lane choice compares.
+    pub vm: String,
+    pub revert: RevertMode,
+    /// The clean snapshot.
+    pub revert_to: String,
+    /// The stealth profile the lane VM must have; unset: any.
+    pub stealth: Option<String>,
+    /// `routed`, `isolated` or `disconnected`. A string so that `nat` gets
+    /// its own message.
+    pub network: String,
+}
+
+impl Default for Lanes {
+    fn default() -> Self {
+        Self {
+            group: super::preset::DEFAULT_LANE_GROUP.into(),
+            vm: "auto-1".into(),
+            revert: RevertMode::SnapshotDisk,
+            revert_to: crate::lane::provision::CLEAN_SNAPSHOT.into(),
+            stealth: None,
+            network: "routed".into(),
         }
     }
 }
@@ -111,7 +164,7 @@ pub enum DeleteAfter {
     Keep,
 }
 
-/// `on_duplicate` of a policy or a watch folder (design 4.2.2).
+/// `on_duplicate` of a preset or a watch folder (design 4.2.2).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnDuplicate {
@@ -128,29 +181,37 @@ pub enum OnDuplicate {
 #[serde(deny_unknown_fields)]
 pub struct Watch {
     pub path: PathBuf,
-    #[serde(default = "default_policy_name")]
-    pub policy: String,
+    /// The preset its runs use, unchanged.
+    #[serde(default = "default_preset_name")]
+    pub preset: String,
     #[serde(default)]
     pub recursive: bool,
     #[serde(default)]
     pub delete_after: DeleteAfter,
-    /// Overrides the policy's `on_duplicate` for files of this folder.
+    /// Overrides the preset's `on_duplicate` for files of this folder.
     #[serde(default)]
     pub on_duplicate: Option<OnDuplicate>,
-    /// Subfolders named after policies select the policy (4.2.1).
+    /// Subfolders named after presets select the preset (4.2.1).
     #[serde(default)]
-    pub policy_by_dir: bool,
+    pub preset_by_dir: bool,
     #[serde(default)]
     pub allow_group_write: bool,
     /// New jobs per minute per folder before the folder pauses.
     #[serde(default = "default_watch_rate")]
     pub watch_rate: u32,
     /// The permissions the folder's runs hold beside `runs.submit` (for
-    /// example `["evidence.core_dump"]` for a policy that takes cores). A run
+    /// example `["evidence.core_dump"]` for a preset that takes cores). A run
     /// whose options need a permission the folder lacks is rejected
     /// `permission_denied`.
     #[serde(default)]
     pub permissions: Vec<Permission>,
+    /// The 0.9.0 key, renamed `preset`: refused by `config validate` with
+    /// that word.
+    #[serde(default, skip_serializing)]
+    pub policy: Option<String>,
+    /// The 0.9.0 key, renamed `preset_by_dir`.
+    #[serde(default, skip_serializing)]
+    pub policy_by_dir: Option<bool>,
 }
 
 impl Watch {
@@ -168,8 +229,8 @@ impl Watch {
     }
 }
 
-fn default_policy_name() -> String {
-    "default".into()
+fn default_preset_name() -> String {
+    super::builtin::DEFAULT_PRESET.into()
 }
 
 fn default_watch_rate() -> u32 {
@@ -393,6 +454,7 @@ pub struct Log {
 pub struct ServiceConfig {
     pub daemon: Daemon,
     pub queue: Queue,
+    pub lanes: Lanes,
     pub inbox: Inbox,
     pub resources: Resources,
     pub retention: Retention,

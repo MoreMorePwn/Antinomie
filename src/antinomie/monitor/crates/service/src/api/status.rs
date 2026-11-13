@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The state objects around the jobs: `Sample` (5.4.7), `QueueStatus`
 //! (5.4.8), `Capabilities` (5.4.9), `health` (5.3) and the summaries of
-//! policies, VMs and bases.
+//! presets, VMs and bases.
 
 use super::{
     event::LaneState,
     ids::{JobId, LaneId, Sha256Hex},
+    ops::Permission,
     spec::{ReportFormat, Route, StaticCheck},
 };
 use crate::query::catalogue::QueryCatalogue;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::BTreeMap;
 
 /// A library tag.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -150,8 +149,8 @@ pub struct Capabilities {
     pub max_sample_bytes: u64,
     pub accept_types: Vec<String>,
     pub accept_arch: Vec<String>,
-    /// Routes a caller may request under its policies (v1: a subset of
-    /// `drop` and `inet_sim`).
+    /// The routes this node runs: `drop` and `inet_sim` (no live route is
+    /// set up before 0.9.1).
     pub routes: Vec<Route>,
     pub report_formats: Vec<ReportFormat>,
     /// Available check names, tool presence considered.
@@ -198,16 +197,28 @@ pub struct HealthStatus {
     pub engine: EngineHealth,
 }
 
-/// A policy a caller may use (`policy.list`); never secrets.
+/// A preset (`policy.list`): what its options need and whether the caller and
+/// the node have it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PolicySummary {
+pub struct PresetSummary {
     pub name: String,
+    pub title: String,
     pub description: String,
-    /// The policy's ceilings by key (`max_run_s`, `max_sample_mib`, ...).
-    pub ceilings: BTreeMap<String, Value>,
+    pub digest: String,
+    /// One of the five presets that ship with the service (read-only).
+    pub built_in: bool,
+    /// The roles that see it on Submit (a list, not a lock).
+    pub offered_to: Vec<String>,
+    /// The permissions its options need, beside `runs.submit`.
+    pub needs: Vec<Permission>,
+    /// The ones of `needs` the caller lacks.
+    pub missing: Vec<Permission>,
+    /// What this node does not have for it ("route tor is not set up on
+    /// this node"); a run of it is refused `unavailable_on_node`.
+    pub unavailable: Vec<String>,
 }
 
-/// A VM a policy can use (`vm.list`); lane VMs carry `lane`.
+/// A VM a preset can use (`vm.list`); lane VMs carry `lane`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct VmSummary {
     pub id: String,

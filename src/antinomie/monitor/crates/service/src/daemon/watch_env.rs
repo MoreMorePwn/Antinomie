@@ -10,12 +10,11 @@
 //! `runs.submit` and the folder's `permissions`.
 
 use super::service::Service;
-use crate::config::PolicyLookup;
+use crate::config::PresetLookup;
 use crate::{
     api::{
         error::ErrorCode,
         job::JobState,
-        ops::Scope,
         spec::{JobSpec, SampleSource},
     },
     watch::{Admission, Admit, Defer, SCAN_EVERY, WatchEnv, Watcher},
@@ -40,8 +39,8 @@ impl crate::config::callers::CallerLookup for Service {
 }
 
 impl WatchEnv for ServiceEnv {
-    fn policy_exists(&self, name: &str) -> bool {
-        crate::config::PolicyLookup::get(&*self.0.policies, name).is_some()
+    fn preset_exists(&self, name: &str) -> bool {
+        crate::config::PresetLookup::get(&*self.0.presets, name).is_some()
     }
 
     fn queue_has_room(&self) -> bool {
@@ -68,17 +67,11 @@ impl WatchEnv for ServiceEnv {
 
     fn admit(&self, request: Admit) -> Result<Admission, Defer> {
         let service = &self.0;
-        let policies = service.policies.snapshot();
-        let loaded = policies
-            .get(&request.policy)
-            .ok_or_else(|| Defer(format!("policy {} does not exist", request.policy)))?;
-        let caller = watch_caller(&request.policy, &request.permissions);
-        if !loaded.allows(&caller.client_id, Scope::Submit) {
-            return Err(Defer(format!(
-                "policy {} does not let {} submit (access.clients)",
-                request.policy, caller.client_id
-            )));
-        }
+        let presets = service.presets.snapshot();
+        let loaded = presets
+            .get(&request.preset)
+            .ok_or_else(|| Defer(format!("preset {} does not exist", request.preset)))?;
+        let caller = watch_caller(&request.preset, &request.permissions);
         let name = (!request.file_name.is_empty()).then_some(request.file_name.as_str());
         let sample = match service.intake.sample_from_file(
             request.file,
@@ -103,13 +96,13 @@ impl WatchEnv for ServiceEnv {
                 ..Default::default()
             },
             name: name.map(str::to_owned),
-            policy: Some(request.policy),
+            policy: Some(request.preset),
             priority: None,
             labels,
             idempotency_key: None,
             overrides: Default::default(),
         };
-        let mut context = service.submit_context(&policies);
+        let mut context = service.submit_context(&presets);
         context.on_duplicate = request.on_duplicate;
         match service.store.submit(&caller, spec, &context) {
             Ok(submitted) if submitted.job.state == JobState::Rejected => {

@@ -2,14 +2,13 @@
 //! `job.submit`: synchronous validation, `rejected`, idempotency, quotas and
 //! duplicates.
 
+use super::permissions::with;
 use super::*;
-use crate::api::{
-    error::ErrorReason,
-    spec::{Overrides, Route, RunAs, RunAsName},
-};
+use crate::api::{error::ErrorReason, ops::Limits};
+use serde_json::json;
 
 #[test]
-fn an_accepted_job_is_queued_with_the_policy_filled_in() {
+fn an_accepted_job_is_queued_with_the_preset_filled_in() {
     let fx = Fx::new("accepted");
     let submitted = fx.submit(spec(1));
     assert!(!submitted.replayed);
@@ -21,20 +20,20 @@ fn an_accepted_job_is_queued_with_the_policy_filled_in() {
     assert_eq!(job.created_ms, T0);
     assert_eq!(job.attempt, 0);
     assert_eq!(job.max_attempts, 2);
-    assert_eq!(job.policy.name, "default");
-    assert_eq!(job.policy.digest, "digest-of-default-300");
+    assert_eq!(job.policy.name, "standard");
+    assert_eq!(job.policy.digest, "digest-of-standard-300");
+    assert_eq!(job.policy.based_on, None);
+    assert!(job.policy.changes.is_empty());
     assert_eq!(job.sample.as_ref().unwrap().sha256, sha(1));
-    // The resolved spec: defaults from the policy, the sample by hash.
+    // The stored spec: the preset's name, the priority, the sample by hash
+    // and no overrides; the options are the frozen preset.
     assert_eq!(job.spec.sample.sha256, Some(sha(1)));
-    assert_eq!(job.spec.policy.as_deref(), Some("default"));
+    assert_eq!(job.spec.policy.as_deref(), Some("standard"));
     assert_eq!(job.spec.priority, Some(5));
-    assert_eq!(job.spec.overrides.timeout_s, Some(300));
-    assert_eq!(job.spec.overrides.route, Some(Route::Drop));
-    assert_eq!(job.spec.overrides.report_defang, Some(true));
-    assert_eq!(
-        job.spec.overrides.run_as,
-        Some(RunAs::Named(RunAsName::User))
-    );
+    assert!(job.spec.overrides.is_empty());
+    let frozen = fx.store.frozen_preset(&job.id).unwrap();
+    assert_eq!(frozen.preset.program.run_time_s, 300);
+    assert_eq!(frozen.preset.network.route, crate::api::spec::Route::Drop);
     assert_eq!(kinds(&fx, &job.id), ["job.created"]);
     // The spec is also written to the job directory.
     assert!(
@@ -47,7 +46,7 @@ fn an_accepted_job_is_queued_with_the_policy_filled_in() {
 }
 
 #[test]
-fn shape_errors_unknown_policy_and_v1_limits_are_errors_not_jobs() {
+fn shape_errors_an_unknown_preset_and_reserved_keys_are_errors_not_jobs() {
     let fx = Fx::new("errors");
     let call = |spec: JobSpec| fx.submit_as(&caller(1000), spec).unwrap_err();
 
@@ -68,18 +67,97 @@ fn shape_errors_unknown_policy_and_v1_limits_are_errors_not_jobs() {
         policy: Some("nope".into()),
         ..spec(1)
     });
-    assert_eq!(error.code, ErrorCode::NotFound);
+    assert_eq!(error.code, ErrorCode::PresetDenied);
+    // Overrides are a partial preset: tables of its keys.
+    let error = call(with(json!({"timeout_s": 60})));
+    assert_eq!(error.field.as_deref(), Some("overrides"));
+    let error = call(with(json!({"run": {"timeout_s": 60}})));
+    assert_eq!(error.field.as_deref(), Some("overrides.run"));
 
-    let desktop = JobSpec {
-        overrides: Overrides {
-            run_in: Some(crate::api::spec::RunIn::GuestDesktop),
-            ..Default::default()
-        },
-        ..spec(1)
-    };
-    let error = call(desktop);
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert_eq!(error.reason(), Some(ErrorReason::RunModeNotInV1));
+    // Every key 0.9.0 reserves, away from its default: unsupported.
+    for (overrides, field) in [
+        (
+            json!({"program": {"run_in": "guest_desktop"}}),
+            "program.run_in",
+        ),
+        (
+            json!({"program": {"source": "guest_path"}}),
+            "program.source",
+        ),
+        (
+            json!({"program": {"executable": "/bin/ls"}}),
+            "program.executable",
+        ),
+        (
+            json!({"program": {"preload": [{"sample": "ab", "how": "ld_preload"}]}}),
+            "program.preload",
+        ),
+        (
+            json!({"program": {"extra_files": [{"sample": "ab", "guest_path": "/tmp/x"}]}}),
+            "program.extra_files",
+        ),
+        (json!({"record": {"scope": "whole_vm"}}), "record.scope"),
+        (
+            json!({"record": {"screenshot_every_s": 5}}),
+            "record.screenshot_every_s",
+        ),
+        (
+            json!({"network": {"private_addresses": true}}),
+            "network.private_addresses",
+        ),
+        (
+            json!({"network": {"abuse_filter": false}}),
+            "network.abuse_filter",
+        ),
+        (json!({"dumps": {"disk_dump": true}}), "dumps.disk_dump"),
+        (
+            json!({"static_analysis": {"rebuilt_file_mib": 32}}),
+            "static_analysis.rebuilt_file_mib",
+        ),
+        (
+            json!({"static_analysis": {"rebuilt_run_mib": 32}}),
+            "static_analysis.rebuilt_run_mib",
+        ),
+        (
+            json!({"triage": {"written_per_file_mib": 1}}),
+            "triage.written_per_file_mib",
+        ),
+        (
+            json!({"triage": {"written_per_run_mib": 1}}),
+            "triage.written_per_run_mib",
+        ),
+        (
+            json!({"triage": {"earlier_per_file_mib": 1}}),
+            "triage.earlier_per_file_mib",
+        ),
+        (
+            json!({"triage": {"earlier_per_run_mib": 1}}),
+            "triage.earlier_per_run_mib",
+        ),
+        (
+            json!({"detection": {"scan_every_min": 2}}),
+            "detection.scan_every_min",
+        ),
+        (
+            json!({"report": {"sections": ["summary"]}}),
+            "report.sections",
+        ),
+    ] {
+        let error = call(with(overrides));
+        assert_eq!(error.code, ErrorCode::Unsupported, "{field}");
+        assert_eq!(error.field.as_deref(), Some(field));
+        assert_eq!(error.reason(), Some(ErrorReason::Reserved));
+        assert!(error.message.contains("arrives with 0.9.1"), "{error:?}");
+    }
+    // At its default, a reserved key is accepted.
+    let fine = fx
+        .submit_as(
+            &caller(1000),
+            with(json!({"program": {"run_in": "app_terminal"}})),
+        )
+        .unwrap();
+    assert_eq!(fine.job.state, JobState::Queued);
+    fx.store.cancel(&fine.job.id, None, &caller(1000)).unwrap();
 
     // sample.path is local-only.
     let remote = Caller {
@@ -97,20 +175,22 @@ fn shape_errors_unknown_policy_and_v1_limits_are_errors_not_jobs() {
     assert_eq!(error.field.as_deref(), Some("sample.path"));
 
     // A caller without runs.submit.
-    let reader = Caller::from_scopes("local:1000", &[Scope::Read]);
+    let reader = Caller::new("local:1000", &[crate::api::ops::Permission::RunsSeeAll]);
     let error = fx.submit_as(&reader, spec(1)).unwrap_err();
     assert_eq!(error.code, ErrorCode::PermissionDenied);
     assert_eq!(error.details["needs"], serde_json::json!(["runs.submit"]));
-    // None of these stored a job.
-    assert_eq!(fx.store.counts().unwrap(), Default::default());
+    // None of these stored a job but the cancelled one.
+    assert_eq!(fx.store.counts().unwrap().queued, 0);
 }
 
 #[test]
 fn a_spec_that_fails_a_check_or_intake_is_stored_rejected() {
-    let fx = Fx::new("rejected");
-    let with = |overrides: Overrides| JobSpec {
-        overrides,
-        ..spec(1)
+    let fx = Fx::with_policy("rejected", |p| p.accepts.types = vec!["elf".into()]);
+    let mut limited = caller(1000);
+    limited.limits = Limits {
+        priority_max: Some(5),
+        max_run_s: Some(600),
+        ..Limits::default()
     };
     let cases: Vec<(JobSpec, FailureCode, &str)> = vec![
         (spec(99), FailureCode::SampleMissing, "sample"),
@@ -125,48 +205,38 @@ fn a_spec_that_fails_a_check_or_intake_is_stored_rejected() {
             "priority",
         ),
         (
-            with(Overrides {
-                timeout_s: Some(1801),
-                ..Default::default()
-            }),
+            with(json!({"program": {"run_time_s": 601}})),
             FailureCode::LimitExceeded,
-            "overrides.timeout_s",
+            "program.run_time_s",
         ),
         (
-            with(Overrides {
-                run_as: Some(RunAs::Named(RunAsName::Root)),
-                ..Default::default()
-            }),
+            with(json!({"program": {"user": "root"}})),
             FailureCode::PermissionDenied,
-            "overrides.run_as",
+            "program.user",
         ),
         (
-            with(Overrides {
-                memory_dump: Some(true),
-                ..Default::default()
-            }),
+            with(json!({"dumps": {"memory_dump_on_exit": true}})),
             FailureCode::PermissionDenied,
-            "overrides.memory_dump",
+            "dumps.memory_dump_on_exit",
         ),
         (
-            with(Overrides {
-                keep_on_failure: Some(true),
-                ..Default::default()
-            }),
+            with(json!({"vm": {"keep_on_failure": true}})),
             FailureCode::PermissionDenied,
-            "overrides.keep_on_failure",
+            "vm.keep_on_failure",
         ),
         (
-            with(Overrides {
-                route: Some(Route::Tor),
-                ..Default::default()
-            }),
+            with(json!({"network": {"route": "tor"}})),
             FailureCode::PermissionDenied,
-            "overrides.route",
+            "network.route",
+        ),
+        (
+            with(json!({"vm": {"lane_group": "arm64"}})),
+            FailureCode::UnavailableOnNode,
+            "vm.lane_group",
         ),
     ];
     for (spec, code, field) in cases {
-        let job = fx.submit(spec).job;
+        let job = fx.submit_as(&limited, spec).unwrap().job;
         assert_eq!(job.state, JobState::Rejected, "{code:?}");
         assert_eq!(job.outcome, Some(Outcome::Rejected));
         assert_eq!(job.finished_ms, Some(T0));
@@ -185,53 +255,73 @@ fn a_spec_that_fails_a_check_or_intake_is_stored_rejected() {
 }
 
 #[test]
-fn a_policy_the_caller_may_not_use_rejects_with_preset_denied() {
-    let mut fx = Fx::new("access");
-    fx.policies = PolicySet::single(policy("default", |p| {
-        p.access.clients = vec!["web:*".into()];
-    }));
-    let job = fx.submit(spec(1)).job;
+fn a_rejected_custom_run_names_the_preset_it_was_based_on() {
+    let fx = Fx::new("rejected-custom");
+    let job = fx
+        .submit(with(
+            json!({"network": {"route": "tor"}, "program": {"run_time_s": 600}}),
+        ))
+        .job;
     assert_eq!(job.state, JobState::Rejected);
-    let failure = job.failure.unwrap();
-    assert_eq!(failure.code, FailureCode::PresetDenied);
-    assert_eq!(failure.field.as_deref(), Some("policy"));
-    assert_eq!(failure.details["preset"], serde_json::json!("default"));
-    let web = Caller {
-        client_id: "web:bob".into(),
-        ..caller(0)
-    };
-    assert_eq!(
-        fx.submit_as(&web, spec(1)).unwrap().job.state,
-        JobState::Queued
-    );
+    assert_eq!(job.policy.name, "custom");
+    assert_eq!(job.policy.based_on.as_ref().unwrap().name, "standard");
+    assert_eq!(job.policy.changes, ["network.route", "program.run_time_s"]);
 }
 
 #[test]
-fn a_spec_may_override_within_the_ceiling() {
-    let fx = Fx::with_policy("ceiling", |p| {
-        p.run.allow_root = true;
-        p.run.env_allowed = true;
-        p.limits.priority_max = 9;
-        p.evidence.memory_dump = true;
-    });
+fn a_change_makes_the_run_custom_and_an_equal_value_does_not() {
+    let fx = Fx::new("custom");
+    let owner = Caller::with_every_permission("local:1000");
     let spec = JobSpec {
         priority: Some(9),
-        overrides: Overrides {
-            timeout_s: Some(1800),
-            route: Some(Route::InetSim),
-            run_as: Some(RunAs::Named(RunAsName::Root)),
-            env: Some(vec!["A=1".into()]),
-            memory_dump: Some(true),
-            ..Default::default()
-        },
-        ..spec(1)
+        ..with(json!({
+            "program": {"run_time_s": 1800, "user": "root", "environment": ["A=1"]},
+            "network": {"route": "inet_sim"},
+            "dumps": {"memory_dump_on_exit": true},
+            "report": {"defang": true}
+        }))
     };
-    // The caller holds run.as_root and evidence.memory_dump.
-    let owner = Caller::with_every_permission("local:1000");
     let job = fx.submit_as(&owner, spec).unwrap().job;
     assert_eq!(job.state, JobState::Queued, "{:?}", job.failure);
-    assert_eq!(job.spec.overrides.route, Some(Route::InetSim));
+    assert_eq!(job.policy.name, "custom");
+    assert_eq!(job.policy.digest.len(), 64);
+    let base = job.policy.based_on.clone().unwrap();
+    assert_eq!(
+        (base.name.as_str(), base.digest.as_str()),
+        ("standard", "digest-of-standard-300")
+    );
+    assert_eq!(
+        job.policy.changes,
+        [
+            "dumps.memory_dump_on_exit",
+            "network.route",
+            "program.environment",
+            "program.run_time_s",
+            "program.user"
+        ]
+    );
+    // The stored spec keeps the changes only (report.defang was already on).
+    assert_eq!(
+        serde_json::to_value(&job.spec.overrides).unwrap(),
+        json!({
+            "dumps": {"memory_dump_on_exit": true},
+            "network": {"route": "inet_sim"},
+            "program": {"environment": ["A=1"], "run_time_s": 1800, "user": "root"}
+        })
+    );
+    assert_eq!(job.spec.policy.as_deref(), Some("standard"));
     assert_eq!(job.spec.priority, Some(9));
+    let frozen = fx.store.frozen_preset(&job.id).unwrap();
+    assert_eq!(frozen.preset.program.run_time_s, 1800);
+    assert_eq!(frozen.digest, job.policy.digest);
+    // An override equal to the preset's value leaves the preset as it is.
+    let same = fx
+        .submit(with(
+            json!({"program": {"run_time_s": 300}, "detection": {"yara": true}}),
+        ))
+        .job;
+    assert_eq!(same.policy.name, "standard");
+    assert!(same.spec.overrides.is_empty());
 }
 
 #[test]
@@ -306,16 +396,22 @@ fn a_key_is_free_again_after_24_hours() {
 
 #[test]
 fn the_queue_and_client_caps_are_enforced() {
-    let mut fx = Fx::with_policy("quota", |p| p.limits.max_queued_per_client = 3);
+    let mut fx = Fx::new("quota");
     fx.limits = SubmitLimits {
         max_queued: 5,
         per_client_queued: 10,
+        wait_s: 3600,
     };
+    let mut capped = caller(1000);
+    capped.limits.max_queued = Some(3);
     for n in 1..=3 {
-        fx.queued(n);
+        assert_eq!(
+            fx.submit_as(&capped, spec(n)).unwrap().job.state,
+            JobState::Queued
+        );
     }
-    // The policy's cap (3) is the smaller one.
-    let error = fx.submit_as(&caller(1000), spec(4)).unwrap_err();
+    // The caller's cap (3) is the smaller one.
+    let error = fx.submit_as(&capped, spec(4)).unwrap_err();
     assert_eq!(error.code, ErrorCode::QuotaExceeded);
     assert!(error.retryable);
     assert!(error.details.contains_key("retry_after_s"));
@@ -335,7 +431,7 @@ fn the_queue_and_client_caps_are_enforced() {
 }
 
 #[test]
-fn duplicates_follow_the_policy() {
+fn duplicates_follow_the_preset() {
     // run (default): the new job repeats the latest finished one.
     let fx = Fx::new("dup-run");
     let first = fx.running(1);
@@ -367,7 +463,7 @@ fn duplicates_follow_the_policy() {
     assert_eq!(reused.job.id, first.id);
     assert_eq!(fx.store.count_state(JobState::Queued).unwrap(), 0);
 
-    // reuse of a failed job runs again; reuse across another policy digest needs the flag.
+    // reuse of a failed job runs again; reuse across another preset digest needs the flag.
     let fx = Fx::with_policy("dup-reuse-failed", |p| on_dup(p, OnDuplicate::Reuse));
     let first = fx.running(1);
     fx.store
