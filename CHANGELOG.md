@@ -27,11 +27,16 @@ x86 programs by their own table.
     and a guest kernel panic reboots the guest so QEMU exits instead of hanging. The desktops
     always had it; Debian 13 Minimal gets it from its next revision (the published revision-22
     Minimal bases are unchanged).
+  - A Debian desktop no longer keeps the build host's `/etc/resolv.conf`, which the bootstrap
+    copies in: every Debian base ends its installation with the resolver the installer's DHCP
+    lease names, which NetworkManager rewrites at boot (the revision-20 GNOME base carries its
+    build host's systemd-resolved stub file).
   - `scripts/vm-regress.py`'s quick tier gains `desktop` on a Debian desktop base: a VM with the
     in-app screen boots to its greeter, and `tests/monitor/debian-desktop-check.sh` checks the
     greeter session, gnome-shell, `virtio_gpu` as Debian's module on a connected display, every
     loaded module signed with taint 0, and the command line; then it saves a screenshot of the
-    greeter. A console base or BusyBox skips it as not applicable.
+    greeter. A console base or BusyBox skips it as not applicable. On an arm64 desktop base the
+    tier also runs the in-app `screen` check.
 
 - **Statistics window (ANT-T0477).** **Statistics** in the menu bar, or Ctrl+Shift+T, opens a window on the selected run or Capture all recording (it floats over the main window and pops out into its own). Four tabs: **Properties** (the run, the guest, the recording and the recording-quality figures: lost packets, reduced recording, host read gaps, guest send waits), **Hierarchy** (calls by group, call and result, with Failed only and By error), **Call rate** (calls per interval over the run, up to four lines: all, failed, a group or your own filter, with the recording's read gaps and full-ring spells drawn on the graph) and **Latency** (the time from a call's entry to its exit, labelled with the accelerator the run was measured under, calls that wait by design shown apart, the slowest calls). The window has its own filter box in the Syscall Trace's language and a choice of time base. Every number opens exactly its calls in the Syscall Trace, every table copies and exports as CSV and JSON, and a quality chip says what the counts cannot tell. It counts the run's own program, as Triage does, and says how many calls of another program it left out. A reconnected run reads only the part after the reconnect, as the Syscall Trace does, and says so. The counting is the new `antinomie_triage::statistics` module, in one walk of the recording that costs what the Syscall Trace's own count costs.
 
