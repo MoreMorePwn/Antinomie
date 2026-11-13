@@ -2602,7 +2602,8 @@ snapshot taken during that boot keeps both. When the engine starts, the worker
 loop sweeps each VM's `snapshots/` folder in passes of at most 256 removals,
 taking the folder's run layer lock, for layers an earlier version or a crash
 left. Only `snapshots/<hex id>.qcow2` regular files directly in the VM's own
-folder are candidates; an unfinished operation's journal, an unreadable header
+folder are candidates, plus `snapshots/<hex id>.state` memory files that no
+checkpoint names (what a failed Full take left behind); an unfinished operation's journal, an unreadable header
 or a missing backing file removes nothing. A lane that reverts before every
 job therefore keeps `snapshots/` at the checkpoints' files plus one working
 disk (and a run layer while a boot runs). Whole-VM deletion checks up to

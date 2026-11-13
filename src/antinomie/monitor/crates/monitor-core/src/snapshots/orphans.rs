@@ -128,6 +128,25 @@ pub(super) fn remove_unreferenced(
     remove(directory, candidates.into_iter(), &live, usize::MAX)
 }
 
+/// `snapshots/<id>.state`, the memory file of a Full checkpoint.
+fn state_name(relative: &Path) -> bool {
+    let mut parts = relative.components();
+    let (Some(Component::Normal(folder)), Some(Component::Normal(file)), None) =
+        (parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let Some(stem) = file.to_str().and_then(|file| file.strip_suffix(".state")) else {
+        return false;
+    };
+    folder == "snapshots"
+        && !stem.is_empty()
+        && stem.len() <= 128
+        && stem
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+}
+
 /// The manifest and pending run layer of a VM folder, or `None` when there is
 /// nothing to judge by: no manifest (a VM that never had a snapshot) or an
 /// unfinished snapshot operation, whose journal names files the manifest
@@ -239,7 +258,13 @@ pub(crate) fn sweep(options: &BackendOptions, vm_id: &str, limit: usize) -> Resu
         return Ok(Sweep::Done { removed: 0 });
     };
     let roots = roots_of(&manifest, record.as_ref());
+    let memories: BTreeSet<&PathBuf> = manifest
+        .nodes
+        .iter()
+        .filter_map(|node| node.memory.as_ref())
+        .collect();
     let mut candidates = Vec::new();
+    let mut states = Vec::new();
     let mut truncated = false;
     for (index, entry) in fs::read_dir(&folder)
         .map_err(|e| e.to_string())?
@@ -253,10 +278,29 @@ pub(crate) fn sweep(options: &BackendOptions, vm_id: &str, limit: usize) -> Resu
         let relative = Path::new("snapshots").join(entry.file_name());
         if layer_name(&relative) && !roots.contains(&relative) {
             candidates.push(relative);
+        } else if state_name(&relative) && !memories.contains(&relative) {
+            states.push(relative);
         }
     }
+    states.retain(|relative| {
+        fs::symlink_metadata(directory.join(relative))
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+    });
+    // Memory files a failed Full take left behind: no checkpoint names them
+    // and no snapshot operation is unfinished (`state` checked the journal).
+    let removed_states = remove(&directory, states.iter(), &BTreeSet::new(), limit)?;
     if candidates.is_empty() {
-        return Ok(Sweep::Done { removed: 0 });
+        return Ok(
+            if removed_states > 0 && (states.len() > removed_states || truncated) {
+                Sweep::More {
+                    removed: removed_states,
+                }
+            } else {
+                Sweep::Done {
+                    removed: removed_states,
+                }
+            },
+        );
     }
     let live = live_set(&directory, &manifest, record.as_ref())?;
     let unreferenced: Vec<PathBuf> = candidates
@@ -267,10 +311,15 @@ pub(crate) fn sweep(options: &BackendOptions, vm_id: &str, limit: usize) -> Resu
                 && fs::canonicalize(&path).is_ok_and(|path| !live.contains(&path))
         })
         .collect();
-    let removed = remove(&directory, unreferenced.iter(), &live, limit)?;
+    let removed = remove(
+        &directory,
+        unreferenced.iter(),
+        &live,
+        limit.saturating_sub(removed_states),
+    )? + removed_states;
     // A pass that removed nothing ends the sweep, so it always terminates.
     Ok(
-        if removed > 0 && (unreferenced.len() > removed || truncated) {
+        if removed > 0 && (unreferenced.len() + states.len() > removed || truncated) {
             Sweep::More { removed }
         } else {
             Sweep::Done { removed }

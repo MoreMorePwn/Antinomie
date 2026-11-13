@@ -251,13 +251,12 @@ fn the_startup_sweep_removes_only_unreferenced_layers_in_bounded_passes() {
                 .join(make_child(&fixture.options, &fixture.directory, &clean_disk).unwrap()),
         );
     }
-    // Files the sweep never removes: not a layer name, a memory state, a
-    // symbolic link with a layer name, a note.
+    // Files the sweep never removes: not a layer name, a symbolic link with a
+    // layer name, a note.
     let folder = fixture.directory.join("snapshots");
     let outside = fixture.root.join("outside.qcow2");
     Fixture::command("qemu-img", &["create", "-f", "qcow2"], &outside, Some("1M"));
     std::os::unix::fs::symlink(&outside, folder.join("0123abcd.qcow2")).unwrap();
-    fs::write(folder.join("abcdef.state"), b"state").unwrap();
     fs::write(folder.join("user-note.qcow2"), b"keep").unwrap();
     fs::write(folder.join("note.txt"), b"keep").unwrap();
     let before = fs::read_dir(&folder).unwrap().count();
@@ -277,6 +276,41 @@ fn the_startup_sweep_removes_only_unreferenced_layers_in_bounded_passes() {
     fixture.read(&working, 2);
     revert(&fixture, &kept.id);
     fixture.read(&active(&fixture), 2);
+    revert(&fixture, &clean.id);
+    fixture.read(&active(&fixture), 1);
+}
+
+#[test]
+fn the_startup_sweep_removes_memory_files_no_checkpoint_names() {
+    if !have_qemu() {
+        return;
+    }
+    let fixture = Fixture::named("orphans-states");
+    fixture.write(1);
+    let clean = fixture.take("Clean");
+    let folder = fixture.directory.join("snapshots");
+    // What a failed Full take left: a memory file of a hex id no node names.
+    let left = [folder.join("abcdef.state"), folder.join("0123-4567.state")];
+    for path in &left {
+        fs::write(path, b"state").unwrap();
+    }
+    // Never removed: other names, a symbolic link with a state name.
+    let outside = fixture.root.join("outside.state");
+    fs::write(&outside, b"keep").unwrap();
+    std::os::unix::fs::symlink(&outside, folder.join("fedcba.state")).unwrap();
+    fs::write(folder.join("user-note.state"), b"keep").unwrap();
+    fs::write(folder.join("note.txt"), b"keep").unwrap();
+    // An unfinished operation's journal: nothing is judged.
+    fs::write(fixture.directory.join(JOURNAL), b"{}").unwrap();
+    assert_eq!(sweep_pass(&fixture, 8), Sweep::Done { removed: 0 });
+    assert!(left.iter().all(|path| path.exists()));
+    fs::remove_file(fixture.directory.join(JOURNAL)).unwrap();
+    assert_eq!(sweep_pass(&fixture, 8), Sweep::Done { removed: 2 });
+    assert!(left.iter().all(|path| !path.exists()));
+    assert!(outside.exists());
+    assert!(fs::symlink_metadata(folder.join("fedcba.state")).is_ok());
+    assert!(folder.join("user-note.state").exists() && folder.join("note.txt").exists());
+    assert_eq!(sweep_pass(&fixture, 8), Sweep::Done { removed: 0 });
     revert(&fixture, &clean.id);
     fixture.read(&active(&fixture), 1);
 }
