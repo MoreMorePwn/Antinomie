@@ -20,6 +20,16 @@
 //!   recording.
 //! * The engine answers a terminal read every 200 ms, so 60 s with nothing
 //!   from it is a stuck engine: `internal`, the watchdog's silence rule.
+//! * While the engine recovers a guest that stopped answering (a reconnect)
+//!   it refuses guest commands (a guest transition, ANT-T0479). That is not
+//!   an engine failure: a refused terminal read is skipped, a refused or
+//!   cancelled `StopRun` is sent again on the next look, and the limits above
+//!   still hold; a guest the engine cannot get back fails the VM, which is
+//!   `guest_lost`.
+//! * Below the disk floor the stage sends `StopRun` and the run ends
+//!   `stopped` however the guest takes it, also when it never confirms the
+//!   stop within the 120 s or the VM fails after it (design 4.6.3: the job is
+//!   `partial` with `low_disk`).
 use super::{LaneStages, Launched, Prepared, StageStop};
 use crate::{
     api::{
@@ -99,6 +109,11 @@ impl<E: Engine> LaneStages<'_, E> {
         let silence = self.waiter.guest_wait(ENGINE_SILENCE);
         let mut dog = Watchdog::new(Stage::Run, begun, None, Some(silence));
         let mut stop_sent_ms: Option<u64> = None;
+        // The id of the `StopRun` the engine took; `None` while it is still
+        // to be sent (refused or cancelled for a guest transition: asked
+        // again on the next look, the grace still counting from the first).
+        let mut stop_id: Option<u64> = None;
+        let mut transition_noted = false;
         let mut limit_stop = false;
         let mut floor_stop: Option<String> = None;
         let mut next_floor_ms = begun + FLOOR_EVERY_MS;
@@ -127,6 +142,10 @@ impl<E: Engine> LaneStages<'_, E> {
             };
             match phase(&run) {
                 Phase::Ended => break run,
+                // The run was stopped for the disk floor: however the guest
+                // ends it (or ends with it, on the full disk), it ended
+                // `stopped` and the job is `partial` (design 4.6.3).
+                Phase::Lost if floor_stop.is_some() => break run,
                 Phase::LaunchFailed => {
                     self.mark_run_lost(job);
                     return Err(fail(
@@ -167,6 +186,9 @@ impl<E: Engine> LaneStages<'_, E> {
                 Phase::Live => {}
             }
             if self.vm_gone(&vm) {
+                if floor_stop.is_some() {
+                    break run;
+                }
                 return Err(self.vm_lost(job));
             }
             if !cancelled && self.waiter.cancel_requested() {
@@ -174,9 +196,6 @@ impl<E: Engine> LaneStages<'_, E> {
                 self.progress(job, Stage::Run, "cancelled; stopping the run");
                 if stop_sent_ms.is_none() {
                     stop_sent_ms = Some(now);
-                    self.waiter.send(Command::StopRun {
-                        run_id: run_id.clone(),
-                    })?;
                 }
             }
             // The disk floor (4.6.3) is looked at once a minute.
@@ -192,9 +211,6 @@ impl<E: Engine> LaneStages<'_, E> {
                     );
                     self.warn(job, "low_disk", &format!("the run was stopped: {words}"));
                     crate::resources::pause_for_low_disk(self.env.store, &words);
-                    self.waiter.send(Command::StopRun {
-                        run_id: run_id.clone(),
-                    })?;
                 }
             }
             let elapsed = now.saturating_sub(begun);
@@ -206,11 +222,28 @@ impl<E: Engine> LaneStages<'_, E> {
                     Stage::Run,
                     "the run limit is reached; stopping the run",
                 );
-                self.waiter.send(Command::StopRun {
+            }
+            if stop_sent_ms.is_some() && stop_id.is_none() {
+                stop_id = self.waiter.guest_send(Command::StopRun {
                     run_id: run_id.clone(),
                 })?;
+                if stop_id.is_none() {
+                    self.note_transition(job, &mut transition_noted);
+                }
             }
             if stop_sent_ms.is_some_and(|sent| now >= sent + grace_ms) {
+                if floor_stop.is_some() {
+                    // The guest did not confirm the end (on a full disk it
+                    // may be held on a write): the run was stopped for the
+                    // floor all the same, and the VM stop that follows ends
+                    // whatever is left of it.
+                    self.progress(
+                        job,
+                        Stage::Run,
+                        "the guest did not confirm the stop; the run is ended with the VM",
+                    );
+                    break run;
+                }
                 self.mark_run_lost(job);
                 if cancelled {
                     return Err(StageStop::Cancelled);
@@ -222,16 +255,28 @@ impl<E: Engine> LaneStages<'_, E> {
                     None,
                 ));
             }
-            // The terminal is dropped when nobody reads it (audit E17).
-            self.waiter.send(Command::TerminalRead {
-                run_id: run_id.clone(),
-            })?;
+            // The terminal is dropped when nobody reads it (audit E17). While
+            // the engine recovers the guest it refuses guest commands: the
+            // loop goes on, bounded by the run limit and the stop's grace, and
+            // a guest that does not come back fails the VM (`guest_lost`).
+            if self
+                .waiter
+                .guest_send(Command::TerminalRead {
+                    run_id: run_id.clone(),
+                })?
+                .is_none()
+            {
+                self.note_transition(job, &mut transition_noted);
+            }
             self.tick(&mut dog, POLL)?;
+            if stop_id.is_some_and(|id| self.waiter.cancelled_by_transition(id)) {
+                stop_id = None;
+            }
             self.waiter.discard_results();
         };
 
         // One last read so the tail holds the program's final lines.
-        self.waiter.send(Command::TerminalRead {
+        self.waiter.guest_send(Command::TerminalRead {
             run_id: run_id.clone(),
         })?;
         self.waiter.pump(POLL)?;
@@ -286,6 +331,18 @@ impl<E: Engine> LaneStages<'_, E> {
             return Err(StageStop::Cancelled);
         }
         Ok(end)
+    }
+
+    /// Say once per run that the engine is recovering the guest.
+    fn note_transition(&self, job: &Job, noted: &mut bool) {
+        if !*noted {
+            *noted = true;
+            self.progress(
+                job,
+                Stage::Run,
+                "the guest stopped answering; waiting while the engine recovers it",
+            );
+        }
     }
 
     /// The lane VM is no longer the engine's running VM.

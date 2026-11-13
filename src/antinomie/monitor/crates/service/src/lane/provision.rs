@@ -98,6 +98,8 @@ fn engine_error(error: WaitError, doing: &str) -> ApiError {
     let code = match &error {
         WaitError::Interrupted | WaitError::Cancelled => ErrorCode::Unavailable,
         WaitError::TimedOut { .. } | WaitError::DeadlineExceeded => ErrorCode::Unavailable,
+        // The engine is recovering the guest: not an engine failure.
+        WaitError::GuestTransition(_) => ErrorCode::Unavailable,
         WaitError::Failed(_) => ErrorCode::PreconditionFailed,
         _ => ErrorCode::Internal,
     };

@@ -50,6 +50,8 @@ mod run_tests;
 #[cfg(test)]
 mod tests;
 pub mod timing;
+#[cfg(test)]
+mod transition_tests;
 mod upload;
 
 use crate::{

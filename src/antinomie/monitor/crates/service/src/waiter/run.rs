@@ -306,6 +306,37 @@ fn fail(code: FailureCode, stage: Stage, message: &str, detail: Option<&str>) ->
     Stop::Failed(Failure::new(code, stage, message, detail))
 }
 
+/// The failure of a stage that a guest transition kept from its guest
+/// command ([`WaitError::GuestTransition`]): the engine was recovering the
+/// guest, or lost it. Once the program runs that is `guest_lost`; before, the
+/// sample has not run and cannot be the cause, so it is `guest_unreachable`
+/// (both retried; a second `guest_lost` would tag the sample
+/// `auto:crashes-guest`). Never `internal` (ANT-T0479).
+pub(crate) fn transition_failure(stage: Stage, words: &str) -> Failure {
+    match stage {
+        Stage::Run | Stage::Collect => Failure::new(
+            FailureCode::GuestLost,
+            stage,
+            "the guest stopped answering and the engine could not recover it",
+            Some(words),
+        ),
+        _ => Failure::new(
+            FailureCode::GuestUnreachable,
+            stage,
+            "the guest stopped answering before the program ran; the engine was recovering it",
+            Some(words),
+        ),
+    }
+}
+
+/// [`transition_failure`] for a guest transition; any other error as it is.
+fn transition_stop(error: WaitError, stage: Stage) -> Stop {
+    match error {
+        WaitError::GuestTransition(words) => Stop::Failed(transition_failure(stage, &words)),
+        other => Stop::Abort(other),
+    }
+}
+
 /// Reads a run's `artifacts.json`.
 pub type Evidence<'a> = &'a dyn Fn(&Path) -> Result<Option<RunArtifacts>, String>;
 
@@ -329,6 +360,27 @@ impl<E: Engine> Waiter<E> {
     /// Forget results nobody waits for (a refused `TerminalRead` answers).
     pub fn discard_results(&mut self) {
         self.results.clear();
+    }
+
+    /// Send a guest command of a polling loop (`TerminalRead`, `StopRun`):
+    /// `None` when the engine refused it for a guest transition. The loop
+    /// asks again on its next look, and its own limits bound the wait
+    /// (ANT-T0479: a refusal during a transition is not an engine failure).
+    pub(crate) fn guest_send(&mut self, command: Command) -> Result<Option<u64>, WaitError> {
+        match self.send(command) {
+            Ok(id) => Ok(Some(id)),
+            Err(WaitError::GuestTransition(_)) => Ok(None),
+            Err(other) => Err(other),
+        }
+    }
+
+    /// Did the engine cancel command `id` at a guest transition (it had
+    /// taken it before the transition began)? Its result is consumed.
+    pub(crate) fn cancelled_by_transition(&mut self, id: u64) -> bool {
+        matches!(
+            self.take_result(id),
+            Some(Err(WaitError::GuestTransition(_)))
+        )
     }
 
     pub(crate) fn run_of(&self, run_id: &str) -> Option<RunSummary> {
@@ -665,14 +717,26 @@ impl<E: Engine> Waiter<E> {
         let deadline = self.now_ms() + super::millis(self.guest_wait(wait));
         let mut tries = 0u32;
         let mut noted_ms: Option<u64> = None;
+        let command = Command::UploadSample {
+            sha256: sha256.to_owned(),
+            destination: destination.to_owned(),
+            executable: true,
+        };
         loop {
-            let result = self.lane_command(Command::UploadSample {
-                sha256: sha256.to_owned(),
-                destination: destination.to_owned(),
-                executable: true,
-            });
+            let result = self
+                .send_through_transition(&command, deadline)
+                .and_then(|id| self.lane_wait(id, "UploadSample".into()));
             match result {
                 Ok(message) => return Ok(message),
+                // Taken, then cancelled by a transition that began before the
+                // engine reached it: asked again once the guest is back.
+                Err(WaitError::GuestTransition(words)) if self.now_ms() < deadline => {
+                    self.transition_wait(&words, deadline)
+                        .map_err(|error| transition_stop(error, Stage::Upload))?;
+                }
+                Err(error @ WaitError::GuestTransition(_)) => {
+                    return Err(transition_stop(error, Stage::Upload));
+                }
                 Err(WaitError::Failed(message))
                     if guest_not_ready(&message) && self.now_ms() < deadline =>
                 {
@@ -742,8 +806,23 @@ impl<E: Engine> Waiter<E> {
             // A headless process has no UI to hand the rule engine over.
             super::trigger::ensure_live_judge();
         }
-        let id = self.send(Command::Execute(request))?;
-        if let Err(error) = self.lane_wait(id, "Execute".into()) {
+        // A guest transition keeps the launch from the guest: it is asked
+        // again until `launch_s` once the guest is back. A refused or
+        // cancelled `Execute` started nothing.
+        let until = self.now_ms() + super::millis(self.guest_wait(LAUNCH_WAIT));
+        let command = Command::Execute(request);
+        let (id, answer) = loop {
+            let id = self
+                .send_through_transition(&command, until)
+                .map_err(|error| transition_stop(error, Stage::Launch))?;
+            match self.lane_wait(id, "Execute".into()) {
+                Err(WaitError::GuestTransition(words)) => self
+                    .transition_wait(&words, until)
+                    .map_err(|error| transition_stop(error, Stage::Launch))?,
+                answer => break (id, answer),
+            }
+        };
+        if let Err(error) = answer {
             return Err(match error {
                 WaitError::Failed(message) => {
                     // A refusal that kept a "Failed to start" record names it.
@@ -808,6 +887,9 @@ impl<E: Engine> Waiter<E> {
         let limit_ms = super::millis(plan.run_limit);
         let grace_ms = super::millis(STOP_RUN_GRACE);
         let mut stop_sent = false;
+        // `StopRun` refused or cancelled for a guest transition is asked
+        // again on the next look; the grace counts from the first ask.
+        let mut stop_id: Option<u64> = None;
         loop {
             self.drain()?;
             let Some(run) = self.run_of(run_id) else {
@@ -849,7 +931,9 @@ impl<E: Engine> Waiter<E> {
                     text: "the run limit is reached; stopping the run".into(),
                     fraction: None,
                 });
-                self.send(Command::StopRun {
+            }
+            if stop_sent && stop_id.is_none() {
+                stop_id = self.guest_send(Command::StopRun {
                     run_id: run_id.to_owned(),
                 })?;
             }
@@ -862,14 +946,17 @@ impl<E: Engine> Waiter<E> {
                 ));
             }
             // The terminal is dropped when nobody reads it (audit E17).
-            self.send(Command::TerminalRead {
+            self.guest_send(Command::TerminalRead {
                 run_id: run_id.to_owned(),
             })?;
             self.pump(Duration::from_millis(200))?;
+            if stop_id.is_some_and(|id| self.cancelled_by_transition(id)) {
+                stop_id = None;
+            }
             self.discard_results();
         }
         // One last read so the tail holds the program's final lines.
-        self.send(Command::TerminalRead {
+        self.guest_send(Command::TerminalRead {
             run_id: run_id.to_owned(),
         })?;
         self.pump(Duration::from_millis(200))?;

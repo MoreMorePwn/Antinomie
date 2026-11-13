@@ -146,10 +146,7 @@ impl<E: Engine> LaneStages<'_, E> {
         let end = match self.collect(job, launched) {
             Ok(mut end) => {
                 // A run stopped for the disk floor is a partial result.
-                if store
-                    .get(&job.id)
-                    .is_ok_and(|stored| stored.warnings.iter().any(|w| w.code == "low_disk"))
-                {
+                if self.floor_stopped(job) {
                     end.outcome = Outcome::Partial;
                 }
                 end
@@ -173,6 +170,15 @@ impl<E: Engine> LaneStages<'_, E> {
             .end_stage(&job.id, StageStatus::Finished)
             .map_err(|e| self.store_error(Stage::Collect, e))?;
         Ok(end)
+    }
+
+    /// The run was stopped for the disk floor (its `low_disk` warning, which
+    /// the run stage writes once the run's end is written).
+    pub(super) fn floor_stopped(&self, job: &Job) -> bool {
+        self.env
+            .store
+            .get(&job.id)
+            .is_ok_and(|stored| stored.warnings.iter().any(|w| w.code == "low_disk"))
     }
 
     /// End a collected job with the outcome `collect` found, until the host
@@ -200,6 +206,15 @@ impl<E: Engine> LaneStages<'_, E> {
             StageStop::Abort(WaitError::Cancelled) | StageStop::Cancelled => {
                 self.end_cancelled(job)
             }
+            // The engine refused or cancelled a guest command while it was
+            // recovering the guest: not an engine failure (ANT-T0479). The
+            // stages that send guest commands decide this themselves; this
+            // is the rule for any path that did not.
+            StageStop::Abort(WaitError::GuestTransition(words)) => {
+                let stage = self.job_stage(job);
+                let failure = crate::waiter::transition_failure(stage, &words);
+                self.end_failed(job, failure)
+            }
             // A send that failed, or an engine that stopped answering.
             StageStop::Abort(other) => {
                 let stage = self.job_stage(job);
@@ -217,6 +232,12 @@ impl<E: Engine> LaneStages<'_, E> {
             } => self.end_waiting(job, waiting_for, detail),
             StageStop::Failed(failure) => self.end_failed(job, failure),
         }
+    }
+
+    /// [`settle`](Self::settle) with a stop, for the tests of an ending.
+    #[cfg(test)]
+    pub(super) fn settle_for_test(&mut self, job: &Job, stop: StageStop) -> Driven {
+        self.settle(job, Err(stop))
     }
 
     fn job_stage(&self, job: &Job) -> Stage {

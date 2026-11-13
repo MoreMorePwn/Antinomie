@@ -7,7 +7,9 @@
 //!    for at most `collect_s` (300 s). A part left `Partial`, `Interrupted` or
 //!    `Failed` is not a failure: the job becomes `partial` with a warning
 //!    (audit G6). Nothing heard from the engine for twice `stall_s` ends the
-//!    wait early.
+//!    wait early. After a run stopped for the disk floor, a VM that failed or
+//!    evidence still pending at `collect_s` is the warning
+//!    `evidence_incomplete`, not a failure: the job is `partial` (4.6.3).
 //! 2. `Stop`, answered within `stop_s` (120 s); an unanswered stop is the hard
 //!    path (see [`super::cleanup`]) and the job `recording_failed`.
 //! 3. Wait until the VM is stopped, the recording flush is over and the VM has
@@ -77,6 +79,10 @@ impl<E: Engine> LaneStages<'_, E> {
         let mut warnings = Vec::new();
         let mut left_pending: Vec<String> = Vec::new();
         let mut artifacts = None;
+        // A run stopped for the disk floor ends the job `partial` (design
+        // 4.6.3): a VM that failed on the full disk after the stop, or
+        // evidence the full disk kept from completing, are warnings then.
+        let floor_stopped = self.floor_stopped(job);
         loop {
             while self.waiter.pump(Duration::ZERO)?.is_some() {
                 dog.heard(self.waiter.now_ms());
@@ -92,7 +98,8 @@ impl<E: Engine> LaneStages<'_, E> {
                     None,
                 ));
             };
-            if self.waiter.snapshot().state == VmState::Failed {
+            let vm_failed = self.waiter.snapshot().state == VmState::Failed;
+            if vm_failed && !floor_stopped {
                 return Err(fail(
                     FailureCode::GuestLost,
                     "the VM failed before the evidence was complete",
@@ -108,9 +115,25 @@ impl<E: Engine> LaneStages<'_, E> {
             })?;
             let pending = pending_parts(&run, evidence.as_ref());
             let late = self.waiter.now_ms() >= began + EVIDENCE_WAIT.as_millis() as u64;
-            if pending.is_empty() || (late && may_stay_pending(&pending)) {
+            let cut_by_floor = floor_stopped && (vm_failed || late) && !pending.is_empty();
+            if pending.is_empty() || (late && may_stay_pending(&pending)) || cut_by_floor {
                 left_pending = pending.iter().map(|part| (*part).to_owned()).collect();
                 warnings = incomplete_parts(&run, evidence.as_ref());
+                if cut_by_floor {
+                    let why = if vm_failed {
+                        let error = self.waiter.snapshot().last_error.clone();
+                        format!(
+                            "the VM failed after the run was stopped for the disk floor ({})",
+                            error.as_deref().unwrap_or("no error given")
+                        )
+                    } else {
+                        "the run was stopped for the disk floor".to_owned()
+                    };
+                    warnings.push(Warning {
+                        code: "evidence_incomplete".into(),
+                        text: format!("{why}; saved without: {}", pending.join(", ")),
+                    });
+                }
                 artifacts = evidence;
                 break;
             }

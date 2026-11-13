@@ -28,6 +28,8 @@ pub mod console;
 mod run;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transition_tests;
 pub mod trigger;
 
 pub use run::{
@@ -35,7 +37,7 @@ pub use run::{
     STOP_RUN_GRACE, Timings, UPLOAD_WAIT, Warning, incomplete_parts, load_artifacts,
     may_stay_pending, pending_parts, phase,
 };
-pub(crate) use run::{Stop, late_launch_warning, route_of};
+pub(crate) use run::{Stop, late_launch_warning, route_of, transition_failure};
 
 /// A guest command (upload, launch, stop run) whose result does not arrive in
 /// this long at KVM speed is an `internal` failure of the engine (audit G5,
@@ -68,12 +70,42 @@ pub enum WaitError {
     Cancelled,
     /// The engine is gone.
     Disconnected(String),
+    /// The engine refused or cancelled a guest command because the guest is
+    /// in a transition: it reconnects to a guest that stopped answering, or
+    /// restores a snapshot (`Backend::send`, `command_at_epoch`). Not an
+    /// engine failure: the guest is being recovered, or lost (ANT-T0479).
+    GuestTransition(String),
+}
+
+/// The words the engine refuses a guest command with while the guest's
+/// transition is in progress (`Backend::send`).
+const TRANSITION_REFUSED: &str = "guest transition in progress";
+/// The words of a guest command the engine had taken before a transition
+/// began and cancelled at its end (`Worker::command_at_epoch`).
+const TRANSITION_CANCELLED: &str = "command cancelled at snapshot/reconnect boundary";
+
+/// How often a guest command refused for a guest transition is asked again.
+pub const TRANSITION_RETRY: Duration = Duration::from_secs(1);
+
+/// The engine's words name a guest transition, not a failure of the command.
+pub fn guest_transition(message: &str) -> bool {
+    message.starts_with(TRANSITION_REFUSED) || message.starts_with(TRANSITION_CANCELLED)
+}
+
+fn engine_refusal(message: String) -> WaitError {
+    if guest_transition(&message) {
+        WaitError::GuestTransition(message)
+    } else {
+        WaitError::Failed(message)
+    }
 }
 
 impl std::fmt::Display for WaitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Failed(message) | Self::Disconnected(message) => f.write_str(message),
+            Self::Failed(message)
+            | Self::Disconnected(message)
+            | Self::GuestTransition(message) => f.write_str(message),
             Self::TimedOut { what } => write!(f, "timed out waiting for {what}"),
             Self::Silent { what, seconds } => write!(
                 f,
@@ -298,7 +330,60 @@ impl<E: Engine> Waiter<E> {
 
     /// Send a command; its id.
     pub fn send(&mut self, command: Command) -> Result<u64, WaitError> {
-        self.engine.send(command).map_err(WaitError::Failed)
+        self.engine.send(command).map_err(engine_refusal)
+    }
+
+    /// The running VM failed, stopped or left the engine.
+    pub fn guest_gone(&self) -> bool {
+        self.snapshot.active_vm.is_none()
+            || matches!(
+                self.snapshot.state,
+                antinomie_monitor_core::VmState::Failed | antinomie_monitor_core::VmState::Stopped
+            )
+    }
+
+    /// Send a guest command. While the engine refuses it because the guest is
+    /// in a transition ([`WaitError::GuestTransition`]) the command is asked
+    /// again every [`TRANSITION_RETRY`] until the clock passes `until_ms`; the
+    /// VM failing or stopping meanwhile ends the wait. Both ends are
+    /// [`WaitError::GuestTransition`], with words that say which.
+    pub fn send_through_transition(
+        &mut self,
+        command: &Command,
+        until_ms: u64,
+    ) -> Result<u64, WaitError> {
+        loop {
+            match self.send(command.clone()) {
+                Err(WaitError::GuestTransition(words)) => {
+                    self.transition_wait(&words, until_ms)?;
+                }
+                other => return other,
+            }
+        }
+    }
+
+    /// One pause of a wait for a guest transition to end, then a look at
+    /// the VM: `Err` when the wait may not go on (the VM is gone, or
+    /// `until_ms` passed), with the engine's `words` kept.
+    pub(crate) fn transition_wait(&mut self, words: &str, until_ms: u64) -> Result<(), WaitError> {
+        self.pause(TRANSITION_RETRY)?;
+        if self.guest_gone() {
+            let error = self
+                .snapshot
+                .last_error
+                .as_deref()
+                .unwrap_or("no error given");
+            return Err(WaitError::GuestTransition(format!(
+                "{words}; the VM is {:?} now: {error}",
+                self.snapshot.state
+            )));
+        }
+        if self.now_ms() >= until_ms {
+            return Err(WaitError::GuestTransition(format!(
+                "{words}; the guest was not back within the stage's limit"
+            )));
+        }
+        Ok(())
     }
 
     /// The result of command `id` if it has arrived.
@@ -307,7 +392,7 @@ impl<E: Engine> Waiter<E> {
             if success {
                 Ok(message)
             } else {
-                Err(WaitError::Failed(message))
+                Err(engine_refusal(message))
             }
         })
     }
