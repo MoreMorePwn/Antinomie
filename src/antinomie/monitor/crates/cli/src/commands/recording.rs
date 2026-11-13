@@ -12,7 +12,7 @@ use antinomie_monitor_core::{
     RunSummary,
     recording::{find_run_read_only, list_runs_read_only},
 };
-use antinomie_service::{daemon::lanes::read_locations, query::key::RunKey};
+use antinomie_service::{daemon::lanes::read_locations, query::key::RecordingKey};
 use antinomie_triage::{ArchiveScan, SavedRun, scan_progress::ScanProgress};
 use serde_json::{Value, json};
 use std::{
@@ -54,9 +54,9 @@ pub fn find_run(context: &Context, text: &str) -> Result<RunSummary, CliError> {
     }
     let locations = read_locations(&context.options)
         .map_err(|error| CliError::internal(format!("cannot list the recordings: {error}")))?;
-    let key = RunKey::try_from(text.to_owned()).ok().or_else(|| {
+    let key = RecordingKey::try_from(text.to_owned()).ok().or_else(|| {
         text.contains(':')
-            .then(|| RunKey::from_triple(text).ok())
+            .then(|| RecordingKey::from_triple(text).ok())
             .flatten()
     });
     if let Some(key) = key {
@@ -167,7 +167,7 @@ pub fn open_saved(context: &Context, text: &str) -> Result<SavedRun, CliError> {
 pub fn run_value(saved: &SavedRun) -> Value {
     let run = &saved.run;
     json!({
-        "run_key": RunKey::new(&run.vm_id, &run.boot_id, &run.id).ok().map(|key| key.as_str().to_owned()),
+        "recording_key": RecordingKey::new(&run.vm_id, &run.boot_id, &run.id).ok().map(|key| key.as_str().to_owned()),
         "vm_id": run.vm_id,
         "boot_id": run.boot_id,
         "run_id": run.id,

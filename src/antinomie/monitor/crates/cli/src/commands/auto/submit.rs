@@ -3,20 +3,20 @@
 //!
 //! With a daemon the file is uploaded over the socket (`upload.begin`, `put`
 //! in pieces of 768 KiB, `finish` with the SHA-256 computed here, so the
-//! daemon checks it), then `job.submit` names the upload. `--wait` waits for
-//! the job's end through its event stream, `--follow` prints the events as
+//! daemon checks it), then `run.submit` names the upload. `--wait` waits for
+//! the run's end through its event stream, `--follow` prints the events as
 //! NDJSON as they happen, `--verdict-exit` waits and turns the label of a
-//! succeeded job into the exit code, `--out DIR` copies the report files.
+//! succeeded run into the exit code, `--out DIR` copies the report files.
 //!
 //! Without a daemon (direct mode) the command owns the data folder itself
 //! (owner kind `cli`, no socket), runs the queue in this process until the
-//! job has ended, and exits with the job's code: "pass an ELF, get a report".
-//! A job queued before it runs first. Ctrl-C stops it as the daemon's stop
-//! does: a job in the VM goes back to the queue (exit 130).
+//! run has ended, and exits with the run's code: "pass an ELF, get a report".
+//! A run queued before it runs first. Ctrl-C stops it as the daemon's stop
+//! does: a run in the VM goes back to the queue (exit 130).
 use super::{
-    jobs::{self, print_event},
     link::{self, api},
     render,
+    runs::{self, print_event},
 };
 use crate::{
     context::Context,
@@ -30,7 +30,7 @@ use antinomie_monitor_core::{
     data_owner::{OwnerClaim, OwnerKind},
 };
 use antinomie_service::{
-    api::{event::Event, job::Job, ops::EventsSubscribeParams, status::Owner},
+    api::{event::Event, ops::EventsSubscribeParams, run::Run, status::Owner},
     daemon::{Daemon, Exit as DaemonExit, Setup},
     server::{CallContext, Handler, b64, client::Client, limits::Limits, subscribe},
 };
@@ -59,11 +59,11 @@ pub struct Submit {
     /// The preset [default: standard]; the other flags change its options
     /// (the run is then Custom).
     #[arg(long)]
-    pub policy: Option<String>,
+    pub preset: Option<String>,
     /// 0 to 9; higher starts first.
     #[arg(long)]
     pub priority: Option<u8>,
-    /// A label of the job (repeatable).
+    /// A label of the run (repeatable).
     #[arg(long = "label", value_name = "KEY=VALUE")]
     pub labels: Vec<String>,
     /// The run time in seconds, 5 to 1800 (`program.run_time_s`).
@@ -99,23 +99,23 @@ pub struct Submit {
     pub defang: bool,
     #[arg(long)]
     pub no_defang: bool,
-    /// The same key and spec within 24 hours returns the first job.
+    /// The same key and spec within 24 hours returns the first run.
     #[arg(long, value_name = "KEY")]
     pub idempotency_key: Option<String>,
-    /// The file name the job shows [default: the file's name].
+    /// The file name the run shows [default: the file's name].
     #[arg(long)]
     pub name: Option<String>,
-    /// Wait until the job has ended; exit with its code.
+    /// Wait until the run has ended; exit with its code.
     #[arg(long)]
     pub wait: bool,
-    /// Print the job's events as NDJSON until it has ended (implies --wait).
+    /// Print the run's events as NDJSON until it has ended (implies --wait).
     #[arg(long)]
     pub follow: bool,
-    /// Wait, and exit 30, 31 or 32 when the succeeded job is labelled
+    /// Wait, and exit 30, 31 or 32 when the succeeded run is labelled
     /// suspicious, malicious or inconclusive.
     #[arg(long)]
     pub verdict_exit: bool,
-    /// Copy the report files into this folder once the job has ended
+    /// Copy the report files into this folder once the run has ended
     /// (implies --wait).
     #[arg(long, value_name = "DIR")]
     pub out: Option<PathBuf>,
@@ -156,7 +156,7 @@ const TRIAGE_CHECKS: [&str; 11] = [
 /// The deep checks a `--static` list may name.
 const DEEP_CHECKS: [&str; 3] = ["disassembly", "decompilation", "floss"];
 
-/// The spec of the job, without its sample.
+/// The spec of the run, without its sample.
 pub fn spec_of(arguments: &Submit) -> Result<Value, CliError> {
     let mut spec = json!({"sample": {}});
     // A partial preset: tables of keys.
@@ -167,8 +167,8 @@ pub fn spec_of(arguments: &Submit) -> Result<Value, CliError> {
             .or_insert_with(|| Value::Object(serde_json::Map::new()));
         entry[key] = value;
     };
-    if let Some(policy) = &arguments.policy {
-        spec["policy"] = json!(policy);
+    if let Some(preset) = &arguments.preset {
+        spec["preset"] = json!(preset);
     }
     if let Some(priority) = arguments.priority {
         spec["priority"] = json!(priority);
@@ -341,8 +341,8 @@ fn copy_reports(files: &[Value], out: &Path) -> Result<Vec<Value>, CliError> {
     Ok(written)
 }
 
-/// The reply for a submitted (and maybe waited) job.
-fn finish(job: &Job, replayed: bool, files: Vec<Value>, waited: bool, verdict_exit: bool) -> Reply {
+/// The reply for a submitted (and maybe waited) run.
+fn finish(job: &Run, replayed: bool, files: Vec<Value>, waited: bool, verdict_exit: bool) -> Reply {
     let value = serde_json::to_value(job).unwrap_or(Value::Null);
     let mut human = render::job_text(&value);
     for file in &files {
@@ -352,14 +352,14 @@ fn finish(job: &Job, replayed: bool, files: Vec<Value>, waited: bool, verdict_ex
             file["path"].as_str().unwrap_or("")
         ));
     }
-    let exit = if job.state == antinomie_service::api::job::JobState::Rejected {
+    let exit = if job.state == antinomie_service::api::run::RunState::Rejected {
         Exit::JobRejected
     } else if waited {
         render::job_exit(job, verdict_exit)
     } else {
         Exit::Ok
     };
-    Reply::value(json!({"job": value, "replayed": replayed, "reports": files}))
+    Reply::value(json!({"run": value, "replayed": replayed, "reports": files}))
         .with_human(human)
         .with_exit(exit)
 }
@@ -380,13 +380,13 @@ pub fn run(arguments: &Submit, context: &Context) -> Result<Reply, CliError> {
                 (None, Some(sha)) => spec["sample"]["sha256"] = json!(sha),
                 (None, None) => unreachable!("clap requires one"),
             }
-            let submitted = link::call(&mut client, "job.submit", spec)?;
+            let submitted = link::call(&mut client, "run.submit", spec)?;
             let replayed = submitted["replayed"].as_bool().unwrap_or(false);
-            let mut job: Job = serde_json::from_value(submitted)
-                .map_err(|e| CliError::internal(format!("job: {e}")))?;
+            let mut job: Run = serde_json::from_value(submitted)
+                .map_err(|e| CliError::internal(format!("run: {e}")))?;
             if arguments.waits() && !job.state.is_terminal() {
                 let follow = arguments.follow;
-                job = jobs::wait_terminal(
+                job = runs::wait_terminal(
                     Some(&mut client),
                     None,
                     &job.id,
@@ -417,7 +417,7 @@ pub fn run(arguments: &Submit, context: &Context) -> Result<Reply, CliError> {
 
 fn artifact_files(
     client: &mut Client,
-    job: &Job,
+    job: &Run,
     context: &Context,
 ) -> Result<Vec<Value>, CliError> {
     let data = context
@@ -438,7 +438,7 @@ fn artifact_files(
     Ok(out)
 }
 
-/// Direct mode: the queue in this process until the job has ended.
+/// Direct mode: the queue in this process until the run has ended.
 fn direct(arguments: &Submit, mut spec: Value, context: &Context) -> Result<Reply, CliError> {
     let data_dir = context.data_dir().to_path_buf();
     match (&arguments.file, &arguments.sha256) {
@@ -472,7 +472,7 @@ fn direct(arguments: &Submit, mut spec: Value, context: &Context) -> Result<Repl
     let mut daemon = Daemon::start(setup, backend)
         .map_err(|message| CliError::new(ErrorCode::Unavailable, message))?;
     let service = Arc::clone(daemon.service());
-    let submitted = service.call("job.submit", spec, &CallContext::in_process(link::me()));
+    let submitted = service.call("run.submit", spec, &CallContext::in_process(link::me()));
     let submitted = match submitted {
         Ok(value) => value,
         Err(error) => {
@@ -480,8 +480,8 @@ fn direct(arguments: &Submit, mut spec: Value, context: &Context) -> Result<Repl
             return Err(api(error));
         }
     };
-    let job: Job = serde_json::from_value(submitted.clone())
-        .map_err(|e| CliError::internal(format!("job: {e}")))?;
+    let job: Run = serde_json::from_value(submitted.clone())
+        .map_err(|e| CliError::internal(format!("run: {e}")))?;
     let id = job.id.clone();
     // The events, printed as they happen.
     let stopping = Arc::new(AtomicBool::new(false));
@@ -491,7 +491,7 @@ fn direct(arguments: &Submit, mut spec: Value, context: &Context) -> Result<Repl
         let id = id.clone();
         std::thread::spawn(move || {
             let params = EventsSubscribeParams {
-                job_id: Some(id),
+                run_id: Some(id),
                 ..EventsSubscribeParams::default()
             };
             let mut sink = |reply: &antinomie_service::api::ops::Reply| {
@@ -579,7 +579,7 @@ mod tests {
     fn the_flags_become_the_spec_of_the_contract() {
         let spec = spec_of(&parse(&[
             "f.elf",
-            "--policy",
+            "--preset",
             "fast",
             "--priority",
             "7",
@@ -607,7 +607,7 @@ mod tests {
         assert_eq!(
             spec,
             json!({
-                "sample": {}, "policy": "fast", "priority": 7, "labels": {"ci": "yes"},
+                "sample": {}, "preset": "fast", "priority": 7, "labels": {"ci": "yes"},
                 "idempotency_key": "k1",
                 "overrides": {
                     "program": {"run_time_s": 60, "arguments": ["-v", "x"], "user": "custom",
@@ -619,7 +619,7 @@ mod tests {
                 }
             })
         );
-        let spec: antinomie_service::api::spec::JobSpec = serde_json::from_value({
+        let spec: antinomie_service::api::spec::RunRequest = serde_json::from_value({
             let mut s = spec;
             s["sample"]["sha256"] = json!("ab".repeat(32));
             s

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `auto lane list/reset/unquarantine` (design 3.4.4; card P3-5b). With a
-//! daemon they go to it (the lane's own thread does the work, when no job
+//! daemon they go to it (the lane's own thread does the work, when no run
 //! runs); without one `list` reads the lane files and the other two take the
 //! lane's data folder for this command. With several lanes (ANT-T0455 card
 //! C) `list` shows every lane, and `--lane lane-N` picks the lane the other
@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 #[derive(Subcommand, Debug)]
 pub enum Lane {
-    /// The lanes, their VM, quarantine and what keeps them from a job.
+    /// The lanes, their VM, quarantine and what keeps them from a run.
     List,
     /// Revert the lane VM to its clean snapshot now; lifts a quarantine
     /// when the revert works.
@@ -86,7 +86,7 @@ fn rows(lanes: &Value) -> String {
     if rows.is_empty() {
         "no lane; run `antinomie-cli auto init`\n".into()
     } else {
-        table(&["LANE", "VM", "QUARANTINE", "JOB", "CHECKS"], &rows)
+        table(&["LANE", "VM", "QUARANTINE", "RUN", "CHECKS"], &rows)
     }
 }
 

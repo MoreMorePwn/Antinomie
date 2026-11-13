@@ -6,7 +6,7 @@
 //!
 //! It runs in this process and takes the lane's data folder for itself, so it
 //! is refused with exit 21 while the daemon (or the window) owns the folder:
-//! stop the daemon first. The VM is created routed (each job picks its route;
+//! stop the daemon first. The VM is created routed (each run picks its route;
 //! nothing leaves between runs), never NAT and never isolated.
 //!
 //! `--lane N` (ANT-T0455 card C; 1 to 4, default 1) makes lane N for a daemon

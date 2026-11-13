@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `run exec SAMPLE` (design 3.4.3): upload one library sample into a VM, run it,
 //! and wait until its recording is complete and settled. The low-level form of
-//! what an Auto job does: no revert, no triage, no report. It is for debugging
+//! what an Auto run does: no revert, no triage, no report. It is for debugging
 //! a lane and for trying a program in a VM from a script.
 //!
 //! The work is the service crate's run waiter ([`Waiter::exec`]); this file is
@@ -10,7 +10,6 @@ use super::{
     analyze::parse_checks,
     library::{library_error, open_existing, open_for_write, parse_sha256},
     machine::{find_vm, vm_value},
-    run_read,
 };
 use crate::{
     context::Context,
@@ -29,7 +28,7 @@ use antinomie_service::{
     api::{
         event::{Event, EventBody, EventScope},
         failure::Failure,
-        job::Outcome,
+        run::Outcome,
     },
     waiter::{BOOT_WAIT, EndReason, RunPlan, RunReport, load_artifacts, trigger::TriggerReport},
 };
@@ -45,16 +44,6 @@ use std::{
 pub enum Run {
     /// Upload a library sample into a VM, run it and wait for a settled recording.
     Exec(Exec),
-    /// List the recorded runs of the data directory; no engine lock needed.
-    /// Asks the daemon when one answers.
-    List(run_read::List),
-    /// Show one run: its state, phase and artifacts; `--summary` adds the
-    /// Triage summary. No engine lock needed. Asks the daemon when one answers.
-    Show(run_read::Show),
-    /// Write a run's recording as NDJSON and evidence files into --out. No
-    /// engine lock needed. Asks the daemon when one answers; the files are
-    /// written by this command, never by the daemon.
-    Export(run_read::Export),
 }
 
 #[derive(Args, Debug)]
@@ -142,7 +131,6 @@ impl Run {
     pub fn streams_events(&self) -> bool {
         match self {
             Run::Exec(exec) => exec.events,
-            Run::List(_) | Run::Show(_) | Run::Export(_) => false,
         }
     }
 }
@@ -150,9 +138,6 @@ impl Run {
 pub fn run(command: &Run, context: &Context) -> Result<Reply, CliError> {
     match command {
         Run::Exec(arguments) => exec(arguments, context),
-        Run::List(arguments) => run_read::list(arguments, context),
-        Run::Show(arguments) => run_read::show(arguments, context),
-        Run::Export(arguments) => run_read::export(arguments, context),
     }
 }
 
@@ -443,8 +428,8 @@ impl EventStream {
             ts_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis() as u64),
-            scope: EventScope::Job,
-            job_id: None,
+            scope: EventScope::Run,
+            run_id: None,
             body,
         };
         let mut line = serde_json::to_string(&event).expect("an event serializes");
@@ -737,15 +722,13 @@ mod tests {
         let sha = "ab".repeat(32);
         let mut all = vec!["x", "exec", sha.as_str()];
         all.extend_from_slice(extra);
-        let Run::Exec(exec) = Wrapper::parse_from(all).run else {
-            panic!("not an exec")
-        };
+        let Run::Exec(exec) = Wrapper::parse_from(all).run;
         exec
     }
 
     #[test]
     fn a_refused_launch_names_the_failed_to_start_run() {
-        use antinomie_service::api::{failure::FailureCode, job::Stage};
+        use antinomie_service::api::{failure::FailureCode, run::Stage};
         let failure = Failure::new(
             FailureCode::LaunchFailed,
             Stage::Launch,
@@ -944,7 +927,7 @@ mod tests {
     #[test]
     fn the_result_tells_what_the_trigger_did() {
         use antinomie_service::{
-            api::job::{JobDump, JobTrigger},
+            api::run::{RunDump, RunTrigger},
             waiter::trigger::Armed,
         };
         let fired = TriggerReport {
@@ -954,7 +937,7 @@ mod tests {
                 core: true,
             },
             fired: true,
-            records: vec![JobTrigger {
+            records: vec![RunTrigger {
                 rule: "persistence.cron".into(),
                 tier: "high".into(),
                 summary: String::new(),
@@ -962,7 +945,7 @@ mod tests {
                 pid: 7,
                 at_ms: 1,
                 memory: None,
-                core: Some(JobDump {
+                core: Some(RunDump {
                     state: "partial".into(),
                     size: Some(10),
                     capture_id: None,

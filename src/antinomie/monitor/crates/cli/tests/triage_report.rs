@@ -387,7 +387,7 @@ fn the_query_api_and_the_report_builder_count_the_same_run_the_same() {
     let before = listing(&fixture.root);
     let (code, triage) = cli(&fixture.args(data, &["triage", "5f3c9a10"]));
     assert_eq!(code, 0, "{triage}");
-    let (code, shown) = cli(&fixture.args(data, &["run", "show", "5f3c9a10", "--summary"]));
+    let (code, shown) = cli(&fixture.args(data, &["recording", "show", "5f3c9a10", "--summary"]));
     assert_eq!(code, 0, "{shown}");
     assert_eq!(
         triage["result"]["summary"]["counts"],
@@ -418,14 +418,14 @@ fn run_list_filters_and_pages_the_recorded_runs() {
     let fixture = Data::new("runlist");
     let data = fixture.data();
     let data = data.to_str().unwrap();
-    let (code, value) = cli(&fixture.args(data, &["run", "list"]));
+    let (code, value) = cli(&fixture.args(data, &["recording", "list"]));
     assert_eq!(code, 0, "{value}");
     let items = value["result"]["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["run_id"], RUN);
     assert_eq!(items[0]["vm_id"], "vm-1");
     assert_eq!(items[0]["state"], "finished");
-    assert!(items[0]["run_key"].is_string());
+    assert!(items[0]["recording_key"].is_string());
     for (args, count) in [
         (vec!["--vm", "vm-1"], 1),
         (vec!["--vm", "other"], 0),
@@ -434,7 +434,7 @@ fn run_list_filters_and_pages_the_recorded_runs() {
         (vec!["--since", "1h"], 0),
         (vec!["--since", "1700000000000"], 1),
     ] {
-        let mut all = vec!["run", "list"];
+        let mut all = vec!["recording", "list"];
         all.extend(args.clone());
         let (code, value) = cli(&fixture.args(data, &all));
         assert_eq!(code, 0, "{args:?}: {value}");
@@ -444,13 +444,13 @@ fn run_list_filters_and_pages_the_recorded_runs() {
             "{args:?}"
         );
     }
-    let (code, _) = cli(&fixture.args(data, &["run", "list", "--since", "soon"]));
+    let (code, _) = cli(&fixture.args(data, &["recording", "list", "--since", "soon"]));
     assert_eq!(code, 4);
-    let (code, _) = cli(&fixture.args(data, &["run", "list", "--limit", "0"]));
+    let (code, _) = cli(&fixture.args(data, &["recording", "list", "--limit", "0"]));
     assert_eq!(code, 4);
-    let (code, _) = cli(&fixture.args(data, &["run", "list", "--state", "bogus"]));
+    let (code, _) = cli(&fixture.args(data, &["recording", "list", "--state", "bogus"]));
     assert_eq!(code, 4);
-    let (code, value) = cli(&fixture.args(data, &["run", "show", "ffffffff"]));
+    let (code, value) = cli(&fixture.args(data, &["recording", "show", "ffffffff"]));
     assert_eq!(code, 3, "{value}");
 }
 
@@ -464,7 +464,7 @@ fn run_export_writes_only_into_out_and_sensitive_bytes_need_the_flag() {
     let (code, value) = cli(&fixture.args(
         data,
         &[
-            "run",
+            "recording",
             "export",
             RUN,
             "--part",
@@ -516,7 +516,7 @@ fn run_export_writes_only_into_out_and_sensitive_bytes_need_the_flag() {
     let (code, value) = cli(&fixture.args(
         data,
         &[
-            "run",
+            "recording",
             "export",
             RUN,
             "--part",
@@ -541,7 +541,7 @@ fn run_export_writes_only_into_out_and_sensitive_bytes_need_the_flag() {
     let (code, _) = cli(&fixture.args(
         data,
         &[
-            "run",
+            "recording",
             "export",
             RUN,
             "--part",
@@ -555,7 +555,7 @@ fn run_export_writes_only_into_out_and_sensitive_bytes_need_the_flag() {
     std::fs::write(&file, b"x").unwrap();
     let (code, _) = cli(&fixture.args(
         data,
-        &["run", "export", RUN, "--out", file.to_str().unwrap()],
+        &["recording", "export", RUN, "--out", file.to_str().unwrap()],
     ));
     assert_eq!(code, 4);
 }

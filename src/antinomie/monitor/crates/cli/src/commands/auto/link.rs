@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! How an `auto` command reaches the job API (design 2.2): the daemon's socket
+//! How an `auto` command reaches the run API (design 2.2): the daemon's socket
 //! when one answers, else the job store read-only (reads) or the store under
 //! the data-directory lock (cancel, pause), and the conversions of the
 //! service's errors into the CLI's.
@@ -109,7 +109,7 @@ pub fn read_store(context: &Context) -> Result<Store, CliError> {
     let dir = context.data_dir().join("service");
     if !dir.join("jobs.sqlite").is_file() {
         return Err(CliError::not_found(format!(
-            "no job store in {} (no job was ever submitted there)",
+            "no run store in {} (no run was ever submitted there)",
             context.data_dir().display()
         )));
     }

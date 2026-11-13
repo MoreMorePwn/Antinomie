@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `run list`, `run show` and `run export` (design 3.4.3, 5.12.10): look at the
-//! recordings of the data directory through the read-only query API, the one
-//! the web pages use. No engine lock, nothing written into a recording; the
+//! `recording list`, `recording show` and `recording export` (design 3.4.3,
+//! 5.12.10): look at the recordings of the data directory through the
+//! read-only query API, the one the web pages use. No engine lock, nothing written into a recording; the
 //! export writes only under `--out`.
 use super::{query::Client, recording::RUN_HELP};
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
     error::{CliError, ErrorCode},
     output::{Reply, block, table},
 };
-use clap::Args;
+use clap::{Args, Subcommand};
 use serde_json::{Map, Value, json};
 use std::{
     fs,
@@ -58,6 +58,32 @@ impl Reads for Client<'_> {
     }
 }
 
+/// `recording ...`: the recordings of the data directory (a recording is
+/// what the engine captured while a program ran; `run exec` makes one, and so
+/// does every run of Auto mode).
+#[derive(Subcommand, Debug)]
+pub enum Recording {
+    /// List the recordings of the data directory; no engine lock needed.
+    /// Asks the daemon when one answers.
+    List(List),
+    /// Show one recording: its state, phase and artifacts; `--summary` adds
+    /// the Triage summary. No engine lock needed. Asks the daemon when one
+    /// answers.
+    Show(Show),
+    /// Write a recording as NDJSON and evidence files into --out. No engine
+    /// lock needed. Asks the daemon when one answers; the files are written by
+    /// this command, never by the daemon.
+    Export(Export),
+}
+
+pub fn run(command: &Recording, context: &Context) -> Result<Reply, CliError> {
+    match command {
+        Recording::List(arguments) => list(arguments, context),
+        Recording::Show(arguments) => show(arguments, context),
+        Recording::Export(arguments) => export(arguments, context),
+    }
+}
+
 #[derive(Args, Debug)]
 pub struct List {
     /// Only runs of this VM.
@@ -66,9 +92,9 @@ pub struct List {
     /// Only runs of this library sample (SHA-256).
     #[arg(long, value_name = "SHA256")]
     pub sample: Option<String>,
-    /// Only runs made by this job.
-    #[arg(long, value_name = "JOB")]
-    pub job: Option<String>,
+    /// Only recordings made by this run of Auto mode (`r_...`).
+    #[arg(long, value_name = "RUN")]
+    pub run: Option<String>,
     /// Only runs in this state (running, finished, stopped, interrupted, ...).
     #[arg(long, value_name = "STATE")]
     pub state: Option<String>,
@@ -159,7 +185,7 @@ pub fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
     };
     put("vm_id", arguments.vm.as_ref().map(|v| json!(v)));
     put("sample_sha256", arguments.sample.as_ref().map(|v| json!(v)));
-    put("job_id", arguments.job.as_ref().map(|v| json!(v)));
+    put("from_run", arguments.run.as_ref().map(|v| json!(v)));
     put("state", arguments.state.as_ref().map(|v| json!(v)));
     put(
         "since_ms",
@@ -172,7 +198,7 @@ pub fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
     );
     put("limit", arguments.limit.map(|v| json!(v)));
     put("cursor", arguments.cursor.as_ref().map(|v| json!(v)));
-    let page = Client::new(context)?.call("recording.run.list", Value::Object(params))?;
+    let page = Client::new(context)?.call("recording.list", Value::Object(params))?;
     let items = page["items"].as_array().cloned().unwrap_or_default();
     let next = page["next_cursor"].as_str().map(str::to_owned);
     let rows: Vec<Vec<String>> = items
@@ -201,8 +227,8 @@ pub fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
 pub fn show(arguments: &Show, context: &Context) -> Result<Reply, CliError> {
     let client = Client::new(context)?;
     let key = client.resolve(&arguments.run)?;
-    let params = json!({"run_key": key});
-    let reply = client.call("recording.run.get", params.clone())?;
+    let params = json!({"recording_key": key});
+    let reply = client.call("recording.get", params.clone())?;
     let mut value = reply["value"].clone();
     if let Some(object) = value.as_object_mut() {
         object.insert("generation".into(), reply["generation"].clone());
@@ -243,7 +269,7 @@ fn time(value: &Value) -> String {
 fn show_text(run: &Value) -> String {
     let mut out = block(&[
         ("run", text(&run["run_id"])),
-        ("run key", text(&run["run_key"])),
+        ("run key", text(&run["recording_key"])),
         ("vm", text(&run["vm_id"])),
         ("boot", text(&run["boot_id"])),
         ("state", text(&run["state"])),
@@ -471,7 +497,7 @@ pub fn export(arguments: &Export, context: &Context) -> Result<Reply, CliError> 
         root: arguments.out.clone(),
         files: Vec::new(),
     };
-    let params = json!({"run_key": key});
+    let params = json!({"recording_key": key});
     let mut partial = false;
     export_parts(
         &parts,
@@ -483,7 +509,7 @@ pub fn export(arguments: &Export, context: &Context) -> Result<Reply, CliError> 
         RETRY_PAUSE,
     )?;
     let value = json!({
-        "run_key": key,
+        "recording_key": key,
         "out": arguments.out,
         "parts": parts,
         "triage": !arguments.no_triage,
@@ -1057,7 +1083,7 @@ mod tests {
         export_parts(
             &["trace", "processes", "findings", "indicators"],
             &slow,
-            &json!({"run_key": "k"}),
+            &json!({"recording_key": "k"}),
             false,
             &mut out,
             &mut partial,
@@ -1085,7 +1111,7 @@ mod tests {
         let error = export_parts(
             &["trace", "processes", "findings", "indicators"],
             &slow,
-            &json!({"run_key": "k"}),
+            &json!({"recording_key": "k"}),
             false,
             &mut out,
             &mut partial,
@@ -1116,7 +1142,7 @@ mod tests {
             root: dir.clone(),
             files: Vec::new(),
         };
-        let run = json!({"run_key": "k"});
+        let run = json!({"recording_key": "k"});
         let rows = vec![
             json!({"ref": {"stream": "1", "task": "2", "call": "3"},
                    "args_preview": [{"key": "path", "captured_len": 150000}]}),
@@ -1161,7 +1187,13 @@ mod tests {
             files: Vec::new(),
         };
         let mut partial = false;
-        export_packets(&fake, &json!({"run_key": "k"}), &mut out, &mut partial).unwrap();
+        export_packets(
+            &fake,
+            &json!({"recording_key": "k"}),
+            &mut out,
+            &mut partial,
+        )
+        .unwrap();
         // The capture id is made safe as a file name.
         let text = fs::read_to_string(dir.join("network-packets-cap_1.ndjson")).unwrap();
         let lines: Vec<Value> = text

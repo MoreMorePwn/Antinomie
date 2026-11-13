@@ -39,9 +39,9 @@ pub fn run(arguments: &Triage, context: &Context) -> Result<Reply, CliError> {
         .collect();
     let client = Client::new(context)?;
     let key = client.resolve(&arguments.run)?;
-    let params = json!({"run_key": key});
+    let params = json!({"recording_key": key});
     let reply = client.call("recording.summary", params.clone())?;
-    let detail = client.call("recording.run.get", params)?;
+    let detail = client.call("recording.get", params)?;
     let summary = reply["value"].clone();
     let partial = reply["partial"] == json!(true);
     let run = &detail["value"];
@@ -49,7 +49,7 @@ pub fn run(arguments: &Triage, context: &Context) -> Result<Reply, CliError> {
     value.insert(
         "run".into(),
         json!({
-            "run_key": run["run_key"], "vm_id": run["vm_id"], "boot_id": run["boot_id"],
+            "recording_key": run["recording_key"], "vm_id": run["vm_id"], "boot_id": run["boot_id"],
             "run_id": run["run_id"], "program": run["program"],
             "started_ms": run["started_ms"], "directory": run["directory"],
         }),

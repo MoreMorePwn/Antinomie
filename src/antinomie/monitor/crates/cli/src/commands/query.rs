@@ -20,7 +20,7 @@ use crate::{
 };
 use antinomie_service::{
     api::error::{ApiError, ErrorCode as ApiCode},
-    query::{QueryApi, QueryService, ReadContext, key::RunKey, request::RecordingRead},
+    query::{QueryApi, QueryService, ReadContext, key::RecordingKey, request::RecordingRead},
     server::client::Client as SocketClient,
     store::job_index::StoreJobIndex,
 };
@@ -145,8 +145,8 @@ impl<'a> Client<'a> {
 
     /// The run `text` names, as the key the query API takes: a run key or
     /// `vm:boot:run`, the id or the first characters of it, or the run's
-    /// folder. Through a daemon the id is looked up in `recording.run.list`.
-    pub fn resolve(&self, text: &str) -> Result<RunKey, CliError> {
+    /// folder. Through a daemon the id is looked up in `recording.list`.
+    pub fn resolve(&self, text: &str) -> Result<RecordingKey, CliError> {
         let Via::Daemon(_) = self.via else {
             let run = find_run(self.context, text)?;
             return self.key_of(&run);
@@ -155,9 +155,9 @@ impl<'a> Client<'a> {
         if text.is_empty() {
             return Err(CliError::invalid("RUN is empty").with_field("run"));
         }
-        let key = RunKey::try_from(text.to_owned()).ok().or_else(|| {
+        let key = RecordingKey::try_from(text.to_owned()).ok().or_else(|| {
             text.contains(':')
-                .then(|| RunKey::from_triple(text).ok())
+                .then(|| RecordingKey::from_triple(text).ok())
                 .flatten()
         });
         if let Some(key) = key {
@@ -175,14 +175,14 @@ impl<'a> Client<'a> {
             if let Some(cursor) = &cursor {
                 params["cursor"] = json!(cursor);
             }
-            let page = self.call("recording.run.list", params)?;
+            let page = self.call("recording.list", params)?;
             for run in page["items"].as_array().into_iter().flatten() {
                 let id = run["run_id"].as_str().unwrap_or_default();
                 let exact = id == text;
                 if exact || (text.len() >= RUN_PREFIX && id.starts_with(text)) {
                     found.push((
                         exact,
-                        run["run_key"].as_str().unwrap_or_default().to_owned(),
+                        run["recording_key"].as_str().unwrap_or_default().to_owned(),
                     ));
                 }
             }
@@ -195,7 +195,7 @@ impl<'a> Client<'a> {
             found.retain(|(exact, _)| *exact);
         }
         match found.as_slice() {
-            [(_, key)] => RunKey::try_from(key.clone())
+            [(_, key)] => RecordingKey::try_from(key.clone())
                 .map_err(|e| CliError::internal(format!("run key: {e}"))),
             [] => Err(CliError::not_found(format!(
                 "no run {text:?} in the data directory of the daemon{}",
@@ -216,8 +216,11 @@ impl<'a> Client<'a> {
     }
 
     /// The key of a run found on this host.
-    pub fn key_of(&self, run: &antinomie_monitor_core::RunSummary) -> Result<RunKey, CliError> {
-        RunKey::new(&run.vm_id, &run.boot_id, &run.id)
+    pub fn key_of(
+        &self,
+        run: &antinomie_monitor_core::RunSummary,
+    ) -> Result<RecordingKey, CliError> {
+        RecordingKey::new(&run.vm_id, &run.boot_id, &run.id)
             .map_err(|error| CliError::invalid(format!("{error}")).with_field("run"))
     }
 }

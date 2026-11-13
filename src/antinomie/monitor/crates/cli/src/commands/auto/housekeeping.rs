@@ -5,9 +5,9 @@
 //! command (nothing holds a recording open then, so nothing is skipped for an
 //! open read).
 use super::{
-    jobs::job_id,
     link::{self, api},
     render::clean,
+    runs::run_id,
 };
 use crate::{
     context::Context,
@@ -43,8 +43,8 @@ pub struct Gc {
 
 #[derive(Args, Debug)]
 pub struct Delete {
-    pub job: String,
-    /// Also delete the job's recording (through the same run deletion the
+    pub run: String,
+    /// Also delete the run's recording (through the same run deletion the
     /// window uses); the sample stays in the library either way.
     #[arg(long)]
     pub with_recording: bool,
@@ -148,8 +148,8 @@ fn gc_text(report: &Value) -> String {
             .map(|a| {
                 vec![
                     cell(a, "kind"),
-                    cell(a, "job"),
                     cell(a, "run"),
+                    cell(a, "recording"),
                     cell(a, "bytes"),
                     cell(a, "detail"),
                 ]
@@ -159,7 +159,7 @@ fn gc_text(report: &Value) -> String {
             "{}:\n",
             if dry { "would delete" } else { "deleted" }
         ));
-        out.push_str(&table(&["WHAT", "JOB", "RUN", "BYTES", "WHY"], &rows));
+        out.push_str(&table(&["WHAT", "RUN", "RECORDING", "BYTES", "WHY"], &rows));
         out.push_str(&format!(
             "{} {} bytes\n",
             if dry { "would free" } else { "freed" },
@@ -170,7 +170,7 @@ fn gc_text(report: &Value) -> String {
         out.push_str(&format!(
             "skipped {} {}: {}\n",
             cell(skip, "kind"),
-            cell(skip, "job"),
+            cell(skip, "run"),
             cell(skip, "why")
         ));
     }
@@ -236,12 +236,12 @@ pub fn gc(arguments: &Gc, context: &Context) -> Result<Reply, CliError> {
 }
 
 pub fn delete(arguments: &Delete, context: &Context) -> Result<Reply, CliError> {
-    let id = job_id(&arguments.job)?;
+    let id = run_id(&arguments.run)?;
     let deleted = match link::daemon(context)? {
         Some(mut client) => link::call(
             &mut client,
-            "job.delete",
-            json!({"job_id": id, "with_recording": arguments.with_recording}),
+            "run.delete",
+            json!({"run_id": id, "with_recording": arguments.with_recording}),
         )?,
         None => {
             need_data_dir(context)?;

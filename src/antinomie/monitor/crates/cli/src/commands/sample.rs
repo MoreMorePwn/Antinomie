@@ -684,7 +684,7 @@ mod tests {
             "tags",
             "first_seen_ms",
             "run_count",
-            "last_job",
+            "last_run",
             "custody_ok",
         ] {
             assert!(elf_sample.get(key).is_some(), "missing {key}");
@@ -693,7 +693,7 @@ mod tests {
         assert_eq!(elf_sample["architecture"], "x86-64");
         assert_eq!(elf_sample["name"], "one.bin");
         assert_eq!(elf_sample["run_count"], 0);
-        assert!(elf_sample["last_job"].is_null() && elf_sample["custody_ok"].is_null());
+        assert!(elf_sample["last_run"].is_null() && elf_sample["custody_ok"].is_null());
         assert_eq!(elf_sample["tags"].as_array().unwrap().len(), 2);
 
         // Filters.

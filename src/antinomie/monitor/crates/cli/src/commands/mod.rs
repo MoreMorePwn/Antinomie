@@ -55,6 +55,10 @@ pub enum Command {
     /// Run a library sample in a VM: `run exec`; takes the engine lock.
     #[command(subcommand)]
     Run(run::Run),
+    /// The recordings of the data directory: list, show, export; no engine
+    /// lock needed. Each asks the daemon when one answers.
+    #[command(subcommand)]
+    Recording(run_read::Recording),
     /// Samples in the library; no engine lock needed. `list`, `show` and `tag`
     /// ask the daemon when one answers.
     #[command(subcommand)]
@@ -77,7 +81,7 @@ pub enum Command {
     /// Write a saved run's report (HTML, PDF, JSON, MISP, STIX, Markdown), the
     /// same files the window's Export report writes. No engine lock needed.
     Report(report::Report),
-    /// Auto mode: the daemon, the lane, jobs and their results.
+    /// Auto mode: the daemon, the lanes, runs and their results.
     #[command(subcommand)]
     Auto(auto::Auto),
 }
@@ -105,6 +109,7 @@ pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
         Command::Vm(vm) => vm::run(vm, context),
         Command::Snapshot(snapshot) => snapshot::run(snapshot, context),
         Command::Run(run) => run::run(run, context),
+        Command::Recording(recording) => run_read::run(recording, context),
         Command::Sample(sample) => sample::run(sample, context),
         Command::Custody(custody) => custody::run(custody, context),
         Command::Triage(arguments) => triage::run(arguments, context),

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The `auto` commands that look at and act on jobs (design 3.4.4; card
+//! The `auto` commands that look at and act on runs (design 3.4.4; card
 //! P3-6b): `status`, `list`, `wait`, `events`, `result`, `artifacts`,
-//! `fetch`, `cancel`, `retry`, `queue`, `policy list` (the presets). Each goes to the
+//! `fetch`, `cancel`, `retry`, `queue`, `preset list` (the presets). Each goes to the
 //! daemon when one answers, else to the job store (see [`super::link`]).
 use super::{
     link::{self, api},
@@ -14,7 +14,7 @@ use crate::{
     output::{Reply, table},
 };
 use antinomie_service::{
-    api::{event::Event, ids::JobId, job::Job, ops::JobListParams, status::PauseReason},
+    api::{event::Event, ids::RunId, ops::RunListParams, run::Run, status::PauseReason},
     server::client::{Client, Streamed},
     store::Store,
 };
@@ -26,25 +26,25 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub fn job_id(text: &str) -> Result<JobId, CliError> {
-    JobId::try_from(text.to_owned()).map_err(|_| {
-        CliError::invalid(format!("{text:?} is not a job id (j_...)")).with_field("job")
+pub fn run_id(text: &str) -> Result<RunId, CliError> {
+    RunId::try_from(text.to_owned()).map_err(|_| {
+        CliError::invalid(format!("{text:?} is not a run id (r_...)")).with_field("run")
     })
 }
 
-fn job_of(value: Value) -> Result<Job, CliError> {
-    serde_json::from_value(value).map_err(|e| CliError::internal(format!("job: {e}")))
+fn job_of(value: Value) -> Result<Run, CliError> {
+    serde_json::from_value(value).map_err(|e| CliError::internal(format!("run: {e}")))
 }
 
 fn value(job: &impl serde::Serialize) -> Value {
     serde_json::to_value(job).unwrap_or(Value::Null)
 }
 
-/// `auto status [JOB]`.
+/// `auto status [RUN]`.
 #[derive(Args, Debug)]
 pub struct Status {
-    /// A job; without one, the queue and the lanes.
-    pub job: Option<String>,
+    /// A run; without one, the queue and the lanes.
+    pub run: Option<String>,
 }
 
 /// `auto list`.
@@ -59,7 +59,7 @@ pub struct List {
     /// A label `KEY` or `KEY=VALUE` of the spec.
     #[arg(long, value_name = "LABEL")]
     pub label: Option<String>,
-    /// Only jobs newer than this: `30m`, `24h`, `7d`, or a time in Unix ms.
+    /// Only runs newer than this: `30m`, `24h`, `7d`, or a time in Unix ms.
     #[arg(long, value_name = "WHEN")]
     pub since: Option<String>,
     #[arg(long, default_value_t = 50)]
@@ -68,51 +68,54 @@ pub struct List {
     pub cursor: Option<String>,
 }
 
-/// `auto wait JOB...`.
+/// `auto wait RUN...`.
 #[derive(Args, Debug)]
 pub struct Wait {
     #[arg(required = true)]
-    pub jobs: Vec<String>,
-    /// Exit 30, 31 or 32 for a succeeded job labelled suspicious, malicious or
+    pub runs: Vec<String>,
+    /// Exit 30, 31 or 32 for a succeeded run labelled suspicious, malicious or
     /// inconclusive.
     #[arg(long)]
     pub verdict_exit: bool,
 }
 
-/// `auto events [JOB]`.
+/// `auto events [RUN]`.
 #[derive(Args, Debug)]
 pub struct Events {
-    /// The job; with `--all`, none.
-    pub job: Option<String>,
-    /// Every job and the engine (resume by `gseq`).
-    #[arg(long, conflicts_with = "job")]
+    /// The run; with `--all`, none.
+    pub run: Option<String>,
+    /// Every run and the engine (resume by `gseq`).
+    #[arg(long, conflicts_with = "run")]
     pub all: bool,
-    /// Resume after this `seq` (one job) or `gseq` (`--all`).
+    /// Resume after this `seq` (one run) or `gseq` (`--all`).
     #[arg(long, value_name = "SEQ")]
     pub since: Option<u64>,
-    /// Keep printing events as they happen (one job: until it ends).
+    /// Keep printing events as they happen (one run: until it ends).
     #[arg(long)]
     pub follow: bool,
-    /// Only these event types, comma-separated (`job.state,job.stage`).
+    /// Only these event types, comma-separated (`run.state,run.stage`).
     #[arg(long, value_name = "T,...", value_delimiter = ',')]
     pub types: Vec<String>,
 }
 
 #[derive(Args, Debug)]
-pub struct JobArg {
-    pub job: String,
+pub struct RunArg {
+    pub run: String,
 }
 
 #[derive(Args, Debug)]
 pub struct Cancel {
-    pub job: String,
+    pub run: String,
     #[arg(long)]
     pub reason: Option<String>,
 }
 
 #[derive(Args, Debug)]
-pub struct Retry {
-    pub job: String,
+pub struct Rerun {
+    pub run: String,
+    /// Another preset, as it is now, instead of the run's own options.
+    #[arg(long)]
+    pub preset: Option<String>,
     /// Change one option, a dotted preset key (`program.run_time_s=60`,
     /// `network.route=inet_sim`); the value is JSON when it parses, else
     /// text.
@@ -122,7 +125,7 @@ pub struct Retry {
 
 #[derive(Args, Debug)]
 pub struct Fetch {
-    pub job: String,
+    pub run: String,
     /// `html`, `pdf`, `json`, `misp`, `stix`, `md` (or `report.html` ...), or
     /// another artifact kind (`report.bundle`).
     pub kind: String,
@@ -135,16 +138,21 @@ pub struct Fetch {
 pub enum Queue {
     /// The queue and the lanes.
     Status,
-    /// Start no new job (running jobs finish).
+    /// Start no new run (the runs in progress finish).
     Pause,
-    /// Start jobs again.
+    /// Start runs again.
     Resume,
 }
 
 #[derive(Subcommand, Debug)]
-pub enum Policy {
+pub enum Preset {
     /// Every preset, with what its options need.
     List,
+    /// One preset with every option, as its file has them.
+    Show {
+        /// The preset's name (`standard`, ...).
+        name: String,
+    },
 }
 
 /// `--since` of `auto list`.
@@ -176,9 +184,9 @@ fn job_reply(job: &Value) -> Reply {
 }
 
 pub fn status(arguments: &Status, context: &Context) -> Result<Reply, CliError> {
-    match &arguments.job {
+    match &arguments.run {
         Some(text) => {
-            let id = job_id(text)?;
+            let id = run_id(text)?;
             let job = get(context, &id)?;
             Ok(job_reply(&value(&job)))
         }
@@ -186,10 +194,10 @@ pub fn status(arguments: &Status, context: &Context) -> Result<Reply, CliError> 
     }
 }
 
-/// One job, from the daemon or the store.
-pub fn get(context: &Context, id: &JobId) -> Result<Job, CliError> {
+/// One run, from the daemon or the store.
+pub fn get(context: &Context, id: &RunId) -> Result<Run, CliError> {
     match link::daemon(context)? {
-        Some(mut client) => job_of(link::call(&mut client, "job.get", json!({"job_id": id}))?),
+        Some(mut client) => job_of(link::call(&mut client, "run.get", json!({"run_id": id}))?),
         None => link::read_store(context)?.get(id).map_err(api),
     }
 }
@@ -211,9 +219,9 @@ pub fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
         params["since_ms"] = json!(since_ms(since, now_ms())?);
     }
     let listed = match link::daemon(context)? {
-        Some(mut client) => link::call(&mut client, "job.list", params)?,
+        Some(mut client) => link::call(&mut client, "run.list", params)?,
         None => {
-            let params: JobListParams =
+            let params: RunListParams =
                 serde_json::from_value(params).map_err(|e| CliError::invalid(e.to_string()))?;
             value(
                 &link::read_store(context)?
@@ -222,13 +230,13 @@ pub fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
             )
         }
     };
-    let jobs = listed["jobs"].as_array().cloned().unwrap_or_default();
+    let jobs = listed["runs"].as_array().cloned().unwrap_or_default();
     let rows: Vec<Vec<String>> = jobs.iter().map(render::job_row).collect();
     let human = if rows.is_empty() {
-        "no jobs\n".into()
+        "no runs\n".into()
     } else {
         table(
-            &["JOB", "STATE", "STAGE", "LABEL", "SAMPLE", "POLICY"],
+            &["RUN", "STATE", "STAGE", "LABEL", "SAMPLE", "PRESET"],
             &rows,
         )
     };
@@ -236,19 +244,19 @@ pub fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
     Ok(Reply::list(jobs, cursor).with_human(human))
 }
 
-/// Wait until `id` is terminal: through a job stream when a client is given,
+/// Wait until `id` is terminal: through a run stream when a client is given,
 /// else by reading the store twice a second. `None` when the limit passed.
 pub fn wait_terminal(
     client: Option<&mut Client>,
     store: Option<&Store>,
-    id: &JobId,
+    id: &RunId,
     limit: Option<Duration>,
     on_event: &mut dyn FnMut(&Event),
-) -> Result<Job, CliError> {
+) -> Result<Run, CliError> {
     match (client, store) {
         (Some(client), _) => {
             client.deadline_in(limit);
-            let ended = client.subscribe(json!({"job_id": id}), &mut |line| {
+            let ended = client.subscribe(json!({"run_id": id}), &mut |line| {
                 if let Streamed::Event(event) = line {
                     on_event(&event);
                 }
@@ -259,7 +267,7 @@ pub fn wait_terminal(
                 Ok(_) | Err(antinomie_service::server::client::ClientError::TimedOut) => {}
                 Err(other) => return Err(link::client(other)),
             }
-            job_of(link::call(client, "job.get", json!({"job_id": id}))?)
+            job_of(link::call(client, "run.get", json!({"run_id": id}))?)
         }
         (None, Some(store)) => {
             let until = limit.map(|limit| Instant::now() + limit);
@@ -280,16 +288,16 @@ pub fn wait_terminal(
                 std::thread::sleep(Duration::from_millis(500));
             }
         }
-        (None, None) => Err(CliError::internal("no way to reach the job")),
+        (None, None) => Err(CliError::internal("no way to reach the run")),
     }
 }
 
 pub fn wait(arguments: &Wait, context: &Context) -> Result<Reply, CliError> {
     crate::signals::install();
-    let ids: Vec<JobId> = arguments
-        .jobs
+    let ids: Vec<RunId> = arguments
+        .runs
         .iter()
-        .map(|t| job_id(t))
+        .map(|t| run_id(t))
         .collect::<Result<_, _>>()?;
     let mut client = link::daemon(context)?;
     let store = match client {
@@ -328,16 +336,16 @@ pub fn print_event(event: &Event) {
 
 pub fn events(arguments: &Events, context: &Context) -> Result<Reply, CliError> {
     crate::signals::install();
-    let job = match (&arguments.job, arguments.all) {
-        (Some(text), _) => Some(job_id(text)?),
+    let job = match (&arguments.run, arguments.all) {
+        (Some(text), _) => Some(run_id(text)?),
         (None, true) => None,
         (None, false) => {
-            return Err(CliError::invalid("name a job, or --all for every job").with_field("job"));
+            return Err(CliError::invalid("name a run, or --all for every run").with_field("run"));
         }
     };
     let mut params = json!({});
     if let Some(job) = &job {
-        params["job_id"] = json!(job);
+        params["run_id"] = json!(job);
         if let Some(since) = arguments.since {
             params["since_seq"] = json!(since);
         }
@@ -376,7 +384,7 @@ pub fn events(arguments: &Events, context: &Context) -> Result<Reply, CliError> 
                 let page = link::call(
                     &mut client,
                     "events.list",
-                    json!({"job_id": job, "after_seq": after, "limit": 1000}),
+                    json!({"run_id": job, "after_seq": after, "limit": 1000}),
                 )?;
                 let batch = page["events"].as_array().cloned().unwrap_or_default();
                 if batch.is_empty() {
@@ -388,7 +396,7 @@ pub fn events(arguments: &Events, context: &Context) -> Result<Reply, CliError> 
             Ok(event_list(events, &arguments.types))
         }
         (Some(_), false, None) => Err(CliError::invalid(
-            "--all needs --follow (the stored events of every job are a stream)",
+            "--all needs --follow (the stored events of every run are a stream)",
         )),
         (None, follow, Some(job)) => {
             let store = link::read_store(context)?;
@@ -411,7 +419,7 @@ pub fn events(arguments: &Events, context: &Context) -> Result<Reply, CliError> 
         }
         (None, _, None) => Err(CliError::new(
             ErrorCode::Unavailable,
-            "the all-jobs stream needs a running daemon",
+            "the all-runs stream needs a running daemon",
         )),
     }
 }
@@ -443,11 +451,11 @@ fn event_list(events: Vec<Value>, types: &[String]) -> Reply {
 }
 
 /// An artifact's file: the daemon's path (checked to be inside the data
-/// folder), or the store's location resolved inside the job directory.
+/// folder), or the store's location resolved inside the run directory.
 fn artifact_paths(
     context: &Context,
     client: Option<&mut Client>,
-    job: &Job,
+    job: &Run,
 ) -> Result<Vec<Value>, CliError> {
     let data = context
         .data_dir()
@@ -484,12 +492,12 @@ fn artifact_paths(
     Ok(out)
 }
 
-/// `auto result JOB`: the job's outcome, label and report files.
-pub fn result(arguments: &JobArg, context: &Context) -> Result<Reply, CliError> {
-    let id = job_id(&arguments.job)?;
+/// `auto result RUN`: the run's outcome, label and report files.
+pub fn result(arguments: &RunArg, context: &Context) -> Result<Reply, CliError> {
+    let id = run_id(&arguments.run)?;
     let mut client = link::daemon(context)?;
     let job = match client.as_mut() {
-        Some(client) => job_of(link::call(client, "job.get", json!({"job_id": id}))?)?,
+        Some(client) => job_of(link::call(client, "run.get", json!({"run_id": id}))?)?,
         None => link::read_store(context)?.get(&id).map_err(api)?,
     };
     let files = artifact_paths(context, client.as_mut(), &job)?;
@@ -504,14 +512,14 @@ pub fn result(arguments: &JobArg, context: &Context) -> Result<Reply, CliError> 
             ));
         }
     }
-    Ok(Reply::value(json!({"job": job, "files": files})).with_human(human))
+    Ok(Reply::value(json!({"run": job, "files": files})).with_human(human))
 }
 
-pub fn artifacts(arguments: &JobArg, context: &Context) -> Result<Reply, CliError> {
-    let id = job_id(&arguments.job)?;
+pub fn artifacts(arguments: &RunArg, context: &Context) -> Result<Reply, CliError> {
+    let id = run_id(&arguments.run)?;
     let list = match link::daemon(context)? {
         Some(mut client) => {
-            link::call(&mut client, "artifact.list", json!({"job_id": id}))?["artifacts"].clone()
+            link::call(&mut client, "artifact.list", json!({"run_id": id}))?["artifacts"].clone()
         }
         None => value(&link::read_store(context)?.artifacts(&id).map_err(api)?),
     };
@@ -533,7 +541,7 @@ pub fn artifacts(arguments: &JobArg, context: &Context) -> Result<Reply, CliErro
 }
 
 pub fn fetch(arguments: &Fetch, context: &Context) -> Result<Reply, CliError> {
-    let id = job_id(&arguments.job)?;
+    let id = run_id(&arguments.run)?;
     let kind = if arguments.kind.contains('.') {
         arguments.kind.clone()
     } else {
@@ -541,14 +549,14 @@ pub fn fetch(arguments: &Fetch, context: &Context) -> Result<Reply, CliError> {
     };
     let mut client = link::daemon(context)?;
     let job = match client.as_mut() {
-        Some(client) => job_of(link::call(client, "job.get", json!({"job_id": id}))?)?,
+        Some(client) => job_of(link::call(client, "run.get", json!({"run_id": id}))?)?,
         None => link::read_store(context)?.get(&id).map_err(api)?,
     };
     let files = artifact_paths(context, client.as_mut(), &job)?;
     let file = files
         .iter()
         .find(|f| f["artifact"]["kind"] == json!(kind))
-        .ok_or_else(|| CliError::not_found(format!("job {id} has no {kind} artifact")))?;
+        .ok_or_else(|| CliError::not_found(format!("run {id} has no {kind} artifact")))?;
     let source = PathBuf::from(file["path"].as_str().unwrap_or_default());
     let name = file["artifact"]["name"].as_str().unwrap_or("artifact");
     if arguments.out.as_deref() == Some(Path::new("-")) {
@@ -573,12 +581,12 @@ pub fn fetch(arguments: &Fetch, context: &Context) -> Result<Reply, CliError> {
 }
 
 pub fn cancel(arguments: &Cancel, context: &Context) -> Result<Reply, CliError> {
-    let id = job_id(&arguments.job)?;
+    let id = run_id(&arguments.run)?;
     let job = match link::daemon(context)? {
         Some(mut client) => link::call(
             &mut client,
-            "job.cancel",
-            json!({"job_id": id, "reason": arguments.reason}),
+            "run.cancel",
+            json!({"run_id": id, "reason": arguments.reason}),
         )?,
         None => {
             let (store, _guard) = link::locked_store(context)?;
@@ -616,19 +624,22 @@ pub fn overrides(pairs: &[String]) -> Result<Value, CliError> {
     Ok(out)
 }
 
-pub fn retry(arguments: &Retry, context: &Context) -> Result<Reply, CliError> {
-    let id = job_id(&arguments.job)?;
-    let mut params = json!({"job_id": id});
+pub fn rerun(arguments: &Rerun, context: &Context) -> Result<Reply, CliError> {
+    let id = run_id(&arguments.run)?;
+    let mut params = json!({"run_id": id});
+    if let Some(preset) = &arguments.preset {
+        params["preset"] = json!(preset);
+    }
     if !arguments.overrides.is_empty() {
         params["overrides"] = overrides(&arguments.overrides)?;
     }
     let Some(mut client) = link::daemon(context)? else {
         return Err(CliError::new(
             ErrorCode::Unavailable,
-            "`auto retry` needs a running daemon (`antinomie-cli auto daemon`)",
+            "`auto rerun` needs a running daemon (`antinomie-cli auto daemon`)",
         ));
     };
-    let job = link::call(&mut client, "job.retry", params)?;
+    let job = link::call(&mut client, "run.rerun", params)?;
     Ok(job_reply(&job))
 }
 
@@ -657,18 +668,22 @@ pub fn queue(command: &Queue, context: &Context) -> Result<Reply, CliError> {
     Ok(Reply::value(status.clone()).with_human(render::queue_text(&status)))
 }
 
-pub fn policy(command: &Policy, context: &Context) -> Result<Reply, CliError> {
-    let Policy::List = command;
-    let list = match link::daemon(context)? {
-        Some(mut client) => link::call(&mut client, "policy.list", json!({}))?["policies"].clone(),
-        None => {
-            let report = antinomie_service::config::validate::load(
-                context.data_dir(),
-                &antinomie_service::config::DiskVms::open(context.data_dir()),
-                None,
-            );
-            value(&report.preset_set().list_for(&link::me()))
+pub fn preset(command: &Preset, context: &Context) -> Result<Reply, CliError> {
+    let list = match (link::daemon(context)?, command) {
+        (Some(mut client), Preset::Show { name }) => {
+            let preset = link::call(&mut client, "preset.get", json!({"name": name}))?;
+            return Ok(preset_reply(preset));
         }
+        (None, Preset::Show { name }) => {
+            let preset = local_presets(context)
+                .detail(name)
+                .ok_or_else(|| CliError::not_found(format!("there is no preset {name}")))?;
+            return Ok(preset_reply(value(&preset)));
+        }
+        (Some(mut client), Preset::List) => {
+            link::call(&mut client, "preset.list", json!({}))?["presets"].clone()
+        }
+        (None, Preset::List) => value(&local_presets(context).list_for(&link::me())),
     };
     let items = list.as_array().cloned().unwrap_or_default();
     let words = |v: &Value| {
@@ -702,6 +717,37 @@ pub fn policy(command: &Policy, context: &Context) -> Result<Reply, CliError> {
         .collect();
     Ok(Reply::list(items, None)
         .with_human(table(&["PRESET", "TITLE", "NEEDS", "DESCRIPTION"], &rows)))
+}
+
+/// The presets of the data folder, read in this process (no daemon).
+fn local_presets(context: &Context) -> antinomie_service::config::PresetSet {
+    antinomie_service::config::validate::load(
+        context.data_dir(),
+        &antinomie_service::config::DiskVms::open(context.data_dir()),
+        None,
+    )
+    .preset_set()
+}
+
+/// `auto preset show`: the preset as JSON, and `table.key = value` lines
+/// for people.
+fn preset_reply(preset: Value) -> Reply {
+    let mut human = String::new();
+    for (key, value) in preset.as_object().into_iter().flatten() {
+        match value {
+            Value::Object(table) => {
+                for (name, item) in table {
+                    let item = render::clean(&item.to_string());
+                    human.push_str(&format!("{key}.{name} = {item}\n"));
+                }
+            }
+            other => {
+                let other = render::clean(&other.to_string());
+                human.push_str(&format!("{key} = {other}\n"));
+            }
+        }
+    }
+    Reply::value(preset).with_human(human)
 }
 
 #[cfg(test)]

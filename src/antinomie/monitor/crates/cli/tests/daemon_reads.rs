@@ -264,11 +264,11 @@ fn the_run_reads_and_triage_go_through_the_daemon_and_match_direct_mode() {
     let data = fixture.data();
     let mut daemon = Running::start(&fixture);
     for tail in [
-        vec!["run", "list"],
-        vec!["run", "list", "--vm", "vm-1", "--state", "finished"],
-        vec!["run", "show", "5f3c9a10"],
+        vec!["recording", "list"],
+        vec!["recording", "list", "--vm", "vm-1", "--state", "finished"],
+        vec!["recording", "show", "5f3c9a10"],
         vec![
-            "run",
+            "recording",
             "show",
             "vm-1:boot-1:5f3c9a10-run-fixture",
             "--summary",
@@ -283,16 +283,16 @@ fn the_run_reads_and_triage_go_through_the_daemon_and_match_direct_mode() {
     // The scan of the Triage reads lives in the daemon, not in the command.
     assert!(daemon.service.query.scans_in_memory() >= 1);
     // Unknown runs and a run folder are told the same way.
-    let (through, direct) = both(&data, &["run", "show", "ffffffff"]);
+    let (through, direct) = both(&data, &["recording", "show", "ffffffff"]);
     assert_eq!((through.0, direct.0), (3, 3));
     assert_eq!(through.1["error"]["code"], "not_found");
-    let (through, direct) = both(&data, &["run", "show", "ab"]);
+    let (through, direct) = both(&data, &["recording", "show", "ab"]);
     assert_eq!((through.0, direct.0), (3, 3), "{}", through.1);
     daemon.stop();
     // Stopped: --daemon fails, the default falls back to direct mode.
-    let (code, value) = cli(&args(&data, &["--daemon", "run", "list"]));
+    let (code, value) = cli(&args(&data, &["--daemon", "recording", "list"]));
     assert_eq!(code, 21, "{value}");
-    let (code, value) = cli(&args(&data, &["run", "list"]));
+    let (code, value) = cli(&args(&data, &["recording", "list"]));
     assert_eq!(code, 0, "{value}");
 }
 
@@ -307,7 +307,7 @@ fn run_export_through_the_daemon_writes_the_same_files_and_only_into_out() {
         &data,
         &[
             "--daemon",
-            "run",
+            "recording",
             "export",
             "5f3c9a10",
             "--out",
@@ -319,7 +319,7 @@ fn run_export_through_the_daemon_writes_the_same_files_and_only_into_out() {
         &data,
         &[
             "--direct",
-            "run",
+            "recording",
             "export",
             "5f3c9a10",
             "--out",
@@ -337,7 +337,7 @@ fn run_export_through_the_daemon_writes_the_same_files_and_only_into_out() {
         &data,
         &[
             "--daemon",
-            "run",
+            "recording",
             "export",
             "5f3c9a10",
             "--no-triage",
@@ -363,7 +363,7 @@ fn run_export_through_the_daemon_writes_the_same_files_and_only_into_out() {
     let (code, value) = cli(&args(
         &data,
         &[
-            "run",
+            "recording",
             "export",
             "5f3c9a10",
             "--no-triage",
@@ -380,7 +380,7 @@ fn run_export_through_the_daemon_writes_the_same_files_and_only_into_out() {
     let (code, _) = cli(&args(
         &data,
         &[
-            "run",
+            "recording",
             "export",
             "5f3c9a10",
             "--part",
@@ -394,7 +394,13 @@ fn run_export_through_the_daemon_writes_the_same_files_and_only_into_out() {
     std::fs::write(&file, b"x").unwrap();
     let (code, _) = cli(&args(
         &data,
-        &["run", "export", "5f3c9a10", "--out", file.to_str().unwrap()],
+        &[
+            "recording",
+            "export",
+            "5f3c9a10",
+            "--out",
+            file.to_str().unwrap(),
+        ],
     ));
     assert_eq!(code, 4);
 }
@@ -514,8 +520,8 @@ fn run_list_shows_the_job_of_a_run_and_job_filters_the_same_through_the_daemon_a
     let _daemon = Running::start(&fixture);
     // A job record that names the fixture's run, as the pipeline writes it
     // when the lane records the run (the job index reads `run_key`).
-    let job = antinomie_service::api::ids::JobId::from_parts(5, [3; 10]).to_string();
-    let key = antinomie_service::query::key::RunKey::new("vm-1", "boot-1", RUN).unwrap();
+    let job = antinomie_service::api::ids::RunId::from_parts(5, [3; 10]).to_string();
+    let key = antinomie_service::query::key::RecordingKey::new("vm-1", "boot-1", RUN).unwrap();
     let store = rusqlite::Connection::open(fixture.root.join("data/service/jobs.sqlite")).unwrap();
     store
         .execute(
@@ -528,21 +534,27 @@ fn run_list_shows_the_job_of_a_run_and_job_filters_the_same_through_the_daemon_a
     drop(store);
 
     for tail in [
-        vec!["run", "list"],
-        vec!["run", "list", "--job", job.as_str()],
-        vec!["run", "show", "5f3c9a10"],
+        vec!["recording", "list"],
+        vec!["recording", "list", "--run", job.as_str()],
+        vec!["recording", "show", "5f3c9a10"],
     ] {
         let (through, direct) = both(&data, &tail);
         assert_eq!(through.0, 0, "{tail:?}: {}", through.1);
         assert_eq!(direct.0, 0, "{tail:?}: {}", direct.1);
         assert_eq!(through.1["result"], direct.1["result"], "{tail:?}");
     }
-    let (_, listed) = cli(&args(&data, &["--direct", "run", "list"]));
-    assert_eq!(items(&listed)[0]["job_id"], job.as_str());
-    let (_, filtered) = cli(&args(&data, &["--direct", "run", "list", "--job", &job]));
+    let (_, listed) = cli(&args(&data, &["--direct", "recording", "list"]));
+    assert_eq!(items(&listed)[0]["from_run"], job.as_str());
+    let (_, filtered) = cli(&args(
+        &data,
+        &["--direct", "recording", "list", "--run", &job],
+    ));
     assert_eq!(items(&filtered).len(), 1);
     let none = "j_00000000000000000000000000";
-    let (_, filtered) = cli(&args(&data, &["--direct", "run", "list", "--job", none]));
+    let (_, filtered) = cli(&args(
+        &data,
+        &["--direct", "recording", "list", "--run", none],
+    ));
     assert!(items(&filtered).is_empty());
 }
 
@@ -659,7 +671,14 @@ fn run_export_with_sensitive_writes_the_recorded_packet_frames_the_same_both_way
         ("--direct", &direct, true),
         ("--daemon", &plain, false),
     ] {
-        let mut tail = vec![mode, "run", "export", "5f3c9a10", "--part", "trace,network"];
+        let mut tail = vec![
+            mode,
+            "recording",
+            "export",
+            "5f3c9a10",
+            "--part",
+            "trace,network",
+        ];
         if sensitive {
             tail.push("--sensitive");
         }
@@ -747,18 +766,18 @@ fn a_run_lane_2_recorded_is_read_from_lane_1_through_the_daemon_and_directly() {
     let lane_run_id = "9d4e1b22-lane-two-run";
     let dir = lane_run(&fixture, lane_run_id);
     let _daemon = Running::start(&fixture);
-    let (_, listed) = cli(&args(&data, &["--direct", "run", "list"]));
+    let (_, listed) = cli(&args(&data, &["--direct", "recording", "list"]));
     let ids: Vec<String> = items(&listed)
         .iter()
         .map(|i| i["run_id"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(ids, [lane_run_id, RUN], "newest first, both lanes");
     for tail in [
-        vec!["run", "list"],
-        vec!["run", "list", "--vm", "vm-2"],
-        vec!["run", "show", "9d4e1b22"],
+        vec!["recording", "list"],
+        vec!["recording", "list", "--vm", "vm-2"],
+        vec!["recording", "show", "9d4e1b22"],
         vec![
-            "run",
+            "recording",
             "show",
             "vm-2:boot-1:9d4e1b22-lane-two-run",
             "--summary",
@@ -771,7 +790,7 @@ fn a_run_lane_2_recorded_is_read_from_lane_1_through_the_daemon_and_directly() {
         assert_eq!(direct.0, 0, "{tail:?}: {}", direct.1);
         assert_eq!(through.1["result"], direct.1["result"], "{tail:?}");
     }
-    let (_, shown) = cli(&args(&data, &["--direct", "run", "show", "9d4e1b22"]));
+    let (_, shown) = cli(&args(&data, &["--direct", "recording", "show", "9d4e1b22"]));
     assert_eq!(shown["result"]["vm_id"], "vm-2", "{shown}");
     let (_, sample) = cli(&args(
         &data,
@@ -787,7 +806,7 @@ fn a_run_lane_2_recorded_is_read_from_lane_1_through_the_daemon_and_directly() {
     assert_eq!(runs.len(), 2, "{sample}");
     // The run's folder given by path is found too.
     let path = dir.display().to_string();
-    let (code, value) = cli(&args(&data, &["--direct", "run", "show", &path]));
+    let (code, value) = cli(&args(&data, &["--direct", "recording", "show", &path]));
     assert_eq!(code, 0, "{value}");
     // The report of the lane's run is written and names its run.
     let out = fixture.root.join("report-lane");

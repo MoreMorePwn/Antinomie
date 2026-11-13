@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The exit code of a waited job (design 3.3, audit G27) and the human text of
-//! jobs and the queue. Text that came from a sample or the guest (names,
+//! The exit code of a waited run (design 3.3, audit G27) and the human text of
+//! runs and the queue. Text that came from a sample or the guest (names,
 //! warnings, the basis sentence) is shown with control characters and escape
 //! sequences removed (abuse case A13); `json` and `ndjson` carry it as data.
 use crate::exit::Exit;
 use antinomie_service::api::{
     assessment::Label,
-    job::{Job, JobState},
+    run::{Run, RunState},
 };
 use serde_json::Value;
 use std::fmt::Write as _;
 
-/// The exit code of a job a command waited for. The job's state comes first:
+/// The exit code of a run a command waited for. The run's state comes first:
 /// `failed` 10, `partial` 11, `cancelled` 12, `rejected` 13, still running
-/// (the wait ran out) 14. Only a `succeeded` job looks at its label, and only
+/// (the wait ran out) 14. Only a `succeeded` run looks at its label, and only
 /// with `--verdict-exit`: `suspicious` 30, `malicious` 31, `inconclusive` 32,
 /// `clean_observed` or none 0.
-pub fn job_exit(job: &Job, verdict_exit: bool) -> Exit {
+pub fn job_exit(job: &Run, verdict_exit: bool) -> Exit {
     match job.state {
-        JobState::Succeeded if verdict_exit => {
+        RunState::Succeeded if verdict_exit => {
             match job.assessment.as_ref().and_then(|a| a.label) {
                 Some(Label::Suspicious) => Exit::Suspicious,
                 Some(Label::Malicious) => Exit::Malicious,
@@ -26,16 +26,16 @@ pub fn job_exit(job: &Job, verdict_exit: bool) -> Exit {
                 Some(Label::CleanObserved) | None => Exit::Ok,
             }
         }
-        JobState::Succeeded => Exit::Ok,
-        JobState::Partial => Exit::JobPartial,
-        JobState::Failed => Exit::JobFailed,
-        JobState::Cancelled => Exit::JobCancelled,
-        JobState::Rejected => Exit::JobRejected,
-        JobState::Queued | JobState::Running | JobState::Cancelling => Exit::WaitTimeout,
+        RunState::Succeeded => Exit::Ok,
+        RunState::Partial => Exit::JobPartial,
+        RunState::Failed => Exit::JobFailed,
+        RunState::Cancelled => Exit::JobCancelled,
+        RunState::Rejected => Exit::JobRejected,
+        RunState::Queued | RunState::Running | RunState::Cancelling => Exit::WaitTimeout,
     }
 }
 
-/// The worst of several waited jobs (`auto wait A B`): the highest code.
+/// The worst of several waited runs (`auto wait A B`): the highest code.
 pub fn worst(exits: &[Exit]) -> Exit {
     exits
         .iter()
@@ -60,13 +60,13 @@ fn word(value: &Value) -> String {
     }
 }
 
-/// `key: value` lines of one job.
+/// `key: value` lines of one run.
 pub fn job_text(job: &Value) -> String {
     let mut out = String::new();
     let line = |out: &mut String, key: &str, value: String| {
         let _ = writeln!(out, "{key:<11} {value}");
     };
-    line(&mut out, "job:", word(&job["id"]));
+    line(&mut out, "run:", word(&job["id"]));
     let mut state = word(&job["state"]);
     if let Some(stage) = job["stage"].as_str() {
         state.push_str(&format!(" ({stage})"));
@@ -93,21 +93,21 @@ pub fn job_text(job: &Value) -> String {
     }
     line(
         &mut out,
-        "policy:",
+        "preset:",
         format!(
             "{}, attempt {} of {}",
-            word(&job["policy"]["name"]),
+            word(&job["preset"]["name"]),
             word(&job["attempt"]),
             word(&job["max_attempts"])
         ),
     );
-    if let Some(run) = job.get("run").filter(|r| !r.is_null()) {
+    if let Some(run) = job.get("program").filter(|r| !r.is_null()) {
         line(
             &mut out,
-            "run:",
+            "program:",
             format!(
                 "{} ended {} exit {}",
-                word(&run["run_id"]),
+                word(&run["id"]),
                 word(&run["end_reason"]),
                 word(&run["exit"])
             ),
@@ -170,11 +170,11 @@ pub fn job_row(job: &Value) -> Vec<String> {
         word(&job["stage"]),
         word(&job["assessment"]["label"]),
         word(&job["sample"]["name"]),
-        word(&job["policy"]["name"]),
+        word(&job["preset"]["name"]),
     ]
 }
 
-/// `auto status` without a job: the queue.
+/// `auto status` without a run: the queue.
 pub fn queue_text(status: &Value) -> String {
     let mut out = format!(
         "queue:      {} queued, {} running{}\nowner:      {}\n",
@@ -189,11 +189,11 @@ pub fn queue_text(status: &Value) -> String {
     if let Some(pool) = status.get("host_pool").filter(|p| !p.is_null()) {
         let _ = writeln!(
             out,
-            "host pool:  {} queued, {} running of {} worker(s), {} job(s){}",
+            "host pool:  {} queued, {} running of {} worker(s), {} run(s){}",
             word(&pool["queued"]),
             word(&pool["running"]),
             word(&pool["workers"]),
-            word(&pool["jobs"]),
+            word(&pool["runs"]),
             pool["waiting_for"]
                 .as_str()
                 .map(|why| format!(", waiting for {}", clean(why)))
@@ -203,11 +203,11 @@ pub fn queue_text(status: &Value) -> String {
     for lane in status["lanes"].as_array().into_iter().flatten() {
         let _ = writeln!(
             out,
-            "{:<11} {} vm {} job {} disk layer {}",
+            "{:<11} {} vm {} run {} disk layer {}",
             format!("{}:", word(&lane["lane"])),
             word(&lane["state"]),
             word(&lane["vm_id"]),
-            word(&lane["job_id"]),
+            word(&lane["run_id"]),
             word(&lane["disk_layer"])
         );
     }
@@ -219,19 +219,19 @@ mod tests {
     use super::*;
     use antinomie_service::api::assessment::Assessment;
 
-    fn job(state: JobState, label: Option<Label>) -> Job {
+    fn job(state: RunState, label: Option<Label>) -> Run {
         let mut value = serde_json::json!({
             "api_version": 1, "id": "j_01ARZ3NDEKTSV4RRFFQ69G5FAV", "state": "queued",
             "stage": null, "waiting_for": null, "outcome": null, "created_ms": 1,
             "started_ms": null, "finished_ms": null, "queue_position": null,
             "attempt": 1, "max_attempts": 2, "client_id": "local:1",
-            "spec": {"sample": {"sha256": "aa".repeat(32)}},
-            "sample": null, "policy": {"name": "default", "digest": "d"}, "lane": null,
+            "request": {"sample": {"sha256": "aa".repeat(32)}},
+            "sample": null, "preset": {"name": "default", "digest": "d"}, "lane": null,
             "vm": null, "run": null, "recording": null, "assessment": null,
             "artifacts": [], "warnings": [], "failure": null, "repeat_of": null, "labels": {}
         });
         value["state"] = serde_json::to_value(state).unwrap();
-        let mut job: Job = serde_json::from_value(value).unwrap();
+        let mut job: Run = serde_json::from_value(value).unwrap();
         job.assessment = label.map(|label| Assessment {
             label: Some(label),
             ..serde_json::from_value(serde_json::json!({
@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn the_job_state_comes_first_and_the_label_only_counts_on_success_with_verdict_exit() {
-        use JobState::*;
+        use RunState::*;
         let cases = [
             (Succeeded, None, false, 0),
             (Succeeded, Some(Label::Malicious), false, 0),
@@ -257,7 +257,7 @@ mod tests {
             (Succeeded, Some(Label::Suspicious), true, 30),
             (Succeeded, Some(Label::Malicious), true, 31),
             (Succeeded, Some(Label::Inconclusive), true, 32),
-            // A partial or failed job is never read as a verdict.
+            // A partial or failed run is never read as a verdict.
             (Partial, Some(Label::Malicious), true, 11),
             (Failed, Some(Label::Malicious), true, 10),
             (Cancelled, None, true, 12),
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(clean("a\x1b[31mred\x07\u{9b}x\n"), "a [31mred  x ");
         let text = job_text(&serde_json::json!({
             "id": "j_1", "state": "succeeded", "sample": {"sha256": "ab", "name": "evil\x1b]0;pwn\x07", "size": 1, "type": "sh"},
-            "policy": {"name": "default"}, "attempt": 1, "max_attempts": 2,
+            "preset": {"name": "default"}, "attempt": 1, "max_attempts": 2,
             "warnings": [{"code": "w", "text": "line1\nline2"}]
         }));
         assert!(!text.contains('\x1b') && !text.contains('\x07'));
@@ -295,7 +295,7 @@ mod tests {
     fn host_items_and_the_pool_are_shown() {
         let text = job_text(&serde_json::json!({
             "id": "j_1", "state": "running", "stage": "analyse",
-            "policy": {"name": "default"}, "attempt": 1, "max_attempts": 2, "warnings": [],
+            "preset": {"name": "default"}, "attempt": 1, "max_attempts": 2, "warnings": [],
             "host_work": [
                 {"name": "static:floss", "state": "running", "expected_s": 150, "basis": "estimate", "limit_s": 300},
                 {"name": "report", "state": "queued", "expected_s": 30, "basis": "median", "limit_s": 60, "note": "x\x1by"}
@@ -311,10 +311,10 @@ mod tests {
         );
         let queue = queue_text(&serde_json::json!({
             "queued": 3, "running": 1, "owner": "daemon", "lanes": [],
-            "host_pool": {"workers": 2, "queued": 5, "running": 2, "jobs": 2, "waiting_for": null}
+            "host_pool": {"workers": 2, "queued": 5, "running": 2, "runs": 2, "waiting_for": null}
         }));
         assert!(
-            queue.contains("host pool:  5 queued, 2 running of 2 worker(s), 2 job(s)"),
+            queue.contains("host pool:  5 queued, 2 running of 2 worker(s), 2 run(s)"),
             "{queue}"
         );
     }
