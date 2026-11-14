@@ -690,7 +690,14 @@ fn environment(ui: &mut egui::Ui, run: &RunSummary) {
                                 ),
                             );
                             parts::row(ui, "Network", environment.network.clone());
-                            parts::row(ui, "Device profile", environment.stealth.clone());
+                            parts::row(
+                                ui,
+                                "Device profile",
+                                antinomie_monitor_core::stealth::StealthPreset::recorded_label(
+                                    &environment.stealth,
+                                )
+                                .to_owned(),
+                            );
                             parts::row(
                                 ui,
                                 "Base image",

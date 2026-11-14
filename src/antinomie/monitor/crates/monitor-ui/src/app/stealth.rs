@@ -4,14 +4,16 @@
 use super::*;
 mod arm64;
 mod cloud;
+mod uptime;
 use antinomie_monitor_core::stealth::{
-    base_supporting, boot_age_text, chassis_label, disk_bus_unavailable, firmware_unavailable,
-    host_cpu_vendor, BaseSupport, BootAge, ClockModel, DiskBus, DiskMedia, Fallback,
-    FallbackSetting, Firmware, HostSupport, MachineIdentity, NatNetwork, NicModel, Pointer,
-    RtcClock, SmbiosEntry, StealthPreset, StealthProfile, CHASSIS, CLOUDS, CPU_MODELS, MACHINES,
+    base_supporting, chassis_label, disk_bus_unavailable, firmware_unavailable, host_cpu_vendor,
+    BaseSupport, DiskBus, DiskMedia, Fallback, FallbackSetting, Firmware, HostSupport,
+    MachineIdentity, NatNetwork, NicModel, Pointer, RtcClock, SmbiosEntry, StealthPreset,
+    StealthProfile, VmView, CHASSIS, CLOUDS, CPU_MODELS, MACHINES,
 };
 use antinomie_monitor_core::GuestArch;
 pub(super) use cloud::launch_advice;
+use uptime::uptime;
 
 /// What the host offers (OVMF, clean SMT), read once.
 pub(super) fn host_support() -> &'static HostSupport {
@@ -27,6 +29,55 @@ fn host_for(arch: GuestArch) -> &'static HostSupport {
     }
 }
 
+/// A widget's hint, shown whether it is enabled or not: a running VM's
+/// profile is read-only, and egui shows an enabled widget's tooltip only
+/// while it is enabled, so every hint of the window was hidden there.
+pub(super) trait Hint {
+    fn hint(self, text: impl Into<egui::WidgetText>) -> Self;
+    /// `text` while enabled; when disabled, `reason` if the window is
+    /// `editable` (the setting itself is off), else `text`.
+    fn hint_or(
+        self,
+        text: impl Into<egui::WidgetText>,
+        reason: impl Into<egui::WidgetText>,
+        editable: bool,
+    ) -> Self;
+}
+
+impl Hint for egui::Response {
+    fn hint(self, text: impl Into<egui::WidgetText>) -> Self {
+        if self.enabled() {
+            self.on_hover_text(text)
+        } else {
+            self.on_disabled_hover_text(text)
+        }
+    }
+
+    fn hint_or(
+        self,
+        text: impl Into<egui::WidgetText>,
+        reason: impl Into<egui::WidgetText>,
+        editable: bool,
+    ) -> Self {
+        match (self.enabled(), editable) {
+            (true, _) => self.on_hover_text(text),
+            (false, true) => self.on_disabled_hover_text(reason),
+            (false, false) => self.on_disabled_hover_text(text),
+        }
+    }
+}
+
+/// The app's help icon beside a label: a muted question mark whose tooltip
+/// explains the setting (shown in a read-only window too).
+pub(super) fn help(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.add(
+        egui::Label::new(RichText::new(egui_phosphor::regular::QUESTION).color(theme::muted()))
+            .selectable(false)
+            .sense(egui::Sense::hover()),
+    )
+    .hint(text)
+}
+
 /// A combo box whose unavailable choices are shown disabled with the reason.
 fn choice<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
@@ -39,6 +90,7 @@ fn choice<T: Copy + PartialEq>(
     egui::ComboBox::from_id_salt(id)
         .selected_text(label(*value))
         .width(260.0)
+        .truncate()
         .show_ui(ui, |ui| {
             for &option in options {
                 let reason = unavailable(option);
@@ -64,21 +116,8 @@ impl MonitorApp {
 
     /// The Device profile window for Getting started's first VM draft.
     pub(super) fn profile_details_window(&mut self, ctx: &egui::Context, draft: &mut VmConfig) {
-        let base = selected_base(&self.snapshot, draft.base_identity.as_deref()).map_or(
-            antinomie_monitor_core::stealth::BaseSupport::all(),
-            |base| antinomie_monitor_core::stealth::BaseSupport::from_list(&base.stealth_support),
-        );
         let selected = selected_base(&self.snapshot, draft.base_identity.as_deref());
-        let current = selected.map(|base| base.id.clone());
-        let arch = selected.map_or_else(Default::default, |base| base.arch);
-        let mut fit = Fit::new(
-            &draft.stealth,
-            base,
-            &self.snapshot.bases,
-            current.as_deref(),
-            arch,
-            draft.launch.fast_emulation,
-        );
+        let mut fit = Fit::new(&draft.stealth, draft, &self.snapshot.bases, selected);
         window(
             ctx,
             &mut self.getting_started.profile_open,
@@ -107,11 +146,11 @@ impl MonitorApp {
 /// installed base that supports it.
 pub(super) struct Fit<'a> {
     pub base: BaseSupport,
-    /// The base's architecture, and what this host offers it.
-    arch: GuestArch,
+    /// The VM's settings beside the profile (architecture, network,
+    /// display), which the Still visible list reads.
+    view: VmView,
+    /// What this host offers the base's architecture.
     host: &'static HostSupport,
-    /// The VM boots arm64 without KPTI (a giveaway of its own).
-    fast_emulation: bool,
     fallbacks: Vec<Fallback>,
     bases: &'a [BaseSummary],
     current: Option<&'a str>,
@@ -120,23 +159,27 @@ pub(super) struct Fit<'a> {
 }
 
 impl<'a> Fit<'a> {
+    /// The fit of `vm`'s profile `profile` (being edited) on its base.
     pub(super) fn new(
         profile: &StealthProfile,
-        base: BaseSupport,
+        vm: &VmConfig,
         bases: &'a [BaseSummary],
-        current: Option<&'a str>,
-        arch: GuestArch,
-        fast_emulation: bool,
+        current: Option<&'a BaseSummary>,
     ) -> Self {
+        let arch = current.map_or_else(Default::default, BaseSummary::arch);
         let host = host_for(arch);
+        let base = current.map_or(BaseSupport::all(), |base| {
+            BaseSupport::from_list(&base.stealth_support)
+        });
+        let mut fallbacks: Vec<Fallback> = profile.arch_fallback(arch).into_iter().collect();
+        fallbacks.extend(profile.for_arch(arch).fallbacks(&base, host));
         Self {
-            fallbacks: profile.fallbacks(&base, host),
+            fallbacks,
             base,
-            arch,
+            view: VmView::of(vm, current, host.ovmf.is_ok()),
             host,
-            fast_emulation,
             bases,
-            current,
+            current: current.map(|base| base.id.as_str()),
             switch: None,
         }
     }
@@ -158,7 +201,12 @@ impl<'a> Fit<'a> {
             return;
         }
         ui.label("");
-        ui.vertical(|ui| self.line(ui, profile, setting));
+        ui.vertical(|ui| {
+            // As wide as the setting's list: wrapped at the cell's width,
+            // the line widened the window (Firmware's on arm64).
+            ui.set_max_width(300.0);
+            self.line(ui, profile, setting);
+        });
         ui.end_row();
     }
 
@@ -178,7 +226,7 @@ impl<'a> Fit<'a> {
             )
             .wrap(),
         )
-        .on_hover_text(&fallback.reason);
+        .hint(&fallback.reason);
         ui.add(
             egui::Label::new(
                 RichText::new(&fallback.reason)
@@ -190,7 +238,7 @@ impl<'a> Fit<'a> {
         if let Some(base) = base_supporting(profile, setting, self.current, self.bases, self.host)
             && ui
                 .button(format!("Use base {}", base.label))
-                .on_hover_text("Switch this VM to an installed base that supports the setting")
+                .hint("Switch this VM to an installed base that supports the setting")
                 .clicked()
         {
             self.switch = Some(base.id.clone());
@@ -198,7 +246,58 @@ impl<'a> Fit<'a> {
     }
 
     fn arm64(&self) -> bool {
-        self.arch == GuestArch::AARCH64
+        self.view.arch == GuestArch::AARCH64
+    }
+
+    /// The Still visible section: what the profile, as this VM starts it,
+    /// leaves visible, then what it cannot apply and the VM's size.
+    fn still_visible(&self, ui: &mut egui::Ui, profile: &StealthProfile, size_hints: &[&str]) {
+        let (fitted, notes) = profile
+            .for_arch(self.view.arch)
+            .fitted(&self.base, self.host);
+        for giveaway in fitted.still_visible(&self.view) {
+            ui.label(format!("• {giveaway}"));
+        }
+        for note in notes {
+            ui.colored_label(theme::warn(), format!("• {note}"));
+        }
+        // The VM's own settings, which pafish-style checks read.
+        for hint in size_hints {
+            ui.colored_label(theme::warn(), format!("• The VM's size: {hint}"));
+        }
+    }
+
+    /// Under an IoT preset: BusyBox is the base it suggests (a device runs no
+    /// desktop and no systemd), with a switch to an installed arm64 BusyBox
+    /// base when the VM is on another.
+    fn iot_base(&mut self, ui: &mut egui::Ui, profile: &StealthProfile) {
+        if profile.preset != StealthPreset::Iot || !self.arm64() {
+            return;
+        }
+        let busybox = |base: &BaseSummary| base.arch == GuestArch::AARCH64 && base.guest.is_none();
+        let on_busybox = self
+            .current
+            .and_then(|id| self.bases.iter().find(|base| base.id == id))
+            .is_some_and(busybox);
+        if on_busybox {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(
+                theme::muted(),
+                "Suggested base: BusyBox (arm64), as a device runs no desktop.",
+            );
+            if let Some(base) = self.bases.iter().find(|base| busybox(base))
+                && ui
+                    .add_enabled(
+                        ui.is_enabled(),
+                        egui::Button::new(format!("Use base {}", base.label)),
+                    )
+                    .clicked()
+            {
+                self.switch = Some(base.id.clone());
+            }
+        });
     }
 
     /// The arm64 VM boots UEFI: its base supports it and AAVMF is here.
@@ -241,22 +340,39 @@ impl<'a> Fit<'a> {
 }
 
 /// Picks a preset, applying it to every entry, and a cloud's provider beside it.
-fn preset_combo(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
-    preset_list(ui, profile, id);
+fn preset_combo(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str, arch: GuestArch) {
+    preset_list(ui, profile, id, arch);
     provider_list(ui, profile, id);
 }
 
-fn preset_list(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
+/// The presets for a VM of `arch`; one it cannot present (the IoT device on
+/// x86-64) is listed disabled with the reason.
+fn preset_list(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str, arch: GuestArch) {
     let mut preset = profile.preset;
     egui::ComboBox::from_id_salt(id)
         .selected_text(preset.label())
         .width(260.0)
+        .truncate()
         // Every preset without scrolling.
         .height(400.0)
         .show_ui(ui, |ui| {
             for &option in StealthPreset::ALL {
-                ui.selectable_value(&mut preset, option, option.label())
-                    .on_hover_text(option.description());
+                let reason = option.unavailable(arch);
+                let response = ui.add_enabled(
+                    reason.is_none(),
+                    egui::Button::selectable(preset == option, option.label()),
+                );
+                match reason {
+                    Some(reason) => {
+                        response
+                            .on_disabled_hover_text(format!("{} ({reason})", option.description()));
+                    }
+                    None => {
+                        if response.hint(option.description()).clicked() {
+                            preset = option;
+                        }
+                    }
+                }
             }
         });
     if preset != profile.preset {
@@ -273,6 +389,7 @@ fn provider_list(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
         egui::ComboBox::from_id_salt(format!("{id}_cloud"))
             .selected_text(current.label)
             .width(260.0)
+            .truncate()
             .show_ui(ui, |ui| {
                 for provider in CLOUDS {
                     ui.selectable_value(&mut picked, provider, provider.label);
@@ -291,15 +408,18 @@ pub(super) fn preset_row(
     open: &mut bool,
     fallbacks: &[Fallback],
     details_label: &str,
+    arch: GuestArch,
 ) {
     // The provider's list has a row of its own, so the form keeps the width
     // of one list whichever profile is chosen.
     ui.horizontal_wrapped(|ui| {
         ui.label("Device profile");
-        ui.label(RichText::new(egui_phosphor::regular::QUESTION).color(theme::muted()))
-            .on_hover_text("Could be helpful for handling anti-VM or anti-sandbox checks.");
+        help(
+            ui,
+            "Could be helpful for handling anti-VM or anti-sandbox checks.",
+        );
     });
-    preset_list(ui, profile, "vm_stealth_preset");
+    preset_list(ui, profile, "vm_stealth_preset", arch);
     ui.end_row();
     if profile.preset == StealthPreset::CloudVps {
         ui.label("");
@@ -311,7 +431,7 @@ pub(super) fn preset_row(
         ui.weak(profile.preset.description());
         if ui
             .button(details_label)
-            .on_hover_text("Machine identity, CPU, network card and devices")
+            .hint("Machine identity, CPU, network card and devices")
             .clicked()
         {
             *open = !*open;
@@ -330,7 +450,7 @@ pub(super) fn preset_row(
                     }
                 ),
             )
-            .on_hover_text(
+            .hint(
                 fallbacks
                     .iter()
                     .map(|fallback| fallback.summary.as_str())
@@ -341,6 +461,24 @@ pub(super) fn preset_row(
     });
     ui.end_row();
 }
+
+/// A muted note that wraps at the width it has (outside a grid: a grid cell
+/// does not wrap, and a long note there widened the window to the screen's
+/// edge, the arm64 one under Firmware and ACPI).
+fn note(ui: &mut egui::Ui, text: &str) {
+    // At most the window's opening width: wrapped at the scroll area's
+    // width, the note still came out a scroll bar wider than the window.
+    ui.scope(|ui| {
+        ui.set_max_width(ui.available_width().min(NOTE_WIDTH));
+        ui.add(egui::Label::new(RichText::new(text).color(theme::muted())).wrap());
+    });
+}
+
+/// The widest a note in the window is laid out.
+const NOTE_WIDTH: f32 = 440.0;
+
+/// The window's content width when it opens, and its least.
+const WINDOW_WIDTH: f32 = 520.0;
 
 fn text_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.label(label);
@@ -383,7 +521,7 @@ fn oem_strings(ui: &mut egui::Ui, identity: &mut MachineIdentity) {
                 .desired_rows(3)
                 .desired_width(crate::theme::plain_edit_width(260.0)),
         )
-        .on_hover_text("SMBIOS type 11, one string per line; PC firmware fills it, QEMU does not")
+        .hint("SMBIOS type 11, one string per line; PC firmware fills it, QEMU does not")
         .changed()
     {
         identity.oem_strings = text
@@ -415,6 +553,7 @@ fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
             egui::ComboBox::from_id_salt("vm_stealth_machine_combo")
                 .selected_text(current)
                 .width(260.0)
+                .truncate()
                 .show_ui(ui, |ui| {
                     for machine in MACHINES {
                         let label = format!(
@@ -455,6 +594,7 @@ fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
                 egui::ComboBox::from_id_salt("vm_stealth_chassis")
                     .selected_text(chassis)
                     .width(260.0)
+                    .truncate()
                     .show_ui(ui, |ui| {
                         for (kind, label) in CHASSIS {
                             ui.selectable_value(&mut profile.identity.chassis_type, *kind, *label);
@@ -468,7 +608,7 @@ fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
         ui.horizontal(|ui| {
             if ui
                 .button("Randomize serials")
-                .on_hover_text("New serials, UUID, disk serial and MAC address")
+                .hint("New serials, UUID, disk serial and MAC address")
                 .clicked()
             {
                 profile.identity.rerandomize();
@@ -495,8 +635,35 @@ fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
 
 fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     let base = fit.base;
+    if fit.arm64() {
+        ui.horizontal(|ui| {
+            ui.label("Firmware");
+            choice(
+                ui,
+                "vm_stealth_firmware_kind",
+                &mut profile.firmware,
+                Firmware::ALL,
+                Firmware::label,
+                |firmware| firmware_unavailable(firmware, &base, fit.host),
+            );
+        });
+        fit.line(ui, profile, FallbackSetting::Firmware);
+        // The machine's own tables replace the PC fields and devices. Below
+        // the row, where it wraps at the window's width (in a grid cell it
+        // widened the window to the screen's edge).
+        note(
+            ui,
+            "On arm64, UEFI is AAVMF and BIOS boots the kernel on a device tree. \
+             The machine's ACPI IDs and SMBIOS tables are filled from the catalog; \
+             the PC devices (HPET, VMware port, ICH9 USB, SMM) do not apply.",
+        );
+        return;
+    }
+    // The two grids share their label column's width, so their rows line up.
+    let labels = 110.0;
     egui::Grid::new("vm_stealth_firmware")
         .num_columns(2)
+        .min_col_width(labels)
         .spacing([12.0, 6.0])
         .show(ui, |ui| {
             ui.label("Firmware");
@@ -510,27 +677,20 @@ fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
             );
             ui.end_row();
             fit.row(ui, profile, FallbackSetting::Firmware);
-            if fit.arm64() {
-                // The machine's own tables replace the PC fields and devices.
-                ui.label("");
-                ui.colored_label(
-                    theme::muted(),
-                    "On arm64, UEFI is AAVMF and BIOS boots the kernel on a device tree. \
-                     The machine's ACPI IDs and SMBIOS tables are filled from the catalog; \
-                     the PC devices (HPET, VMware port, ICH9 USB, SMM) do not apply.",
-                );
-                ui.end_row();
-                return;
-            }
-            if profile.firmware == Firmware::UefiSecureBoot {
-                ui.label("");
-                ui.colored_label(
-                    theme::muted(),
-                    "OVMF finds the kernel unsigned and starts it with its legacy loader; \
-                     the guest sees Secure Boot on",
-                );
-                ui.end_row();
-            }
+        });
+    // Below the grid, where it wraps at the window's width.
+    if profile.firmware == Firmware::UefiSecureBoot {
+        note(
+            ui,
+            "OVMF finds the kernel unsigned and starts it with its legacy loader; \
+             the guest sees Secure Boot on",
+        );
+    }
+    egui::Grid::new("vm_stealth_firmware_tables")
+        .num_columns(2)
+        .min_col_width(labels)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
             if profile.identity_enabled {
                 text_row(ui, "ACPI OEM ID", &mut profile.identity.acpi_oem_id);
                 text_row(ui, "ACPI table ID", &mut profile.identity.acpi_table_id);
@@ -555,21 +715,25 @@ fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
             ui.end_row();
             ui.label("");
             ui.checkbox(&mut profile.vmport, "VMware backdoor port")
-                .on_hover_text("Only VMware VMs have it; real PCs do not");
+                .hint("Only VMware VMs have it; real PCs do not");
             ui.end_row();
             ui.label("");
             ui.checkbox(&mut profile.usb, "Intel ICH9 USB controllers")
-                .on_hover_text("Every PC has USB; QEMU adds none by default");
+                .hint("Every PC has USB; QEMU adds none by default");
             ui.end_row();
             ui.label("");
             let secure_boot = profile.firmware == Firmware::UefiSecureBoot;
             let mut smm = profile.smm || secure_boot;
+            let editable = ui.is_enabled();
             ui.add_enabled(
                 !secure_boot,
                 egui::Checkbox::new(&mut smm, "System management mode"),
             )
-            .on_hover_text("PCs have SMM; Secure Boot firmware needs it")
-            .on_disabled_hover_text("Secure Boot firmware keeps its variables in SMM");
+            .hint_or(
+                "PCs have SMM; Secure Boot firmware needs it",
+                "Secure Boot firmware keeps its variables in SMM",
+                editable,
+            );
             if !secure_boot {
                 profile.smm = smm;
             }
@@ -586,7 +750,7 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
         &mut profile.cpu_passthrough,
         "Pass the host CPU through (its real name and features)",
     )
-    .on_hover_text("Needs KVM; without it the model is named after the host CPU");
+    .hint("Needs KVM; without it the model is named after the host CPU");
     if !profile.cpu_passthrough {
         egui::Grid::new("vm_stealth_cpu_model")
             .num_columns(2)
@@ -602,6 +766,7 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 egui::ComboBox::from_id_salt("vm_stealth_cpu_named")
                     .selected_text(current)
                     .width(260.0)
+                    .truncate()
                     .show_ui(ui, |ui| {
                         if ui
                             .selectable_label(
@@ -619,7 +784,7 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                         {
                             if ui
                                 .selectable_label(profile.cpu_model == model.model, model.model)
-                                .on_hover_text(model.brand)
+                                .hint(model.brand)
                                 .clicked()
                             {
                                 profile.cpu_model = model.model.into();
@@ -634,21 +799,23 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                     !profile.cpu_model.is_empty(),
                     egui::Checkbox::new(&mut profile.model_cache_info, "The model's own caches"),
                 )
-                .on_hover_text("Its real cache layout and an L3 instead of QEMU's legacy one");
+                .hint("Its real cache layout and an L3 instead of QEMU's legacy one");
                 ui.end_row();
             });
     }
     ui.checkbox(&mut profile.hide_hypervisor, "Hide the hypervisor CPU flag");
     ui.checkbox(&mut profile.hide_kvm, "Hide the KVM signature")
-        .on_hover_text(
-            "The guest then uses its TSC instead of kvm-clock: a small timekeeping cost",
-        );
+        .hint("The guest then uses its TSC instead of kvm-clock: a small timekeeping cost");
+    let editable = ui.is_enabled();
     ui.add_enabled(
         !profile.hide_kvm,
         egui::Checkbox::new(&mut profile.kvm_clock, "kvm-clock"),
     )
-    .on_hover_text("The guest's clock source while the KVM signature is shown")
-    .on_disabled_hover_text("Hiding the KVM signature also hides kvm-clock");
+    .hint_or(
+        "The guest's clock source while the KVM signature is shown",
+        "Hiding the KVM signature also hides kvm-clock",
+        editable,
+    );
     ui.checkbox(&mut profile.pmu, "Performance counters");
     ui.checkbox(&mut profile.realistic_topology, "One socket with N cores");
     let smt = &fit.host.smt;
@@ -656,17 +823,20 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
         profile.realistic_topology && smt.is_ok(),
         egui::Checkbox::new(&mut profile.smt, "Two threads per core"),
     )
-    .on_hover_text("As a CPU with SMT: N/2 cores of two threads (an even CPU count)")
-    .on_disabled_hover_text(match smt {
-        Err(reason) => reason.clone(),
-        Ok(()) => "Needs one socket with N cores".to_owned(),
-    });
+    .hint_or(
+        "As a CPU with SMT: N/2 cores of two threads (an even CPU count)",
+        match smt {
+            Err(reason) => reason.clone(),
+            Ok(()) => "Needs one socket with N cores".to_owned(),
+        },
+        editable,
+    );
     fit.line(ui, profile, FallbackSetting::Smt);
     ui.add_enabled(
         profile.cpu_passthrough,
         egui::Checkbox::new(&mut profile.host_cache_info, "The host's cache sizes"),
     )
-    .on_hover_text("QEMU otherwise reports its own cache sizes; passthrough only");
+    .hint("QEMU otherwise reports its own cache sizes; passthrough only");
 }
 
 fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
@@ -679,6 +849,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
             egui::ComboBox::from_id_salt("vm_stealth_nic")
                 .selected_text(profile.nic.label())
                 .width(260.0)
+                .truncate()
                 .show_ui(ui, |ui| {
                     for &nic in NicModel::ALL {
                         ui.selectable_value(&mut profile.nic, nic, nic.label());
@@ -697,14 +868,14 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 );
                 if ui
                     .button("Random")
-                    .on_hover_text("A random address with the card's vendor prefix")
+                    .hint("A random address with the card's vendor prefix")
                     .clicked()
                 {
                     profile.new_mac();
                 }
                 if ui
                     .button("Local")
-                    .on_hover_text("A random locally administered address, which names no vendor")
+                    .hint("A random locally administered address, which names no vendor")
                     .clicked()
                 {
                     profile.new_local_mac();
@@ -730,7 +901,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                         .desired_width(crate::theme::plain_edit_width(150.0))
                         .hint_text(crate::theme::placeholder(ui, "8086:0000")),
                 )
-                .on_hover_text("A board's own card carries its maker's PCI subsystem IDs");
+                .hint("A board's own card carries its maker's PCI subsystem IDs");
                 ui.end_row();
             }
             ui.label("Guest network");
@@ -742,14 +913,14 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 );
                 if ui
                     .button("Home")
-                    .on_hover_text("192.168.1.0/24 behind a router at .1")
+                    .hint("192.168.1.0/24 behind a router at .1")
                     .clicked()
                 {
                     profile.nat = NatNetwork::home();
                 }
                 if ui
                     .button("QEMU default")
-                    .on_hover_text("10.0.2.0/24, which QEMU and VirtualBox share")
+                    .hint("10.0.2.0/24, which QEMU and VirtualBox share")
                     .clicked()
                 {
                     profile.nat = NatNetwork::default();
@@ -811,7 +982,7 @@ fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
             }
             ui.label("CD-ROM");
             ui.checkbox(&mut profile.cdrom, "An empty SATA CD-ROM drive")
-                .on_hover_text(
+                .hint(
                     "Desktops with an optical drive have one; QEMU's answers \
                      \"QEMU DVD-ROM\" to the SCSI inquiry whatever its model",
                 );
@@ -835,12 +1006,15 @@ fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
 }
 
 fn display(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
+    let editable = ui.is_enabled();
     ui.label("Pointer");
     for &pointer in Pointer::ALL {
         let usable = pointer != Pointer::UsbTablet || profile.usb;
         ui.add_enabled_ui(usable, |ui| {
-            ui.radio_value(&mut profile.pointer, pointer, pointer.label())
-                .on_disabled_hover_text("Needs the Intel ICH9 USB controllers");
+            let response = ui.radio_value(&mut profile.pointer, pointer, pointer.label());
+            if editable {
+                response.on_disabled_hover_text("Needs the Intel ICH9 USB controllers");
+            }
             ui.label(RichText::new(pointer.cost()).small().color(theme::muted()));
         });
     }
@@ -858,116 +1032,27 @@ fn clock(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     fit.line(ui, profile, FallbackSetting::Uptime);
     ui.add_space(4.0);
     ui.checkbox(&mut profile.rtc_localtime, "Real-time clock in local time")
-        .on_hover_text(
+        .hint(
             "Linux PCs keep it in UTC and Linux guests read it as UTC; Windows PCs in local time",
         );
     ui.horizontal(|ui| {
         ui.label("Driven by");
         ui.radio_value(&mut profile.rtc_clock, RtcClock::Host, "the host's clock")
-            .on_hover_text("Wall time goes on while the VM is paused");
+            .hint("Wall time goes on while the VM is paused");
         ui.radio_value(&mut profile.rtc_clock, RtcClock::Vm, "the VM's clock")
-            .on_hover_text("Stops while the VM is paused, as if it had been off");
+            .hint("Stops while the VM is paused, as if it had been off");
     });
     ui.checkbox(&mut profile.rtc_driftfix, "Catch up on missed clock ticks")
-        .on_hover_text("For guests that count RTC interrupts (Windows); Linux does not need it");
-}
-
-/// The boot's age: how long the guest says it has been up when it starts.
-fn uptime(ui: &mut egui::Ui, profile: &mut StealthProfile, debian: bool) {
-    let kind = BootAge::of(profile);
-    let (low, high) = kind.range();
-    let range = format!(
-        "{} machine: {} to {}",
-        if kind == BootAge::Server {
-            "A server or cloud"
-        } else {
-            "A desktop or laptop"
-        },
-        boot_age_text(low),
-        boot_age_text(high)
-    );
-    ui.horizontal(|ui| {
-        let mut aged = profile.boot_age_s > 0;
-        if ui
-            .checkbox(&mut aged, "Booted a while ago")
-            .on_hover_text(
-                "The guest boots this long ago, the same at every start of the VM, and \
-                 reaches the present when the first program starts: a desktop or laptop as \
-                 if it slept for part of it, a server or cloud machine as if it never \
-                 stopped. Off: a fresh boot (minutes of uptime).",
-            )
-            .changed()
-        {
-            profile.boot_age_s = if aged { kind.draw() } else { 0 };
-        }
-        if profile.boot_age_s > 0 {
-            ui.label(format!("up {}", boot_age_text(profile.boot_age_s)));
-            if ui
-                .button("Draw again")
-                .on_hover_text(range.clone())
-                .clicked()
-            {
-                profile.boot_age_s = kind.draw();
-            }
-        }
-    });
-    ui.label(RichText::new(range).small().color(theme::muted()));
-    if profile.boot_age_s > 0 {
-        clock_model(ui, profile, debian);
-    }
-}
-
-/// The label of a clock model; Auto names what it resolves to.
-pub(super) fn clock_model_label(
-    model: ClockModel,
-    profile: &StealthProfile,
-    debian: bool,
-) -> String {
-    match model {
-        ClockModel::Auto => format!(
-            "Auto ({})",
-            match profile.resolved_clock(debian) {
-                ClockModel::Continuous => "Always running",
-                _ => "Suspend",
-            }
-        ),
-        ClockModel::Continuous => "Always running".into(),
-        ClockModel::Suspend => "Suspend".into(),
-    }
-}
-
-/// How the boot age reaches the guest's clocks.
-fn clock_model(ui: &mut egui::Ui, profile: &mut StealthProfile, debian: bool) {
-    ui.horizontal(|ui| {
-        ui.label("Clock model");
-        let shown = clock_model_label(profile.clock_model, profile, debian);
-        egui::ComboBox::from_id_salt("stealth_clock_model")
-            .selected_text(shown)
-            .show_ui(ui, |ui| {
-                for option in [
-                    ClockModel::Auto,
-                    ClockModel::Continuous,
-                    ClockModel::Suspend,
-                ] {
-                    let label = clock_model_label(option, profile, debian);
-                    ui.selectable_value(&mut profile.clock_model, option, label);
-                }
-            })
-            .response
-            .on_hover_text(
-                "Always running: the machine never stopped, so both of the guest's clocks \
-                 (CLOCK_MONOTONIC and CLOCK_BOOTTIME) step by the boot age. Suspend: the age \
-                 reads as time asleep, so only CLOCK_BOOTTIME steps. Auto: a server or cloud \
-                 machine is always running and a desktop or laptop suspends, except on a \
-                 Debian base, where stepping CLOCK_MONOTONIC makes systemd's watchdogs kill \
-                 journald, udevd and logind at the first launch.",
-            );
-    });
+        .hint("For guests that count RTC interrupts (Windows); Linux does not need it");
 }
 
 /// A preset applied this frame stays that preset; any other edit is Custom.
+/// The uptime is not one of those edits: each preset draws one per VM, and a
+/// typed or redrawn one keeps the machine the preset made (and its range).
 pub(super) fn settle_preset(before: &StealthProfile, profile: &mut StealthProfile) {
-    if profile != before
+    let mut other = profile.clone();
+    other.boot_age_s = before.boot_age_s;
+    if other != *before
         && profile.preset == before.preset
         && profile.preset != StealthPreset::Custom
     {
@@ -993,57 +1078,66 @@ pub(super) fn window(
         .open(open)
         .collapsible(false)
         .resizable(true)
-        .default_width(520.0)
+        .default_width(WINDOW_WIDTH)
         .max_height((ctx.content_rect().height() - 100.0).max(200.0))
         .show(ctx, |ui| {
+            // Never narrower than it opens: the widest section (Firmware and
+            // ACPI's fields) fits, so opening one does not widen the window.
+            ui.set_min_width(WINDOW_WIDTH);
             let before = profile.clone();
+            // Read-only (a running VM): the entries are disabled, but the
+            // sections still open and their hints still show.
             ui.add_enabled_ui(editable, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Preset");
-                    preset_combo(ui, profile, "vm_stealth_window_preset");
+                    preset_combo(ui, profile, "vm_stealth_window_preset", fit.view.arch);
                 });
-                fit.summary(ui);
-                egui::ScrollArea::vertical()
-                    .id_salt("vm_stealth_scroll")
-                    .max_height((ctx.content_rect().height() - 330.0).max(120.0))
-                    .show(ui, |ui| {
-                        egui::CollapsingHeader::new("Hardware identity")
-                            .default_open(true)
-                            .show(ui, |ui| {
+            });
+            fit.iot_base(ui, profile);
+            fit.summary(ui);
+            egui::ScrollArea::vertical()
+                .id_salt("vm_stealth_scroll")
+                // The bar's room is kept whether the list scrolls or not: a
+                // section that made it scroll widened the window by the bar.
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .max_height((ctx.content_rect().height() - 330.0).max(120.0))
+                .show(ui, |ui| {
+                    let section = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
+                        ui.add_enabled_ui(editable, |ui| add(ui));
+                    };
+                    egui::CollapsingHeader::new("Hardware identity")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            section(ui, &mut |ui| {
                                 if fit.arm64() {
                                     arm64::hardware(ui, profile, fit.uefi());
                                 } else {
                                     hardware(ui, profile);
                                 }
-                            });
-                        egui::CollapsingHeader::new("Firmware and ACPI")
-                            .show(ui, |ui| firmware(ui, profile, fit));
-                        egui::CollapsingHeader::new("CPU").show(ui, |ui| cpu(ui, profile, fit));
-                        egui::CollapsingHeader::new("Network")
-                            .show(ui, |ui| network(ui, profile, fit));
-                        egui::CollapsingHeader::new("Storage and devices").show(ui, |ui| {
+                            })
+                        });
+                    egui::CollapsingHeader::new("Firmware and ACPI").show(ui, |ui| {
+                        section(ui, &mut |ui| firmware(ui, profile, fit));
+                    });
+                    egui::CollapsingHeader::new("CPU").show(ui, |ui| {
+                        section(ui, &mut |ui| cpu(ui, profile, fit));
+                    });
+                    egui::CollapsingHeader::new("Network").show(ui, |ui| {
+                        section(ui, &mut |ui| network(ui, profile, fit));
+                    });
+                    egui::CollapsingHeader::new("Storage and devices").show(ui, |ui| {
+                        section(ui, &mut |ui| {
                             storage(ui, profile, fit);
                             ui.add_space(6.0);
                             display(ui, profile, fit);
                         });
-                        egui::CollapsingHeader::new("Clock").show(ui, |ui| clock(ui, profile, fit));
-                        egui::CollapsingHeader::new("Still visible").show(ui, |ui| {
-                            let (fitted, notes) = profile.fitted(&fit.base, fit.host);
-                            for giveaway in
-                                fitted.giveaways_for(fit.arch, fit.fast_emulation, fit.debian())
-                            {
-                                ui.label(format!("• {giveaway}"));
-                            }
-                            for note in notes {
-                                ui.colored_label(theme::warn(), format!("• {note}"));
-                            }
-                            // The VM's own settings, which pafish-style checks read.
-                            for hint in size_hints {
-                                ui.colored_label(theme::warn(), format!("• The VM's size: {hint}"));
-                            }
-                        });
                     });
-            });
+                    egui::CollapsingHeader::new("Clock").show(ui, |ui| {
+                        section(ui, &mut |ui| clock(ui, profile, fit));
+                    });
+                    egui::CollapsingHeader::new("Still visible")
+                        .show(ui, |ui| fit.still_visible(ui, profile, size_hints));
+                });
             settle_preset(&before, profile);
             if let Err(error) = profile.validate() {
                 ui.colored_label(theme::error(), error);

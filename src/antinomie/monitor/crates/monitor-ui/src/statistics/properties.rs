@@ -76,7 +76,13 @@ impl Facts {
                     ("Accelerator".to_owned(), accelerator),
                     ("vCPUs".to_owned(), env.cpus.to_string()),
                     ("RAM".to_owned(), format!("{} MiB", env.ram_mib)),
-                    ("Stealth profile".to_owned(), env.stealth.clone()),
+                    (
+                        "Stealth profile".to_owned(),
+                        antinomie_monitor_core::stealth::StealthPreset::recorded_label(
+                            &env.stealth,
+                        )
+                        .to_owned(),
+                    ),
                     ("Network".to_owned(), env.network.clone()),
                 ]
             })

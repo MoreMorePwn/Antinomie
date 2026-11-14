@@ -58,6 +58,7 @@ mod startup;
 mod statistics;
 mod stealth;
 mod stealth_shots;
+mod stealth_window;
 mod stop_run_shots;
 mod tcg_fallback;
 mod tcg_shots;

@@ -154,6 +154,12 @@ fn edits_make_the_profile_custom_and_presets_stay_named() {
     let mut unchanged = before.clone();
     crate::app::stealth::settle_preset(&before, &mut unchanged);
     assert_eq!(unchanged.preset, StealthPreset::RealisticDesktop);
+
+    // A typed or redrawn uptime keeps the preset (each preset draws one).
+    let mut aged = before.clone();
+    aged.boot_age_s = 7_200;
+    crate::app::stealth::settle_preset(&before, &mut aged);
+    assert_eq!(aged.preset, StealthPreset::RealisticDesktop);
 }
 
 #[test]
@@ -181,10 +187,7 @@ fn dialog_shows_the_preset_and_the_window_its_sections() {
     let mut app = app();
     app.new_image();
     let texts = shown(&mut app, size);
-    assert!(
-        texts.iter().any(|text| text == "Realistic desktop"),
-        "{texts:?}"
-    );
+    assert!(texts.iter().any(|text| text == "Desktop"), "{texts:?}");
     assert!(!texts.iter().any(|text| text.contains("Detected as a VM")));
 
     app.stealth_open = true;

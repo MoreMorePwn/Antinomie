@@ -43,15 +43,14 @@ pub(super) fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile, uefi: bo
             egui::ComboBox::from_id_salt("vm_stealth_arm_machine_combo")
                 .selected_text(current)
                 .width(260.0)
+                .truncate()
                 .show_ui(ui, |ui| {
                     if ui
                         .selectable_label(
                             profile.identity_enabled && pinned(profile).is_none(),
                             AUTOMATIC,
                         )
-                        .on_hover_text(
-                            "A machine of the preset's kind, the same one for the VM's life",
-                        )
+                        .hint("A machine of the preset's kind, the same one for the VM's life")
                         .clicked()
                     {
                         profile.identity_enabled = true;
@@ -106,7 +105,7 @@ pub(super) fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile, uefi: bo
             );
             if ui
                 .button("Randomize serials")
-                .on_hover_text("New serials, UUID and MAC address (an automatic pick may change)")
+                .hint("New serials, UUID and MAC address (an automatic pick may change)")
                 .clicked()
             {
                 profile.identity.rerandomize();
