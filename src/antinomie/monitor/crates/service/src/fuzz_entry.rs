@@ -130,6 +130,19 @@ mod tests {
     }
 
     #[test]
+    fn a_long_number_in_overrides_reads_back_as_the_same_number() {
+        // fuzz/artifacts/job_spec crash of 2026-11-14: a 73-digit integer parses as
+        // an f64 that, without serde_json's float_roundtrip, reads back as another.
+        job_spec(br#"{"sample": {"upload_id": "u_01ARZ3NDEKTSV4RRFFQ69G5FAV"}, "name": "a.sh", "preset": "standard", "priority": 7, "labels": {"case": "%2", "src.x": "y"}, "idempotency_key": "k-1", "overrides": {"timeout_s": 5955555555555333333355555555555555555555555555555555555555555555555555555,"5 arp": true}}"#);
+        for text in ["0.1", "1e300", "2.2250738585072014e-308", "123456789012345678901234567890"] {
+            let value: serde_json::Value = serde_json::from_str(text).unwrap();
+            let again: serde_json::Value =
+                serde_json::from_str(&serde_json::to_string(&value).unwrap()).unwrap();
+            assert_eq!(again, value, "{text}");
+        }
+    }
+
+    #[test]
     fn every_entry_survives_hostile_and_generated_bytes() {
         let deep = "(".repeat(5000);
         let deep_not = "not ".repeat(5000);

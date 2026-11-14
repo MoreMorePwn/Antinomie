@@ -1269,6 +1269,11 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **A number in a run request reads back as the same number.** A very long number
+  in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
+  integer) was read as a floating-point value that, written again by the service,
+  read back as a slightly different one. serde_json's `float_roundtrip` is now on
+  for every crate.
 - **Published base sources keep each base's own build recipe.**
   `scripts/publish-base-sources.py` put the build recipe under the kernel's folder,
   which every base of one patch series shares, so publishing a base built from a
