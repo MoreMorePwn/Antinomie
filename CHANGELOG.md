@@ -7,8 +7,8 @@ it runs.
 ## 0.9.0 — 2026-MM-DD
 
 Runs the bases 0.8.3 runs (contract revision 20), revision-21 bases and the
-bases built by this release (contract revision 22), arm64 BusyBox and Debian 13
-Minimal among them. An app older than 0.9.0 refuses a revision-21 or 22 base and
+bases built by this release (contract revision 22), arm64 BusyBox, Debian 13
+Minimal and Debian 13 GNOME among them. An app older than 0.9.0 refuses a revision-21 or 22 base and
 an arm64 base before it starts a VM; on a revision-21 base the revision-22
 features below say they need a newer base. x86-64 bases built by this release also record 32-bit
 x86 programs by their own table.
@@ -16,6 +16,9 @@ x86 programs by their own table.
 ### Host
 
 - **Debian 13 GNOME bases for 0.9.0, and arm64 Debian desktops in the builder (ANT-T0484).**
+  - Debian 13 GNOME at revision 22 for x86-64 and for arm64, on the kernels of the revision-22
+    Debian 13 Minimal bases. Under CPU emulation the arm64 desktop's greeter appears after
+    about five minutes.
   - The base builder builds the Debian desktops (GNOME and the others) for arm64 as it builds
     Debian 13 Minimal: in the container builder on a host with a `qemu-aarch64` binfmt handler
     (F flag), else in the QEMU builder, never natively (`build-base.py` job
