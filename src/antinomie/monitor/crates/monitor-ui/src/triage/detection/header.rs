@@ -497,15 +497,19 @@ impl View {
             if !self.kept_note[index].is_empty() {
                 note(self.kept_note[index].clone(), self.kept_note[index].clone());
             }
-            if report.omitted_evidence > 0 {
+            if let Some(text) = saved_hits_note(report) {
+                note(text.clone(), text);
+            }
+            let other = report.omitted_evidence.saturating_sub(report.over_limit);
+            if other > 0 {
                 note(
                     format!(
                         "{} evidence locations not previewed",
-                        engine::group_digits(report.omitted_evidence)
+                        engine::group_digits(other)
                     ),
                     format!(
                         "{} evidence locations exceed the preview or have no recorded position",
-                        report.omitted_evidence
+                        engine::group_digits(other)
                     ),
                 );
             }
@@ -630,11 +634,71 @@ fn evaluated_text(report: &Report) -> (String, String) {
 // What an evidence key means, in words: `antinomie_triage::detection`'s.
 pub(super) use antinomie_triage::detection::evidence_note;
 
+/// The note of a scan that kept fewer hit positions than it counted
+/// (item 25): every hit, the saved ones, and how to keep more. None when
+/// every hit was saved, and on results saved before the left-out hits were
+/// counted (those keep the general "not previewed" line).
+pub(super) fn saved_hits_note(
+    report: &antinomie_monitor_core::analysis::detection::Report,
+) -> Option<String> {
+    if report.over_limit == 0 {
+        return None;
+    }
+    let saved: u64 = report
+        .findings
+        .iter()
+        .map(|finding| finding.evidence.len() as u64)
+        .sum();
+    let hits = saved + report.over_limit;
+    let per_rule = report
+        .evidence_limit
+        .map(|limit| format!(" (at most {} per rule)", engine::group_digits(limit)))
+        .unwrap_or_default();
+    Some(format!(
+        "{} hits, {} saved{per_rule}. Raise Saved hits per rule in Settings and scan again to keep more.",
+        engine::group_digits(hits),
+        engine::group_digits(saved)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::{finding, frames, rendered_text, report};
     use super::*;
     use antinomie_monitor_core::analysis::detection::{InputOutcome, ScannedInput};
+
+    /// Item 25: a scan that saved fewer positions than it counted says so
+    /// plainly, with how to keep more; an old result keeps its old line.
+    #[test]
+    fn the_saved_hits_note_counts_every_hit_and_says_how_to_keep_more() {
+        let evidence = |n: usize| {
+            (0..n)
+                .map(|i| Evidence::Bytes {
+                    path: "/specimen".into(),
+                    offset: Some(i as u64),
+                    address: None,
+                    report_id: None,
+                    block: None,
+                    input: None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut scan = report(vec![finding("r", "Rule", evidence(100))]);
+        assert_eq!(saved_hits_note(&scan), None);
+        scan.evidence_limit = Some(100);
+        scan.over_limit = 225;
+        scan.omitted_evidence = 225;
+        assert_eq!(
+            saved_hits_note(&scan).as_deref(),
+            Some(
+                "325 hits, 100 saved (at most 100 per rule). Raise Saved hits per rule in \
+                 Settings and scan again to keep more."
+            )
+        );
+        // A result saved before the count: no limit recorded, no new line.
+        let old = report(vec![finding("r", "Rule", evidence(16))]);
+        assert_eq!(saved_hits_note(&old), None);
+    }
 
     #[test]
     fn engine_tab_badges_use_all_findings_and_show_pending_and_zero() {

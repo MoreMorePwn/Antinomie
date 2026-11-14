@@ -8,7 +8,6 @@ use std::{
 
 const BLOCK_SIZE: usize = 64 * 1024 * 1024;
 const TOTAL_SIZE: u64 = 512 * 1024 * 1024;
-const EVIDENCE_LIMIT: usize = 16;
 
 mod extra;
 mod physical;
@@ -140,6 +139,14 @@ fn record(
                 continue;
             }
         };
+        // The positions saved per rule (Settings > Detection rules); every
+        // hit past them is counted, so saved and left out add up to all.
+        let limit = report
+            .evidence_limit
+            .map_or(super::EVIDENCE_LIMIT_DEFAULT as usize, |limit| {
+                limit as usize
+            });
+        let mut over = 0u64;
         let finding = &mut report.findings[index];
         // One occurrence is one matched target/block, not one string match.
         finding.count += 1;
@@ -147,9 +154,9 @@ fn record(
         for pattern in rule.patterns() {
             for found in pattern.matches() {
                 located = true;
-                if finding.evidence.len() >= EVIDENCE_LIMIT {
-                    report.omitted_evidence += 1;
-                    break;
+                if finding.evidence.len() >= limit {
+                    over += 1;
+                    continue;
                 }
                 let relative = found.range().start as u64;
                 finding.evidence.push(Evidence::Bytes {
@@ -165,7 +172,7 @@ fn record(
             }
         }
         if !located {
-            if finding.evidence.len() < EVIDENCE_LIMIT {
+            if finding.evidence.len() < limit {
                 finding.evidence.push(Evidence::Bytes {
                     path: target.path.to_path_buf(),
                     offset: None,
@@ -175,9 +182,11 @@ fn record(
                     input: Some(target.input),
                 });
             } else {
-                report.omitted_evidence += 1;
+                over += 1;
             }
         }
+        report.over_limit += over;
+        report.omitted_evidence += over;
     }
     Ok(block.sha256)
 }
@@ -545,6 +554,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     let request = &staged.request;
     let mut report = Report::empty(Engine::Yara, request.identity.clone());
     report.selection = staged.selection.clone();
+    report.evidence_limit = Some(u64::from(request.settings.evidence_limit()));
     if staged.no_rules || staged.yara_sources.is_empty() && staged.warnings.is_empty() {
         report.state = State::NoRules;
         report.warnings.push("No rules enabled".into());
@@ -793,6 +803,72 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Item 25 (2026-11-14): the saved positions per rule follow the
+    /// setting (100 by default), and every hit past them is counted, across
+    /// patterns and blocks, so saved plus left out is every hit.
+    #[test]
+    fn every_hit_past_the_saved_positions_is_counted_exactly() {
+        let rules = yara_x::compile(
+            "rule many { strings: $a = \"ab\" $b = \"cd\" condition: any of them }",
+        )
+        .unwrap();
+        let identity = Identity {
+            vm_id: "v".into(),
+            boot_id: "b".into(),
+            run_id: "r".into(),
+            root_cookie: 1,
+        };
+        // 200 "ab" and 125 "cd": 325 hits in one block.
+        let mut data = b"ab ".repeat(200);
+        data.extend(b"cd ".repeat(125));
+        let scan = |report: &mut Report, data: &[u8], offset: u64| {
+            let mut budget = super::RuleTextBudget::new();
+            let mut scanner = yara_x::Scanner::new(&rules);
+            record(
+                &mut scanner,
+                data,
+                Target {
+                    path: Path::new("/specimen"),
+                    offset,
+                    address: None,
+                    report_id: None,
+                    input: InputKind::Executable,
+                },
+                &[],
+                &mut budget,
+                report,
+            )
+            .unwrap();
+        };
+        let mut report = Report::empty(Engine::Yara, identity.clone());
+        scan(&mut report, &data, 0);
+        // Not recorded: the default of 100.
+        assert_eq!(report.findings[0].evidence.len(), 100);
+        assert_eq!(report.over_limit, 225);
+        assert_eq!(report.omitted_evidence, 225);
+        // A second block adds all of its hits.
+        scan(&mut report, &data, 1 << 20);
+        assert_eq!(report.over_limit, 225 + 325);
+        assert_eq!(report.findings[0].count, 2);
+        // The setting's limit, recorded on the report.
+        let mut report = Report::empty(Engine::Yara, identity);
+        report.evidence_limit = Some(16);
+        scan(&mut report, &data, 0);
+        assert_eq!(report.findings[0].evidence.len(), 16);
+        assert_eq!(report.over_limit, 325 - 16);
+        let settings = Settings {
+            evidence_limit: 5,
+            ..Settings::default()
+        };
+        assert_eq!(settings.evidence_limit(), 16);
+        assert_eq!(Settings::default().evidence_limit(), 100);
+        let old: Report = serde_json::from_str(
+            r#"{"engine":"yara","identity":{"vm_id":"v","boot_id":"b","run_id":"r","root_cookie":1},"state":"complete","sources":[],"findings":[],"scanned_rules":null,"skipped_rules":0,"skipped":[],"omitted_evidence":3,"warnings":[],"source_digest":null}"#,
+        )
+        .unwrap();
+        assert_eq!((old.evidence_limit, old.over_limit), (None, 0));
+    }
+
     #[test]
     fn byte_evidence_keeps_offsets_and_file_level_rules_have_no_fake_offset() {
         let rules = yara_x::compile("rule located { strings: $a = \"needle\" condition: $a } rule file_only { condition: filesize == 9 }").unwrap();

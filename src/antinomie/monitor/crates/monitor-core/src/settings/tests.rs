@@ -213,3 +213,29 @@ fn the_live_detection_interval_defaults_to_two_minutes_and_can_be_off() {
     std::fs::write(path(&dir), r#"{"live_detection_minutes": 1}"#).unwrap();
     assert!(load(&dir).unwrap_err().contains("live_detection_minutes"));
 }
+
+/// Item 25 (2026-11-14): "Saved hits per rule" lives in the engine
+/// settings; a file without it reads 0, the default of 100.
+#[test]
+fn the_saved_hits_per_rule_are_an_engine_setting_with_bounds() {
+    let dir = scratch("evidence-limit");
+    std::fs::write(path(&dir), r#"{"triage_detection": {"scan_memory": true}}"#).unwrap();
+    let loaded = load(&dir).unwrap().unwrap();
+    assert_eq!(loaded.triage_detection.evidence_limit, 0);
+    assert_eq!(loaded.triage_detection.evidence_limit(), 100);
+    let mut settings = EngineSettings::default();
+    settings
+        .set("triage_detection.evidence_limit", "500")
+        .unwrap();
+    assert_eq!(settings.triage_detection.evidence_limit(), 500);
+    for bad in ["15", "10001"] {
+        assert!(
+            settings
+                .set("triage_detection.evidence_limit", bad)
+                .is_err(),
+            "{bad}"
+        );
+    }
+    assert_eq!(settings.triage_detection.evidence_limit, 500);
+    let _ = std::fs::remove_dir_all(dir);
+}

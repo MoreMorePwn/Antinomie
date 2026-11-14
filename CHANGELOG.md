@@ -15,6 +15,11 @@ x86 programs by their own table.
 
 ### Host
 
+- **Saved hits per rule.** A detection scan saves up to 100 hit positions per
+  rule (was 16), set in Settings > Detection rules (16 to 10,000,
+  `triage_detection.evidence_limit`), and counts every hit it left out; the
+  note says "325 hits, 100 saved ... Raise Saved hits per rule in Settings and
+  scan again to keep more."
 - **A static analysis whose worker is gone no longer stays running.** A worker
   that was killed or crashed, or that shows no progress for far longer than its
   check may take, ends the analysis: the check it was running says "the

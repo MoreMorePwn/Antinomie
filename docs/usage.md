@@ -1097,7 +1097,13 @@ The network capture is the guest's own view on every route.
   choice is saved. A card shows the rule's title, severity tag and hit count, the
   description, the rule pack and every author, and the MITRE tags. **Details…**
   opens the rule: description, then the evidence locations as a scrollable
-  table (the full width of the window, twelve rows or more before it scrolls, a long location wraps and shows in full), the rule's metadata and its text (wrapped by default). The page scrolls
+  table (the full width of the window, twelve rows or more before it scrolls, a long location wraps and shows in full), the rule's metadata and its text (wrapped by default).
+  A scan saves up to **Settings > Detection rules > Saved hits per rule** hit
+  positions for each rule (100 by default, 16 to 10,000; YARA byte offsets and IDS
+  packets) and counts every hit past them, so a scan that left some out says so
+  plainly: "325 hits, 100 saved (at most 100 per rule). Raise Saved hits per rule in
+  Settings and scan again to keep more." The setting is kept in `settings.json`
+  (`triage_detection.evidence_limit`; 0 is the default). The page scrolls
   when a section grows. An empty result says how many inputs were not scanned
   and why. For IDS, "Rule packs: N rules" counts every rule in the enabled
   packs and the grey "N rules loaded" text at the right end of that line counts
