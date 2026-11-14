@@ -60,6 +60,7 @@ fn production_sandbox_publishes_light_results_while_heavy_tool_runs() {
         report_len: 0,
         specimen_publication: None,
         progress: Default::default(),
+        liveness: Default::default(),
         host_copy: None,
         supplement: None,
     };

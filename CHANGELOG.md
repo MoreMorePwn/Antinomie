@@ -15,6 +15,12 @@ x86 programs by their own table.
 
 ### Host
 
+- **A static analysis whose worker is gone no longer stays running.** A worker
+  that was killed or crashed, or that shows no progress for far longer than its
+  check may take, ends the analysis: the check it was running says "the
+  analysis worker stopped unexpectedly (signal N)", finished checks are kept and
+  the rest can be run again. The worker is also followed while a memory dump
+  pauses the VM.
 - **The right BusyBox and the right arm64 minimum after the r22 bases went
   public (ANT-T0485).** The catalog's optional `arch` field (`arm64`; absent
   means x86-64) is read. The nightly check boots the newest x86-64 BusyBox

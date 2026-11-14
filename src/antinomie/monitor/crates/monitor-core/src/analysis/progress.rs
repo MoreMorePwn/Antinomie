@@ -169,29 +169,35 @@ pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
     // minutes) cannot use up the time of a later one (decompilation); this is
     // the hard backstop behind each tool's own timeout. A time limit the run
     // asked for replaces each tool's own.
-    let own = |default: u64| super::limits::seconds_in(report, default);
-    let tool = |tool| super::limits::seconds_for_in(report, tool);
     let seconds: u64 = report
         .sections
         .iter()
         // Checks a finished analysis already has are not run again.
         .filter(|section| section.state == AnalysisSectionState::Pending)
-        .map(|section| match section.kind {
-            AnalysisKind::Decompilation => tool(TimedTool::Ghidra) + 120,
-            AnalysisKind::Capabilities => tool(TimedTool::Capa) + 60,
-            AnalysisKind::Floss => tool(TimedTool::Floss) + 60,
-            AnalysisKind::Unpacking => tool(TimedTool::Unpack) + 30,
-            AnalysisKind::Embedded => tool(TimedTool::Binwalk) + 20,
-            AnalysisKind::Identification => own(60) * 2 + 40,
-            AnalysisKind::Disassembly if super::decompile::listing_only(report).is_some() => {
-                own(60) + 30 + tool(TimedTool::Ghidra) + 120
-            }
-            AnalysisKind::Disassembly => own(60) + 30,
-            AnalysisKind::Rules => tool(TimedTool::Yara) + 30,
-            _ => 20,
-        })
+        .map(|section| check_budget(report, section.kind))
         .sum();
     Duration::from_secs(seconds.max(60))
+}
+
+/// The seconds one check of `report` may take in the worker: its tool's
+/// time limit and a margin, or a fixed time for a built-in check.
+pub(super) fn check_budget(report: &AnalysisReport, kind: AnalysisKind) -> u64 {
+    let own = |default: u64| super::limits::seconds_in(report, default);
+    let tool = |tool| super::limits::seconds_for_in(report, tool);
+    match kind {
+        AnalysisKind::Decompilation => tool(TimedTool::Ghidra) + 120,
+        AnalysisKind::Capabilities => tool(TimedTool::Capa) + 60,
+        AnalysisKind::Floss => tool(TimedTool::Floss) + 60,
+        AnalysisKind::Unpacking => tool(TimedTool::Unpack) + 30,
+        AnalysisKind::Embedded => tool(TimedTool::Binwalk) + 20,
+        AnalysisKind::Identification => own(60) * 2 + 40,
+        AnalysisKind::Disassembly if super::decompile::listing_only(report).is_some() => {
+            own(60) + 30 + tool(TimedTool::Ghidra) + 120
+        }
+        AnalysisKind::Disassembly => own(60) + 30,
+        AnalysisKind::Rules => tool(TimedTool::Yara) + 30,
+        _ => 20,
+    }
 }
 
 #[cfg(test)]

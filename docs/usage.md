@@ -1803,7 +1803,13 @@ YARA scan 60, UPX unpacking 240, Ghidra decompilation 840, Detect It Easy 120),
 and **Reset** puts the default back. A time set for one tool comes before the
 older **Time limit for every tool** below it, which still applies to the tools you
 did not set; a **Run again with twice the time** from a check's tab uses its own
-doubled time for that run. **Settings > Detection rules** has the same **Time
+doubled time for that run. An analysis whose sandboxed worker ends under it (killed,
+crashed) or gives no sign of life for twice its running check's time and two minutes
+more does not stay running: the check it was running is marked unavailable with
+"the analysis worker stopped unexpectedly (signal N)" (or "exit N", or "stopped
+responding"), the finished checks are kept, the ones it never started say "not run"
+and can be run from their tabs, and the report is written. The worker is followed
+while a memory dump pauses the VM too. **Settings > Detection rules** has the same **Time
 limits** for the detection engines, each with its "Default (N s)" and a **Reset**:
 the Triage YARA scan (100 s), Suricata (100 s; its retry and the sandbox time follow
 it at twice and 3.6 times), Sigma (110 s) and TShark (300 s per capture, with the

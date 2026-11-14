@@ -32,6 +32,7 @@ mod host_copy;
 mod host_file;
 mod layers;
 pub(crate) mod live;
+mod liveness;
 mod sandbox_account;
 mod sandbox_run;
 mod specimen_publication;
@@ -75,6 +76,8 @@ pub(crate) struct Job {
     report_len: u64,
     specimen_publication: Option<storage::JsonReceipt>,
     progress: progress::Watch,
+    /// Whether the worker is still there and still moving (item 36).
+    liveness: liveness::Liveness,
     /// The uploaded file staged on the host while the guest's hash is awaited.
     host_copy: Option<host_copy::HostCopy>,
     /// Set when the job runs checks added to a finished analysis.
@@ -118,6 +121,8 @@ pub(crate) struct Jobs {
 enum StopWhy {
     Deadline,
     Cancelled,
+    /// The worker gave no sign of life for far longer than its check may take.
+    Stalled,
 }
 
 /// A worker that got SIGTERM (ANT-T0471): it ends on its own, or at
@@ -305,6 +310,7 @@ impl Jobs {
                 report_len: 0,
                 specimen_publication: None,
                 progress: Default::default(),
+                liveness: Default::default(),
                 host_copy: None,
                 supplement: None,
             };
@@ -429,6 +435,14 @@ impl Jobs {
         self.tick_carried();
         action
     }
+    /// Advance only what runs on the host (the worker and the analyses a
+    /// finished session left), for a turn in which the guest cannot be asked
+    /// anything (it is paused while QEMU writes a memory dump): a worker that
+    /// ended is still noticed (item 36).
+    pub fn host_tick(&mut self) {
+        self.worker_tick();
+        self.tick_carried();
+    }
     fn worker_tick(&mut self) {
         if self.active.is_none() {
             self.active = self
@@ -480,41 +494,8 @@ impl Jobs {
             match child.poll_status() {
                 Ok(Some(status)) => {
                     job.child = None;
-                    if status.success() {
-                        match read_report(
-                            &job.directory.join("output/report.json"),
-                            &job.report,
-                            true,
-                        ) {
-                            Ok(report) => {
-                                job.report = report;
-                                adopt_listings(
-                                    &job.directory,
-                                    &mut job.report,
-                                    supplement::carried(&job.supplement),
-                                );
-                            }
-                            Err(error) => fail(&mut job.report, AnalysisState::Unavailable, error),
-                        }
-                    } else {
-                        let kept = progress::salvage(&job.directory, &mut job.report);
-                        if kept {
-                            adopt_listings(
-                                &job.directory,
-                                &mut job.report,
-                                supplement::carried(&job.supplement),
-                            );
-                        }
-                        fail(
-                            &mut job.report,
-                            if kept {
-                                AnalysisState::Partial
-                            } else {
-                                AnalysisState::Unavailable
-                            },
-                            format!("mandatory isolated worker failed ({status}); see worker.log"),
-                        );
-                    }
+                    use std::os::unix::process::ExitStatusExt;
+                    job.worker_ended(status.code(), status.signal());
                     self.finish(job);
                     return;
                 }
@@ -522,6 +503,27 @@ impl Jobs {
                     if let Some(progress) = job.progress.changed(&job.directory, &job.report) {
                         progress::merge(&mut job.report, progress, false);
                         self.updates.push((job.run_id.clone(), job.report.clone()));
+                    }
+                    // A worker that is gone, or hung, ends its job (item 36).
+                    let ended = child.launcher_end().ok().flatten();
+                    match job
+                        .liveness
+                        .check(ended, &job.directory, &job.report, Instant::now())
+                    {
+                        liveness::Verdict::Alive => {}
+                        liveness::Verdict::Gone(exit, signal) => {
+                            // The cleanup in `finish` still owns the sandbox.
+                            job.worker_ended(exit, signal);
+                            self.finish(job);
+                            return;
+                        }
+                        liveness::Verdict::Stalled(why) => {
+                            job.liveness.stalled = Some(why);
+                            if !self.soft_stop(&mut job, StopWhy::Stalled) {
+                                self.end_stopped(job, StopWhy::Stalled);
+                                return;
+                            }
+                        }
                     }
                     self.active = Some(job);
                     return;
@@ -684,6 +686,14 @@ impl Jobs {
                 AnalysisState::Cancelled,
                 "analysis cancelled; program execution continues",
             ),
+            StopWhy::Stalled => {
+                let why = job
+                    .liveness
+                    .stalled
+                    .clone()
+                    .unwrap_or_else(|| "the analysis worker stopped responding".into());
+                job.close_stopped_worker(&why);
+            }
         }
         self.finish(job);
     }
@@ -1070,6 +1080,7 @@ mod tests {
                     report_len: 0,
                     specimen_publication: None,
                     progress: Default::default(),
+                    liveness: Default::default(),
                     host_copy: None,
                     supplement: None,
                 }),
@@ -1387,6 +1398,7 @@ time.sleep(30)
             report_len: 0,
             specimen_publication: None,
             progress: Default::default(),
+            liveness: Default::default(),
             host_copy: None,
             supplement: None,
         };
@@ -1634,6 +1646,7 @@ time.sleep(30)
             report_len: 0,
             specimen_publication: None,
             progress: Default::default(),
+            liveness: Default::default(),
             host_copy: None,
             supplement: None,
         };

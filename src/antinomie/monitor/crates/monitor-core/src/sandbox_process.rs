@@ -193,6 +193,9 @@ struct SandboxInit {
     namespace_init: bool,
 }
 
+/// How a launcher ended: its exit code, or the signal that ended it.
+pub(crate) type LauncherEnd = (Option<i32>, Option<i32>);
+
 /// One unreaped launcher anchors its group ID; one pidfd anchors its namespace init.
 pub(crate) struct SandboxProcess {
     child: std::process::Child,
@@ -454,6 +457,28 @@ impl SandboxProcess {
                 | rustix::process::WaitIdOptions::NOWAIT,
         )
         .map(|status| status.is_some())
+        .map_err(|e| format!("sandbox status: {e}"))
+    }
+
+    /// How the launcher ended, once it has, without reaping it: `(exit
+    /// code, signal)`. None while it runs. A launcher that ended while
+    /// [`Self::poll_status`] cannot yet confirm its namespace's end tells
+    /// the job its worker is gone (item 36).
+    pub(crate) fn launcher_end(&self) -> Result<Option<LauncherEnd>, String> {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(status) = self.completed_status {
+            return Ok(Some((status.code(), status.signal())));
+        }
+        if self.reaped {
+            return Ok(Some((None, None)));
+        }
+        rustix::process::waitid(
+            rustix::process::WaitId::Pid(self.group()?),
+            rustix::process::WaitIdOptions::EXITED
+                | rustix::process::WaitIdOptions::NOHANG
+                | rustix::process::WaitIdOptions::NOWAIT,
+        )
+        .map(|status| status.map(|status| (status.exit_status(), status.terminating_signal())))
         .map_err(|e| format!("sandbox status: {e}"))
     }
 
