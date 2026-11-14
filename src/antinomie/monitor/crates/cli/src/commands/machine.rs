@@ -64,16 +64,20 @@ pub fn preset_name(preset: StealthPreset) -> &'static str {
 }
 
 /// The presets `vm create --stealth` takes. `cloud-vps` needs a provider
-/// choice and `custom` a hand-made profile; both are made in the app.
+/// choice and `custom` a hand-made profile; both are made in the app. `iot`
+/// is a Raspberry Pi, which only an arm64 VM presents: on an x86-64 base the
+/// VM starts as Normal QEMU, as in the app.
 pub fn parse_preset(name: &str) -> Result<StealthPreset, CliError> {
     match name.trim_start_matches("realistic-") {
         "desktop" => Ok(StealthPreset::RealisticDesktop),
         "laptop" => Ok(StealthPreset::RealisticLaptop),
         "server" => Ok(StealthPreset::RealisticServer),
         "transparent" => Ok(StealthPreset::Transparent),
+        "iot" => Ok(StealthPreset::Iot),
         other => Err(CliError::invalid(format!(
             "unknown stealth preset {other:?}; use realistic-desktop, realistic-laptop, \
-             realistic-server or transparent (cloud-vps and custom profiles are made in the app)"
+             realistic-server, iot or transparent (cloud-vps and custom profiles are made in \
+             the app)"
         ))
         .with_field("stealth")),
     }
@@ -373,6 +377,7 @@ mod tests {
             "realistic-desktop",
             "realistic-laptop",
             "realistic-server",
+            "iot",
             "transparent",
         ] {
             assert_eq!(preset_name(parse_preset(name).unwrap()), name);

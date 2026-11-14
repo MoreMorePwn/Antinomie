@@ -1765,8 +1765,6 @@ the like) never grow past 80 % of the app's content area each way (a window
 still opens at its own size when that fits), and not below a small minimum. What does not fit scrolls inside the window: code scrolls
 sideways in its box, and long text wraps. A rules window opens with the list at 40 % and the details at 60 % of its width (drag the divider to change it).
 
-Menus: **File**, **VM**, **Run**, **View**, **Tools** and **Help**; the menu bar's
-**Search** button at the right (with its key) opens the command palette. Menus and
 Help icons: a muted **?** beside a control explains it. Hover it to read the text,
 or click it (or focus it and press Space) to keep it open until you click elsewhere
 or press Esc; it works on a disabled control too, and a disabled control's icon
@@ -1774,6 +1772,8 @@ starts with the reason. Controls carry no long hover text: an icon-only button s
 its name on hover, and a value cut short shows whole. The toolbar has one help icon
 after its buttons that explains each of them (the hidden ones too), with their keys.
 
+Menus: **File**, **VM**, **Run**, **View**, **Tools** and **Help**; the menu bar's
+**Search** button at the right (with its key) opens the command palette. Menus and
 the toolbar's help icon show the keys, and a tab's tooltip shows its Ctrl+digit.
 
 **Ctrl+K** (or **Search**, or **Help > Command palette**) opens the palette. It
@@ -2268,11 +2268,13 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
 - **VMs.** `vm list`, `vm status ID` (state, boot, guest kernel, snapshots, a pending
   disk layer), `vm create NAME [--base ID] [--cpus N] [--ram-mib N] [--disk-gib N]
   [--network disconnected|isolated|routed|nat] [--stealth realistic-desktop|
-  realistic-laptop|realistic-server|transparent] [--user NAME] [--password-stdin]`,
+  realistic-laptop|realistic-server|iot|transparent] [--user NAME] [--password-stdin]`,
   `vm start ID [--wait] [--hold [SECONDS]]`, `vm stop ID`, `vm reset ID --yes`,
   `vm duplicate ID NAME` and `vm delete ID --yes`. A VM is named by its identity or
   its name. The defaults are the window's (4 CPUs, 2048 MiB, 8 GiB, disconnected,
-  realistic desktop). A Debian base needs a guest account: give the password as one
+  realistic desktop). `iot` is the IoT device (Raspberry Pi), which only an arm64 VM
+  presents: on an x86-64 base the VM keeps it but starts as Normal QEMU, and `vm create`
+  says so in a `note`. An arm64 VM gets no uptime from its preset. A Debian base needs a guest account: give the password as one
   line on standard input with `--password-stdin` (never on the command line); a base
   with no account refuses the flag. `vm reset` is refused for a VM that has snapshots
   (duplicate it first). Every destructive command (`base delete`, `vm reset`, `vm

@@ -20,7 +20,7 @@ use crate::{
 };
 use antinomie_monitor_core::{
     Command, GuestCredentials, Snapshot, VmConfig, VmNetwork,
-    stealth::{StealthPreset, StealthProfile, host_cpu_vendor},
+    stealth::{FallbackSetting, StealthPreset, StealthProfile, host_cpu_vendor},
 };
 use clap::{Args, Subcommand};
 use serde_json::json;
@@ -78,7 +78,8 @@ pub struct Create {
     #[arg(long, default_value = "disconnected", value_name = "NETWORK")]
     pub network: String,
     /// What the guest sees of the machine: realistic-desktop, realistic-laptop,
-    /// realistic-server or transparent.
+    /// realistic-server, iot (a Raspberry Pi; arm64 bases only, an x86-64 VM
+    /// starts as Normal QEMU) or transparent.
     #[arg(long, default_value = "realistic-desktop", value_name = "PRESET")]
     pub stealth: String,
     /// Guest account name (bases that need an account).
@@ -224,10 +225,10 @@ fn list_through(client: &mut antinomie_service::server::client::Client) -> Resul
 pub fn config_for(arguments: &Create, base_identity: String) -> Result<VmConfig, CliError> {
     let network = parse_network(&arguments.network)?;
     let preset = parse_preset(&arguments.stealth)?;
-    let stealth = if preset == StealthPreset::Transparent {
-        StealthProfile::transparent()
-    } else {
-        StealthProfile::realistic(preset, &host_cpu_vendor())
+    let stealth = match preset {
+        StealthPreset::Transparent => StealthProfile::transparent(),
+        StealthPreset::Iot => StealthProfile::iot(),
+        _ => StealthProfile::realistic(preset, &host_cpu_vendor()),
     };
     if arguments.name.trim().is_empty() {
         return Err(CliError::invalid("the VM needs a name").with_field("name"));
@@ -275,7 +276,9 @@ pub(crate) fn create_command(
         .guest
         .as_ref()
         .is_some_and(|guest| guest.requires_credentials);
-    let vm = config_for(arguments, base.id.clone())?;
+    let mut vm = config_for(arguments, base.id.clone())?;
+    // As in the app: an arm64 VM draws no uptime (its guest ignores one).
+    vm.stealth = vm.stealth.drawn_for(base.arch);
     let command = match (needs_account, password) {
         (true, Some(password)) => Command::CreateWithCredentials {
             vm,
@@ -309,6 +312,7 @@ fn create(
     config_for(arguments, String::new())?;
     let snapshot = engine.snapshot();
     let command = create_command(arguments, snapshot, password)?;
+    let note = stealth_note(&command, snapshot);
     let before: Vec<String> = snapshot.vms.iter().map(|vm| vm.id.clone()).collect();
     let message = engine.command(command, limit)?;
     // A Debian VM is made in the background: the command's result can come
@@ -324,7 +328,7 @@ fn create(
         .iter()
         .find(|vm| !before.contains(&vm.id))
         .map(|vm| vm_value(vm, engine.snapshot()));
-    let human = match &created {
+    let mut human = match &created {
         Some(vm) => format!(
             "{message}: {} ({})\n",
             vm["name"].as_str().unwrap_or(""),
@@ -332,7 +336,28 @@ fn create(
         ),
         None => format!("{message}\n"),
     };
-    Ok(Reply::value(json!({"message": message, "vm": created})).with_human(human))
+    if let Some(note) = &note {
+        human.push_str(&format!("note: {note}\n"));
+    }
+    Ok(Reply::value(json!({"message": message, "vm": created, "note": note})).with_human(human))
+}
+
+/// What the new VM's base cannot take of its profile, as the app's Device
+/// profile window says it: the IoT device on an x86-64 base starts as
+/// Normal QEMU.
+pub(crate) fn stealth_note(command: &Command, snapshot: &Snapshot) -> Option<String> {
+    let (Command::Create(vm) | Command::CreateWithCredentials { vm, .. }) = command else {
+        return None;
+    };
+    let base = snapshot
+        .bases
+        .iter()
+        .find(|base| Some(&base.id) == vm.base_identity.as_ref())?;
+    vm.stealth
+        .arch_fallbacks(base.arch)
+        .into_iter()
+        .find(|fallback| fallback.setting == FallbackSetting::Preset)
+        .map(|fallback| fallback.summary)
 }
 
 fn start(
@@ -617,6 +642,57 @@ mod tests {
         assert_eq!(config.stealth.preset, StealthPreset::Transparent);
         let desktop = config_for(&create_arguments(&[]), "b".into()).unwrap();
         assert_eq!(desktop.stealth.preset, StealthPreset::RealisticDesktop);
+    }
+
+    #[test]
+    fn the_iot_preset_is_taken_and_an_x86_base_says_it_starts_as_normal_qemu() {
+        use antinomie_monitor_core::{BaseSummary, GuestArch};
+        let base = |id: &str, arch| BaseSummary {
+            id: id.into(),
+            label: id.into(),
+            directory: Default::default(),
+            guest: None,
+            min_ram_mib: 0,
+            min_disk_gib: 0,
+            fixed_display: false,
+            arch,
+            size_bytes: 0,
+            revision: None,
+            min_app_version: None,
+            built_with: None,
+            stealth_support: vec![],
+        };
+        let arguments = create_arguments(&["--stealth", "iot"]);
+        assert_eq!(
+            config_for(&arguments, "b".into()).unwrap().stealth.preset,
+            StealthPreset::Iot
+        );
+        let made = |arch| {
+            let snapshot = Snapshot {
+                bases: vec![base("only", arch)],
+                ..Snapshot::default()
+            };
+            let command = create_command(&arguments, &snapshot, None).unwrap();
+            let note = stealth_note(&command, &snapshot);
+            let Command::Create(vm) = command else {
+                panic!("a plain create")
+            };
+            (vm, note)
+        };
+        // arm64: the Raspberry Pi, with no uptime drawn (the guest ignores one).
+        let (vm, note) = made(GuestArch::AARCH64);
+        assert_eq!(vm.stealth.preset, StealthPreset::Iot);
+        assert_eq!(vm.stealth.boot_age_s, 0);
+        assert_eq!(note, None);
+        // x86-64: kept as chosen, started as Normal QEMU, and said.
+        let (vm, note) = made(GuestArch::X86_64);
+        assert_eq!(vm.stealth.preset, StealthPreset::Iot);
+        assert_eq!(
+            vm.stealth.for_arch(GuestArch::X86_64).preset,
+            StealthPreset::Transparent
+        );
+        let note = note.expect("a note on x86-64");
+        assert!(note.contains("Normal QEMU will be used"), "{note}");
     }
 
     #[test]
