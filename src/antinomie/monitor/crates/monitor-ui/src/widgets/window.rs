@@ -204,6 +204,21 @@ impl<'open> Dialog<'open> {
         if let Some(size) = sizes.fixed {
             window = window.fixed_size(size + frame);
         }
+        // egui keeps a window's min size only as room offered to the
+        // content: a window whose content is smaller still shrinks to it. The
+        // content is held to the caller's least size instead (capped to the
+        // window area like the rest).
+        let area_size = crate::title_bar::content_rect(ctx).size() - egui::vec2(24.0, 24.0);
+        let least = egui::vec2(
+            sizes
+                .min
+                .map(|size| size.x)
+                .or(sizes.min_width)
+                .unwrap_or(0.0),
+            sizes.min.map_or(0.0, |size| size.y),
+        )
+        .min(area_size)
+        .max(egui::Vec2::ZERO);
         let closable = open.is_some();
         let mut close = false;
         let area = crate::title_bar::content_rect(ctx);
@@ -226,9 +241,13 @@ impl<'open> Dialog<'open> {
                 max_width.map_or(cap.x, |width| width.min(area.width() - 24.0)),
                 max_height.map_or(cap.y, |height| height.min(area.height() - 24.0)),
             );
+            // The usable minimum, unless the caller set one: a caller's
+            // `min_width` replaces the width part (egui's `min_size` would
+            // otherwise overwrite it).
             if sizes.min.is_none() {
-                window = window
-                    .min_size(egui::vec2(MIN_WIDTH.min(max.x), MIN_HEIGHT.min(max.y)) + frame);
+                let width = sizes.min_width.unwrap_or(MIN_WIDTH);
+                window =
+                    window.min_size(egui::vec2(width.min(max.x), MIN_HEIGHT.min(max.y)) + frame);
             }
             window.max_size(max + frame)
         };
@@ -280,7 +299,13 @@ impl<'open> Dialog<'open> {
             // In a child ui: contents that call `set_max_height` (egui then
             // resets the cursor to the top of the ui) must not reach back
             // over the title row.
-            let inner = ui.scope(add_contents).inner;
+            let inner = ui
+                .scope(|ui| {
+                    ui.set_min_width(least.x);
+                    ui.set_min_height((least.y - (ui.min_rect().top() - header.top())).max(0.0));
+                    add_contents(ui)
+                })
+                .inner;
             let width = ui.min_rect().x_range();
             ui.painter().set(
                 rule,

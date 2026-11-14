@@ -273,6 +273,9 @@ fn opening_firmware_and_acpi_keeps_the_windows_width() {
         hover_at(&mut app, &ctx, AWAY);
         hover_at(&mut app, &ctx, AWAY);
         let before = window_width(&ctx);
+        // It opens at its own width (the dialog helper's min_width, which
+        // used to be dropped), not narrower.
+        assert!(before >= 520.0, "arm64 {arm}: opens {before} wide");
         assert!(
             (before - settled).abs() < 2.0,
             "arm64 {arm}: {settled} wide, then {before} without a click"

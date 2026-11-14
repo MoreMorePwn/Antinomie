@@ -1045,6 +1045,9 @@ fn display(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     );
 }
 
+        // Never narrower than it opens: the widest section (Firmware and
+        // ACPI's fields) fits, so opening one does not widen the window.
+        .min_width(WINDOW_WIDTH)
 fn clock(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     uptime(ui, profile, fit.debian());
     fit.line(ui, profile, FallbackSetting::Uptime);
@@ -1107,9 +1110,6 @@ pub(super) fn window(
         .default_width(WINDOW_WIDTH)
         .max_height((ctx.content_rect().height() - 100.0).max(200.0))
         .show(ctx, |ui| {
-            // Never narrower than it opens: the widest section (Firmware and
-            // ACPI's fields) fits, so opening one does not widen the window.
-            ui.set_min_width(WINDOW_WIDTH);
             let before = profile.clone();
             // Read-only (a running VM): the entries are disabled, but the
             // sections still open and their hints still show.

@@ -718,3 +718,47 @@ fn a_window_never_takes_more_than_four_fifths_of_the_area_whatever_its_content()
         assert!(rect.width() >= 280.0, "{rect:?}");
     }
 }
+
+#[test]
+fn a_window_keeps_the_least_width_and_size_its_caller_asks_for() {
+    let frame = |ctx: &egui::Context| frame_extra(ctx);
+    // A caller's min_width: the window is never narrower, however little it
+    // holds (egui's min_size used to overwrite it).
+    let ctx = context();
+    for _ in 0..6 {
+        run(&ctx, vec![], egui::vec2(1400.0, 900.0), |root| {
+            let ctx = root.ctx().clone();
+            window("Narrow content")
+                .id(egui::Id::new("least-width"))
+                .min_width(520.0)
+                .show(&ctx, |ui| {
+                    ui.label("x");
+                });
+        });
+    }
+    let rect = ctx
+        .memory(|memory| memory.area_rect(egui::Id::new("least-width")))
+        .unwrap();
+    assert!(rect.width() >= 520.0 + frame(&ctx).x - 1.0, "{rect:?}");
+    // And min_size, both ways.
+    let ctx = context();
+    for _ in 0..6 {
+        run(&ctx, vec![], egui::vec2(1400.0, 900.0), |root| {
+            let ctx = root.ctx().clone();
+            window("Small content")
+                .id(egui::Id::new("least-size"))
+                .min_size(egui::vec2(600.0, 300.0))
+                .show(&ctx, |ui| {
+                    ui.label("x");
+                });
+        });
+    }
+    let rect = ctx
+        .memory(|memory| memory.area_rect(egui::Id::new("least-size")))
+        .unwrap();
+    let least = egui::vec2(600.0, 300.0) + frame(&ctx);
+    assert!(
+        rect.width() >= least.x - 1.0 && rect.height() >= least.y - 1.0,
+        "{rect:?}"
+    );
+}
