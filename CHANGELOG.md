@@ -1269,6 +1269,12 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **No false persisted copy on a slow guest.** A process the recorded tree has
+  just forked, listed before the host has read its fork (seen when a test forks 32
+  children on a slow TCG guest), was reported as a copy of the sample running
+  outside the recorded tree. A process whose parent is in the tree is now left for
+  the next process list, where it is in the tree; copies started by cron or
+  systemd are found as before.
 - **The arm64 BusyBox base no longer shows the Linux logo on the VM screen (ANT-T0484).** arm64's defconfig, which the minimal kernel profile starts from, draws the penguin at the top of the framebuffer console; the profile now turns `CONFIG_LOGO` off, as x86-64's defconfig has it. The rebuilt revision-22 arm64 BusyBox base differs from the first one only in that; the Debian arm64 bases use Debian's own kernel configuration, which has no logo, and are unchanged.
 - **`auto init` takes the clean snapshot only after the guest has finished booting (ANT-T0476).** The guest answers from its initramfs, which may still be growing the root file system to the lane disk; `auto init` stopped it then, so `auto-clean` could hold a half-grown file system, and every job's boot from it hit a guest kernel `BUG` (`fs/ext4/resize.c`) while the guest still reported ready and the job said nothing. `auto init` and `auto lane reset` now wait until the guest's own root is mounted (and a Debian guest's start-up has finished), so are `vm start`, `snapshot restore` and `snapshot create --mode full`, through the engine's new boot wait (`start.boot_wait_secs`, stretched under TCG). A guest kernel crash on the console fails `auto init` and `lane reset`, a crash while the job's VM booted fails the job `guest_unreachable` before the program is started, and one during the run is the warning `guest_kernel_crashed`. A lane made by an earlier `auto init` may hold such a snapshot: make it again with `auto init --replace`.
 - **A `snapshot_full` lane can run jobs (ANT-T0472).** `snapshot create --mode full` saved the guest as soon as it answered, still in its initramfs, and after a resume the sample upload failed `upload_failed` "No such file or directory" at once. The Full snapshot is now taken once the guest has finished booting, and the upload treats "no such file or directory" like "read-only file system": the guest is not ready yet, and it is tried again inside `upload_s`.

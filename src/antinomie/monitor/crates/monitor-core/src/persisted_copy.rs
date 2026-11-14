@@ -299,7 +299,11 @@ impl Watch {
     }
 
     /// The processes worth reading, oldest first: alive now, not before the
-    /// launch, not in the recorded tree, not looked at already.
+    /// launch, not in the recorded tree, not looked at already. A process
+    /// whose parent (in the same list) is in the tree is the tree's own
+    /// child that the host has not read the fork of yet (a slow guest
+    /// forking many children at once): the guest traces it, so it is not
+    /// read, and the next list finds it in the tree.
     pub(crate) fn candidates<'a>(
         &self,
         processes: &'a [GuestProcess],
@@ -308,12 +312,18 @@ impl Watch {
         let Some(baseline) = &self.baseline else {
             return Vec::new();
         };
+        let in_tree: HashSet<u32> = processes
+            .iter()
+            .filter(|process| tree.contains(&process.identity.task_cookie))
+            .map(|process| process.identity.tgid)
+            .collect();
         let mut found: Vec<&GuestProcess> = processes
             .iter()
             .filter(|process| {
                 let key = (process.identity.tgid, process.identity.task_cookie);
                 !baseline.contains(&key)
                     && !tree.contains(&process.identity.task_cookie)
+                    && !in_tree.contains(&process.parent_tgid)
                     && match self.looked.get(&key) {
                         None => true,
                         Some(Looked::Unreadable(tries)) => *tries < UNREADABLE_TRIES,

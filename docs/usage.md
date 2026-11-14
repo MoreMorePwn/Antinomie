@@ -1594,7 +1594,8 @@ started in the guest:
 
 - Just before the launch it lists the guest's processes. While the run goes on
   it lists them every 3 s; a process that was not there before the launch and is
-  not in the recorded tree is read (the guest kernel opens `/proc/<pid>/exe`, the
+  not in the recorded tree (nor a child of a process in it whose fork the host
+  has not read yet) is read (the guest kernel opens `/proc/<pid>/exe`, the
   way static analysis reads the sample) and hashed on the host.
 - It is a copy when that SHA-256 is the launched program's (for a library
   sample), or that of a file the run wrote (the guest's hash at the file's last

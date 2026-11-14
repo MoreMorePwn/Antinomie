@@ -77,6 +77,20 @@ fn only_new_processes_outside_the_tree_are_candidates() {
 }
 
 #[test]
+fn a_child_of_the_tree_not_yet_in_it_is_not_a_candidate() {
+    // The sample (pid 668, cookie 101) forked pid 670 the host has not read
+    // the fork of: it runs the sample's image but is the tree's own child.
+    let (watch, mut now, tree) = mirai_like();
+    now.push(process(670, 107, 668, "a", 23));
+    let names: Vec<&str> = watch
+        .candidates(&now, &tree)
+        .iter()
+        .map(|process| process.command.as_str())
+        .collect();
+    assert_eq!(names, ["cron", ".e", "systemd-timesyn"]);
+}
+
+#[test]
 fn a_copy_is_matched_by_digest_and_size_never_by_name() {
     let (watch, ..) = mirai_like();
     assert_eq!(watch.matches(&[0xaa; 32], 4096), Some(CopyOf::Sample));
