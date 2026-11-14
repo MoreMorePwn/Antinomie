@@ -23,6 +23,9 @@
 //! - Grouped facts on a page: [`card`]; a jump to another view: [`link`].
 //! - A run-based window with nothing to show: [`info_panel`].
 //! - Status words: [`chip`] with a [`Tone`]; filter-bar switches: [`toggle_chip`].
+//! - An explanation of a control: [`help`] (a help icon) or [`with_help`]
+//!   (the control with its icon); a control keeps no long hover text (see
+//!   [`Tip`] for what may stay).
 //!
 //! Nothing here holds a literal color; add new ones to `theme::Palette`.
 
@@ -33,6 +36,7 @@ pub(crate) mod dot;
 mod facts;
 mod fit;
 pub mod fit_table;
+mod help;
 mod info_panel;
 mod lost_release;
 mod tabs;
@@ -45,6 +49,9 @@ pub use card::{back_link, bounded_menu, card, card_sized, detail_block, link};
 pub use clear::{clear_button, clear_margin};
 pub use facts::{fact_line, facts, titled};
 pub use fit::fit_middle;
+#[cfg(test)]
+pub(crate) use help::qa_pin_key;
+pub use help::{help, list_help, with_help, with_help_or, Tip};
 pub use info_panel::{info_panel, InfoPanel};
 pub(crate) use lost_release::install as end_drags_that_lose_their_release;
 pub use tabs::{segmented, tab, tab_row, tabs, tight_tabs, TabItem, TIGHT_SAVING};

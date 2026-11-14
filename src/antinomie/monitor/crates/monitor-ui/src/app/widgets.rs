@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Small shared widgets and formatting helpers.
 use super::*;
+use crate::widgets::Tip as _;
 
 pub(super) fn unix_seconds() -> u64 {
     SystemTime::now()
@@ -354,11 +355,16 @@ pub(super) fn library_row(
     response
 }
 
-/// A one-line hint under a control, muted, with the longer explanation in its
-/// tooltip. Settings keeps its paragraphs out of the page this way.
+/// A one-line hint under a control, muted, with the longer explanation on a
+/// help icon after it. Settings keeps its paragraphs out of the page this way.
 pub(super) fn hint_tip(ui: &mut egui::Ui, short: &str, long: &str) -> egui::Response {
-    ui.add(egui::Label::new(RichText::new(short).small().color(theme::muted())).wrap())
-        .on_hover_text(long)
+    ui.horizontal_wrapped(|ui| {
+        let line =
+            ui.add(egui::Label::new(RichText::new(short).small().color(theme::muted())).wrap());
+        crate::widgets::help(ui, long);
+        line
+    })
+    .inner
 }
 
 pub(super) fn tool_button(ui: &mut egui::Ui, button: ToolButton<'_>) -> bool {
@@ -393,10 +399,12 @@ pub(super) fn tool_button(ui: &mut egui::Ui, button: ToolButton<'_>) -> bool {
     // text and icon are the feedback.
     ui.scope(|ui| {
         theme::borderless_buttons(ui);
-        ui.add_enabled(button.enabled, widget)
-            .on_hover_text(button.tooltip)
-            .on_disabled_hover_text(button.tooltip)
-            .clicked()
+        let response = ui.add_enabled(button.enabled, widget);
+        if button.label.is_empty() {
+            response.name_tip(button.tooltip).clicked()
+        } else {
+            response.clicked()
+        }
     })
     .inner
 }
@@ -456,17 +464,18 @@ pub(super) fn status_line(ui: &mut egui::Ui, icon: &str, text: &str, color: egui
 pub(super) fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) -> bool {
     ui.scope(|ui| {
         theme::borderless_buttons(ui);
-        ui.add_enabled(
-            enabled,
-            egui::Button::new(
-                RichText::new(icon).size(ui.text_style_height(&egui::TextStyle::Body)),
+        crate::widgets::with_help(ui, tooltip, |ui| {
+            ui.add_enabled(
+                enabled,
+                egui::Button::new(
+                    RichText::new(icon).size(ui.text_style_height(&egui::TextStyle::Body)),
+                )
+                .min_size(egui::vec2(
+                    ui.spacing().interact_size.y,
+                    ui.spacing().interact_size.y,
+                )),
             )
-            .min_size(egui::vec2(
-                ui.spacing().interact_size.y,
-                ui.spacing().interact_size.y,
-            )),
-        )
-        .on_hover_text(tooltip)
+        })
         .clicked()
     })
     .inner

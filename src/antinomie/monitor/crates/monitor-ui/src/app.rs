@@ -1092,6 +1092,8 @@ struct SectionHeader<'a> {
 struct ToolButton<'a> {
     icon: &'a str,
     label: &'a str,
+    /// The name on hover when only the icon shows (the toolbar's help icon
+    /// explains every button).
     tooltip: &'a str,
     enabled: bool,
     tone: egui::Color32,

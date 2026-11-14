@@ -227,12 +227,12 @@ impl MonitorApp {
                             self.shortcut_text(ctx, &Action::Palette)
                                 .unwrap_or_default()
                         );
-                        if ui
-                            .add(egui::Button::new(text).frame(false))
-                            .on_hover_text(
-                                "Command palette: find any action, tab, VM, run or sample",
-                            )
-                            .clicked()
+                        if crate::widgets::with_help(
+                            ui,
+                            "Command palette: find any action, tab, VM, run or sample",
+                            |ui| ui.add(egui::Button::new(text).frame(false)),
+                        )
+                        .clicked()
                         {
                             self.run_action(ctx, Action::Palette);
                         }
@@ -278,6 +278,14 @@ impl MonitorApp {
                             chosen = Some(spec.action);
                         }
                     }
+                    // One help icon explains every button, the hidden ones too.
+                    crate::widgets::help(
+                        ui,
+                        crate::widgets::list_help(
+                            "Toolbar",
+                            specs.iter().map(|spec| (spec.label, spec.tooltip.as_str())),
+                        ),
+                    );
                     if !hidden.is_empty() {
                         ui.menu_button(egui_phosphor::regular::CARET_RIGHT, |ui| {
                             for &at in &hidden {
@@ -285,8 +293,6 @@ impl MonitorApp {
                                 let text = format!("{} {}", spec.icon, spec.label);
                                 if ui
                                     .add_enabled(spec.enabled, egui::Button::new(text))
-                                    .on_hover_text(&spec.tooltip)
-                                    .on_disabled_hover_text(&spec.tooltip)
                                     .clicked()
                                 {
                                     chosen = Some(spec.action);
@@ -492,9 +498,8 @@ pub(super) struct ToolSpec {
     group: u8,
     icon: &'static str,
     label: &'static str,
+    /// What the button does, for the toolbar's help icon.
     tooltip: String,
-    /// The hover text when only the icon shows: the label, then the tooltip.
-    icon_tip: String,
     enabled: bool,
     tone: egui::Color32,
     strong: bool,
@@ -519,7 +524,6 @@ impl ToolSpec {
             group,
             icon,
             label,
-            icon_tip: format!("{label}: {tooltip}"),
             tooltip,
             enabled,
             tone,
@@ -532,12 +536,8 @@ impl ToolSpec {
         ToolButton {
             icon: self.icon,
             label: if minimal { "" } else { self.label },
-            // Icons only: the label moves into the hover text.
-            tooltip: if minimal {
-                &self.icon_tip
-            } else {
-                &self.tooltip
-            },
+            // Icons only: the label is the name on hover.
+            tooltip: self.label,
             enabled: self.enabled,
             tone: self.tone,
             strong: self.strong,
@@ -573,7 +573,9 @@ fn tool_layout(ui: &egui::Ui, specs: &[ToolSpec], minimal: bool) -> Vec<usize> {
     let status = 150.0;
     // The sidebar button and its separator at the left end.
     let sidebar = ui.spacing().interact_size.y + 12.0;
-    let budget = ui.available_width() - status - sidebar - 12.0;
+    // The help icon after the buttons.
+    let help = 20.0;
+    let budget = ui.available_width() - status - sidebar - help - 12.0;
     let order: Vec<usize> = TOOL_PRIORITY
         .iter()
         .filter_map(|action| specs.iter().position(|spec| spec.action == *action))

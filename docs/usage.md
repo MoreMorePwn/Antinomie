@@ -60,7 +60,7 @@ versions; existing VMs keep their pinned base.
   pySigma, which **Tools > Analysis tools** installs for Antinomie; it needs
   Python 3.11 or newer with venv support (`python3-venv` on Debian/Ubuntu).
   The page shows counts under its title (installed packs, how many are enabled,
-  custom groups, string patterns); its long explanations are in tooltips.
+  custom groups, string patterns); its long explanations are on help icons.
   The YARA packs are YARA-Forge Core, Elastic protections-artifacts and
   **abuse.ch YARAhub** (community rules shared as TLP:CLEAR at
   yaraify.abuse.ch/yarahub, downloaded from abuse.ch without an Auth-Key). Each
@@ -209,7 +209,7 @@ The **Device profile** presets are Desktop, Laptop, Server, Cloud VPS, IoT devic
 (Raspberry Pi), Normal QEMU (QEMU's own identity, what Antinomie launched before
 profiles) and Custom. Runs recorded before 0.9.0 say "Realistic desktop" or
 "Transparent QEMU (as before)"; the app shows them by these names. The window's
-hints (the **?** icons and the entries' tooltips) show on a running VM's
+hints (the **?** help icons) show on a running VM's
 read-only profile too, and its sections still open there.
 
 The Desktop, Laptop and Server presets report the identity strings of one
@@ -1765,7 +1765,14 @@ sideways in its box, and long text wraps. A rules window opens with the list at 
 
 Menus: **File**, **VM**, **Run**, **View**, **Tools** and **Help**; the menu bar's
 **Search** button at the right (with its key) opens the command palette. Menus and
-button tooltips show the keys, and a tab's tooltip shows its Ctrl+digit.
+Help icons: a muted **?** beside a control explains it. Hover it to read the text,
+or click it (or focus it and press Space) to keep it open until you click elsewhere
+or press Esc; it works on a disabled control too, and a disabled control's icon
+starts with the reason. Controls carry no long hover text: an icon-only button shows
+its name on hover, and a value cut short shows whole. The toolbar has one help icon
+after its buttons that explains each of them (the hidden ones too), with their keys.
+
+the toolbar's help icon show the keys, and a tab's tooltip shows its Ctrl+digit.
 
 **Ctrl+K** (or **Search**, or **Help > Command palette**) opens the palette. It
 searches every menu action, the open tabs, the machines, the recent runs and the
@@ -1858,8 +1865,8 @@ step Ready; **Skip this step** leaves the settings as they are. **Help > Getting
 started: Appearance** is in the palette.
 
 On **Settings > Recording**, **Default base for new VMs** is the base a new VM
-starts with; each VM keeps the base it was created with. Its explanations are
-tooltips.
+starts with; each VM keeps the base it was created with. Its explanations are on
+help icons.
 
 **Settings** has the pages Appearance, Recording, Detection rules, Notifications,
 Network lookup, Network routes, Analysis tools, Disks, Keyboard and Advanced. It
