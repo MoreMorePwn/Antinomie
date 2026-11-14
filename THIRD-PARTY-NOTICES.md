@@ -203,9 +203,11 @@ Cargo source/notice inventory includes these packages under their upstream terms
 The `MoreMorePwn/antinomie-bases` Hugging Face bucket holds the VM image
 catalog and image files, and under `sources/` the corresponding source of each
 listed base (`bases/<identity>/SOURCES.json` is that base's inventory): the
-Debian `linux` source package (`debian/`), the Antinomie patch series and build
-recipe of the kernel revision (`kernels/`), the exact kernel configuration
-(`bases/<identity>/kernel.config`), the source packages of the host programs the
+Debian `linux` source package (`debian/`), the Antinomie patch series of the
+kernel revision (`kernels/`), the exact kernel configuration
+(`bases/<identity>/kernel.config`) and build recipe (`bases/<identity>/recipe/`;
+bases published before it sit under `kernels/<kernel id>/recipe/`, as their
+SOURCES.json says), the source packages of the host programs the
 image builders copy into BusyBox images and every initrd (BusyBox, glibc,
 e2fsprogs; `userland/`), and for Debian bases the full package inventory with
 source package, version and snapshot.debian.org link

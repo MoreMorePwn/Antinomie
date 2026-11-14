@@ -1269,6 +1269,14 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **Published base sources keep each base's own build recipe.**
+  `scripts/publish-base-sources.py` put the build recipe under the kernel's folder,
+  which every base of one patch series shares, so publishing a base built from a
+  newer checkout rewrote `build-base.py` for the bases already published (through
+  hard links too). The recipe now goes to `bases/<identity>/recipe/`, the kernel's
+  folder keeps only the patches and `SERIES.json`, and a changed file is written as
+  a new file. Bases published before keep their recipe under `kernels/`, as their
+  `SOURCES.json` says.
 - **No false persisted copy on a slow guest.** A process the recorded tree has
   just forked, listed before the host has read its fork (seen when a test forks 32
   children on a slow TCG guest), was reported as a copy of the sample running

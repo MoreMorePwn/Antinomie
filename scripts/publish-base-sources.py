@@ -10,12 +10,14 @@ the base (hf://buckets/MoreMorePwn/antinomie-bases/sources/):
     debian/linux_<version>/        the Debian source package the kernel is built on
                                    (.dsc, .debian.tar.xz, .orig.tar.xz from snapshot.debian.org)
     kernels/linux-<version>-antinomie-r<revision>-<series>/
-                                   the Antinomie patch series, the kernel build recipe
-                                   and the series hash it must match
+                                   the Antinomie patch series and the series hash it
+                                   must match (shared by every base of that series)
     userland/<source>_<version>/   the source package of each host program copied into the image
                                    (BusyBox, glibc, e2fsprogs, ...)
     bases/<identity>/              SOURCES.json (everything above, with SHA-256), the kernel's
-                                   .config and, for a Debian base, the package inventory
+                                   .config, the build recipe of the checkout that built
+                                   the base (recipe/) and, for a Debian base, the
+                                   package inventory
 
     publish-base-sources.py --bundle DIR --output DIR [--repo ROOT] [--cache DIR]
                             [--packages FILE] [--identity HEX]
@@ -46,7 +48,8 @@ SNAPSHOT = "https://snapshot.debian.org"
 SCHEMA = 1
 SERIES_DIR = "src/antinomie/core/6.12"
 ADAPTER = "src/antinomie/packaging/debian-6.12.94-1-trixie"
-# Kernel build recipe files, copied when the checkout has them.
+# Build recipe files, copied per base when the checkout has them: they follow the
+# app commit, not the patch series, so bases of one series may hold different ones.
 RECIPE = ("scripts/build-monitor-kernel.sh", "scripts/build-base.py", "scripts/bootstrap.sh",
           "scripts/fetch-inputs.sh", "scripts/verify-inputs.sh", "scripts/commit.sh",
           ADAPTER + "/adapter.conf", ADAPTER + "/series.fence")
@@ -204,6 +207,8 @@ def series_hash(series_dir):
 def copy_file(source, target):
     target.parent.mkdir(parents=True, exist_ok=True)
     if not (target.is_file() and sha256_file(target) == sha256_file(source)):
+        # A new file, never a write through a hard link into another tree.
+        target.unlink(missing_ok=True)
         shutil.copy2(source, target)
 
 
@@ -305,7 +310,7 @@ def publish(bundle_dir, output, repo, cache, snapshot, packages_file=None, ident
         copy_file(patch, output / "kernels" / kernel_id / "patches" / patch.name)
     for relative in RECIPE:
         if (repo / relative).is_file():
-            copy_file(repo / relative, output / "kernels" / kernel_id / "recipe" / relative)
+            copy_file(repo / relative, output / "bases" / identity / "recipe" / relative)
     write_json(output / "kernels" / kernel_id / "SERIES.json", {
         "series_sha256": found, "patches": [p.name for p in sorted(series_dir.glob("*.patch"))],
         "debian_source": f"linux {version}", "antinomie_revision": kernel["antinomie_revision"],
@@ -371,7 +376,9 @@ def publish(bundle_dir, output, repo, cache, snapshot, packages_file=None, ident
         "userland": sources,
         "inventory": f"bases/{identity}/packages.tsv" if inventory else None,
         "inventory_packages": len(inventory),
-        "files": {**tree(f"debian/linux_{version}"), **tree(f"kernels/{kernel_id}"),
+        "files": {**tree(f"debian/linux_{version}"), **tree(f"kernels/{kernel_id}/patches"),
+                  f"kernels/{kernel_id}/SERIES.json": sha256_file(output / "kernels" / kernel_id / "SERIES.json"),
+                  **tree(f"bases/{identity}/recipe"),
                   **{k: v for s in sources for k, v in tree(s["path"]).items()},
                   f"bases/{identity}/kernel.config": sha256_file(base_dir / "kernel.config"),
                   **({f"bases/{identity}/packages.tsv": sha256_file(base_dir / "packages.tsv")}

@@ -124,6 +124,25 @@ class PublishTests(unittest.TestCase):
         found = publish.dsc_checksums(dsc({"a.tar.xz": b"abc"}).decode())
         self.assertEqual(found, {"a.tar.xz": (sha256(b"abc"), 3)})
 
+    def test_a_later_base_of_the_series_keeps_the_earlier_recipe(self):
+        # build-base.py follows the app commit: a second base of the same patch series
+        # built from a newer checkout gets its own recipe, and the first base's
+        # manifest still matches the tree (hard links included, as in a staging copy).
+        out = self.root / "out"
+        script = self.repo / "scripts/build-monitor-kernel.sh"
+        first = self.run_publish(identity="ab" * 32)
+        shared = out / f"bases/{'ab' * 32}/recipe/scripts/build-monitor-kernel.sh"
+        mirror = self.root / "mirror.sh"
+        os.link(shared, mirror)
+        script.write_text("#!/bin/sh\necho newer\n")
+        second = self.run_publish(identity="cd" * 32)
+        self.assertEqual(mirror.read_text(), "#!/bin/sh\n")
+        for manifest in (first, second):
+            for relative, digest in manifest["files"].items():
+                self.assertEqual(publish.sha256_file(out / relative), digest, relative)
+        self.assertFalse(any("/recipe/" in k for k in first["files"] if k.startswith("kernels/")))
+        self.assertEqual(first["kernel"]["path"], second["kernel"]["path"])
+
     def test_busybox_base_publishes_kernel_and_userland_sources(self):
         manifest = self.run_publish(identity="ab" * 32)
         out = self.root / "out"
@@ -133,8 +152,8 @@ class PublishTests(unittest.TestCase):
                          "debian/linux_1.0-1/linux_1.0-1.orig.tar.xz",
                          f"kernels/{kernel_id}/patches/0001-a.patch",
                          f"kernels/{kernel_id}/patches/0002-b.patch",
-                         f"kernels/{kernel_id}/recipe/scripts/build-monitor-kernel.sh",
-                         f"kernels/{kernel_id}/recipe/{publish.ADAPTER}/adapter.conf",
+                         f"bases/{'ab' * 32}/recipe/scripts/build-monitor-kernel.sh",
+                         f"bases/{'ab' * 32}/recipe/{publish.ADAPTER}/adapter.conf",
                          "userland/busybox_1.37.0-6/busybox_1.37.0-6.dsc",
                          f"bases/{'ab' * 32}/kernel.config",
                          f"bases/{'ab' * 32}/SOURCES.json"):
