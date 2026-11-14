@@ -170,15 +170,17 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                                             ui.close();
                                         }
                                         if available
-                                            && ui
-                                                .add_enabled(
-                                                    view.can_send,
-                                                    egui::Button::new("Send to VM"),
-                                                )
-                                                .on_hover_text(
-                                                    "Upload the file only; it is not run",
-                                                )
-                                                .clicked()
+                                            && crate::widgets::with_help(
+                                                ui,
+                                                "Upload the file only; it is not run",
+                                                |ui| {
+                                                    ui.add_enabled(
+                                                        view.can_send,
+                                                        egui::Button::new("Send to VM"),
+                                                    )
+                                                },
+                                            )
+                                            .clicked()
                                         {
                                             selected = Some(Action::SendOnly(entry.path.clone()));
                                             ui.close();
@@ -206,6 +208,7 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                                         }
                                     });
                                 }
+                                // hover: the whole path, and what a double-click does on this row
                                 response.on_hover_ui(|ui| {
                                     ui.label(entry.path.display().to_string());
                                     if available && view.actions {

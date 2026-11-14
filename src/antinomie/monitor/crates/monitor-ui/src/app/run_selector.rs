@@ -153,23 +153,25 @@ impl MonitorApp {
                 _ => view.empty_text.into(),
             },
         };
-        egui::ComboBox::from_id_salt(view.id_salt)
-            .selected_text(text)
-            .width(ui.available_width().min(view.max_width))
-            .show_ui(ui, |ui| {
-                if let Some(label) = view.clear_label {
-                    ui.selectable_value(&mut selected, None, label);
-                }
-                for run in runs {
-                    ui.selectable_value(
-                        &mut selected,
-                        Some(run.id.clone()),
-                        run_selector_label(run),
-                    );
-                }
-            })
-            .response
-            .on_hover_text(view.hover);
+        crate::widgets::with_help(ui, view.hover, |ui| {
+            let width = ui.available_width().min(view.max_width);
+            egui::ComboBox::from_id_salt(view.id_salt)
+                .selected_text(text)
+                .width(width)
+                .show_ui(ui, |ui| {
+                    if let Some(label) = view.clear_label {
+                        ui.selectable_value(&mut selected, None, label);
+                    }
+                    for run in runs {
+                        ui.selectable_value(
+                            &mut selected,
+                            Some(run.id.clone()),
+                            run_selector_label(run),
+                        );
+                    }
+                })
+                .response
+        });
         let changed = selected != self.selected_run;
         if changed {
             self.select_run(selected);

@@ -131,10 +131,12 @@ fn fnv1a(text: &str) -> u32 {
 /// The "Copy as Mermaid" item of a context menu: `text` goes to the
 /// clipboard and the menu closes.
 pub(crate) fn menu_item(ui: &mut egui::Ui, text: impl FnOnce() -> String) {
-    if ui
-        .button("Copy as Mermaid")
-        .on_hover_text("Put this diagram on the clipboard as a Mermaid flowchart")
-        .clicked()
+    if crate::widgets::with_help(
+        ui,
+        "Put this diagram on the clipboard as a Mermaid flowchart",
+        |ui| ui.button("Copy as Mermaid"),
+    )
+    .clicked()
     {
         ui.ctx().copy_text(text());
         ui.close();
@@ -143,9 +145,11 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, text: impl FnOnce() -> String) {
 
 /// A small "Copy as Mermaid" button, for a diagram with no context menu.
 pub(crate) fn button(ui: &mut egui::Ui, text: impl FnOnce() -> String) -> egui::Response {
-    let response = ui
-        .button(format!("{} Mermaid", egui_phosphor::regular::COPY))
-        .on_hover_text("Copy this diagram to the clipboard as a Mermaid flowchart");
+    let response = crate::widgets::with_help(
+        ui,
+        "Copy this diagram to the clipboard as a Mermaid flowchart",
+        |ui| ui.button(format!("{} Mermaid", egui_phosphor::regular::COPY)),
+    );
     if response.clicked() {
         ui.ctx().copy_text(text());
     }

@@ -121,12 +121,12 @@ impl MonitorApp {
             if ui.add_enabled(ready, egui::Button::new("Upload")).clicked() {
                 self.request_upload(false);
             }
-            if ui
-                .add_enabled(ready, primary_button("Upload and Run"))
-                .on_hover_text(
-                    "Upload as executable, then open Run program to review launch settings",
-                )
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "Upload as executable, then open Run program to review launch settings",
+                |ui| ui.add_enabled(ready, primary_button("Upload and Run")),
+            )
+            .clicked()
             {
                 self.request_upload(true);
             }

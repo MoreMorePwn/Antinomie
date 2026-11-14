@@ -97,18 +97,41 @@ fn open_presets(app: &mut MonitorApp, ctx: &egui::Context) {
     hover_at(app, ctx, AWAY);
 }
 
-/// The hints missing when each label is hovered: `(label, part of its tip)`.
+/// The hints missing when the help icon beside each label is hovered:
+/// `(label, part of its tip)`. The control itself shows nothing.
 fn missing_tips(app: &mut MonitorApp, ctx: &egui::Context, cases: &[(&str, &str)]) -> Vec<String> {
     let mut missing = Vec::new();
     for &(label, tip) in cases {
         let output = hover_at(app, ctx, AWAY);
-        let Some((_, rect)) = texts(&output).into_iter().rfind(|(text, _)| text == label) else {
+        let found = texts(&output);
+        let Some((_, rect)) = found.iter().rfind(|(text, _)| text == label) else {
             missing.push(format!("{label}: not drawn"));
             continue;
         };
-        let shown = texts(&hover_at(app, ctx, rect.center()));
+        // A tooltip is text that shows only while the control is hovered.
+        let on_control = texts(&hover_at(app, ctx, rect.center()));
+        if on_control
+            .iter()
+            .any(|(text, _)| text.contains(tip) && !found.iter().any(|(away, _)| away == text))
+        {
+            missing.push(format!("{label}: still a tooltip on the control"));
+        }
+        let Some(icon) = found
+            .iter()
+            .filter(|(text, icon)| {
+                text == egui_phosphor::regular::QUESTION
+                    && (icon.center().y - rect.center().y).abs() < 10.0
+                    && icon.left() > rect.right()
+            })
+            .min_by(|a, b| a.1.left().total_cmp(&b.1.left()))
+            .map(|(_, icon)| *icon)
+        else {
+            missing.push(format!("{label}: no help icon"));
+            continue;
+        };
+        let shown = texts(&hover_at(app, ctx, icon.center()));
         if !shown.iter().any(|(text, _)| text.contains(tip)) {
-            missing.push(format!("{label}: no tooltip {tip:?}"));
+            missing.push(format!("{label}: no help {tip:?}"));
         }
     }
     missing
@@ -468,8 +491,10 @@ fn the_routed_buttons_help_icon_says_what_it_does() {
         .expect("a help icon beside the button");
     let tip = texts(&hover_at(&mut app, &ctx, icon.center()));
     assert!(
-        tip.iter().any(|(text, _)| text.contains("route gateway")
-            && text.contains("sets the VM's Network to Routed")),
+        tip.iter().any(|(text, _)| text.contains("route gateway"))
+            && tip
+                .iter()
+                .any(|(text, _)| text.contains("sets the VM's Network to Routed")),
         "{tip:?}"
     );
 }

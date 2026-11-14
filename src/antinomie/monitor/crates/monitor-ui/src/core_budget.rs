@@ -117,15 +117,14 @@ pub(crate) fn show(
                 .show_ui(ui, |ui| {
                     for entry in entries(limits) {
                         let enabled = entry.disabled.is_none();
-                        let response = ui
+                        let response = crate::widgets::with_help_or(ui, "", entry.disabled.clone().unwrap_or_default(), |ui| ui
                             .add_enabled(
                                 enabled,
                                 egui::Button::selectable(
                                     u64::from(*budget) == entry.size,
                                     &entry.label,
                                 ),
-                            )
-                            .on_disabled_hover_text(entry.disabled.clone().unwrap_or_default());
+                            ));
                         if response.clicked() {
                             *budget = entry.size as u32;
                             picked = Some(*budget);
@@ -151,7 +150,10 @@ pub(crate) fn show(
             *timeout_ms = (seconds * 1000.0).round() as u32;
             edited = true;
         }
-        response.on_hover_text("Serialization deadline. The guest checks it page by page; page faults and thread rendezvous can still delay the pause.");
+        crate::widgets::help(
+            ui,
+            "Serialization deadline\n\nThe guest checks it page by page; page faults and thread rendezvous can still delay the pause.",
+        );
     });
     ui.data_mut(|data| data.insert_temp(edited_id, edited));
     picked

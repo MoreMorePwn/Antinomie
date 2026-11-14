@@ -733,23 +733,17 @@ fn terminal_header(ui: &mut egui::Ui, terminal: &mut RunTerminal, clipboard_read
                     .small().color(theme::muted()));
                 ui.separator();
                 terminal.terminal.view_controls(ui);
-                ui.label(egui::RichText::new(egui_phosphor::regular::INFO)
-                    .color(theme::muted()))
-                    .on_hover_text("Drag to select text. Double-click selects a word. Copy with Ctrl+Shift+C, Ctrl+Insert, or right-click. Ctrl+C interrupts when nothing is selected. Paste with Ctrl+Shift+V or Ctrl+V. Shift+PageUp/PageDown scrolls output. Raw shows escape codes as text; Copy then gives that text.");
+                crate::widgets::help(ui, "Terminal keys\n\n- Drag to select text; double-click selects a word.\n- Copy with `Ctrl+Shift+C`, `Ctrl+Insert` or right-click.\n- `Ctrl+C` interrupts when nothing is selected.\n- Paste with `Ctrl+Shift+V` or `Ctrl+V`.\n- `Shift+PageUp` and `Shift+PageDown` scroll the output.\n\nRaw shows escape codes as text; Copy then gives that text.");
                 ui.separator();
-                type_clipboard = ui
+                type_clipboard = crate::widgets::with_help_or(ui, "Type the host clipboard into the VM's focused input (Ctrl+Shift+Y). \
+                         Uses a US keyboard layout; Caps Lock should be off. Maximum 4 KiB.", "Needs a running VM that is not busy", |ui| ui
                     .add_enabled(
                         clipboard_ready,
                         egui::Button::new(format!(
                             "{} Type clipboard",
                             egui_phosphor::regular::KEYBOARD
                         )),
-                    )
-                    .on_hover_text(
-                        "Type the host clipboard into the VM's focused input (Ctrl+Shift+Y). \
-                         Uses a US keyboard layout; Caps Lock should be off. Maximum 4 KiB.",
-                    )
-                    .on_disabled_hover_text("Needs a running VM that is not busy")
+                    ))
                     .clicked();
             });
             if let Some(error) = terminal.snapshot_error.as_ref().or(terminal.replay_error.as_ref()) {

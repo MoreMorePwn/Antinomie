@@ -16,12 +16,17 @@ pub(super) fn show(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
     ui.horizontal(|ui| {
         ui.strong("VM configuration");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let button = ui
-                .add_enabled(
-                    !running,
-                    egui::Button::new(format!("{} Configure…", icon::SLIDERS_HORIZONTAL)),
-                )
-                .on_disabled_hover_text("Stop the VM to change its configuration");
+            let button = crate::widgets::with_help_or(
+                ui,
+                "",
+                "Stop the VM to change its configuration",
+                |ui| {
+                    ui.add_enabled(
+                        !running,
+                        egui::Button::new(format!("{} Configure…", icon::SLIDERS_HORIZONTAL)),
+                    )
+                },
+            );
             if button.clicked() {
                 ui.ctx()
                     .data_mut(|data| data.insert_temp(egui::Id::new(CONFIGURE), true));

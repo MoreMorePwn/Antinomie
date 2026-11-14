@@ -4,6 +4,7 @@
 //! confirmation. The deletion itself is the
 //! backend's `Command::DeleteEvidence`.
 use crate::theme;
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::{byte_size::file_size, evidence_delete::measure, EvidenceItem};
 use eframe::egui::{self, RichText};
 use std::path::Path;
@@ -164,9 +165,10 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, blocked: Option<&str>) -> bool {
         blocked.is_none(),
         egui::Button::new(RichText::new("Delete…").color(theme::error())),
     );
+    // A menu item: the reason it is off, no help icon.
     let button = match blocked {
-        Some(reason) => button.on_disabled_hover_text(reason),
-        None => button.on_hover_text("Permanently delete this item from the recording folder"),
+        Some(reason) => button.reason_tip(reason),
+        None => button,
     };
     if button.clicked() {
         ui.close();

@@ -5,6 +5,7 @@
 //! manager's own dialogs, so every rule of the Snapshots window applies
 //! (what the VM state allows, a busy operation, compatibility).
 use super::{created_time, primary};
+use crate::widgets::Tip as _;
 use crate::{theme, widgets};
 use antinomie_monitor_core::{VmSnapshotMode, VmSnapshotProgress, VmSnapshotTree};
 use eframe::egui::{self, RichText};
@@ -103,7 +104,7 @@ pub(crate) fn show(
             });
         }
         if !can_restore {
-            restore.on_disabled_hover_text(if busy {
+            restore.reason_tip(if busy {
                 "A snapshot operation is running"
             } else if node.is_none() {
                 "Select a snapshot to restore"
@@ -123,10 +124,12 @@ pub(crate) fn show(
                 boot_from_disk: true,
             });
         }
-        if ui
-            .button("Open Snapshots…")
-            .on_hover_text("The full Snapshots window: graph, rename, delete")
-            .clicked()
+        if crate::widgets::with_help(
+            ui,
+            "The full Snapshots window: graph, rename, delete",
+            |ui| ui.button("Open Snapshots…"),
+        )
+        .clicked()
         {
             action = Some(Action::Open);
         }

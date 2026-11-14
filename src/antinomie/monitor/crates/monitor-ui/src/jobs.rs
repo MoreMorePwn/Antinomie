@@ -5,6 +5,7 @@
 //! worker, the rules window, Triage, the Memory tab, the Samples page) what
 //! they are doing; this module keeps when each job was first seen and which
 //! ones have since gone, and draws the two lists.
+use crate::widgets::Tip as _;
 use crate::{
     theme,
     time_format::{elapsed, now_ms, time_of_day},
@@ -288,11 +289,12 @@ impl Board {
         } else {
             format!("{count} jobs")
         };
-        ui.add(egui::Button::new(
-            RichText::new(format!("{} {text}", egui_phosphor::regular::GEAR_FINE))
-                .color(theme::warn()),
-        ))
-        .on_hover_text("Open Jobs: what is running now")
+        crate::widgets::with_help(ui, "Open Jobs: what is running now", |ui| {
+            ui.add(egui::Button::new(
+                RichText::new(format!("{} {text}", egui_phosphor::regular::GEAR_FINE))
+                    .color(theme::warn()),
+            ))
+        })
         .clicked()
     }
 
@@ -312,13 +314,13 @@ impl Board {
                  work the app is doing now",
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_enabled(
+                if crate::widgets::with_help(ui, "Forget the finished jobs listed below", |ui| {
+                    ui.add_enabled(
                         !self.finished.is_empty(),
                         egui::Button::new("Clear finished"),
                     )
-                    .on_hover_text("Forget the finished jobs listed below")
-                    .clicked()
+                })
+                .clicked()
                 {
                     self.finished.clear();
                 }
@@ -404,7 +406,7 @@ impl Board {
                         });
                         row.col(|ui| {
                             if let Some(open) = &job.open {
-                                if ui.small_button("Open").on_hover_text(&open.label).clicked() {
+                                if ui.small_button("Open").value_tip(&open.label).clicked() {
                                     request = Some(Request::Open(open.clone()));
                                 }
                             }
@@ -487,7 +489,7 @@ impl Board {
                     });
                     row.col(|ui| {
                         if let Some(open) = &done.job.open {
-                            if ui.small_button("Open").on_hover_text(&open.label).clicked() {
+                            if ui.small_button("Open").value_tip(&open.label).clicked() {
                                 request = Some(Request::Open(open.clone()));
                             }
                         }

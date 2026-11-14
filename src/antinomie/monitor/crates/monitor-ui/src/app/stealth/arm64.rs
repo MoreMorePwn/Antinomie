@@ -45,13 +45,17 @@ pub(super) fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile, uefi: bo
                 .width(260.0)
                 .truncate()
                 .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(
-                            profile.identity_enabled && pinned(profile).is_none(),
-                            AUTOMATIC,
-                        )
-                        .hint("A machine of the preset's kind, the same one for the VM's life")
-                        .clicked()
+                    if crate::widgets::with_help(
+                        ui,
+                        "A machine of the preset's kind, the same one for the VM's life",
+                        |ui| {
+                            ui.selectable_label(
+                                profile.identity_enabled && pinned(profile).is_none(),
+                                AUTOMATIC,
+                            )
+                        },
+                    )
+                    .clicked()
                     {
                         profile.identity_enabled = true;
                         if pinned(profile).is_some() {
@@ -103,10 +107,12 @@ pub(super) fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile, uefi: bo
                      from the catalog and the VM's UUID; the PC fields do not apply to arm64."
                 },
             );
-            if ui
-                .button("Randomize serials")
-                .hint("New serials, UUID and MAC address (an automatic pick may change)")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "New serials, UUID and MAC address (an automatic pick may change)",
+                |ui| ui.button("Randomize serials"),
+            )
+            .clicked()
             {
                 profile.identity.rerandomize();
                 profile.new_mac();

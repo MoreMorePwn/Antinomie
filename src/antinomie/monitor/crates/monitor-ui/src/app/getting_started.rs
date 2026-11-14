@@ -206,17 +206,15 @@ impl MonitorApp {
                         if ui.add(primary_button("Next")).clicked() {
                             go = Some(step.next());
                         }
-                        skip = ui
-                            .button("Skip this step")
-                            .on_hover_text("Skipped steps stay available here and in the summary")
+                        skip = crate::widgets::with_help(ui, "Skipped steps stay available here and in the summary", |ui| ui
+                            .button("Skip this step"))
                             .clicked();
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.checkbox(
+                        crate::widgets::with_help(ui, "It opens by itself only on the first launch; Help > Getting started always reopens it", |ui| ui.checkbox(
                             &mut self.settings.getting_started.dont_show,
                             "Don't show again",
-                        )
-                        .on_hover_text("It opens by itself only on the first launch; Help > Getting started always reopens it");
+                        ));
                     });
                 });
             });

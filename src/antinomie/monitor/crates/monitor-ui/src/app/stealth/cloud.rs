@@ -5,8 +5,8 @@ use antinomie_monitor_core::{stealth::MACHINES, VmConfig, VmNetwork};
 use eframe::egui;
 
 /// What the Routed button does and why (its help icon).
-pub(in crate::app) const ROUTED_HELP: &str =
-    "A real cloud instance can ask its provider's metadata service (169.254.169.254 and the \
+pub(in crate::app) const ROUTED_HELP: &str = "Cloud metadata needs a Routed network\n\n\
+     A real cloud instance can ask its provider's metadata service (169.254.169.254 and the \
      like) for its identity and credentials, and malware may check that it answers. Cloud \
      VPS answers it with fake data and canary credentials from Antinomie's route gateway, \
      which only a Routed network has.\n\nThis button sets the VM's Network to Routed, as \

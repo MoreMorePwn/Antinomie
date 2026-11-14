@@ -3,6 +3,7 @@
 //! guest. A preset fills every entry; editing one makes the profile Custom.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 mod arm64;
 mod cloud;
 mod uptime;
@@ -30,54 +31,8 @@ fn host_for(arch: GuestArch) -> &'static HostSupport {
     }
 }
 
-/// A widget's hint, shown whether it is enabled or not: a running VM's
-/// profile is read-only, and egui shows an enabled widget's tooltip only
-/// while it is enabled, so every hint of the window was hidden there.
-pub(super) trait Hint {
-    fn hint(self, text: impl Into<egui::WidgetText>) -> Self;
-    /// `text` while enabled; when disabled, `reason` if the window is
-    /// `editable` (the setting itself is off), else `text`.
-    fn hint_or(
-        self,
-        text: impl Into<egui::WidgetText>,
-        reason: impl Into<egui::WidgetText>,
-        editable: bool,
-    ) -> Self;
-}
-
-impl Hint for egui::Response {
-    fn hint(self, text: impl Into<egui::WidgetText>) -> Self {
-        if self.enabled() {
-            self.on_hover_text(text)
-        } else {
-            self.on_disabled_hover_text(text)
-        }
-    }
-
-    fn hint_or(
-        self,
-        text: impl Into<egui::WidgetText>,
-        reason: impl Into<egui::WidgetText>,
-        editable: bool,
-    ) -> Self {
-        match (self.enabled(), editable) {
-            (true, _) => self.on_hover_text(text),
-            (false, true) => self.on_disabled_hover_text(reason),
-            (false, false) => self.on_disabled_hover_text(text),
-        }
-    }
-}
-
-/// The app's help icon beside a label: a muted question mark whose tooltip
-/// explains the setting (shown in a read-only window too).
-pub(super) fn help(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
-    ui.add(
-        egui::Label::new(RichText::new(egui_phosphor::regular::QUESTION).color(theme::muted()))
-            .selectable(false)
-            .sense(egui::Sense::hover()),
-    )
-    .hint(text)
-}
+/// The app's help icon (shared: `widgets::help`).
+pub(super) use crate::widgets::help;
 
 /// A combo box whose unavailable choices are shown disabled with the reason.
 fn choice<T: Copy + PartialEq>(
@@ -100,7 +55,7 @@ fn choice<T: Copy + PartialEq>(
                     egui::Button::selectable(*value == option, label(option)),
                 );
                 if let Some(reason) = reason {
-                    response.on_disabled_hover_text(reason);
+                    response.reason_tip(reason);
                 } else if response.clicked() {
                     *value = option;
                 }
@@ -226,8 +181,7 @@ impl<'a> Fit<'a> {
                 .color(theme::warn()),
             )
             .wrap(),
-        )
-        .hint(&fallback.reason);
+        );
         ui.add(
             egui::Label::new(
                 RichText::new(&fallback.reason)
@@ -237,10 +191,12 @@ impl<'a> Fit<'a> {
             .wrap(),
         );
         if let Some(base) = base_supporting(profile, setting, self.current, self.bases, self.host)
-            && ui
-                .button(format!("Use base {}", base.label))
-                .hint("Switch this VM to an installed base that supports the setting")
-                .clicked()
+            && crate::widgets::with_help(
+                ui,
+                "Switch this VM to an installed base that supports the setting",
+                |ui| ui.button(format!("Use base {}", base.label)),
+            )
+            .clicked()
         {
             self.switch = Some(base.id.clone());
         }
@@ -424,16 +380,18 @@ pub(super) fn preset_row(
     ui.end_row();
     if profile.preset == StealthPreset::CloudVps {
         ui.label("");
-        provider_list(ui, profile, "vm_stealth_preset");
+        provider_list(ui, profile, "vm_stealth_preset", arch);
         ui.end_row();
     }
     ui.label("");
     ui.horizontal_wrapped(|ui| {
         ui.weak(profile.preset.description());
-        if ui
-            .button(details_label)
-            .hint("Machine identity, CPU, network card and devices")
-            .clicked()
+        if crate::widgets::with_help(
+            ui,
+            "Machine identity, CPU, network card and devices",
+            |ui| ui.button(details_label),
+        )
+        .clicked()
         {
             *open = !*open;
         }
@@ -450,11 +408,12 @@ pub(super) fn preset_row(
                         "settings fall back"
                     }
                 ),
-            )
-            .hint(
+            );
+            help(
+                ui,
                 fallbacks
                     .iter()
-                    .map(|fallback| fallback.summary.as_str())
+                    .map(|fallback| format!("- {}", fallback.summary))
                     .collect::<Vec<_>>()
                     .join("\n"),
             );
@@ -516,14 +475,18 @@ fn identity_fields(ui: &mut egui::Ui, identity: &mut MachineIdentity) {
 fn oem_strings(ui: &mut egui::Ui, identity: &mut MachineIdentity) {
     ui.label("OEM strings");
     let mut text = identity.oem_strings.join("\n");
-    if ui
-        .add(
-            egui::TextEdit::multiline(&mut text)
-                .desired_rows(3)
-                .desired_width(crate::theme::plain_edit_width(260.0)),
-        )
-        .hint("SMBIOS type 11, one string per line; PC firmware fills it, QEMU does not")
-        .changed()
+    if crate::widgets::with_help(
+        ui,
+        "SMBIOS type 11, one string per line; PC firmware fills it, QEMU does not",
+        |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut text)
+                    .desired_rows(3)
+                    .desired_width(crate::theme::plain_edit_width(260.0)),
+            )
+        },
+    )
+    .changed()
     {
         identity.oem_strings = text
             .lines()
@@ -607,10 +570,12 @@ fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile) {
         });
     if profile.identity_enabled {
         ui.horizontal(|ui| {
-            if ui
-                .button("Randomize serials")
-                .hint("New serials, UUID, disk serial and MAC address")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "New serials, UUID, disk serial and MAC address",
+                |ui| ui.button("Randomize serials"),
+            )
+            .clicked()
             {
                 profile.identity.rerandomize();
                 profile.new_mac();
@@ -715,25 +680,33 @@ fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
             ui.checkbox(&mut profile.hpet, "HPET timer");
             ui.end_row();
             ui.label("");
-            ui.checkbox(&mut profile.vmport, "VMware backdoor port")
-                .hint("Only VMware VMs have it; real PCs do not");
+            crate::widgets::with_help(ui, "Only VMware VMs have it; real PCs do not", |ui| {
+                ui.checkbox(&mut profile.vmport, "VMware backdoor port")
+            });
             ui.end_row();
             ui.label("");
-            ui.checkbox(&mut profile.usb, "Intel ICH9 USB controllers")
-                .hint("Every PC has USB; QEMU adds none by default");
+            crate::widgets::with_help(ui, "Every PC has USB; QEMU adds none by default", |ui| {
+                ui.checkbox(&mut profile.usb, "Intel ICH9 USB controllers")
+            });
             ui.end_row();
             ui.label("");
             let secure_boot = profile.firmware == Firmware::UefiSecureBoot;
             let mut smm = profile.smm || secure_boot;
             let editable = ui.is_enabled();
-            ui.add_enabled(
-                !secure_boot,
-                egui::Checkbox::new(&mut smm, "System management mode"),
-            )
-            .hint_or(
+            crate::widgets::with_help_or(
+                ui,
                 "PCs have SMM; Secure Boot firmware needs it",
-                "Secure Boot firmware keeps its variables in SMM",
-                editable,
+                if editable {
+                    "Secure Boot firmware keeps its variables in SMM"
+                } else {
+                    ""
+                },
+                |ui| {
+                    ui.add_enabled(
+                        !secure_boot,
+                        egui::Checkbox::new(&mut smm, "System management mode"),
+                    )
+                },
             );
             if !secure_boot {
                 profile.smm = smm;
@@ -747,11 +720,16 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
         arm64::cpu(ui, profile, fit.uefi());
         return;
     }
-    ui.checkbox(
-        &mut profile.cpu_passthrough,
-        "Pass the host CPU through (its real name and features)",
-    )
-    .hint("Needs KVM; without it the model is named after the host CPU");
+    crate::widgets::with_help(
+        ui,
+        "Needs KVM; without it the model is named after the host CPU",
+        |ui| {
+            ui.checkbox(
+                &mut profile.cpu_passthrough,
+                "Pass the host CPU through (its real name and features)",
+            )
+        },
+    );
     if !profile.cpu_passthrough {
         egui::Grid::new("vm_stealth_cpu_model")
             .num_columns(2)
@@ -783,10 +761,10 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                             .iter()
                             .filter(|model| host.is_empty() || model.cpu_vendor == host)
                         {
-                            if ui
-                                .selectable_label(profile.cpu_model == model.model, model.model)
-                                .hint(model.brand)
-                                .clicked()
+                            if crate::widgets::with_help(ui, model.brand, |ui| {
+                                ui.selectable_label(profile.cpu_model == model.model, model.model)
+                            })
+                            .clicked()
                             {
                                 profile.cpu_model = model.model.into();
                                 profile.cpu_brand = model.brand.into();
@@ -796,48 +774,75 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 ui.end_row();
                 text_row(ui, "Brand string", &mut profile.cpu_brand);
                 ui.label("");
-                ui.add_enabled(
-                    !profile.cpu_model.is_empty(),
-                    egui::Checkbox::new(&mut profile.model_cache_info, "The model's own caches"),
-                )
-                .hint("Its real cache layout and an L3 instead of QEMU's legacy one");
+                crate::widgets::with_help(
+                    ui,
+                    "Its real cache layout and an L3 instead of QEMU's legacy one",
+                    |ui| {
+                        ui.add_enabled(
+                            !profile.cpu_model.is_empty(),
+                            egui::Checkbox::new(
+                                &mut profile.model_cache_info,
+                                "The model's own caches",
+                            ),
+                        )
+                    },
+                );
                 ui.end_row();
             });
     }
     ui.checkbox(&mut profile.hide_hypervisor, "Hide the hypervisor CPU flag");
-    ui.checkbox(&mut profile.hide_kvm, "Hide the KVM signature")
-        .hint("The guest then uses its TSC instead of kvm-clock: a small timekeeping cost");
+    crate::widgets::with_help(
+        ui,
+        "The guest then uses its TSC instead of kvm-clock: a small timekeeping cost",
+        |ui| ui.checkbox(&mut profile.hide_kvm, "Hide the KVM signature"),
+    );
     let editable = ui.is_enabled();
-    ui.add_enabled(
-        !profile.hide_kvm,
-        egui::Checkbox::new(&mut profile.kvm_clock, "kvm-clock"),
-    )
-    .hint_or(
+    crate::widgets::with_help_or(
+        ui,
         "The guest's clock source while the KVM signature is shown",
-        "Hiding the KVM signature also hides kvm-clock",
-        editable,
+        if editable {
+            "Hiding the KVM signature also hides kvm-clock"
+        } else {
+            ""
+        },
+        |ui| {
+            ui.add_enabled(
+                !profile.hide_kvm,
+                egui::Checkbox::new(&mut profile.kvm_clock, "kvm-clock"),
+            )
+        },
     );
     ui.checkbox(&mut profile.pmu, "Performance counters");
     ui.checkbox(&mut profile.realistic_topology, "One socket with N cores");
     let smt = &fit.host.smt;
-    ui.add_enabled(
-        profile.realistic_topology && smt.is_ok(),
-        egui::Checkbox::new(&mut profile.smt, "Two threads per core"),
-    )
-    .hint_or(
+    let reason = match (editable, smt) {
+        (false, _) => String::new(),
+        (true, Err(reason)) => reason.clone(),
+        (true, Ok(())) => "Needs one socket with N cores".to_owned(),
+    };
+    let usable = profile.realistic_topology && smt.is_ok();
+    crate::widgets::with_help_or(
+        ui,
         "As a CPU with SMT: N/2 cores of two threads (an even CPU count)",
-        match smt {
-            Err(reason) => reason.clone(),
-            Ok(()) => "Needs one socket with N cores".to_owned(),
+        reason,
+        |ui| {
+            ui.add_enabled(
+                usable,
+                egui::Checkbox::new(&mut profile.smt, "Two threads per core"),
+            )
         },
-        editable,
     );
     fit.line(ui, profile, FallbackSetting::Smt);
-    ui.add_enabled(
-        profile.cpu_passthrough,
-        egui::Checkbox::new(&mut profile.host_cache_info, "The host's cache sizes"),
-    )
-    .hint("QEMU otherwise reports its own cache sizes; passthrough only");
+    crate::widgets::with_help(
+        ui,
+        "QEMU otherwise reports its own cache sizes; passthrough only",
+        |ui| {
+            ui.add_enabled(
+                profile.cpu_passthrough,
+                egui::Checkbox::new(&mut profile.host_cache_info, "The host's cache sizes"),
+            )
+        },
+    );
 }
 
 fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
@@ -867,17 +872,21 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                         .desired_width(crate::theme::plain_edit_width(150.0))
                         .hint_text(crate::theme::placeholder(ui, "52:54:00:12:34:56")),
                 );
-                if ui
-                    .button("Random")
-                    .hint("A random address with the card's vendor prefix")
-                    .clicked()
+                if crate::widgets::with_help(
+                    ui,
+                    "A random address with the card's vendor prefix",
+                    |ui| ui.button("Random"),
+                )
+                .clicked()
                 {
                     profile.new_mac();
                 }
-                if ui
-                    .button("Local")
-                    .hint("A random locally administered address, which names no vendor")
-                    .clicked()
+                if crate::widgets::with_help(
+                    ui,
+                    "A random locally administered address, which names no vendor",
+                    |ui| ui.button("Local"),
+                )
+                .clicked()
                 {
                     profile.new_local_mac();
                 }
@@ -897,12 +906,17 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
         .show(ui, |ui| {
             if profile.identity_enabled && profile.nic == NicModel::E1000e {
                 ui.label("Card subsystem");
-                ui.add(
-                    egui::TextEdit::singleline(&mut profile.identity.nic_subsystem)
-                        .desired_width(crate::theme::plain_edit_width(150.0))
-                        .hint_text(crate::theme::placeholder(ui, "8086:0000")),
-                )
-                .hint("A board's own card carries its maker's PCI subsystem IDs");
+                crate::widgets::with_help(
+                    ui,
+                    "A board's own card carries its maker's PCI subsystem IDs",
+                    |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut profile.identity.nic_subsystem)
+                                .desired_width(crate::theme::plain_edit_width(150.0))
+                                .hint_text(crate::theme::placeholder(ui, "8086:0000")),
+                        )
+                    },
+                );
                 ui.end_row();
             }
             ui.label("Guest network");
@@ -911,18 +925,21 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                     egui::TextEdit::singleline(&mut profile.nat.network)
                         .desired_width(crate::theme::plain_edit_width(150.0))
                         .hint_text(crate::theme::placeholder(ui, "10.0.2.0/24")),
-                );
-                if ui
-                    .button("Home")
-                    .hint("192.168.1.0/24 behind a router at .1")
-                    .clicked()
+                |ui| ui.checkbox(&mut profile.cdrom, "An empty SATA CD-ROM drive"),
+            );
+                if crate::widgets::with_help(ui, "192.168.1.0/24 behind a router at .1", |ui| {
+                    ui.button("Home")
+                })
+                .clicked()
                 {
                     profile.nat = NatNetwork::home();
                 }
-                if ui
-                    .button("QEMU default")
-                    .hint("10.0.2.0/24, which QEMU and VirtualBox share")
-                    .clicked()
+                if crate::widgets::with_help(
+                    ui,
+                    "10.0.2.0/24, which QEMU and VirtualBox share",
+                    |ui| ui.button("QEMU default"),
+                )
+                .clicked()
                 {
                     profile.nat = NatNetwork::default();
                 }
@@ -982,9 +999,9 @@ fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 text_row(ui, "Disk serial", &mut profile.identity.disk_serial);
             }
             ui.label("CD-ROM");
-            ui.checkbox(&mut profile.cdrom, "An empty SATA CD-ROM drive")
-                .hint(
-                    "Desktops with an optical drive have one; QEMU's answers \
+            crate::widgets::with_help(
+                ui,
+                "Desktops with an optical drive have one; QEMU's answers \
                      \"QEMU DVD-ROM\" to the SCSI inquiry whatever its model",
                 );
             ui.end_row();
@@ -1014,7 +1031,7 @@ fn display(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
         ui.add_enabled_ui(usable, |ui| {
             let response = ui.radio_value(&mut profile.pointer, pointer, pointer.label());
             if editable {
-                response.on_disabled_hover_text("Needs the Intel ICH9 USB controllers");
+                response.reason_tip("Needs the Intel ICH9 USB controllers");
             }
             ui.label(RichText::new(pointer.cost()).small().color(theme::muted()));
         });
@@ -1032,19 +1049,27 @@ fn clock(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     uptime(ui, profile, fit.debian());
     fit.line(ui, profile, FallbackSetting::Uptime);
     ui.add_space(4.0);
-    ui.checkbox(&mut profile.rtc_localtime, "Real-time clock in local time")
-        .hint(
-            "Linux PCs keep it in UTC and Linux guests read it as UTC; Windows PCs in local time",
-        );
+    crate::widgets::with_help(
+        ui,
+        "Linux PCs keep it in UTC and Linux guests read it as UTC; Windows PCs in local time",
+        |ui| ui.checkbox(&mut profile.rtc_localtime, "Real-time clock in local time"),
+    );
     ui.horizontal(|ui| {
         ui.label("Driven by");
-        ui.radio_value(&mut profile.rtc_clock, RtcClock::Host, "the host's clock")
-            .hint("Wall time goes on while the VM is paused");
-        ui.radio_value(&mut profile.rtc_clock, RtcClock::Vm, "the VM's clock")
-            .hint("Stops while the VM is paused, as if it had been off");
+        crate::widgets::with_help(ui, "Wall time goes on while the VM is paused", |ui| {
+            ui.radio_value(&mut profile.rtc_clock, RtcClock::Host, "the host's clock")
+        });
+        crate::widgets::with_help(
+            ui,
+            "Stops while the VM is paused, as if it had been off",
+            |ui| ui.radio_value(&mut profile.rtc_clock, RtcClock::Vm, "the VM's clock"),
+        );
     });
-    ui.checkbox(&mut profile.rtc_driftfix, "Catch up on missed clock ticks")
-        .hint("For guests that count RTC interrupts (Windows); Linux does not need it");
+    crate::widgets::with_help(
+        ui,
+        "For guests that count RTC interrupts (Windows); Linux does not need it",
+        |ui| ui.checkbox(&mut profile.rtc_driftfix, "Catch up on missed clock ticks"),
+    );
 }
 
 /// A preset applied this frame stays that preset; any other edit is Custom.

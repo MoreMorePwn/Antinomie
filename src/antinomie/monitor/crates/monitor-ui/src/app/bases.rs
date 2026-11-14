@@ -2,6 +2,7 @@
 //! Base image choice and the download window.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 
 impl MonitorApp {
     pub(super) fn open_downloads(&mut self) {
@@ -62,14 +63,19 @@ impl MonitorApp {
                     }
                     self.catalog_feedback.show_updated(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_enabled(
-                            !older.is_empty(),
-                            egui::Checkbox::new(
-                                show_older,
-                                format!("Show older bases ({})", older.len()),
-                            ),
-                        )
-                        .on_hover_text("Bases built for earlier Antinomie versions");
+                        crate::widgets::with_help(
+                            ui,
+                            "Bases built for earlier Antinomie versions",
+                            |ui| {
+                                ui.add_enabled(
+                                    !older.is_empty(),
+                                    egui::Checkbox::new(
+                                        show_older,
+                                        format!("Show older bases ({})", older.len()),
+                                    ),
+                                )
+                            },
+                        );
                     });
                 });
                 if let Some(error) = &self.snapshot.remote_error {
@@ -221,11 +227,11 @@ pub(super) fn base_selector(
                             Some(base.id.clone()),
                             base_choice_label(base),
                         )
-                        .on_hover_text(base.directory.display().to_string());
+                        .value_tip(base.directory.display().to_string());
                     }
                 })
                 .response
-                .on_hover_text(label);
+                .value_tip(label);
         },
     );
 }
@@ -291,14 +297,16 @@ pub(super) fn download_row(
                 });
                 crate::theme::spinner(ui);
             } else if status == RevisionStatus::NeedsNewerApp {
-                ui.add_enabled(false, egui::Button::new("Download"))
-                    .on_disabled_hover_text(
-                        antinomie_monitor_core::base_refusal(
-                            base.revision,
-                            base.min_app_version.as_deref(),
-                        )
-                        .unwrap_or_default(),
-                    );
+                crate::widgets::with_help_or(
+                    ui,
+                    "",
+                    antinomie_monitor_core::base_refusal(
+                        base.revision,
+                        base.min_app_version.as_deref(),
+                    )
+                    .unwrap_or_default(),
+                    |ui| ui.add_enabled(false, egui::Button::new("Download")),
+                );
             } else if ui
                 .add_enabled(
                     !busy,
@@ -307,7 +315,7 @@ pub(super) fn download_row(
                         egui_phosphor::regular::DOWNLOAD_SIMPLE
                     )),
                 )
-                .on_disabled_hover_text("Another download is in progress")
+                .reason_tip("Another download is in progress")
                 .clicked()
             {
                 command = Some(Command::DownloadBase {

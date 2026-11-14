@@ -5,6 +5,7 @@
 //! and the sidebar button at the left end of the toolbar switch between them.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 use crate::workspace::LibraryPage;
 
 /// One rail button: an icon in a square, an optional state dot at its
@@ -59,7 +60,7 @@ impl MonitorApp {
         let tooltip = if self.settings.sidebar_rail {
             "Show the sidebar"
         } else {
-            "Fold the sidebar to icons"
+            "Fold the sidebar"
         };
         // The same borderless look as `tool_button`: no frame at rest, the
         // hover and pressed tints on the widget states.
@@ -72,7 +73,7 @@ impl MonitorApp {
                     )
                     .min_size(egui::vec2(0.0, ui.spacing().interact_size.y)),
                 )
-                .on_hover_text(self.with_shortcut(ui.ctx(), tooltip, &Action::ToggleSidebar))
+                .name_tip(self.with_shortcut(ui.ctx(), tooltip, &Action::ToggleSidebar))
                 .clicked()
             })
             .inner;

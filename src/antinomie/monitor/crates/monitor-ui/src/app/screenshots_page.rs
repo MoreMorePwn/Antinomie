@@ -8,6 +8,7 @@
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
 use crate::widgets;
+use crate::widgets::Tip as _;
 use chrono::TimeZone;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, TextureOptions, Vec2};
 use std::{
@@ -680,7 +681,7 @@ impl ScreenshotsPage {
 fn icon_button(ui: &mut egui::Ui, icon: &str, hint: &str) -> bool {
     ui.add(egui::Button::new(RichText::new(icon).small()).frame(false))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(hint)
+        .name_tip(hint)
         .clicked()
 }
 
@@ -850,13 +851,13 @@ impl MonitorApp {
         let page = &self.screenshots_page;
         let mut refresh = false;
         ui.horizontal(|ui| {
-            if ui
-                .button(format!(
+            if crate::widgets::with_help(ui, "Read the screenshot folders again", |ui| {
+                ui.button(format!(
                     "{} Refresh",
                     egui_phosphor::regular::ARROWS_CLOCKWISE
                 ))
-                .on_hover_text("Read the screenshot folders again")
-                .clicked()
+            })
+            .clicked()
             {
                 refresh = true;
             }

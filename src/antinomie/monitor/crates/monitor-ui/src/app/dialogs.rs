@@ -2,6 +2,7 @@
 //! Modal dialogs and dialog layout helpers.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 
 /// The "Don't ask me again" tick of the no-snapshot question, until it closes.
 const DONT_ASK_NO_SNAPSHOT: &str = "start_no_snapshot_dont_ask";
@@ -122,7 +123,7 @@ impl MonitorApp {
                                     && !self.import_directory.trim().is_empty(),
                                 primary_button("Import"),
                             )
-                            .on_disabled_hover_text("Choose a folder; stop the running VM first")
+                            .reason_tip("Choose a folder; stop the running VM first")
                             .clicked();
                         cancel = ui.button("Cancel").clicked();
                     });
@@ -500,15 +501,13 @@ impl MonitorApp {
                     if matches!(confirm, Confirm::StartWithoutSnapshot(_)) {
                         let id = egui::Id::new(DONT_ASK_NO_SNAPSHOT);
                         let mut dont_ask = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
-                        ui.checkbox(&mut dont_ask, "Don't ask me again")
-                            .on_hover_text("Start will not ask again for any VM. Settings > Notifications turns the question back on.");
+                        crate::widgets::with_help(ui, "Start will not ask again for any VM. Settings > Notifications turns the question back on.", |ui| ui.checkbox(&mut dont_ask, "Don't ask me again"));
                         ui.data_mut(|data| data.insert_temp(id, dont_ask));
                     }
                     if matches!(confirm, Confirm::ClearActivity) {
                         let id = egui::Id::new(DONT_ASK_CLEAR_ACTIVITY);
                         let mut dont_ask = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
-                        ui.checkbox(&mut dont_ask, "Don't ask me again")
-                            .on_hover_text("Clear will not ask again. Settings > Notifications turns the question back on.");
+                        crate::widgets::with_help(ui, "Clear will not ask again. Settings > Notifications turns the question back on.", |ui| ui.checkbox(&mut dont_ask, "Don't ask me again"));
                         ui.data_mut(|data| data.insert_temp(id, dont_ask));
                     }
                     if matches!(confirm, Confirm::Quit) {
@@ -772,7 +771,7 @@ pub(super) fn directory_input(
                     .font(egui::TextStyle::Monospace)
                     .desired_width(crate::theme::edit_width(235.0)),
             )
-            .on_hover_text(text.clone())
+            .value_tip(text.clone())
             .changed()
         {
             *path = (!text.trim().is_empty()).then(|| crate::folders::user_path(&text));

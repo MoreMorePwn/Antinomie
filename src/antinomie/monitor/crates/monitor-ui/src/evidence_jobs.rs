@@ -164,8 +164,7 @@ impl EvidenceJobs {
             crate::widgets::window("Export analysis result").open(&mut open).default_width(620.0).collapsible(false).show(ctx, |ui| {
                 ui.label(if export.format == AnalysisExportFormat::GhidraProject { "Destination: new directory" } else { "Destination: new file" });
                 ui.add(egui::TextEdit::singleline(&mut export.destination).desired_width(f32::INFINITY));
-                save = ui.add_enabled(!export.destination.trim().is_empty(), egui::Button::new("Export"))
-                    .on_hover_text("Exports all saved rows in this category, including rows outside the current page/filter. Existing files are preserved.")
+                save = crate::widgets::with_help(ui, "Exports all saved rows in this category, including rows outside the current page/filter. Existing files are preserved.", |ui| ui.add_enabled(!export.destination.trim().is_empty(), egui::Button::new("Export")))
                     .clicked();
             });
             if save {

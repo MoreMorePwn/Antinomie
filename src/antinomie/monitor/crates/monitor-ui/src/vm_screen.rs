@@ -224,14 +224,12 @@ impl VmScreenView {
             let live = status == Some(ScreenStatus::Connected);
             if ui
                 .add_enabled(live, egui::Button::new("Ctrl+Alt+Del"))
-                .on_hover_text("Send Ctrl+Alt+Delete to the guest")
                 .clicked()
             {
                 self.ctrl_alt_del();
             }
             if ui
                 .add_enabled(live && shots.is_some(), egui::Button::new("Screenshot"))
-                .on_hover_text("Save the screen as a PNG in the VM's recording folder")
                 .clicked()
             {
                 if let Some(dir) = shots {
@@ -240,7 +238,6 @@ impl VmScreenView {
             }
             if ui
                 .add_enabled(can_type, egui::Button::new("Type clipboard"))
-                .on_hover_text("Type the host clipboard into the VM, as key presses")
                 .clicked()
             {
                 request = Some(Request::TypeClipboard);
@@ -251,6 +248,13 @@ impl VmScreenView {
             } else {
                 ui.colored_label(theme::muted(), "Click the screen to type into the VM.");
             }
+            // After the status, which must stay whole.
+            crate::widgets::help(
+                ui,
+                "- **Ctrl+Alt+Del**: send `Ctrl+Alt+Delete` to the guest.\n\
+                 - **Screenshot**: save the screen as a PNG in the VM's recording folder.\n\
+                 - **Type clipboard**: type the host clipboard into the VM, as key presses.",
+            );
             if let Some((w, h)) = size {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.colored_label(theme::muted(), format!("{w} x {h}"));

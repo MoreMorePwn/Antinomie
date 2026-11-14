@@ -2,6 +2,7 @@
 //! Native process selection and observer history, without program terminals.
 use super::{icon, theme, values};
 use crate::widgets::fit_table::{Col, FitBuilder};
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::{
     capture_processes::CaptureProcess, CaptureScope, CaptureState, CaptureSummary,
     GuestProcessIdentity, GuestProcessPage, WaitStatus,
@@ -135,9 +136,7 @@ impl ProcessPicker {
                     if !nonresident {
                         self.core_nonresident = false;
                     }
-                    ui.add_enabled(nonresident, egui::Checkbox::new(&mut self.core_nonresident, "Read non-resident pages"))
-                        .on_hover_text("Also read the pages that are not in memory (swapped out, or file pages the kernel dropped) while the process is paused. Slower; bounded by the budget and the deadline. Pages never touched stay out.")
-                        .on_disabled_hover_text("Needs a base of guest contract revision 22: this guest copies only the pages that are in memory.");
+                    crate::widgets::with_help_or(ui, "Also read the pages that are not in memory (swapped out, or file pages the kernel dropped) while the process is paused. Slower; bounded by the budget and the deadline. Pages never touched stay out.", "Needs a base of guest contract revision 22: this guest copies only the pages that are in memory.", |ui| ui.add_enabled(nonresident, egui::Checkbox::new(&mut self.core_nonresident, "Read non-resident pages")));
                     // Start from the remembered default, and follow a guest that lowers it.
                     if self.core_budget == 0
                         || limits.is_some_and(|limits| u64::from(self.core_budget) > limits.max_size)
@@ -926,7 +925,7 @@ pub(super) fn process_tree_tinted(
                         let (text, color) = exit_status(process);
                         ui.label(RichText::new(text).font(mono.clone()).color(color));
                     });
-                    let response = row.response().on_hover_text(process_hover(process));
+                    let response = row.response().value_tip(process_hover(process));
                     if response.clicked() {
                         action = Some(ProcessSelection::Process(process.pid));
                     }
@@ -1005,7 +1004,7 @@ pub(super) fn process_menu(
                 );
                 if ui
                     .selectable_label(selected == Some(process.pid), text)
-                    .on_hover_text(process_hover(process))
+                    .value_tip(process_hover(process))
                     .clicked()
                 {
                     action = Some(ProcessSelection::Process(process.pid));

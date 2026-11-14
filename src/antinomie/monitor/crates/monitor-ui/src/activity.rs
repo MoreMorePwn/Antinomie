@@ -232,10 +232,12 @@ impl Journal {
             ui.with_layout(
                 egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
                 |ui| {
-                    if ui
-                        .button("Clear")
-                        .on_hover_text("Clear the saved Activity log, including filtered entries")
-                        .clicked()
+                    if crate::widgets::with_help(
+                        ui,
+                        "Clear the saved Activity log, including filtered entries",
+                        |ui| ui.button("Clear"),
+                    )
+                    .clicked()
                     {
                         self.clear_asked = true;
                     }
