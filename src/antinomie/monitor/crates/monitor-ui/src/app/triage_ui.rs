@@ -67,13 +67,11 @@ impl MonitorApp {
         self.triage.set_route_text(route);
         self.triage
             .set_run_artifacts(&run, self.live_history_run(&run));
-        let screenshot = self.last_run_screenshot(ui.ctx(), &run, self.triage.run_ended_ms());
         self.triage.set_run_facts(
             run.environment
                 .as_ref()
                 .map(|environment| environment.base_name.clone())
                 .filter(|name| !name.is_empty()),
-            screenshot,
             self.screenshots_page.timed_for(&run),
             run.request
                 .preloaded
@@ -145,6 +143,9 @@ impl MonitorApp {
         }
         if let Some(path) = self.triage.take_open_screenshot() {
             self.open_screenshot_path(ui.ctx(), path);
+        }
+        if self.triage.take_open_screenshots_page() {
+            self.open_library(crate::workspace::LibraryPage::Screenshots);
         }
         self.settings.triage_detection = self.triage.detection_settings().clone();
         self.settings.triage_detection.rules_root.clear();

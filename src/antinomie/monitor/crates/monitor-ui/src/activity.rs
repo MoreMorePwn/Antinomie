@@ -479,6 +479,28 @@ pub(crate) fn compact(
     .0
 }
 
+/// A muted note about one thing (a run) with a dismiss button. Two things that
+/// share the same words are dismissed one at a time: `scope` names the thing
+/// and is part of the notice's identity and hover text.
+pub(crate) fn info_scoped(
+    ui: &mut egui::Ui,
+    message: impl std::fmt::Display,
+    scope: &str,
+) -> egui::Response {
+    let message = message.to_string();
+    let details = format!("{message} [{scope}]");
+    notice_impl(
+        ui,
+        Level::Info,
+        message,
+        Look {
+            details: Some(details),
+            ..Look::default()
+        },
+    )
+    .0
+}
+
 pub(crate) fn warning_details(
     ui: &mut egui::Ui,
     summary: String,

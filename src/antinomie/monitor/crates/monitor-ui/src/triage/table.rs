@@ -494,14 +494,14 @@ pub(super) fn finding_table(
     clicked
 }
 
-/// Columns whose cells are numbers (ids, frames, counts): their header and
-/// cells sit at the right edge, as in the other tables of the app.
+/// Columns whose cells are numbers (ids, counts): their header and cells sit
+/// at the right edge, as in the other tables of the app. The Network tables'
+/// frame columns (Frame, Response frame) read like the text beside them and
+/// stay at the left edge.
 fn numeric_column(header: &str) -> bool {
     matches!(
         header,
         "TID"
-            | "Frame"
-            | "Response frame"
             | "Occurrences"
             | "Diff count"
             | "Offset"

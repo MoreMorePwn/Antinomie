@@ -279,7 +279,9 @@ impl StatisticsWindow {
 
     fn title(view: &AppView<'_>) -> String {
         match view.target.as_ref() {
-            Some(target) => format!("Statistics · {}", target.label),
+            // The window is the Statistics window already: its title names
+            // what it shows, without the repeated prefix.
+            Some(target) => target.label.clone(),
             None => "Statistics".into(),
         }
     }

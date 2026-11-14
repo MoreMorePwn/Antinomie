@@ -19,6 +19,8 @@ use std::{
 pub(crate) mod decode;
 #[cfg(test)]
 mod fixture;
+#[cfg(test)]
+mod tests;
 
 /// The thumbnail cell: picture area and gap.
 const THUMB_W: f32 = 224.0;
@@ -41,6 +43,8 @@ struct Shot {
     ms: u64,
     /// The last run of the VM that began before it.
     run: Option<String>,
+    /// The id of that run, when it is known: the group's heading opens it.
+    run_id: Option<String>,
     /// A timed screenshot of a run: milliseconds from the run's start.
     rel_ms: Option<u64>,
 }
@@ -48,6 +52,7 @@ struct Shot {
 /// A run with timed screenshots (`<run folder>/screenshots/t+SSSSSS.s.png`).
 #[derive(Clone)]
 struct TimedRun {
+    id: String,
     vm_id: String,
     vm_name: String,
     label: String,
@@ -92,6 +97,8 @@ enum Act {
     Copy(PathBuf),
     Reveal(PathBuf),
     Delete(PathBuf),
+    /// Open the run a series belongs to in Triage.
+    OpenRun(String),
 }
 
 pub(super) struct ScreenshotsPage {
@@ -107,6 +114,8 @@ pub(super) struct ScreenshotsPage {
     viewer: Option<Viewer>,
     confirm: Option<Shot>,
     seen_saved: u64,
+    /// A picture to open in the viewer once the folders are read.
+    open_when_loaded: Option<PathBuf>,
     /// The timed screenshots of the run the Summary shows, read again every
     /// couple of seconds (a run in progress adds to them).
     timed: Option<(
@@ -132,6 +141,7 @@ impl Default for ScreenshotsPage {
             viewer: None,
             confirm: None,
             seen_saved: 0,
+            open_when_loaded: None,
             timed: None,
         }
     }
@@ -164,10 +174,10 @@ fn taken_ms(path: &Path) -> u64 {
 }
 
 /// Read the screenshot folders of `targets`, newest first. `runs` are
-/// (VM, start ms, label) of every known run.
+/// (VM, start ms, label, id) of every known run.
 fn scan(
     targets: Vec<Target>,
-    mut runs: Vec<(String, u64, String)>,
+    mut runs: Vec<(String, u64, String, String)>,
     timed: Vec<TimedRun>,
 ) -> Vec<Shot> {
     runs.sort_by_key(|run| run.1);
@@ -188,17 +198,18 @@ fn scan(
                     continue;
                 }
                 let ms = taken_ms(&path);
-                let run = runs
+                let after = runs
                     .iter()
                     .rev()
-                    .find(|run| run.0 == target.vm_id && run.1 <= ms)
-                    .map(|run| format!("after run {} ({})", run.2, time_text(run.1)));
+                    .find(|run| run.0 == target.vm_id && run.1 <= ms);
+                let run = after.map(|run| format!("after run {} ({})", run.2, time_text(run.1)));
                 shots.push(Shot {
                     path,
                     vm_id: target.vm_id.clone(),
                     vm_name: target.vm_name.clone(),
                     ms,
                     run,
+                    run_id: after.map(|run| run.3.clone()),
                     rel_ms: None,
                 });
             }
@@ -218,6 +229,7 @@ fn scan(
                         run.label,
                         time_text(run.started_ms)
                     )),
+                    run_id: Some(run.id.clone()),
                     rel_ms: Some(found.t_ms),
                 });
             }
@@ -495,16 +507,24 @@ impl ScreenshotsPage {
                         let current = &group[index].run;
                         if run != Some(current) {
                             ui.add_space(2.0);
-                            ui.label(
-                                RichText::new(
-                                    current
-                                        .as_deref()
-                                        .unwrap_or("before any recorded run")
-                                        .to_owned(),
-                                )
-                                .small()
-                                .color(theme::muted()),
-                            );
+                            let text = current
+                                .as_deref()
+                                .unwrap_or("before any recorded run")
+                                .to_owned();
+                            match &group[index].run_id {
+                                Some(id) => {
+                                    if ui
+                                        .link(RichText::new(text).small())
+                                        .on_hover_text("Open this run in Triage")
+                                        .clicked()
+                                    {
+                                        act = Some(Act::OpenRun(id.clone()));
+                                    }
+                                }
+                                None => {
+                                    ui.label(RichText::new(text).small().color(theme::muted()));
+                                }
+                            }
                             run = Some(current);
                         }
                         let end = (index..group.len().min(index + columns))
@@ -693,7 +713,7 @@ impl MonitorApp {
             })
             .collect();
         let mut seen = HashSet::new();
-        let runs: Vec<(String, u64, String)> = self
+        let runs: Vec<(String, u64, String, String)> = self
             .snapshot
             .runs
             .iter()
@@ -705,6 +725,7 @@ impl MonitorApp {
                     run.vm_id.clone(),
                     run.started_ms?,
                     name.to_string_lossy().into_owned(),
+                    run.id.clone(),
                 ))
             })
             .collect();
@@ -719,6 +740,7 @@ impl MonitorApp {
             .filter_map(|run| {
                 let label = Path::new(&run.request.path).file_name()?;
                 Some(TimedRun {
+                    id: run.id.clone(),
                     vm_id: run.vm_id.clone(),
                     vm_name: names
                         .get(run.vm_id.as_str())
@@ -754,6 +776,7 @@ impl MonitorApp {
                     crate::evidence::reveal(ctx, folder);
                 }
             }
+            Act::OpenRun(id) => self.open_run_in_triage(&id),
             Act::Delete(path) => {
                 self.screenshots_page.confirm = self
                     .screenshots_page
@@ -884,13 +907,32 @@ impl MonitorApp {
         if refresh {
             self.screenshots_page.stale = true;
         }
-        if let Some(found) = self.screenshots_page.viewer_window(&ctx) {
-            act = Some(found);
-        }
         if let Some(act) = act {
             self.screenshot_act(&ctx, act);
         }
-        self.screenshot_confirm(&ctx);
+    }
+
+    /// The enlarged picture and the delete question: floating windows drawn
+    /// every frame, so a picture opened from the Triage Summary shows over
+    /// Triage without switching to the Screenshots page.
+    pub(super) fn screenshot_windows(&mut self, ctx: &egui::Context) {
+        if self.screenshots_page.viewer.is_none()
+            && self.screenshots_page.confirm.is_none()
+            && self.screenshots_page.open_when_loaded.is_none()
+        {
+            return;
+        }
+        self.screenshots_page.poll(ctx);
+        if self.screenshots_page.scan.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        } else if let Some(path) = self.screenshots_page.open_when_loaded.take() {
+            // A picture the scan did not find (deleted since) is not opened.
+            self.screenshot_act(ctx, Act::Open(path));
+        }
+        if let Some(act) = self.screenshots_page.viewer_window(ctx) {
+            self.screenshot_act(ctx, act);
+        }
+        self.screenshot_confirm(ctx);
     }
 }
 
@@ -904,32 +946,17 @@ fn count(n: usize, noun: &str) -> String {
 }
 
 impl MonitorApp {
-    /// The last screenshot taken on the VM screen tab during `run`: after it
-    /// began and no later than a few seconds after its process tree ended.
-    /// The folders are read once, on a thread, the first time this asks.
-    pub(super) fn last_run_screenshot(
-        &mut self,
-        ctx: &egui::Context,
-        run: &antinomie_monitor_core::RunSummary,
-        ended_ms: Option<u64>,
-    ) -> Option<PathBuf> {
-        self.screenshots_page.poll(ctx);
-        if !self.screenshots_page.loaded && self.screenshots_page.scan.is_none() {
+    /// Open `path` in the viewer window, over the page that is showing (no
+    /// switch to the Screenshots page). The folders are read first when they
+    /// were not yet.
+    pub(super) fn open_screenshot_path(&mut self, ctx: &egui::Context, path: PathBuf) {
+        if self.screenshots_page.shots.iter().any(|s| s.path == path) {
+            self.screenshot_act(ctx, Act::Open(path));
+            return;
+        }
+        if self.screenshots_page.scan.is_none() {
             self.screenshot_scan();
         }
-        let from = run.started_ms?;
-        self.screenshots_page
-            .shots
-            .iter()
-            .filter(|shot| shot.vm_id == run.vm_id && shot.ms >= from)
-            .filter(|shot| ended_ms.is_none_or(|end| shot.ms <= end + 10_000))
-            .max_by_key(|shot| shot.ms)
-            .map(|shot| shot.path.clone())
-    }
-
-    /// Open `path` in the Screenshots page's viewer.
-    pub(super) fn open_screenshot_path(&mut self, ctx: &egui::Context, path: PathBuf) {
-        self.open_library(crate::workspace::LibraryPage::Screenshots);
-        self.screenshot_act(ctx, Act::Open(path));
+        self.screenshots_page.open_when_loaded = Some(path);
     }
 }

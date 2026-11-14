@@ -158,6 +158,8 @@ struct Import {
 }
 
 pub(crate) struct MemoryView {
+    /// Reads the dump list again when the window is opened or focused.
+    arrival: crate::arrival::Arrival,
     /// A dump a note's chip asked for, selected when the list is drawn.
     note_target: Option<String>,
     dumps: Vec<MemoryDump>,
@@ -248,6 +250,7 @@ impl MemoryView {
 impl Default for MemoryView {
     fn default() -> Self {
         Self {
+            arrival: Default::default(),
             pending_plugin: None,
             dumps: Vec::new(),
             dumps_for: None,
@@ -557,11 +560,13 @@ impl MemoryView {
         cx: MemoryContext<'_>,
     ) -> Option<MemoryAction> {
         let dumping = cx.dumping.is_some();
+        let arrived = self.arrival.arrived(ui.ctx());
         if self
             .dumps_for
             .as_deref()
             .is_none_or(|roots| roots != cx.recording_roots)
             || self.dumping_seen != dumping
+            || arrived
         {
             self.scan(cx.recording_roots);
             self.dumping_seen = dumping;

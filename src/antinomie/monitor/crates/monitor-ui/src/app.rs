@@ -863,6 +863,7 @@ impl eframe::App for MonitorApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+        self.screenshot_windows(ctx);
         self.draw(root);
         ctx.request_repaint_after(crate::ui_performance::repaint_delay(
             self.snapshot.active_vm.is_some() || self.closing || self.folder_picker.pending(),

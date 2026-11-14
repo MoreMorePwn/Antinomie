@@ -467,9 +467,9 @@ pub(super) fn tactic_counts(details: &[attack::Detail]) -> Vec<(&'static str, us
 /// wraps: when its content is wider than the box it scrolls sideways (the
 /// wheel with Shift, or the bar that shows then), and a plain wheel over it
 /// still scrolls the page.
-fn line(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+fn line(ui: &mut egui::Ui, title: &str, color: egui::Color32, body: impl FnOnce(&mut egui::Ui)) {
     ui.scope(|ui| {
-        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        ui.spacing_mut().scroll = theme::solid_scroll();
         egui::ScrollArea::horizontal()
             .id_salt(("summary-line", title))
             .auto_shrink([false, true])
@@ -477,7 +477,7 @@ fn line(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
             .show_contained(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
-                    ui.label(RichText::new(title).strong().color(theme::heading()));
+                    ui.label(RichText::new(title).strong().color(color));
                     body(ui);
                 });
             });
@@ -488,13 +488,18 @@ pub(super) fn attack_row(ui: &mut egui::Ui, total: usize, details: &[attack::Det
     if total == 0 {
         return;
     }
-    line(ui, &format!("MITRE ATT&CK ({total})"), |ui| {
-        let counts: Vec<(String, &str, bool)> = tactic_counts(details)
-            .into_iter()
-            .map(|(name, n)| (n.to_string(), name, false))
-            .collect();
-        rows::figures(ui, &counts);
-    });
+    line(
+        ui,
+        &format!("MITRE ATT&CK ({total})"),
+        theme::triage_mitre(),
+        |ui| {
+            let counts: Vec<(String, &str, bool)> = tactic_counts(details)
+                .into_iter()
+                .map(|(name, n)| (n.to_string(), name, false))
+                .collect();
+            rows::figures(ui, &counts, theme::triage_mitre());
+        },
+    );
 }
 /// How many processes of interest the row names; the rest is "+N more".
 const INTEREST_SHOWN: usize = 5;
@@ -521,66 +526,73 @@ pub(super) fn interest_row(
     scan: &ArchiveScan,
     acts: &mut Vec<Act>,
 ) {
-    line(ui, "Processes of interest", |ui| {
-        if interest.is_empty() {
-            ui.label(RichText::new("none with findings or an argv mismatch").color(theme::muted()));
-        }
-        // Items sit directly in the wrapped row (no ui of their own, which
-        // took a whole line when it did not fit), each name cut to a readable
-        // length with the full name on hover, and at most `INTEREST_SHOWN`
-        // of them: the rest is "+N more", which opens the Process tree.
-        for item in interest.iter().take(INTEREST_SHOWN) {
-            let (color, count) = match item.tier {
-                Some(tier) => (theme::tone(tier.tone()), format!("\u{d7}{}", item.findings)),
-                None => (theme::muted(), "argv".to_owned()),
-            };
-            ui.add(crate::widgets::dot::DotLabel::new(color, count).text_color(color));
-            let name = cut_name(&item.label);
-            let response = ui
-                .add(
-                    egui::Label::new(RichText::new(name).color(theme::text()))
-                        .wrap_mode(egui::TextWrapMode::Extend)
-                        .selectable(false)
-                        .sense(egui::Sense::click()),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(format!("{}\nOpen this process's details", item.label));
-            if response.clicked() {
-                acts.push(Act::Process(item.key));
+    line(
+        ui,
+        "Processes of interest",
+        theme::triage_processes(),
+        |ui| {
+            if interest.is_empty() {
+                ui.label(
+                    RichText::new("none with findings or an argv mismatch").color(theme::muted()),
+                );
             }
-        }
-        if interest.len() > INTEREST_SHOWN {
-            let more = format!("+{} more", interest.len() - INTEREST_SHOWN);
-            if ui
-                .add(
-                    egui::Label::new(RichText::new(more).color(theme::muted()))
-                        .wrap_mode(egui::TextWrapMode::Extend)
-                        .selectable(false)
-                        .sense(egui::Sense::click()),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text("Open the Process tree")
-                .clicked()
-            {
+            // Items sit directly in the wrapped row (no ui of their own, which
+            // took a whole line when it did not fit), each name cut to a readable
+            // length with the full name on hover, and at most `INTEREST_SHOWN`
+            // of them: the rest is "+N more", which opens the Process tree.
+            for item in interest.iter().take(INTEREST_SHOWN) {
+                let (color, count) = match item.tier {
+                    Some(tier) => (theme::tone(tier.tone()), format!("\u{d7}{}", item.findings)),
+                    None => (theme::muted(), "argv".to_owned()),
+                };
+                ui.add(crate::widgets::dot::DotLabel::new(color, count).text_color(color));
+                let name = cut_name(&item.label);
+                let response = ui
+                    .add(
+                        egui::Label::new(RichText::new(name).color(theme::text()))
+                            .wrap_mode(egui::TextWrapMode::Extend)
+                            .selectable(false)
+                            .sense(egui::Sense::click()),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(format!("{}\nOpen this process's details", item.label));
+                if response.clicked() {
+                    acts.push(Act::Process(item.key));
+                }
+            }
+            if interest.len() > INTEREST_SHOWN {
+                let more = format!("+{} more", interest.len() - INTEREST_SHOWN);
+                if ui
+                    .add(
+                        egui::Label::new(RichText::new(more).color(theme::muted()))
+                            .wrap_mode(egui::TextWrapMode::Extend)
+                            .selectable(false)
+                            .sense(egui::Sense::click()),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("Open the Process tree")
+                    .clicked()
+                {
+                    acts.push(Act::Go(Destination::Tasks));
+                }
+            }
+            let sections = [
+                ("of ".to_owned(), false),
+                (scan.process.len().to_string(), true),
+                (" processes \u{b7} ".to_owned(), false),
+                (scan.counts.calls.to_string(), true),
+                (" syscalls".to_owned(), false),
+            ];
+            if rows::counted_item(ui, &sections, "Open the Process tree") {
                 acts.push(Act::Go(Destination::Tasks));
             }
-        }
-        let sections = [
-            ("of ".to_owned(), false),
-            (scan.process.len().to_string(), true),
-            (" processes \u{b7} ".to_owned(), false),
-            (scan.counts.calls.to_string(), true),
-            (" syscalls".to_owned(), false),
-        ];
-        if rows::counted_item(ui, &sections, "Open the Process tree") {
-            acts.push(Act::Go(Destination::Tasks));
-        }
-    });
+        },
+    );
 }
 
 pub(super) fn files_row(ui: &mut egui::Ui, scan: &ArchiveScan, acts: &mut Vec<Act>) {
     let tab = |tab: FileTab| scan.counts.tabs[tab.slot() - 8];
-    line(ui, "Files", |ui| {
+    line(ui, "Files", theme::triage_files(), |ui| {
         rows::figures(
             ui,
             &[
@@ -589,6 +601,7 @@ pub(super) fn files_row(ui: &mut egui::Ui, scan: &ArchiveScan, acts: &mut Vec<Ac
                 (tab(FileTab::Deleted).to_string(), "deleted", true),
                 (scan.counts.changed.to_string(), "changed", true),
             ],
+            theme::triage_files(),
         );
         if ui
             .link("\u{2192}")
@@ -601,7 +614,7 @@ pub(super) fn files_row(ui: &mut egui::Ui, scan: &ArchiveScan, acts: &mut Vec<Ac
 }
 
 pub(super) fn network_row(ui: &mut egui::Ui, scan: &ArchiveScan, acts: &mut Vec<Act>) {
-    line(ui, "Network", |ui| {
+    line(ui, "Network", theme::triage_network(), |ui| {
         if scan.network_counts.is_none() {
             ui.label(
                 RichText::new("no capture for this run (turn on Capture network in Run program)")
@@ -616,6 +629,7 @@ pub(super) fn network_row(ui: &mut egui::Ui, scan: &ArchiveScan, acts: &mut Vec<
                     (scan.counts.dns.to_string(), "DNS", true),
                     (scan.counts.http.to_string(), "HTTP", true),
                 ],
+                theme::triage_network(),
             );
         }
         if ui

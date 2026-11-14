@@ -27,6 +27,20 @@ x86 programs by their own table.
   VM screen captures the keyboard on a click, and its only tab can be dragged to
   move the window; a list inside a scrollable window no longer scrolls the window
   at its top or bottom.
+- **Triage polish (ANT-T0550).** The Summary's MITRE ATT&CK, Processes of
+  interest, Files and Network rows each have their own text colour; its notes
+  are bullets and the run's last screenshot is gone from them; **Timed
+  screenshots** is **Screenshots (N)**, a picture opens in a viewer over Triage
+  instead of switching to Library > Screenshots, and an icon beside the title
+  opens that page, whose series now link to their run. The run notes in Details
+  (such as the silent dump trigger and the screenshot count) can be dismissed
+  like the app's other notes. The Network, Memory and Core dumps lists read
+  again when the window is opened or focused (Refresh stays). The Network
+  tables' Frame columns are left aligned, and the Summary's scroll bars have a
+  light handle like the others.
+  The Statistics window's title no longer repeats the word (it names the run
+  or capture), and its tables' alternate rows use a stronger theme colour that
+  shows against the window in the dark, light and blue themes.
 - **The right BusyBox and the right arm64 minimum after the r22 bases went
   public (ANT-T0485).** The catalog's optional `arch` field (`arm64`; absent
   means x86-64) is read. The nightly check boots the newest x86-64 BusyBox

@@ -220,6 +220,8 @@ impl StatisticsWindow {
         view: &AppView<'_>,
         navigate: &mut Vec<Navigate>,
     ) {
+        // The tables' alternate rows must show against the window.
+        ui.visuals_mut().faint_bg_color = theme::stripe_strong();
         let Some(target) = view.target.as_ref() else {
             theme::empty_state(
                 ui,

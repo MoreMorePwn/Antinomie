@@ -108,6 +108,7 @@ fn native_timed_screenshots_fixture() {
                         vm_name: "Analysis QA".into(),
                         ms: started + rel,
                         run: Some(label.clone()),
+                        run_id: Some("0123456789abcdef".into()),
                         rel_ms: Some(rel),
                     });
                 }

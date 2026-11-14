@@ -19,11 +19,10 @@ pub(super) use state::Mode as SummaryMode;
 pub(super) use state::State as SummaryState;
 
 /// What the app knows about the run that Triage does not read from the
-/// recording: the base image's name and the run's last screenshot.
+/// recording: the base image's name and the run's screenshots.
 #[derive(Clone, Default)]
 pub(super) struct RunFacts {
     pub base: Option<String>,
-    pub screenshot: Option<std::path::PathBuf>,
     /// The run's timed screenshots (ANT-T0487), oldest first.
     pub timed: Vec<antinomie_monitor_core::timed_shots::RunShot>,
     /// The libraries the run loaded into its program, one line each.
@@ -33,6 +32,8 @@ pub(super) struct RunFacts {
 /// What a click in the Summary asks for, applied once the frame is drawn.
 enum Act {
     Go(Destination),
+    /// Open the Screenshots page (the button beside the screenshots title).
+    ScreenshotsPage,
     /// Suspicious activity with only this tier.
     Tier(rules::Tier),
     /// The finding at this place in the scan's findings: its Details.
@@ -171,6 +172,7 @@ impl TriageView {
             Act::Endpoint => *destination = Some(Destination::Ips),
             Act::ExportIndicators => self.export_indicators(ctx),
             Act::Screenshot(path) => self.summary_state.open_screenshot = Some(path),
+            Act::ScreenshotsPage => self.summary_state.open_screenshots_page = true,
         }
     }
 
@@ -208,27 +210,29 @@ impl TriageView {
         }
     }
 
-    /// The run's last screenshot was clicked in the Summary.
+    /// A screenshot of the run was clicked in the Summary.
     pub(crate) fn take_open_screenshot(&mut self) -> Option<std::path::PathBuf> {
         self.summary_state.open_screenshot.take()
     }
 
-    /// The base image and last screenshot of the selected run.
+    /// The button beside the Summary's screenshots title was clicked.
+    pub(crate) fn take_open_screenshots_page(&mut self) -> bool {
+        std::mem::take(&mut self.summary_state.open_screenshots_page)
+    }
+
+    /// The base image and screenshots of the selected run.
     pub(crate) fn set_run_facts(
         &mut self,
         base: Option<String>,
-        screenshot: Option<std::path::PathBuf>,
         timed: Vec<antinomie_monitor_core::timed_shots::RunShot>,
         preloaded: Vec<String>,
     ) {
         if self.run_facts.base != base
-            || self.run_facts.screenshot != screenshot
             || self.run_facts.timed != timed
             || self.run_facts.preloaded != preloaded
         {
             self.run_facts = RunFacts {
                 base,
-                screenshot,
                 timed,
                 preloaded,
             };
@@ -442,7 +446,8 @@ mod tests {
                 .y
         };
         assert!(y("Notes") > y("Open results"));
-        assert!(y(note) > y("Notes"));
+        // One bullet per note.
+        assert!(y(&format!("\u{2022} {note}")) > y("Notes"));
     }
 
     #[test]

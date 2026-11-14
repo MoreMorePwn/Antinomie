@@ -39,6 +39,9 @@ pub struct Palette {
     pub selection_soft: Color32,
     /// Zebra stripe of tables and grids (translucent, over `bg`).
     pub stripe: Color32,
+    /// A stronger zebra stripe for tables that sit in a window (Statistics),
+    /// where the faint one blends with the window background.
+    pub stripe_strong: Color32,
     pub good: Color32,
     pub warn: Color32,
     pub error: Color32,
@@ -105,6 +108,7 @@ pub const DARK: Palette = Palette {
     selection: rgb(38, 79, 135),
     selection_soft: alpha(110, 176, 255, 36),
     stripe: alpha(127, 140, 160, 15),
+    stripe_strong: alpha(150, 165, 190, 34),
     good: rgb(110, 214, 150),
     warn: rgb(246, 192, 92),
     error: rgb(255, 120, 120),
@@ -180,6 +184,7 @@ pub const LIGHT: Palette = Palette {
     selection: rgb(190, 216, 250),
     selection_soft: alpha(20, 104, 204, 31),
     stripe: alpha(127, 140, 160, 15),
+    stripe_strong: alpha(70, 84, 110, 30),
     good: rgb(20, 132, 66),
     warn: rgb(170, 104, 0),
     error: rgb(196, 36, 44),
@@ -253,6 +258,7 @@ pub const BLUE: Palette = Palette {
     selection: rgb(34, 76, 140),
     selection_soft: alpha(116, 182, 255, 38),
     stripe: alpha(120, 150, 210, 15),
+    stripe_strong: alpha(140, 175, 235, 36),
     neutral_bg: alpha(146, 165, 198, 36),
     terminal: rgb(7, 14, 28),
     terminal_text: rgb(214, 225, 244),

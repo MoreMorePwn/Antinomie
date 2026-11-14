@@ -101,6 +101,8 @@ struct PacketOrder {
 
 #[derive(Default)]
 pub(crate) struct NetworkView {
+    /// Reads the capture list again when the window is opened or focused.
+    arrival: crate::arrival::Arrival,
     list: PacketList,
     packet_order: PacketOrder,
     filter: String,
@@ -530,6 +532,7 @@ impl NetworkView {
             .map(|capture| (capture.id.clone(), capture.file.clone()));
         self.collect_listing();
         self.refresh_links(cx.active);
+        let arrived = self.arrival.arrived(ui.ctx());
         if self
             .captures_for
             .as_ref()
@@ -545,6 +548,10 @@ impl NetworkView {
             self.list = PacketList::new(active.as_ref().map(|(_, file)| file.clone()));
             self.release_capture();
             self.reset_display_capture();
+            self.seen_active = active.clone();
+        } else if arrived {
+            // Opened or focused: list the folders again, no Refresh needed.
+            self.scan(ui.ctx(), cx.recordings, cx.recording_roots);
             self.seen_active = active.clone();
         } else if self.seen_active != active {
             // A capture started or stopped: list it, and show a new one live.
