@@ -12,6 +12,10 @@ report. Needs KVM, QEMU, bubblewrap (for the Auto job) and the release
 guest-run example (and antinomie-cli).
 
     nightly-vm.py GUEST_RUN WORK_DIR [CLI]
+
+The base is the newest x86-64 BusyBox; the catalog's `arch` field names an
+architecture and is absent for x86-64. NIGHTLY_BASE_ARCH=arm64 picks the
+newest arm64 BusyBox instead.
 """
 import hashlib
 import importlib.util
@@ -49,16 +53,28 @@ def release(version):
     return tuple(int(part) for part in version.split("."))
 
 
+def pick_base(catalog, version, arch="x86-64"):
+    """The newest BusyBox of one architecture that this version runs: a patch
+    release keeps its minor's bases. An entry without `arch` is x86-64; the
+    arm64 entries also carry the same revision and a later creation time, so
+    the architecture is chosen first."""
+    names = {"x86-64": "x86-64", "x86_64": "x86-64", "arm64": "arm64", "aarch64": "arm64"}
+    wanted = names.get(arch)
+    if wanted is None:
+        raise SystemExit(f"unknown base architecture {arch!r} (x86-64 or arm64)")
+    bases = [base for base in catalog["bases"]
+             if base["kind"] == "busybox" and base.get("min_app_version")
+             and names.get(base.get("arch", "x86-64"), base.get("arch")) == wanted
+             and release(base["min_app_version"]) <= release(version)]
+    if not bases:
+        raise SystemExit(f"no {wanted} BusyBox base for Antinomie {version} in the catalog")
+    return max(bases, key=lambda base: (release(base["min_app_version"]), base["created"]))
+
+
 def download_base(version, target):
     with urllib.request.urlopen(f"{BUCKET}/index.json", timeout=60) as reply:
         catalog = json.load(reply)
-    # The newest base this version runs: a patch release keeps its minor's bases.
-    bases = [base for base in catalog["bases"]
-             if base["kind"] == "busybox" and base.get("min_app_version")
-             and release(base["min_app_version"]) <= release(version)]
-    if not bases:
-        raise SystemExit(f"no BusyBox base for Antinomie {version} in the catalog")
-    base = max(bases, key=lambda base: (release(base["min_app_version"]), base["created"]))
+    base = pick_base(catalog, version, os.environ.get("NIGHTLY_BASE_ARCH", "x86-64"))
     directory = target / base["identity"]
     directory.mkdir(parents=True, exist_ok=True)
     for file in base["files"]:

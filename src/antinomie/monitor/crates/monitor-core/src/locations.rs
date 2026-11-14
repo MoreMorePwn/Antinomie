@@ -393,6 +393,7 @@ fn installed_base(directory: &std::path::Path) -> Result<Option<BaseSummary>, St
     if !bundle.kernel_version.starts_with("6.12.94") {
         return Ok(None);
     }
+    let min_ram_mib = bundle.min_ram_mib();
     let id = bundle
         .base_identity
         .ok_or("installed bundle missing identity")?;
@@ -408,7 +409,7 @@ fn installed_base(directory: &std::path::Path) -> Result<Option<BaseSummary>, St
                 .map_or_else(|| "BusyBox".into(), |guest| guest.label.clone())
         }),
         directory: directory.to_path_buf(),
-        min_ram_mib: bundle.guest.as_ref().map_or(256, |guest| guest.min_ram_mib),
+        min_ram_mib,
         min_disk_gib: bundle.guest.as_ref().map_or(1, |guest| guest.min_disk_gib),
         guest: bundle.guest,
         fixed_display: bundle.fixed_display,

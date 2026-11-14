@@ -15,6 +15,15 @@ x86 programs by their own table.
 
 ### Host
 
+- **The right BusyBox and the right arm64 minimum after the r22 bases went
+  public (ANT-T0485).** The catalog's optional `arch` field (`arm64`; absent
+  means x86-64) is read. The nightly check boots the newest x86-64 BusyBox
+  (it picked the arm64 one, which is newer; `NIGHTLY_BASE_ARCH=arm64` picks
+  that instead), and the ignored network test picks its BusyBox by
+  architecture. An arm64 base shows and enforces at least 512 MiB of RAM
+  (the figure an arm64 VM boots with) in the installed list, the Download
+  window and the VM check, whatever its `bundle.json` or catalog entry says;
+  the published files are unchanged.
 - **Check online in Auto runs (ANT-T0548 F2).** A preset with `[detection]
   check_online = true` (off in every built-in preset; needs `lookup.online`)
   now asks abuse.ch about the run's indicators, as the window's Triage › IOC ›
