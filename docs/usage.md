@@ -586,8 +586,10 @@ suggests a BusyBox base (with **Use base** when an arm64 BusyBox base is
 installed and the VM is on Debian). An x86-64 VM lists it disabled ("arm64
 only": the catalog has no x86-64 IoT device); a VM that has it on an x86-64 base
 starts as Normal QEMU and says so. An arm64 VM shows a fresh boot whatever its
-**Uptime** (its guest kernel ignores the age); the window says so beside the
-setting. The
+**Uptime** (its guest kernel ignores the age): its presets draw no uptime and the
+field is shown disabled, with the reason on its help icon. A profile that already
+holds an uptime keeps it (an x86-64 VM uses it) and the window says it is not
+applied. The
 **Device profile** window shows the arm64 machine list instead of the PC
 catalog (pick one, or let the preset pick by the VM's UUID), the machine's CPU
 instead of the x86 CPU settings, and, under **Still visible**, what an arm64

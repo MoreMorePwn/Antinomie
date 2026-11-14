@@ -351,3 +351,34 @@ fn a_custom_profile_on_a_server_keeps_the_server_uptime_range() {
     desktop.preset = StealthPreset::Custom;
     assert_eq!(BootAge::of(&desktop), BootAge::Desktop);
 }
+
+#[test]
+fn a_preset_picked_for_an_arm64_vm_draws_no_uptime_but_a_held_one_stays() {
+    // Freshly picked on arm64 (every preset, IoT too): no uptime, so no
+    // "not applied" line; on x86-64 the preset's draw stays.
+    for &preset in StealthPreset::ALL {
+        let drawn = StealthProfile::transparent()
+            .for_preset(preset, "GenuineIntel")
+            .drawn_for(GuestArch::AARCH64);
+        assert_eq!(drawn.boot_age_s, 0, "{preset:?}");
+        assert!(
+            drawn.arch_fallbacks(GuestArch::AARCH64).is_empty(),
+            "{preset:?}: {:?}",
+            drawn.arch_fallbacks(GuestArch::AARCH64)
+        );
+    }
+    let x86 = StealthProfile::transparent()
+        .for_preset(StealthPreset::RealisticServer, "GenuineIntel")
+        .drawn_for(GuestArch::X86_64);
+    assert!(x86.boot_age_s > 0);
+    // A profile that already holds an uptime keeps it stored (an x86-64 VM
+    // uses it) and arm64 says it is not applied.
+    let held = StealthProfile::iot();
+    assert!(held.boot_age_s > 0);
+    let fallbacks = held.arch_fallbacks(GuestArch::AARCH64);
+    assert_eq!(fallbacks[0].setting, FallbackSetting::Uptime);
+    assert_eq!(
+        held.for_arch(GuestArch::X86_64).preset,
+        StealthPreset::Transparent
+    );
+}

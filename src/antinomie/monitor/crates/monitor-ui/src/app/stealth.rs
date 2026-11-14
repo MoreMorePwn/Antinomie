@@ -6,6 +6,7 @@ use crate::scroll_contain::ScrollContained as _;
 use crate::widgets::Tip as _;
 mod arm64;
 mod cloud;
+mod presets;
 mod uptime;
 use antinomie_monitor_core::stealth::{
     base_supporting, chassis_label, disk_bus_unavailable, firmware_unavailable, host_cpu_vendor,
@@ -15,6 +16,7 @@ use antinomie_monitor_core::stealth::{
 };
 use antinomie_monitor_core::GuestArch;
 pub(super) use cloud::launch_advice;
+use presets::{preset_combo, preset_list, provider_list};
 use uptime::uptime;
 
 /// What the host offers (OVMF, clean SMT), read once.
@@ -293,68 +295,6 @@ impl<'a> Fit<'a> {
                 ui.colored_label(theme::warn(), format!("• {}", fallback.summary));
             }
         });
-    }
-}
-
-/// Picks a preset, applying it to every entry, and a cloud's provider beside it.
-fn preset_combo(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str, arch: GuestArch) {
-    preset_list(ui, profile, id, arch);
-    provider_list(ui, profile, id);
-}
-
-/// The presets for a VM of `arch`; one it cannot present (the IoT device on
-/// x86-64) is listed disabled with the reason.
-fn preset_list(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str, arch: GuestArch) {
-    let mut preset = profile.preset;
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(preset.label())
-        .width(260.0)
-        .truncate()
-        // Every preset without scrolling.
-        .height(400.0)
-        .show_ui(ui, |ui| {
-            for &option in StealthPreset::ALL {
-                let reason = option.unavailable(arch);
-                let response = ui.add_enabled(
-                    reason.is_none(),
-                    egui::Button::selectable(preset == option, option.label()),
-                );
-                match reason {
-                    Some(reason) => {
-                        response
-                            .on_disabled_hover_text(format!("{} ({reason})", option.description()));
-                    }
-                    None => {
-                        if response.hint(option.description()).clicked() {
-                            preset = option;
-                        }
-                    }
-                }
-            }
-        });
-    if preset != profile.preset {
-        *profile = profile.for_preset(preset, &host_cpu_vendor());
-    }
-}
-
-/// The provider of a Cloud VPS profile; nothing for any other.
-fn provider_list(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
-    if profile.preset == StealthPreset::CloudVps
-        && let Some(current) = profile.cloud_provider()
-    {
-        let mut picked = current;
-        egui::ComboBox::from_id_salt(format!("{id}_cloud"))
-            .selected_text(current.label)
-            .width(260.0)
-            .truncate()
-            .show_ui(ui, |ui| {
-                for provider in CLOUDS {
-                    ui.selectable_value(&mut picked, provider, provider.label);
-                }
-            });
-        if picked.id != current.id {
-            *profile = StealthProfile::cloud_vps(picked);
-        }
     }
 }
 
@@ -925,8 +865,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                     egui::TextEdit::singleline(&mut profile.nat.network)
                         .desired_width(crate::theme::plain_edit_width(150.0))
                         .hint_text(crate::theme::placeholder(ui, "10.0.2.0/24")),
-                |ui| ui.checkbox(&mut profile.cdrom, "An empty SATA CD-ROM drive"),
-            );
+                );
                 if crate::widgets::with_help(ui, "192.168.1.0/24 behind a router at .1", |ui| {
                     ui.button("Home")
                 })
@@ -1003,7 +942,8 @@ fn storage(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 ui,
                 "Desktops with an optical drive have one; QEMU's answers \
                      \"QEMU DVD-ROM\" to the SCSI inquiry whatever its model",
-                );
+                |ui| ui.checkbox(&mut profile.cdrom, "An empty SATA CD-ROM drive"),
+            );
             ui.end_row();
             if profile.identity_enabled && profile.cdrom {
                 text_row(ui, "CD-ROM model", &mut profile.identity.cdrom_model);
@@ -1045,11 +985,8 @@ fn display(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     );
 }
 
-        // Never narrower than it opens: the widest section (Firmware and
-        // ACPI's fields) fits, so opening one does not widen the window.
-        .min_width(WINDOW_WIDTH)
 fn clock(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
-    uptime(ui, profile, fit.debian());
+    uptime(ui, profile, fit.debian(), fit.view.arch);
     fit.line(ui, profile, FallbackSetting::Uptime);
     ui.add_space(4.0);
     crate::widgets::with_help(
@@ -1108,6 +1045,9 @@ pub(super) fn window(
         .collapsible(false)
         .resizable(true)
         .default_width(WINDOW_WIDTH)
+        // Never narrower than it opens: the widest section (Firmware and
+        // ACPI's fields) fits, so opening one does not widen the window.
+        .min_width(WINDOW_WIDTH)
         .max_height((ctx.content_rect().height() - 100.0).max(200.0))
         .show(ctx, |ui| {
             let before = profile.clone();

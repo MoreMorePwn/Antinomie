@@ -1384,6 +1384,19 @@ impl StealthProfile {
         profile
     }
 
+    /// A freshly drawn profile (a preset or provider just picked, a new VM)
+    /// as a VM of `arch` takes it: an arm64 guest ignores the boot age for
+    /// now (the guest fix is 0.10.0 work, see [`ARM64_UPTIME`]), so nothing
+    /// is drawn there and Still visible shows no uptime line. A profile that
+    /// already holds an uptime keeps it ([`for_arch`](Self::for_arch) drops
+    /// it at launch only).
+    pub fn drawn_for(mut self, arch: crate::api::GuestArch) -> Self {
+        if arch == crate::api::GuestArch::AARCH64 {
+            self.boot_age_s = 0;
+        }
+        self
+    }
+
     /// A new instance of `provider`: its firmware strings, chipset, MAC
     /// prefix and DHCP network, with the hypervisor left visible (a hidden
     /// flag on a cloud's DMI strings would itself be odd).

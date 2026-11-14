@@ -532,3 +532,63 @@ fn still_visible_follows_the_vms_network() {
     );
     assert!(shown.iter().any(|text| text.contains("a fresh boot")));
 }
+
+// ----- sweep follow-up: arm64 draws no uptime -----
+
+#[test]
+fn an_arm64_vm_draws_no_uptime_and_shows_the_field_disabled_with_its_note() {
+    const IOT: &str = "IoT device (Raspberry Pi)";
+    let ctx = context();
+    let mut app = arm_app(false);
+    open_presets(&mut app, &ctx);
+    click_last(&mut app, &ctx, IOT);
+    assert_eq!(app.draft.stealth.boot_age_s, 0, "a fresh pick draws none");
+    click_last(&mut app, &ctx, "Clock");
+    let shown = lines(&mut app, &ctx);
+    assert!(
+        !shown.iter().any(|text| text.contains("not applied")),
+        "no warning line for a fresh pick: {shown:?}"
+    );
+    assert!(shown.iter().any(|text| text == "a fresh boot"), "{shown:?}");
+    assert!(!shown.iter().any(|text| text.starts_with("Recommended for")));
+    // The field is disabled: a click does not turn it on.
+    click_last(&mut app, &ctx, "Uptime");
+    assert_eq!(app.draft.stealth.boot_age_s, 0);
+    // Its help icon (on the Uptime row) says why.
+    let output = hover_at(&mut app, &ctx, AWAY);
+    let found = texts(&output);
+    let row = found
+        .iter()
+        .rfind(|(text, _)| text == "Uptime")
+        .expect("the Uptime row")
+        .1;
+    let icon = found
+        .iter()
+        .filter(|(text, rect)| {
+            text == egui_phosphor::regular::QUESTION
+                && (rect.center().y - row.center().y).abs() < 8.0
+                && rect.left() > row.right()
+        })
+        .map(|(_, rect)| *rect)
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .expect("a help icon on the Uptime row");
+    let tip: Vec<String> = texts(&hover_at(&mut app, &ctx, icon.center()))
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+    assert!(
+        tip.iter()
+            .any(|text| text == "A fresh boot is shown on arm64"),
+        "icon {icon:?} row {row:?}: {tip:?}"
+    );
+    // A profile that already holds an uptime keeps it and says so.
+    app.draft.stealth.boot_age_s = 5 * 86_400;
+    let shown = lines(&mut app, &ctx);
+    assert!(
+        shown
+            .iter()
+            .any(|text| text.contains("not applied on arm64")),
+        "{shown:?}"
+    );
+    assert_eq!(app.draft.stealth.boot_age_s, 5 * 86_400);
+}

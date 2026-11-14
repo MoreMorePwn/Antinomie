@@ -29,16 +29,17 @@ impl MonitorApp {
 
     /// The settings a new VM starts with, shared by New VM and Getting started.
     pub(super) fn fresh_draft(&self) -> VmConfig {
+        let base = preferred_new_base(&self.snapshot, &self.settings.bundle);
         VmConfig {
             name: "New VM".into(),
             // New VMs look like an ordinary PC; saved ones keep what they had.
-            stealth: antinomie_monitor_core::stealth::StealthProfile::realistic(
             // On an arm64 base without an uptime (its guest ignores one).
+            stealth: antinomie_monitor_core::stealth::StealthProfile::realistic(
                 antinomie_monitor_core::stealth::StealthPreset::RealisticDesktop,
                 &antinomie_monitor_core::stealth::host_cpu_vendor(),
-            ),
-            base_identity: preferred_new_base(&self.snapshot, &self.settings.bundle)
-                .map(|base| base.id.clone()),
+            )
+            .drawn_for(base.map_or(antinomie_monitor_core::GuestArch::X86_64, |base| base.arch)),
+            base_identity: base.map(|base| base.id.clone()),
             ..VmConfig::default()
         }
     }
@@ -572,7 +573,6 @@ impl MonitorApp {
                 let analyze = ui.add_enabled(can_analyze, egui::Button::new("Analyze only"));
                 analyze_clicked = analyze.clicked();
                 cancel = ui.button("Cancel").clicked();
-                run_rects = Some((run.rect, analyze.rect));
                 let mut text = String::new();
                 if !can_run {
                     text.push_str(if uploading {
@@ -599,6 +599,7 @@ impl MonitorApp {
                     "- **Analyze only**: acquire the file and run static analysis without launching it.",
                 );
                 crate::widgets::help(ui, text);
+                run_rects = Some((run.rect, analyze.rect));
             },
         );
         if start {

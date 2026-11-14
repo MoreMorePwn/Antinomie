@@ -6,6 +6,7 @@
 //! summary (the VM's Summary header and the sidebar badge) |
 //! config (the VM configuration; ANTINOMIE_QA_PRESET = desktop | laptop |
 //! server | cloud | transparent, ANTINOMIE_QA_NETWORK = nat | disconnected),
+//! ANTINOMIE_QA_PIN = text of a help icon to open pinned,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1280x900,
 //! ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -57,6 +58,10 @@ fn native_stealth_fixture() {
         },
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
+            // ANTINOMIE_QA_PIN: a help icon whose text holds this opens pinned.
+            let pin = std::env::var("ANTINOMIE_QA_PIN").unwrap_or_default();
+            cc.egui_ctx
+                .data_mut(|data| data.insert_temp(crate::widgets::qa_pin_key(), pin));
             let mut app = app();
             app.settings.set_theme(theme_choice);
             theme::apply_theme(&cc.egui_ctx, theme_choice);

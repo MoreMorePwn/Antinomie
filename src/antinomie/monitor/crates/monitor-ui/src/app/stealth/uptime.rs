@@ -4,7 +4,7 @@
 //! and the clock model that carries it.
 use super::*;
 use antinomie_monitor_core::stealth::{
-    boot_age_text, parse_boot_age, BootAge, ClockModel, BOOT_AGE_MAX_S,
+    boot_age_text, parse_boot_age, BootAge, ClockModel, ARM64_UPTIME, BOOT_AGE_MAX_S,
 };
 
 /// What kind of machine the recommended range is for.
@@ -43,13 +43,22 @@ fn explanation(profile: &StealthProfile) -> String {
 }
 
 /// The boot's age: how long the guest says it has been up when it starts.
-pub(super) fn uptime(ui: &mut egui::Ui, profile: &mut StealthProfile, debian: bool) {
+pub(super) fn uptime(
+    ui: &mut egui::Ui,
+    profile: &mut StealthProfile,
+    debian: bool,
+    arch: GuestArch,
+) {
     let kind = BootAge::of(profile);
+    // The arm64 guest ignores a boot age for now: the field is shown
+    // disabled with the reason on its help icon; an uptime the profile
+    // already holds stays stored (an x86-64 VM uses it).
+    let arm64 = arch == GuestArch::AARCH64;
     // The text being typed, kept with the age it was last read as: an age
     // set elsewhere (a preset, the dice) replaces it.
     let id = ui.make_persistent_id("stealth_uptime_text");
     let mut problem = None;
-    ui.horizontal(|ui| {
+    ui.add_enabled_ui(!arm64, |ui| ui.horizontal(|ui| {
         let mut aged = profile.boot_age_s > 0;
         if ui.checkbox(&mut aged, "Uptime").changed() {
             profile.boot_age_s = if aged { kind.draw() } else { 0 };
@@ -78,15 +87,30 @@ pub(super) fn uptime(ui: &mut egui::Ui, profile: &mut StealthProfile, debian: bo
             }
             ui.data_mut(|data| data.insert_temp(id, (text, profile.boot_age_s)));
             // Explained by the help icon beside it.
-            if ui.button(egui_phosphor::regular::DICE_FIVE).clicked() {
+            if ui
+                .button(egui_phosphor::regular::DICE_FIVE)
+                .name_tip("Random uptime")
+                .clicked()
+            {
                 profile.boot_age_s = kind.draw();
             }
         } else {
             ui.label(RichText::new("a fresh boot").color(theme::muted()));
         }
-        help(ui, explanation(profile));
-    });
+        let explained = explanation(profile);
+        help(
+            ui,
+            if arm64 {
+                format!("A fresh boot is shown on arm64\n\nThe uptime is not applied: {ARM64_UPTIME}. A later guest fixes it. An uptime this profile already holds stays stored for an x86-64 VM.\n\n{explained}")
+            } else {
+                explained
+            },
+        );
+    }));
     let (low, high) = kind.range();
+    if arm64 {
+        return;
+    }
     if let Some(problem) = problem {
         ui.colored_label(theme::error(), problem);
     } else if profile.boot_age_s > 0 && !(low..=high).contains(&profile.boot_age_s) {
