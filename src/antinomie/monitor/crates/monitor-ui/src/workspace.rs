@@ -829,10 +829,12 @@ impl WorkspaceLayout {
         // the tab strip.
         let strip_only =
             surface.is_main() && (self.bottom_folded || self.details_fraction.is_some());
+        let surface_tabs = local.iter_all_tabs().count();
         let mut viewer = Viewer {
             app,
             layout: self,
             surface,
+            surface_tabs,
             tight: Vec::new(),
             work_tabs,
         };
