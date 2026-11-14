@@ -80,8 +80,9 @@ CONSOLE_DESKTOP = "none"
 # Guest architectures the kernel builds for, and the adapter key of Debian's
 # banner for each (adapter.conf).
 ARCHES = {"x86_64": "KERNEL_BANNER", "arm64": "KERNEL_BANNER_ARM64"}
-# Profiles whose image recipe builds an arm64 base.
-ARM64_PROFILES = {"busybox", "debian-minimal"}
+# Profiles whose image recipe builds an arm64 base (debian-xfce: the Debian
+# desktops, GNOME included, from 0.9.0).
+ARM64_PROFILES = {"busybox", "debian-minimal", "debian-xfce"}
 # The machine name (uname -m) of each guest architecture: a Debian base of
 # another architecture than the build machine's runs that architecture's
 # maintainer scripts under emulation: in the QEMU builder VM (qemu-user-static's

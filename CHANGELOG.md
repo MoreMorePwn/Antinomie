@@ -7,8 +7,8 @@ it runs.
 ## 0.9.0 — 2026-MM-DD
 
 Runs the bases 0.8.3 runs (contract revision 20), revision-21 bases and the
-bases built by this release (contract revision 22), arm64 BusyBox and Debian 13
-Minimal among them. An app older than 0.9.0 refuses a revision-21 or 22 base and
+bases built by this release (contract revision 22), arm64 BusyBox, Debian 13
+Minimal and Debian 13 GNOME among them. An app older than 0.9.0 refuses a revision-21 or 22 base and
 an arm64 base before it starts a VM; on a revision-21 base the revision-22
 features below say they need a newer base. x86-64 bases built by this release also record 32-bit
 x86 programs by their own table.
@@ -195,6 +195,31 @@ x86 programs by their own table.
     `unavailable_on_node`.
 
 - **Timed screenshots of the VM screen during a run (ANT-T0487).** **Run program** has a **Screen** section: **Take a screenshot every N s** (off by default, 1 to 999 s, 10 when switched on). While the run goes, the VM screen is read at that interval on a worker thread of its own and each picture is saved in the run's own folder as `screenshots/t+SSSSSS.s.png`, named by the time since the run started, with a last one when the program tree ends. A screen that has not changed since the last picture is skipped and counted; a tick that arrives while the previous picture is still being written is dropped and counted; a run keeps at most 500 pictures or 256 MiB, and the run's notes say how many were saved and skipped and whether a limit ended the series. Triage > Summary shows the series as a strip with the run-relative time under each picture; a click opens it in Library > Screenshots, which groups the series under its run and steps through it with the arrow keys. The report's notes list the series and the evidence bundle holds up to 100 of the pictures under `screenshots/`. Auto mode: `[record] screenshot_every_s` of a preset (0, off, in every built-in preset; 1 to 999 s, no node minimum), which a run may set to any value in that range as a Custom run (`overrides` `{"record": {"screenshot_every_s": N}}`, `auto submit --screenshot-every N`; `invalid_argument` outside it); `run exec --screenshot-every N` takes the same range. The pictures are listed by `recording.artifact.list` as kind `screenshot` with `run_time_ms` (sensitive: reading them needs `evidence.view`). The headless engine keeps QEMU's VNC display on a private unix socket for this; the guest sees the same devices.
+- **Debian 13 GNOME bases for 0.9.0, and arm64 Debian desktops in the builder (ANT-T0484).**
+  - Debian 13 GNOME at revision 22 for x86-64 and for arm64, on the kernels of the revision-22
+    Debian 13 Minimal bases. Under CPU emulation the arm64 desktop's greeter appears after
+    about five minutes.
+  - The base builder builds the Debian desktops (GNOME and the others) for arm64 as it builds
+    Debian 13 Minimal: in the container builder on a host with a `qemu-aarch64` binfmt handler
+    (F flag), else in the QEMU builder, never natively (`build-base.py` job
+    `{"profile": "debian-xfce", "options": {"desktop": "gnome"}, "arch": "arm64"}`). The desktop
+    boots on a device tree from its `/dev/vda` root, with Debian's arm64 kernel packages, the
+    desktop's task and display manager, and the armhf program loader.
+  - Debian bases built from now on end their kernel command line with
+    `console=tty0 console=ttyS0 panic=-1` (`ttyAMA0` on arm64): the serial log shows the boot,
+    and a guest kernel panic reboots the guest so QEMU exits instead of hanging. The desktops
+    always had it; Debian 13 Minimal gets it from its next revision (the published revision-22
+    Minimal bases are unchanged).
+  - A Debian desktop no longer keeps the build host's `/etc/resolv.conf`, which the bootstrap
+    copies in: every Debian base ends its installation with the resolver the installer's DHCP
+    lease names, which NetworkManager rewrites at boot (the revision-20 GNOME base carries its
+    build host's systemd-resolved stub file).
+  - `scripts/vm-regress.py`'s quick tier gains `desktop` on a Debian desktop base: a VM with the
+    in-app screen boots to its greeter, and `tests/monitor/debian-desktop-check.sh` checks the
+    greeter session, gnome-shell drawing it (a framebuffer of its own), `virtio_gpu` as Debian's module on a connected display, every
+    loaded module signed with taint 0, and the command line; then it saves a screenshot of the
+    greeter. A console base or BusyBox skips it as not applicable. On an arm64 desktop base the
+    tier also runs the in-app `screen` check.
 
 - **Statistics window (ANT-T0477).** **Statistics** in the menu bar, or Ctrl+Shift+T, opens a window on the selected run or Capture all recording (it floats over the main window and pops out into its own). Four tabs: **Properties** (the run, the guest, the recording and the recording-quality figures: lost packets, reduced recording, host read gaps, guest send waits), **Hierarchy** (calls by group, call and result, with Failed only and By error), **Call rate** (calls per interval over the run, up to four lines: all, failed, a group or your own filter, with the recording's read gaps and full-ring spells drawn on the graph) and **Latency** (the time from a call's entry to its exit, labelled with the accelerator the run was measured under, calls that wait by design shown apart, the slowest calls). The window has its own filter box in the Syscall Trace's language and a choice of time base. Every number opens exactly its calls in the Syscall Trace, every table copies and exports as CSV and JSON, and a quality chip says what the counts cannot tell. It counts the run's own program, as Triage does, and says how many calls of another program it left out. A reconnected run reads only the part after the reconnect, as the Syscall Trace does, and says so. The counting is the new `antinomie_triage::statistics` module, in one walk of the recording that costs what the Syscall Trace's own count costs.
 

@@ -115,13 +115,21 @@ def profile(desktop):
 
 
 PROFILE = profile("xfce")
-APPEND = "root=/dev/vda rw rootwait console=tty0 console=ttyS0 panic=-1"
+# Every Debian base's command line ends with the serial console of its
+# machine and panic=-1 (user decision 2026-11-13, from revision 22's GNOME
+# bases on): the VM's serial log shows the boot, and a guest kernel panic
+# reboots the guest, so QEMU exits instead of hanging with the guest dead.
+SERIAL_TAIL = "console=tty0 console={console} panic=-1"
+# The serial console of each guest architecture's machine (q35's 16550,
+# virt's PL011).
+SERIAL_CONSOLES = {"x86_64": "ttyS0", "arm64": "ttyAMA0"}
+APPEND = "root=/dev/vda rw rootwait " + SERIAL_TAIL
 # The console base's command line is the one GRUB gives a Debian install: the
 # kernel image, the root by filesystem UUID (each VM's own: the app names the
 # UUID provisioning gave its disk), mounted read-only for the boot-time fsck,
-# and quiet; no serial console and no panic=-1. The bootstrap initrd finds the
-# UUID on whichever bus the stealth profile chose (virtio, SATA, NVMe).
-CONSOLE_APPEND = "BOOT_IMAGE=/boot/vmlinuz-{release} root=UUID={uuid} ro quiet"
+# and quiet; then SERIAL_TAIL. The bootstrap initrd finds the UUID on
+# whichever bus the stealth profile chose (virtio, SATA, NVMe).
+CONSOLE_APPEND = "BOOT_IMAGE=/boot/vmlinuz-{release} root=UUID={uuid} ro quiet " + SERIAL_TAIL
 # The console base's disk is the installer's guided "all files in one
 # partition" on a BIOS PC: an MBR table, the root at 1 MiB (bootable), where
 # fstab's comment says the installer saw it. Provisioning grows the root to the
@@ -490,10 +498,11 @@ def packages(desktop, arch="x86_64"):
     return PACKAGES + (task,) + extra + foreign_packages(arch)
 
 
-def kernel_append(desktop, release=None, root_uuid=None):
+def kernel_append(desktop, release=None, root_uuid=None, arch="x86_64"):
+    console = SERIAL_CONSOLES[arch]
     if desktop == CONSOLE:
-        return CONSOLE_APPEND.format(release=release.split()[0], uuid=root_uuid)
-    return APPEND
+        return CONSOLE_APPEND.format(release=release.split()[0], uuid=root_uuid, console=console)
+    return APPEND.format(console=console)
 
 
 def fstab(desktop, root_uuid=None):
@@ -525,7 +534,7 @@ def display(desktop):
 # The end of every installation (the installer's finish-install): build-time
 # apt and dpkg settings (recommends, proxy, left-out documentation) leave, the
 # system is checked and inventoried, apt's history reads like the installer's,
-# and the console base gets the resolver its DHCP lease named. In the console
+# and every base gets the resolver its DHCP lease named. In the console
 # base this runs after the boot loader, in the BIOS system and in its UEFI copy
 # ($manager is "none" there); a desktop runs it at the end of its customization.
 FINISH = """# Build-time apt and dpkg settings (recommends, proxy, left-out documentation)
@@ -543,9 +552,11 @@ if [ "$manager" = none ] && [ -f /var/log/apt/history.log ]; then
     cat /tmp/history.log > /var/log/apt/history.log
     rm -f /tmp/history.log
 fi
+# The resolver the installer's DHCP lease named, on every base (the build
+# host's own, which the bootstrap copied in, never stays); dhcpcd, or a
+# desktop's NetworkManager, rewrites it at boot.
+printf 'nameserver 192.168.1.1\\n' > /etc/resolv.conf
 if [ "$manager" = none ]; then
-    # The resolver the installer's DHCP lease named; dhcpcd rewrites it at boot.
-    printf 'nameserver 192.168.1.1\\n' > /etc/resolv.conf
     find /var/cache/apt/archives -name '*.deb' -delete
 else
     apt-get clean
@@ -1688,8 +1699,9 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
     release = kernel_release(kernel)
     console = values["desktop"] == CONSOLE
     if arch != "x86_64":
-        if not console:
-            raise RuntimeError(f"no {arch} recipe for the Debian desktops yet")
+        # The console base and the desktops alike: Debian's arm64 system with
+        # its kernel packages, the desktop's task and display manager, on a
+        # /dev/vda root the VM boots on a device tree (no boot loader).
         if not is_arm64_image(kernel):
             raise RuntimeError("an arm64 Debian base needs an arm64 kernel Image")
         foreign_bootstrap(arch)
@@ -1781,7 +1793,7 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
                     "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
                     "kernel_append": kernel_append(values["desktop"], release,
-                                                   root.get("root_uuid")),
+                                                   root.get("root_uuid"), arch),
                     "guest": profile(values["desktop"]),
                     "sha256": hashes}
         if values["desktop"] == CONSOLE:
@@ -1856,9 +1868,9 @@ def main():
                         help="reuse this bootstrapped root filesystem if it matches the recipe "
                              "and answers and is recent, else bootstrap and write it")
     parser.add_argument("--arch", choices=tuple(DEB_ARCHES), default="x86_64",
-                        help="guest architecture; arm64 (the console base only) bootstraps "
-                             "Debian's arm64 system, in the QEMU builder VM unless this is an "
-                             "arm64 machine")
+                        help="guest architecture; arm64 bootstraps Debian's arm64 system, in "
+                             "the QEMU builder VM (or a container on a host with a qemu-aarch64 "
+                             "binfmt handler) unless this is an arm64 machine")
     args = parser.parse_args()
     if not args.kernel.is_file():
         parser.error("an existing patched Linux 6.12.94 kernel is required")

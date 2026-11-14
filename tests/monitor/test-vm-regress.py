@@ -154,9 +154,13 @@ class PlanTests(unittest.TestCase):
         return {"out": out, "base": Path("/base"), "old_base": Path("/old"), "new": Path("/new"),
                 "fix": out / "fixtures", "old": Path("/oldhost"), "old_ok": True}
 
-    def test_quick_is_the_three_oracle_groups_the_in_app_screen_and_a_routed_nic(self):
+    def test_quick_is_the_three_oracle_groups_the_in_app_screen_a_routed_nic_and_the_desktop(self):
         checks = vm.plan("quick", self.ctx())
-        self.assertEqual([c.name for c in checks], ["conf-quick", "screen", "nic-routed"])
+        self.assertEqual([c.name for c in checks], ["conf-quick", "screen", "nic-routed", "desktop"])
+        self.assertEqual(checks[3].argv, ["/new/guest-run", "/out/runs/desktop/plan.json"])
+        self.assertEqual((checks[3].group, checks[3].needs), ("quick", ("base", "desktop_base")))
+        self.assertEqual(vm.missing(checks[3], {**self.ctx(), "debian_base": True}),
+                         "needs a Debian desktop base (BASE's guest is graphical)")
         self.assertEqual(checks[0].argv[-1], "user,root,threads")
         self.assertEqual(checks[1].argv, ["/new/guest-run", "/out/runs/screen/plan.json"])
         self.assertEqual(checks[2].argv, ["/new/guest-run", "/out/runs/nic-routed/plan.json"])
@@ -167,6 +171,53 @@ class PlanTests(unittest.TestCase):
         full = [c.name for c in vm.plan("full", self.ctx())]
         self.assertIn("screen", full)
         self.assertIn("nic-routed", full)
+        self.assertIn("desktop", full)
+
+    def test_the_desktop_check_waits_for_the_greeter_and_takes_its_screenshot(self):
+        scale = vm.time_scale("arm64")
+        plans = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            base, out = Path(tmp) / "base", Path(tmp) / "out"
+            base.mkdir()
+            (base / "bundle.json").write_text('{"guest": {"min_ram_mib": 4096, "min_disk_gib": 16, '
+                                              '"requires_credentials": true, "graphical": true}}')
+            self.assertTrue(vm.bundle_desktop(base))
+            for arch in ("x86_64", "arm64"):
+                ctx = {**self.ctx(), "base": base, "out": out, "arch": arch}
+                check = next(c for c in vm.plan("quick", ctx, arch) if c.name == "desktop")
+                argv, _ = vm.command_for(check, ctx, None)
+                self.assertEqual(Path(argv[-1]).stat().st_mode & 0o777, 0o600)
+                plans[arch] = (vm.json.loads(Path(argv[-1]).read_text()), check)
+            # A console base or BusyBox is no desktop.
+            (base / "bundle.json").write_text('{"guest": {"requires_credentials": true, '
+                                              '"graphical": false}}')
+            self.assertFalse(vm.bundle_desktop(base))
+        (x86, x86_check), (arm, arm_check) = plans["x86_64"], plans["arm64"]
+        self.assertEqual(arm_check.timeout, x86_check.timeout * scale)
+        self.assertIs(x86["headless"], False)
+        self.assertEqual((x86["vm"]["ram_mib"], x86["vm"]["disk_gib"], x86["vm"]["username"]),
+                         (4096, 16, "desktopcheck"))
+        [upload] = x86["uploads"]
+        self.assertEqual(upload["source"], str(vm.TESTS / "debian-desktop-check.sh"))
+        self.assertTrue(Path(upload["source"]).is_file())
+        [run] = x86["runs"]
+        self.assertEqual((run["path"], run["uid"], run["done"]),
+                         (upload["destination"], 0, "DESKTOP-CHECK-PASS"))
+        self.assertEqual(run["args"], [str(vm.DESKTOP_GREETER_WAIT)])
+        self.assertGreater(run["timeout"], vm.DESKTOP_GREETER_WAIT)
+        # Outside runs/desktop, which the check's clean-up removes.
+        self.assertEqual(run["screenshot"], str(out / "screens/desktop-greeter.png"))
+        self.assertEqual(arm["runs"][0]["args"], [str(vm.DESKTOP_GREETER_WAIT * scale)])
+        self.assertEqual(arm["runs"][0]["timeout"], run["timeout"] * scale)
+        self.assertEqual(arm["runs"][0]["screenshot_after"], run["screenshot_after"] * scale)
+        for key in ("boot_timeout", "create_timeout"):
+            self.assertEqual(arm[key], x86[key] * scale, key)
+        # The check script fails by waiting, so the marker wait fails the check.
+        script = Path(upload["source"]).read_text()
+        self.assertIn("DESKTOP-CHECK-FAIL", script)
+        self.assertIn("exec sleep", script)
+        # The greeter counts once gnome-shell has its own framebuffer on the display.
+        self.assertIn("allocated by = gnome-shell", script)
 
     def nic_plan(self, arch):
         with tempfile.TemporaryDirectory() as tmp:
@@ -352,7 +403,11 @@ class PlanTests(unittest.TestCase):
         self.assertIn("stealth", arm64)
         for name, check in arm64.items():
             self.assertEqual(check.timeout, x86[name] * scale, name)
-        self.assertEqual([c.name for c in vm.plan("quick", self.ctx(), "arm64")], ["conf-quick", "nic-routed"])
+        self.assertEqual([c.name for c in vm.plan("quick", self.ctx(), "arm64")],
+                         ["conf-quick", "nic-routed", "desktop"])
+        # An arm64 Debian desktop base also runs the in-app screen check.
+        self.assertEqual([c.name for c in vm.plan("quick", {**self.ctx(), "desktop_base": True}, "arm64")],
+                         ["conf-quick", "screen", "nic-routed", "desktop"])
         self.assertEqual(vm.parse(["quick", "/base", "--arch", "arm64"]).arch, "arm64")
         self.assertEqual(vm.parse(["quick", "/base"]).arch, "x86_64")
 
@@ -387,19 +442,25 @@ class PlanTests(unittest.TestCase):
 
     def test_a_busybox_tier_that_passes_exits_0(self):
         # The quick tier on an arm64 (or x86-64) BusyBox base: conf-quick passes, nic-routed needs a
-        # Debian base. That SKIP is not applicable and the tier exits 0; a missing --old-base still fails.
+        # Debian base and desktop a Debian desktop. Those SKIPs are not applicable and the tier exits
+        # 0; a missing --old-base still fails.
         with tempfile.TemporaryDirectory() as tmp:
             args = vm.parse(["quick", "/base", "--arch", "arm64", "--out", tmp, "--min-free", f"{tmp}:0",
                              "--max-used-gb", "1000000"])
             ctx = {**self.ctx(), "out": Path(tmp), "results": {}, "debian_base": False}
             checks = vm.plan("quick", ctx, "arm64")
             order = [c.name for c in checks]
-            self.assertEqual(order, ["conf-quick", "nic-routed"])
+            self.assertEqual(order, ["conf-quick", "nic-routed", "desktop"])
             nic = vm.run_check(checks[1], ctx, args, 1)
             self.assertEqual((nic["status"], nic.get("not_applicable")), ("SKIP", True), nic)
             self.assertIn("needs a Debian base", nic["detail"])
+            desktop = vm.run_check(checks[2], {**ctx, "debian_base": True, "desktop_base": False},
+                                   args, 1)
+            self.assertEqual((desktop["status"], desktop.get("not_applicable")), ("SKIP", True), desktop)
+            self.assertIn("needs a Debian desktop base", desktop["detail"])
             results = {"conf-quick": {"name": "conf-quick", "status": "PASS", "seconds": 278.0,
-                                      "log": f"{tmp}/logs/conf-quick.log"}, "nic-routed": nic}
+                                      "log": f"{tmp}/logs/conf-quick.log"}, "nic-routed": nic,
+                       "desktop": desktop}
             self.assertEqual(vm.exit_code(results, order), 0)
             self.assertEqual(vm.exit_code({**results, "conf-quick": {**results["conf-quick"], "status": "FAIL"}},
                                           order), 1)

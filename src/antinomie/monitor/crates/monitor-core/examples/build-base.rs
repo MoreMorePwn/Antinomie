@@ -5,7 +5,8 @@
 //!
 //! OPTIONS_JSON overrides fields of the profile's default answers, for example
 //! '{"hostname":"lab","timezone":"Europe/Berlin"}'. ANTINOMIE_BUILD_ARCH=arm64
-//! builds an arm64 base (BusyBox, or Debian Minimal in the QEMU builder).
+//! builds an arm64 base (BusyBox, or Debian Minimal or a Debian desktop in the
+//! QEMU builder).
 //! Prints stage changes and build output, then the installed bases.
 
 use antinomie_monitor_core::{

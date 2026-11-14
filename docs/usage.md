@@ -468,6 +468,16 @@ password goes in over QEMU's fw_cfg and is never written to the disk. If that
 boot fails or takes more than 15 minutes, the creation fails with the reason
 and leaves no VM. Then start the VM and log in with the account, as on x86-64.
 
+**Debian 13 arm64 desktops.** The Debian desktops (GNOME and the others the
+x86-64 wizard offers) build for arm64 the same way, in the container builder
+with the handler or in the QEMU builder: `"profile": "debian-xfce",
+"options": {"desktop": "gnome"}, "arch": "arm64"` in the job, or
+`ANTINOMIE_BUILD_ARCH=arm64` with `build-base DATA debian-xfce qemu
+'{"desktop":"gnome"}'`. The desktop runs on the emulated CPU too: its display
+manager and desktop draw in software, so they take several minutes to come up
+and react slowly; it suits automated runs and screenshots better than
+interactive work.
+
 **What works.** Everything an x86-64 BusyBox VM records: every system call
 (by arm64's own numbers and names), file activity and contents, captured
 programs, packets and routes, io_uring and AIO, notes, Triage, Sigma, the Files

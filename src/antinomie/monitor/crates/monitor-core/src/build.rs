@@ -563,7 +563,7 @@ pub struct BuildRequest {
 /// this host's kernel), this host's qemu-aarch64 binfmt handler with the F
 /// flag ([`foreign_handler`]); never a native build. Automatic picks a
 /// container only when that handler is ready, else the QEMU builder. The
-/// Debian desktops have no arm64 recipe yet.
+/// Debian desktops (GNOME and the others) build for arm64 the same way.
 pub fn arch_mode(
     kind: Kind,
     arch: crate::api::GuestArch,
@@ -592,9 +592,10 @@ fn arch_mode_with(
     }
     match kind {
         Kind::BusyBox => resolve_mode(kind, requested),
-        Kind::DebianXfce => Err("the Debian desktops have no arm64 recipe yet".into()),
-        Kind::DebianMinimal if std::env::consts::ARCH == "aarch64" => resolve_mode(kind, requested),
-        Kind::DebianMinimal => match (requested, handler) {
+        Kind::DebianMinimal | Kind::DebianXfce if std::env::consts::ARCH == "aarch64" => {
+            resolve_mode(kind, requested)
+        }
+        Kind::DebianMinimal | Kind::DebianXfce => match (requested, handler) {
             (BuildMode::Qemu, _) | (BuildMode::Automatic, Err(_)) => {
                 mode_obstacle(kind, BuildMode::Qemu).map_or(Ok(BuildMode::Qemu), Err)
             }
@@ -1096,11 +1097,30 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(dir).unwrap();
-        assert!(
-            arch_mode(Kind::DebianXfce, GuestArch::AARCH64, BuildMode::Qemu)
-                .unwrap_err()
-                .contains("no arm64 recipe")
-        );
+        // The Debian desktops build for arm64 as Debian Minimal does: in a
+        // container with the handler, else in the QEMU builder, never natively.
+        for (requested, handler, want) in [
+            (BuildMode::Native, ready(), "never run"),
+            (BuildMode::Native, missing(), "QEMU builder"),
+            (BuildMode::Docker, missing(), "Register it"),
+        ] {
+            let error = arch_mode_with(Kind::DebianXfce, GuestArch::AARCH64, requested, handler)
+                .unwrap_err();
+            assert!(error.contains(want), "{error}");
+            assert_eq!(
+                Err(error),
+                arch_mode_with(
+                    Kind::DebianMinimal,
+                    GuestArch::AARCH64,
+                    requested,
+                    if want == "never run" {
+                        ready()
+                    } else {
+                        missing()
+                    }
+                )
+            );
+        }
         assert!(arch_mode(Kind::BusyBox, GuestArch::MIPS, BuildMode::Native).is_err());
         assert_eq!(
             automatic_base_name_for(Kind::DebianMinimal, "", GuestArch::AARCH64),
