@@ -205,7 +205,14 @@ VM list and the Overview's **Device profile** card carry a **Device profile fall
 badge; and each start warns in **Activity** and adds the same lines as notes to
 every run of that boot, shown under the run's header.
 
-The realistic presets (desktop, laptop, server) report the identity strings of one
+The **Device profile** presets are Desktop, Laptop, Server, Cloud VPS, IoT device
+(Raspberry Pi), Normal QEMU (QEMU's own identity, what Antinomie launched before
+profiles) and Custom. Runs recorded before 0.9.0 say "Realistic desktop" or
+"Transparent QEMU (as before)"; the app shows them by these names. The window's
+hints (the **?** icons and the entries' tooltips) show on a running VM's
+read-only profile too, and its sections still open there.
+
+The Desktop, Laptop and Server presets report the identity strings of one
 real, popular machine model, picked at random when the VM is created and kept for its life, never per boot.
 The pick is weighted by how common the model is, and limited to machines the
 host CPU's generation was sold in. The BIOS release, the unit (product, SKU, board), the disk
@@ -214,6 +221,18 @@ VMs of the same model differ, as two such machines do. The catalog's
 `SOURCES.md` names a public hardware report for every value, and the weight is how
 many public reports of the model exist. A run's details show the
 machine its guest looked like. RAM size and disk size stay the VM's own settings.
+Under **Clock**, **Uptime** is how long the guest says it has been up when the VM
+starts, the same at every start. Each preset draws one in its recommended range
+(a desktop or laptop: 3 hours to 6 days; a server, cloud machine or IoT device: 3
+to 120 days); type your own (`3 d 4 h`, `90 min`, from 1 minute to 1098 days, the
+most the guest kernel takes) or press the dice for a new random one in the
+range. Off is a fresh boot. **Still visible** lists what the profile, as this VM
+starts it, still gives away with the VM's own settings: a Disconnected VM lists no
+network card, the display is named by the device the VM gets, a cloud profile's
+metadata entry goes away on a Routed network. A cloud profile's **Use Routed for
+cloud metadata** button (VM dialog) has a **?** that explains it: the fake
+metadata service runs on the route gateway, so the button sets the VM's Network to
+Routed.
 The model catalog is in `src/antinomie/monitor/crates/monitor-core/src/stealth/catalog/`;
 the names belong to their owners and imply no affiliation or endorsement (see
 [Trademarks](../README.md#trademarks)).
@@ -560,6 +579,15 @@ workstation (ADLINK Altra Developer Platform), or an AWS EC2 Graviton2 instance
 for Cloud VPS, all booting UEFI (AAVMF) with that machine's SMBIOS tables, ACPI
 OEM IDs, CPU (MIDR and timer frequency), network card and SATA disk; with BIOS
 firmware, a Raspberry Pi 4 Model B or Pi 5 on a disguised device tree. The
+**IoT device (Raspberry Pi)** preset presents a Pi 4 or Pi 5 (picked by the VM's
+UUID) booting BIOS on its device tree, on a home network, with nothing of a
+desktop and an always-on uptime model (see below); the window
+suggests a BusyBox base (with **Use base** when an arm64 BusyBox base is
+installed and the VM is on Debian). An x86-64 VM lists it disabled ("arm64
+only": the catalog has no x86-64 IoT device); a VM that has it on an x86-64 base
+starts as Normal QEMU and says so. An arm64 VM shows a fresh boot whatever its
+**Uptime** (its guest kernel ignores the age); the window says so beside the
+setting. The
 **Device profile** window shows the arm64 machine list instead of the PC
 catalog (pick one, or let the preset pick by the VM's UUID), the machine's CPU
 instead of the x86 CPU settings, and, under **Still visible**, what an arm64

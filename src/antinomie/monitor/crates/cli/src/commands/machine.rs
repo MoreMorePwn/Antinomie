@@ -57,6 +57,7 @@ pub fn preset_name(preset: StealthPreset) -> &'static str {
         StealthPreset::RealisticLaptop => "realistic-laptop",
         StealthPreset::RealisticServer => "realistic-server",
         StealthPreset::CloudVps => "cloud-vps",
+        StealthPreset::Iot => "iot",
         StealthPreset::Transparent => "transparent",
         StealthPreset::Custom => "custom",
     }

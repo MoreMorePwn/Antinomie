@@ -166,6 +166,22 @@ fn initial_size(options: &BackendOptions, launch: &VmLaunchOptions) -> Option<(u
 /// The kernel command line for one VM's disk: a base that names its root by
 /// filesystem UUID (`root=UUID=`, Debian Minimal) names the UUID provisioning
 /// gave this VM's disk; a disk provisioned before that keeps the base's.
+/// The VM's boot age option, as the profile fitted to the base keeps it
+/// (nothing on a base whose kernel does not take it, which the fitting set to
+/// 0). The guest takes antinomie_* options out of its command line before
+/// anything can read it. An arm64 guest ignores the age, so its launch has
+/// none (`StealthProfile::for_arch`).
+fn boot_age_option(stealth: &crate::stealth::StealthProfile, debian: bool) -> String {
+    if stealth.boot_age_s == 0 {
+        return String::new();
+    }
+    format!(
+        " antinomie_boot_age={}:{}",
+        stealth.boot_age_s,
+        stealth.boot_clock(debian)
+    )
+}
+
 pub(crate) fn vm_kernel_append(append: &str, root_uuid: Option<&str>) -> String {
     let Some(uuid) = root_uuid else {
         return append.to_owned();
@@ -213,16 +229,7 @@ fn apply_launch_settings(
         "{} antinomie_boot_gpa=0x{bootstrap:x}",
         bundle.kernel_append
     );
-    // The VM's boot age, as the profile fitted to the base keeps it (0 on a
-    // base whose kernel does not take it). The guest takes antinomie_*
-    // options out of its command line before anything can read it.
-    if stealth.boot_age_s > 0 {
-        append.push_str(&format!(
-            " antinomie_boot_age={}:{}",
-            stealth.boot_age_s,
-            stealth.boot_clock(bundle.runs_debian_modules())
-        ));
-    }
+    append.push_str(&boot_age_option(stealth, bundle.runs_debian_modules()));
     if let Some((width, height)) = launch.resolution.dimensions() {
         // virtio-gpu provides a hardware cursor, so the guest does not paint
         // its own cursor into the framebuffer. The fixed mode is selected by
@@ -495,9 +502,21 @@ impl VmProcess {
         } else {
             crate::stealth::HostSupport::detect(&options.qemu)
         };
-        let (mut stealth, fallbacks) = vm.stealth.fitted_with(&base_support, &host_support);
-        let mut fallbacks: Vec<String> = fallbacks
+        // A preset this architecture cannot present (the IoT device on
+        // x86-64) starts as Normal QEMU; an arm64 guest takes no boot age.
+        let arch = if virt {
+            crate::api::GuestArch::AARCH64
+        } else {
+            crate::api::GuestArch::X86_64
+        };
+        let arch_fallbacks = vm.stealth.arch_fallbacks(arch);
+        let (mut stealth, fallbacks) = vm
+            .stealth
+            .for_arch(arch)
+            .fitted_with(&base_support, &host_support);
+        let mut fallbacks: Vec<String> = arch_fallbacks
             .iter()
+            .chain(&fallbacks)
             .map(crate::stealth::Fallback::log_line)
             .collect();
         if let Some(note) = effective_machine(&mut stealth, ram_size) {
@@ -1563,6 +1582,17 @@ mod tests {
                 "root=/dev/vda console=ttyS0 antinomie_boot_gpa=0x40000000 antinomie_boot_age=734512:suspend"
             )
         );
+    }
+
+    #[test]
+    fn an_arm64_vm_starts_without_a_boot_age() {
+        // Its guest ignores one (stealth::ARM64_UPTIME): the profile as an
+        // arm64 VM starts it has none, so the launch adds no option.
+        let stealth = crate::stealth::StealthProfile::iot();
+        assert!(stealth.boot_age_s > 0);
+        let arm = stealth.for_arch(crate::api::GuestArch::AARCH64);
+        assert_eq!(boot_age_option(&arm, false), "");
+        assert!(boot_age_option(&stealth, false).starts_with(" antinomie_boot_age="));
     }
 
     #[test]

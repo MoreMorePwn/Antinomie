@@ -238,6 +238,7 @@ impl MonitorApp {
                 &mut self.getting_started.profile_open,
                 &fallbacks,
                 "Details…",
+                crate::app::base_arch(&self.snapshot, draft.base_identity.as_deref()),
             );
             if credentials_required {
                 ui.label("Guest username");

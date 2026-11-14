@@ -44,6 +44,9 @@ mod record;
 mod smbios;
 #[cfg(test)]
 mod tests;
+mod visible;
+#[cfg(test)]
+mod visible_tests;
 
 pub use firmware::{Ovmf, find_ovmf};
 pub(crate) use launch::{
@@ -51,6 +54,7 @@ pub(crate) use launch::{
     machine_options, netdev_option, nic_option_for, pointer_args, smp_option,
 };
 pub use nat::NatNetwork;
+pub use visible::{Display, VmView};
 
 /// A starting point for every entry; changing one makes the profile Custom.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,7 +65,12 @@ pub enum StealthPreset {
     /// An instance of a KVM cloud (Tencent, Alibaba, DigitalOcean, Vultr):
     /// the hypervisor stays visible, as on the provider's machines.
     CloudVps,
-    /// The launch Antinomie used before profiles: QEMU's own identity.
+    /// A Raspberry Pi 4 or 5 on its device tree (arm64 only): always on, no
+    /// desktop. The x86 catalog has no such device, so an x86-64 VM starts
+    /// with QEMU's own identity ([`StealthProfile::arch_fallbacks`]).
+    Iot,
+    /// The launch Antinomie used before profiles: QEMU's own identity. Shown
+    /// as "Normal QEMU"; the stored name stays.
     #[default]
     Transparent,
     Custom,
@@ -73,19 +82,41 @@ impl StealthPreset {
         Self::RealisticLaptop,
         Self::RealisticServer,
         Self::CloudVps,
+        Self::Iot,
         Self::Transparent,
         Self::Custom,
     ];
 
+    /// The name the app shows; the stored value is the variant's name.
     pub fn label(self) -> &'static str {
         match self {
-            Self::RealisticDesktop => "Realistic desktop",
-            Self::RealisticLaptop => "Realistic laptop",
-            Self::RealisticServer => "Realistic server",
+            Self::RealisticDesktop => "Desktop",
+            Self::RealisticLaptop => "Laptop",
+            Self::RealisticServer => "Server",
             Self::CloudVps => "Cloud VPS",
-            Self::Transparent => "Transparent QEMU (as before)",
+            Self::Iot => "IoT device (Raspberry Pi)",
+            Self::Transparent => "Normal QEMU",
             Self::Custom => "Custom",
         }
+    }
+
+    /// A profile name a run recorded (the label of its day) as the app names
+    /// it now: runs saved before 0.9.0 say "Realistic desktop" and
+    /// "Transparent QEMU (as before)".
+    pub fn recorded_label(recorded: &str) -> &str {
+        match recorded {
+            "Realistic desktop" => Self::RealisticDesktop.label(),
+            "Realistic laptop" => Self::RealisticLaptop.label(),
+            "Realistic server" => Self::RealisticServer.label(),
+            "Transparent QEMU (as before)" | "Transparent QEMU" => Self::Transparent.label(),
+            other => other,
+        }
+    }
+
+    /// Why a VM of `arch` cannot use this preset: the IoT device is a
+    /// Raspberry Pi, which only an arm64 VM can present.
+    pub fn unavailable(self, arch: crate::api::GuestArch) -> Option<&'static str> {
+        (self == Self::Iot && arch != crate::api::GuestArch::AARCH64).then_some(IOT_ARM64_ONLY)
     }
 
     /// One line on what the profile makes the guest look like.
@@ -102,6 +133,9 @@ impl StealthPreset {
             }
             Self::CloudVps => {
                 "Reports a cloud provider's instance identity (independent imitation)."
+            }
+            Self::Iot => {
+                "A Raspberry Pi 4 or 5 on its device tree, up for days, no desktop (arm64 only)."
             }
             Self::Transparent => "Plain QEMU, nothing hidden: the guest sees a QEMU machine.",
             Self::Custom => "Your own machine identity, CPU and devices (Edit…).",
@@ -578,10 +612,22 @@ impl BootAge {
         }
     }
 
-    /// The range a profile's machine belongs to: a cloud instance or a
-    /// server preset, else a desktop.
+    /// The range a profile's machine belongs to: a cloud instance, a server
+    /// (the preset, or a Custom profile on a server of the catalog) or an IoT
+    /// device (always on), else a desktop.
     pub fn of(profile: &StealthProfile) -> Self {
-        if profile.cloud_provider().is_some() || profile.preset == StealthPreset::RealisticServer {
+        let server_machine = profile.identity_enabled
+            && MACHINES.iter().any(|machine| {
+                machine.id == profile.identity.profile
+                    && machine.kind == StealthPreset::RealisticServer
+            });
+        if profile.cloud_provider().is_some()
+            || server_machine
+            || matches!(
+                profile.preset,
+                StealthPreset::RealisticServer | StealthPreset::Iot
+            )
+        {
             Self::Server
         } else {
             Self::Desktop
@@ -603,6 +649,13 @@ impl BootAge {
     }
 }
 
+/// The shortest boot age a person can type: a minute.
+pub const BOOT_AGE_MIN_S: u64 = 60;
+/// The oldest boot the guest kernel takes (`ANT_BOOT_AGE_MAX_S` in guest
+/// patch 0053, `kernel/antinomie/uptime.c`): about three years. A longer
+/// age would be ignored by the guest, which then shows a fresh boot.
+pub const BOOT_AGE_MAX_S: u64 = 3 * 366 * 24 * 3_600;
+
 /// An age as a person reads it: `5 h 12 min`, `3 d 4 h`, `0` for a fresh boot.
 pub fn boot_age_text(seconds: u64) -> String {
     let (days, hours, minutes) = (seconds / 86_400, seconds / 3_600 % 24, seconds / 60 % 60);
@@ -611,6 +664,56 @@ pub fn boot_age_text(seconds: u64) -> String {
         (0, _) => format!("{hours} h {minutes} min"),
         _ => format!("{days} d {hours} h"),
     }
+}
+
+/// A typed uptime: numbers with units, `3 d 4 h`, `5h 12min`, `90 min`,
+/// `2 days` (d, h, min or m, s; their long names too), between
+/// [`BOOT_AGE_MIN_S`] and [`BOOT_AGE_MAX_S`]. [`boot_age_text`] reads back.
+pub fn parse_boot_age(text: &str) -> Result<u64, String> {
+    let mut total: u64 = 0;
+    let mut rest = text.trim();
+    if rest.is_empty() {
+        return Err("Type an uptime, like 3 d 4 h or 90 min".into());
+    }
+    while !rest.is_empty() {
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits == 0 {
+            return Err(format!(
+                "{text:?} is not an uptime: use numbers with d, h or min"
+            ));
+        }
+        let number: u64 = rest[..digits]
+            .parse()
+            .map_err(|_| format!("{text:?} is too long an uptime"))?;
+        rest = rest[digits..].trim_start();
+        let letters = rest.len()
+            - rest
+                .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+                .len();
+        let unit = match rest[..letters].to_ascii_lowercase().as_str() {
+            "d" | "day" | "days" => 86_400,
+            "h" | "hr" | "hrs" | "hour" | "hours" => 3_600,
+            "m" | "min" | "mins" | "minute" | "minutes" => 60,
+            "s" | "sec" | "secs" | "second" | "seconds" => 1,
+            "" => return Err(format!("Give {number} a unit: d, h or min")),
+            other => return Err(format!("{other:?} is not a unit: use d, h or min")),
+        };
+        rest = rest[letters..].trim_start_matches([' ', ',']);
+        total = number
+            .checked_mul(unit)
+            .and_then(|seconds| total.checked_add(seconds))
+            .ok_or_else(|| format!("{text:?} is too long an uptime"))?;
+    }
+    if total < BOOT_AGE_MIN_S {
+        return Err("An uptime is at least 1 min".into());
+    }
+    if total > BOOT_AGE_MAX_S {
+        return Err(format!(
+            "An uptime is at most {} (the guest kernel ignores a longer one)",
+            boot_age_text(BOOT_AGE_MAX_S)
+        ));
+    }
+    Ok(total)
 }
 
 impl Default for StealthProfile {
@@ -1145,8 +1248,10 @@ impl StealthProfile {
     /// random serials and MAC address. The pick is saved with the VM: a boot
     /// never picks again.
     pub fn realistic_on(kind: StealthPreset, host: &HostCpu) -> Self {
-        if kind == StealthPreset::CloudVps {
-            return Self::cloud_vps(&CLOUDS[0]);
+        match kind {
+            StealthPreset::CloudVps => return Self::cloud_vps(&CLOUDS[0]),
+            StealthPreset::Iot => return Self::iot(),
+            _ => {}
         }
         let (machine, _fits) = catalog::pick_machine(kind, host, roll());
         Self::realistic_machine(machine)
@@ -1211,6 +1316,72 @@ impl StealthProfile {
             .draw(),
             clock_model: ClockModel::Auto,
         }
+    }
+
+    /// An IoT device: on arm64 a Raspberry Pi 4 or 5 (picked by the VM's
+    /// new UUID, the same for its life) booting BIOS on the board's device
+    /// tree, up for days to months as a device that is never switched off
+    /// (Auto resolves to Always running on BusyBox), on a home network. It
+    /// adds nothing a desktop has: no facade, no cloud state, no user files.
+    pub fn iot() -> Self {
+        let identity = MachineIdentity {
+            system_uuid: uuid(),
+            ..MachineIdentity::default()
+        };
+        Self {
+            preset: StealthPreset::Iot,
+            identity_enabled: true,
+            identity,
+            firmware: Firmware::Bios,
+            // The Pi 4's vendor prefix; the arm64 launch gives the board's own.
+            mac: random_mac([0xdc, 0xa6, 0x32]),
+            nat: NatNetwork::home(),
+            boot_age_s: BootAge::Server.draw(),
+            clock_model: ClockModel::Auto,
+            ..Self::transparent()
+        }
+    }
+
+    /// What a VM of `arch` cannot take of this profile: the IoT device on
+    /// x86-64 starts as Normal QEMU, and an arm64 VM shows a fresh boot
+    /// whatever its uptime (see [`ARM64_UPTIME`]).
+    pub fn arch_fallbacks(&self, arch: crate::api::GuestArch) -> Vec<Fallback> {
+        if let Some(reason) = self.preset.unavailable(arch) {
+            return vec![Fallback {
+                setting: FallbackSetting::Preset,
+                summary: format!(
+                    "{} is {reason}: Normal QEMU will be used",
+                    self.preset.label()
+                ),
+                note: format!("{}: {reason}; Normal QEMU used", self.preset.label()),
+                reason: format!("{reason}; choose another preset for this VM"),
+            }];
+        }
+        if arch == crate::api::GuestArch::AARCH64 && self.boot_age_s > 0 {
+            return vec![Fallback {
+                setting: FallbackSetting::Uptime,
+                summary: "Uptime not applied on arm64: a fresh boot will be shown".into(),
+                note: format!(
+                    "Uptime of {}: {ARM64_UPTIME}; a fresh boot shown",
+                    boot_age_text(self.boot_age_s)
+                ),
+                reason: ARM64_UPTIME.into(),
+            }];
+        }
+        Vec::new()
+    }
+
+    /// This profile as a VM of `arch` presents it (see
+    /// [`arch_fallbacks`](Self::arch_fallbacks)).
+    pub fn for_arch(&self, arch: crate::api::GuestArch) -> Self {
+        if self.preset.unavailable(arch).is_some() {
+            return Self::transparent();
+        }
+        let mut profile = self.clone();
+        if arch == crate::api::GuestArch::AARCH64 {
+            profile.boot_age_s = 0;
+        }
+        profile
     }
 
     /// A new instance of `provider`: its firmware strings, chipset, MAC
@@ -1280,6 +1451,7 @@ impl StealthProfile {
                 ..self.clone()
             },
             StealthPreset::CloudVps => Self::cloud_vps(&CLOUDS[0]),
+            StealthPreset::Iot => Self::iot(),
             kind => Self::realistic_on(kind, host),
         }
     }
@@ -1483,191 +1655,14 @@ impl StealthProfile {
         if !self.cloud.is_empty() && self.cloud_provider().is_none() {
             return Err(format!("{:?} is not a known cloud provider", self.cloud));
         }
+        if self.boot_age_s > BOOT_AGE_MAX_S {
+            return Err(format!(
+                "The uptime is at most {} (the guest kernel ignores a longer one)",
+                boot_age_text(BOOT_AGE_MAX_S)
+            ));
+        }
         self.nat.validate()?;
         Ok(())
-    }
-
-    /// What still tells a VM of this guest architecture apart, most telling
-    /// first: an arm64 VM is QEMU's virt machine under TCG, whatever the
-    /// x86 identity says (`fast_emulation`: booted without KPTI).
-    pub fn giveaways_for(
-        &self,
-        arch: crate::api::GuestArch,
-        fast_emulation: bool,
-        debian: bool,
-    ) -> Vec<&'static str> {
-        if arch == crate::api::GuestArch::AARCH64 {
-            let machine = arm_machine(self);
-            return arm64::giveaways(
-                machine,
-                machine.is_some() || self.firmware.is_uefi(),
-                fast_emulation,
-            );
-        }
-        self.giveaways_on(debian)
-    }
-
-    /// What still tells a VM apart, most telling first, on a base that does
-    /// not run Debian's modules.
-    pub fn giveaways(&self) -> Vec<&'static str> {
-        self.giveaways_on(false)
-    }
-
-    /// [`giveaways`](Self::giveaways) on a base that runs Debian's modules
-    /// (`debian`) or not.
-    pub fn giveaways_on(&self, debian: bool) -> Vec<&'static str> {
-        if self.cloud_provider().is_some() {
-            return self.cloud_giveaways(debian);
-        }
-        let mut found = Vec::new();
-        // A desktop or laptop machine on a base with the guest facade
-        // (patch 0052): its GPU, NVMe drive, board subsystem, ACPI creator,
-        // mouse and EFI vendor are shown for QEMU's.
-        let facade = !launch::facade_options(self, false).is_empty();
-        if !self.hide_hypervisor {
-            found.push("CPUID hypervisor flag");
-        }
-        if !self.hide_kvm {
-            found.push(if self.kvm_clock {
-                "KVM CPUID signature and kvm-clock"
-            } else {
-                "KVM CPUID signature"
-            });
-        }
-        if !self.identity_enabled {
-            found.push("QEMU in the SMBIOS and ACPI tables, chassis type Other");
-        }
-        if !self.cpu_passthrough {
-            found.push(if self.cpu_brand.is_empty() {
-                "QEMU CPU model name"
-            } else {
-                "the QEMU CPU model's family and model numbers behind its brand"
-            });
-        }
-        if self.mac.is_empty() {
-            found.push("QEMU's MAC address 52:54:00:12:34:56");
-        }
-        if self.nic == NicModel::VirtioNet {
-            found.push("virtio network card (Red Hat vendor ID)");
-        } else if self.identity_enabled
-            && let Some(machine) = MACHINES
-                .iter()
-                .find(|machine| machine.id == self.identity.profile)
-        {
-            found.extend(machine.nic_fit().giveaway());
-        }
-        match self.disk_bus {
-            DiskBus::Virtio => found.push("virtio disk vda (Red Hat vendor ID)"),
-            DiskBus::Sata if !self.identity_enabled || self.identity.disk_model.is_empty() => {
-                found.push("SATA disk model QEMU HARDDISK")
-            }
-            DiskBus::Sata => {}
-            DiskBus::Nvme if facade && self.identity.nvme_drive().is_some() => {}
-            DiskBus::Nvme => {
-                found.push("NVMe controller model QEMU NVMe Ctrl, QEMU's version as firmware, an org.qemu subsystem name")
-            }
-        }
-        if self.cdrom {
-            found.push("the CD-ROM's SCSI inquiry: QEMU DVD-ROM");
-        }
-        if self.vmport {
-            found.push("VMware backdoor port");
-        }
-        if !self.usb {
-            found.push("no USB controller");
-        }
-        if !self.pmu {
-            found.push("no performance counters");
-        }
-        match self.firmware {
-            Firmware::Bios => found.push("BIOS firmware (SeaBIOS): no /sys/firmware/efi"),
-            _ if facade => found.push(
-                "OVMF's boot entries in efivarfs name QEMU's devices; its vendor (EDK II) in the EFI system table, to root reading memory",
-            ),
-            _ => found.push("OVMF's vendor (EDK II) in the EFI tables, to root"),
-        }
-        if self.nat.network.is_empty() {
-            found.push("QEMU user-network addresses (10.0.2.x) on NAT");
-        }
-        if self.pointer == Pointer::VirtioTablet || (self.pointer == Pointer::UsbTablet && !facade)
-        {
-            found.push("the pointer's input name (QEMU) in the VM window");
-        } else if self.pointer == Pointer::UsbTablet {
-            found.push("the USB tablet's strings to a program that asks the device (usbfs), and its absolute axes");
-        }
-        if facade {
-            found.extend([
-                "timing of VM exits (CPUID, I/O) and of traced calls",
-                "QEMU's PCI IDs to root reading config space through I/O ports",
-                "the q35 chipset's ICH9 (2009) device IDs behind the board's subsystem",
-                "the display's Bochs layout (registers, modes) behind its GPU name",
-                "udev's device database (Debian bases): the devices' true PCI IDs",
-                "Debian's own NVMe, DRM, USB and libata modules (Debian bases): QEMU's NVMe Identify data, display driver names, USB HID strings and default DVD-ROM",
-            ]);
-            found.push(self.uptime_giveaway(debian));
-            return found;
-        }
-        // Not covered by any entry: needed by Antinomie, outside QEMU options
-        // or beyond what the guest kernel can hide (docs/implementation/bases-and-stealth.md,
-        // "Guest stealth").
-        found.extend([
-            "timing of VM exits (CPUID, I/O) and of traced calls",
-            "the emulated display (Bochs or virtio-gpu)",
-            "q35 chipset layout, Red Hat PCI subsystem IDs on the chipset's devices",
-            "QEMU's ACPI tables to root (BXPC creator ID, fw_cfg in the DSDT)",
-            "the host CPU's family, model and feature flags behind the provider's CPU name",
-        ]);
-        found.push(self.uptime_giveaway(debian));
-        found
-    }
-
-    /// What still tells a cloud profile from an instance of the provider.
-    fn cloud_giveaways(&self, debian: bool) -> Vec<&'static str> {
-        let mut found =
-            vec!["the QEMU/KVM hypervisor, visible by design as on the provider's machines"];
-        if self.nat.network.is_empty() {
-            found.push("QEMU user-network addresses (10.0.2.x) on NAT");
-        }
-        found.extend([
-            "the metadata service answers only on a Routed network",
-            "the emulated display (Bochs or virtio-gpu), not the provider's Cirrus, QXL or Bochs",
-            "PCI subsystem IDs and the provider's own PCI bridges and balloon device",
-            "DNS servers inside the DHCP network, not the provider's",
-            "no provider agent process runs (files and stubs only)",
-        ]);
-        found.push(self.uptime_giveaway(debian));
-        found
-    }
-
-    /// What the boot's age leaves visible: a fresh boot, or the traces of its
-    /// clock model (docs/implementation/bases-and-stealth.md, "Aged uptime").
-    fn uptime_giveaway(&self, debian: bool) -> &'static str {
-        if self.boot_age_s == 0 {
-            return "a fresh boot: minutes of uptime";
-        }
-        match (self.resolved_clock(debian), BootAge::of(self), debian) {
-            (ClockModel::Continuous, _, true) => {
-                "the boot age's step to the present at the first launch: systemd's watchdogs \
-                 kill journald, udevd and logind for a timeout (in the journal; logind drops \
-                 its sessions), and processes started at boot see their clocks jump; input \
-                 and display event timestamps keep the kernel's monotonic clock"
-            }
-            (ClockModel::Continuous, _, false) => {
-                "the boot age's step to the present at the first launch: processes started at \
-                 boot see their clocks jump; input and display event timestamps keep the \
-                 kernel's monotonic clock"
-            }
-            (_, BootAge::Server, _) => {
-                "a server that slept for most of its uptime: CLOCK_BOOTTIME is ahead of \
-                 CLOCK_MONOTONIC by the age, the kernel log's timestamps not counting it, and \
-                 no suspend in the log or /sys/power/suspend_stats"
-            }
-            _ => {
-                "the boot age is a sleep: CLOCK_BOOTTIME ahead of CLOCK_MONOTONIC, the kernel \
-                 log's timestamps not counting it, and no suspend in the log or \
-                 /sys/power/suspend_stats"
-            }
-        }
     }
 
     /// This profile as the base and the host can boot it, and what changed:
@@ -1684,6 +1679,8 @@ impl StealthProfile {
         let fallbacks = self.fallbacks(base, host);
         for fallback in &fallbacks {
             match fallback.setting {
+                // Not produced here (it needs the VM's architecture).
+                FallbackSetting::Preset => {}
                 FallbackSetting::Firmware => fitted.firmware = Firmware::Bios,
                 FallbackSetting::DiskBus => fitted.disk_bus = DiskBus::Virtio,
                 FallbackSetting::Nat => fitted.nat = NatNetwork::default(),
@@ -1800,6 +1797,8 @@ impl StealthProfile {
 /// host or the profile itself cannot give.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FallbackSetting {
+    /// The preset itself: the IoT device on an x86-64 VM.
+    Preset,
     Firmware,
     DiskBus,
     Nat,
@@ -1865,8 +1864,13 @@ pub fn vm_fallbacks(
         } else {
             host
         };
-        vm.stealth
-            .fallbacks(&BaseSupport::from_list(&base.stealth_support), host)
+        let mut found = vm.stealth.arch_fallbacks(base.arch);
+        found.extend(
+            vm.stealth
+                .for_arch(base.arch)
+                .fallbacks(&BaseSupport::from_list(&base.stealth_support), host),
+        );
+        found
     })
 }
 
@@ -1890,12 +1894,24 @@ pub fn base_supporting<'a>(
         .filter(|base| arch.is_none_or(|arch| base.arch == arch))
         .find(|base| {
             let support = BaseSupport::from_list(&base.stealth_support);
+            // What no base of this architecture gives is not offered.
             !profile
-                .fallbacks(&support, host)
+                .arch_fallbacks(base.arch)
                 .iter()
+                .chain(&profile.for_arch(base.arch).fallbacks(&support, host))
                 .any(|fallback| fallback.setting == setting)
         })
 }
+
+/// Why an arm64 VM shows a fresh boot: the guest patch (0053) sets the
+/// boot's time back from the wall clock read at `timekeeping_init()`, and an
+/// arm64 guest has no persistent clock then (its RTC is read later), so it
+/// ignores the age. Passing it would change nothing; a guest change is needed.
+pub const ARM64_UPTIME: &str =
+    "the arm64 guest kernel ignores a boot age (it has no clock yet when it sets the boot's time)";
+
+/// Why an x86-64 VM cannot present the IoT device.
+const IOT_ARM64_ONLY: &str = "arm64 only (the catalog has no x86-64 IoT device)";
 
 /// Why an older base shows a fresh boot.
 const UPTIME_FRESH: &str = "the base's guest kernel does not take a boot age (rebuild it)";

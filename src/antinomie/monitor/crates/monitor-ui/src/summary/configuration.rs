@@ -53,11 +53,22 @@ pub(super) fn show(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
     );
     let base = crate::app::selected_base(snapshot, vm.base_identity.as_deref());
     let arch = crate::app::base_arch(snapshot, vm.base_identity.as_deref());
-    let giveaways = vm.stealth.giveaways_for(
-        arch,
-        vm.launch.fast_emulation,
-        base.is_some_and(|base| base.guest.is_some()),
-    );
+    // The profile as this VM starts it, with its own settings: what its
+    // configuration hides is not listed and what it causes is.
+    let host = if arch == antinomie_monitor_core::GuestArch::AARCH64 {
+        antinomie_monitor_core::stealth::HostSupport::cached_arm64()
+    } else {
+        antinomie_monitor_core::stealth::HostSupport::cached()
+    };
+    let support = base.map_or_else(antinomie_monitor_core::stealth::BaseSupport::all, |base| {
+        antinomie_monitor_core::stealth::BaseSupport::from_list(&base.stealth_support)
+    });
+    let (fitted, _) = vm.stealth.for_arch(arch).fitted(&support, host);
+    let giveaways = fitted.still_visible(&antinomie_monitor_core::stealth::VmView::of(
+        vm,
+        base,
+        host.ovmf.is_ok(),
+    ));
     // An arm64 VM shows the arm64 machine its profile presents.
     let shown = antinomie_monitor_core::stealth::arm64::shown_profile(
         &vm.stealth,
@@ -307,7 +318,7 @@ fn stealth(
         let preset = pill(ui, profile.preset.label(), theme::blue());
         if profile.preset == StealthPreset::Transparent {
             preset.on_hover_text(
-                "QEMU's own identity. Choose a Realistic preset in Configure… to hide it.",
+                "QEMU's own identity. Choose Desktop, Laptop or Server in Configure… to hide it.",
             );
         }
         if !fallbacks.is_empty() {
@@ -546,7 +557,7 @@ mod tests {
             "Storage and display",
             "Network and transport",
             "Device profile",
-            "Realistic desktop",
+            "Desktop",
             profile.identity.system_serial.as_str(),
         ] {
             assert!(
@@ -579,9 +590,7 @@ mod tests {
             "{texts:?}"
         );
         assert!(
-            texts
-                .iter()
-                .any(|text| text.starts_with("Transparent QEMU")),
+            texts.iter().any(|text| text.starts_with("Normal QEMU")),
             "{texts:?}"
         );
         assert!(

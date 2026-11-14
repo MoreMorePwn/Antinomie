@@ -244,6 +244,7 @@ impl MonitorApp {
                 &mut app.stealth_open,
                 &fallbacks,
                 "Edit…",
+                arch,
             );
         });
         super::stealth::launch_advice(ui, &mut app.draft);
@@ -433,20 +434,12 @@ impl MonitorApp {
     fn vm_stealth_window(&mut self, ctx: &egui::Context, creating: bool) {
         let editable = creating || self.snapshot.active_vm.as_ref() != Some(&self.draft.id);
         // What the VM's base boots with; none chosen yet offers all.
-        let base = selected_base(&self.snapshot, self.draft.base_identity.as_deref()).map_or(
-            antinomie_monitor_core::stealth::BaseSupport::all(),
-            |base| antinomie_monitor_core::stealth::BaseSupport::from_list(&base.stealth_support),
-        );
         let selected = selected_base(&self.snapshot, self.draft.base_identity.as_deref());
-        let current = selected.map(|base| base.id.clone());
-        let arch = selected.map_or_else(Default::default, BaseSummary::arch);
         let mut fit = super::stealth::Fit::new(
             &self.draft.stealth,
-            base,
+            &self.draft,
             &self.snapshot.bases,
-            current.as_deref(),
-            arch,
-            self.draft.launch.fast_emulation,
+            selected,
         );
         super::stealth::window(
             ctx,

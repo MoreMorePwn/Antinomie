@@ -389,7 +389,7 @@ fn the_vm_step_offers_the_device_profile_dropdown_with_every_preset() {
     app.getting_started.step = Step::Vm;
     let text = shown(&mut app, &ctx);
     // The default is what the old checkbox selected: a realistic desktop.
-    assert!(text.iter().any(|t| t == "Realistic desktop"), "{text:?}");
+    assert!(text.iter().any(|t| t == "Desktop"), "{text:?}");
     assert!(text.iter().any(|t| t == "Details\u{2026}"), "{text:?}");
     assert!(!text
         .iter()
@@ -399,7 +399,7 @@ fn the_vm_step_offers_the_device_profile_dropdown_with_every_preset() {
         StealthPreset::RealisticDesktop
     );
     // Opening the list shows every preset.
-    click_label(&mut app, &ctx, SIZE, "Realistic desktop");
+    click_label(&mut app, &ctx, SIZE, "Desktop");
     let text = shown(&mut app, &ctx);
     for preset in StealthPreset::ALL {
         assert!(
@@ -409,7 +409,7 @@ fn the_vm_step_offers_the_device_profile_dropdown_with_every_preset() {
         );
     }
     // The pick reaches the VM that is created.
-    click_label(&mut app, &ctx, SIZE, "Realistic server");
+    click_label(&mut app, &ctx, SIZE, "Server");
     click_label(&mut app, &ctx, SIZE, "Create VM");
     let vm = app
         .submitted

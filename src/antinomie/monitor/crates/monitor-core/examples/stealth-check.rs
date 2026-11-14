@@ -9,9 +9,10 @@
 //!   stealth-check abi BUNDLE NEW_DATA_DIR FIXTURES HEADER_DEBS|- [PRESET [ENTRY=VALUE...]]
 //!
 //! PROBE is the static `tests/monitor/stealth-probe` program; PRESET is
-//! `desktop` (default), `laptop`, `server`, `cloud` (the first provider's)
-//! or `transparent`; on an arm64 base the preset picks the arm64 machine
-//! (an Altra workstation or server, a Graviton2 instance); entries change
+//! `desktop` (default), `laptop`, `server`, `cloud` (the first provider's),
+//! `iot` (a Raspberry Pi, arm64 only) or `transparent`; on an arm64 base
+//! the preset picks the arm64 machine (an Altra workstation or server, a
+//! Graviton2 instance, a Raspberry Pi); entries change
 //! the preset: `firmware=bios|uefi|uefi-sb`, `disk=virtio|sata|nvme`,
 //! `nat=qemu|home`, `cdrom=on|off`, `smt=on|off`, `gpa=ADDRESS` (the
 //! bootstrap page), `machine=ID` (that catalog machine's realistic profile
@@ -191,6 +192,7 @@ fn profile(args: &[&str]) -> Result<(StealthProfile, Option<u64>), String> {
         "laptop" => StealthPreset::RealisticLaptop,
         "server" => StealthPreset::RealisticServer,
         "cloud" => StealthPreset::CloudVps,
+        "iot" => StealthPreset::Iot,
         "transparent" => StealthPreset::Transparent,
         other => return Err(format!("unknown preset {other}")),
     };
