@@ -58,6 +58,32 @@ fn hover_at(app: &mut MonitorApp, ctx: &egui::Context, pos: egui::Pos2) -> egui:
     output
 }
 
+/// The texts the help icon on the row of `of` (right of it) shows on hover.
+fn help_beside(
+    app: &mut MonitorApp,
+    ctx: &egui::Context,
+    of: egui::Rect,
+) -> Vec<(String, egui::Rect)> {
+    let shown = texts(&settle(app, ctx));
+    let icon = shown
+        .iter()
+        // On its row, or at the end of its last line when it wraps.
+        .filter(|(text, rect)| {
+            text == egui_phosphor::regular::QUESTION
+                && rect.center().y > of.top() - 6.0
+                && rect.center().y < of.bottom() + 6.0
+                && rect.left() > of.left()
+        })
+        .min_by(|a, b| {
+            a.1.left_top()
+                .distance(of.right_bottom())
+                .total_cmp(&b.1.left_top().distance(of.right_bottom()))
+        })
+        .unwrap_or_else(|| panic!("no help icon beside {of:?}: {shown:?}"))
+        .1;
+    texts(&hover_at(app, ctx, icon.center()))
+}
+
 fn rects_filled_with(output: &egui::FullOutput, colour: egui::Color32) -> Vec<egui::Rect> {
     fn walk(shape: &egui::Shape, colour: egui::Color32, out: &mut Vec<egui::Rect>) {
         match shape {
@@ -227,7 +253,7 @@ fn settings_pages_keep_no_paragraph_only_short_lines() {
 }
 
 #[test]
-fn the_tcg_explanation_is_in_the_tooltip_of_a_short_line() {
+fn the_tcg_explanation_is_on_the_help_icon_of_a_short_line() {
     let ctx = context();
     let mut app = app();
     app.settings_open = true;
@@ -241,7 +267,7 @@ fn the_tcg_explanation_is_in_the_tooltip_of_a_short_line() {
     assert!(!shown
         .iter()
         .any(|(text, _)| text.contains("Raise the multiplier")));
-    let tip = texts(&hover_at(&mut app, &ctx, line.center()));
+    let tip = help_beside(&mut app, &ctx, line);
     assert!(
         tip.iter()
             .any(|(text, _)| text.contains("Raise the multiplier when a slow TCG boot")),
@@ -263,7 +289,7 @@ fn use_tcg_when_kvm_is_unavailable_is_on_for_a_new_install_and_an_old_choice_sta
 }
 
 #[test]
-fn a_time_limit_row_has_no_default_text_and_its_reset_tooltip_names_the_default() {
+fn a_time_limit_row_has_no_default_text_and_its_reset_help_names_the_default() {
     use antinomie_monitor_core::analysis_tools::ToolStatus;
     let ctx = context();
     let mut app = app();
@@ -283,7 +309,7 @@ fn a_time_limit_row_has_no_default_text_and_its_reset_tooltip_names_the_default(
         .find(|(text, _)| text == "Reset")
         .expect("a Reset button")
         .1;
-    let tip = texts(&hover_at(&mut app, &ctx, reset.center()));
+    let tip = help_beside(&mut app, &ctx, reset);
     assert!(
         tip.iter()
             .any(|(text, _)| text.contains("default time (240 s)")),

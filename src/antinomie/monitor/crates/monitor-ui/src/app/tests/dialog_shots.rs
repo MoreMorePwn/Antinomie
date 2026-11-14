@@ -3,6 +3,7 @@
 //! screenshots in each theme and size. Needs an X11 display; exits by itself.
 //!
 //! ANTINOMIE_QA_DIALOG = settings | snapshots | run
+//! ANTINOMIE_QA_PIN = text of a help icon to open pinned,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1280x820,
 //! ANTINOMIE_QA_PAGE = settings page name (or `upload` for run), ANTINOMIE_QA_SECONDS = 25.
 use super::*;
@@ -56,6 +57,10 @@ fn native_dialog_fixture() {
         },
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
+            // ANTINOMIE_QA_PIN: a help icon whose text holds this opens pinned.
+            let pin = std::env::var("ANTINOMIE_QA_PIN").unwrap_or_default();
+            cc.egui_ctx
+                .data_mut(|data| data.insert_temp(crate::widgets::qa_pin_key(), pin));
             let mut app = analysis_setup_fixture();
             app.settings.set_theme(theme_choice);
             theme::apply_theme(&cc.egui_ctx, theme_choice);

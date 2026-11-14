@@ -6,6 +6,7 @@
 use super::{theme, Model};
 use crate::widgets::fit_table::{self, Cell};
 use crate::widgets::fit_table::{Col, FitBuilder};
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::strings_regex::{
     builtin_patterns, Category, Config, CustomPattern, Origin, RuleSet, Scan, CUSTOM_MAX_COUNT,
     PATTERN_MAX_LEN,
@@ -180,10 +181,12 @@ impl Model {
             // Add is laid out first, at the width its own text needs; the
             // expression field then fills what is left.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                add = ui
-                    .add_enabled(ready, egui::Button::new("Add"))
-                    .on_hover_text("Rust regex syntax, matched against every string")
-                    .clicked();
+                add = crate::widgets::with_help(
+                    ui,
+                    "Rust regex syntax, matched against every string",
+                    |ui| ui.add_enabled(ready, egui::Button::new("Add")),
+                )
+                .clicked();
                 ui.add(
                     egui::TextEdit::singleline(pattern)
                         .hint_text(crate::theme::placeholder(
@@ -292,7 +295,7 @@ impl Model {
                     let (id, category, name, regex) = patterns[row.index()];
                     let mut enabled = self.regex.config.is_enabled(id);
                     row.col(|ui| {
-                        if ui.checkbox(&mut enabled, "").on_hover_text(id).changed() {
+                        if ui.checkbox(&mut enabled, "").name_tip(id).changed() {
                             toggle = Some((id, enabled));
                         }
                     });

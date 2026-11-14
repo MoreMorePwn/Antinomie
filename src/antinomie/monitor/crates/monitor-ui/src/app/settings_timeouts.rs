@@ -34,11 +34,13 @@ impl MonitorApp {
                 };
                 self.settings.analysis_limits.timeouts.set(tool, stored);
             }
-            if ui
-                .add_enabled(set != 0, egui::Button::new("Reset"))
-                .on_hover_text(format!("Back to the default time ({default} s)"))
-                .on_disabled_hover_text(format!("Already the default time ({default} s)"))
-                .clicked()
+            if crate::widgets::with_help_or(
+                ui,
+                format!("Back to the default time ({default} s)"),
+                format!("Already the default time ({default} s)"),
+                |ui| ui.add_enabled(set != 0, egui::Button::new("Reset")),
+            )
+            .clicked()
             {
                 self.settings.analysis_limits.timeouts.set(tool, 0);
             }
@@ -76,11 +78,13 @@ impl MonitorApp {
                         .timeouts
                         .set(engine, stored);
                 }
-                if ui
-                    .add_enabled(set != 0, egui::Button::new("Reset"))
-                    .on_hover_text(format!("Back to the default time ({default} s)"))
-                    .on_disabled_hover_text(format!("Already the default time ({default} s)"))
-                    .clicked()
+                if crate::widgets::with_help_or(
+                    ui,
+                    format!("Back to the default time ({default} s)"),
+                    format!("Already the default time ({default} s)"),
+                    |ui| ui.add_enabled(set != 0, egui::Button::new("Reset")),
+                )
+                .clicked()
                 {
                     self.triage.detection_settings().timeouts.set(engine, 0);
                 }
@@ -99,14 +103,16 @@ impl MonitorApp {
         let mut shown = self.triage.detection_settings().evidence_limit();
         ui.horizontal_wrapped(|ui| {
             ui.label("Saved hits per rule");
-            if ui
-                .add(egui::DragValue::new(&mut shown).range(EVIDENCE_LIMIT_RANGE))
-                .on_hover_text(format!(
+            if crate::widgets::with_help(
+                ui,
+                format!(
                     "{} to {}",
                     EVIDENCE_LIMIT_RANGE.start(),
                     EVIDENCE_LIMIT_RANGE.end()
-                ))
-                .changed()
+                ),
+                |ui| ui.add(egui::DragValue::new(&mut shown).range(EVIDENCE_LIMIT_RANGE)),
+            )
+            .changed()
             {
                 self.triage.detection_settings().evidence_limit = if shown == EVIDENCE_LIMIT_DEFAULT
                 {
@@ -115,11 +121,13 @@ impl MonitorApp {
                     shown
                 };
             }
-            if ui
-                .add_enabled(set != 0, egui::Button::new("Reset"))
-                .on_hover_text(format!("Back to the default ({EVIDENCE_LIMIT_DEFAULT})"))
-                .on_disabled_hover_text(format!("Already the default ({EVIDENCE_LIMIT_DEFAULT})"))
-                .clicked()
+            if crate::widgets::with_help_or(
+                ui,
+                format!("Back to the default ({EVIDENCE_LIMIT_DEFAULT})"),
+                format!("Already the default ({EVIDENCE_LIMIT_DEFAULT})"),
+                |ui| ui.add_enabled(set != 0, egui::Button::new("Reset")),
+            )
+            .clicked()
             {
                 self.triage.detection_settings().evidence_limit = 0;
             }

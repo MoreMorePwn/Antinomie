@@ -197,12 +197,9 @@ fn filter_form(
     form_grid("settings_routes_filter", ui).show(ui, |ui| {
         ui.label("Abuse filter");
         ui.vertical(|ui| {
-            ui.checkbox(&mut filter.enabled, "Limit what a sample can do through Internet, Tor, VPN and SOCKS5 routes")
-                .on_hover_text(
-                    "On by default. Stops a detonation from sending spam, scanning, \
+            crate::widgets::with_help(ui, "On by default. Stops a detonation from sending spam, scanning, \
                      flooding or keeping a connection open after the time limit. What it \
-                     refused is counted in the run's network route and report.",
-                );
+                     refused is counted in the run's network route and report.", |ui| ui.checkbox(&mut filter.enabled, "Limit what a sample can do through Internet, Tor, VPN and SOCKS5 routes"));
         });
         ui.end_row();
         ui.add_enabled_ui(filter.enabled, |ui| {
@@ -218,9 +215,8 @@ fn filter_form(
                         .collect::<Vec<_>>()
                         .join(", ")
                 });
-                if ui
-                    .add(text_field(shown).desired_width(crate::theme::edit_width(260.0)))
-                    .on_hover_text("Outbound TCP ports that are refused, separated by commas. Default: mail (25, 26, 465, 587, 2525).")
+                if crate::widgets::with_help(ui, "Outbound TCP ports that are refused, separated by commas. Default: mail (25, 26, 465, 587, 2525).", |ui| ui
+                    .add(text_field(shown).desired_width(crate::theme::edit_width(260.0))))
                     .changed()
                 {
                     if let Ok(ports) = parse_ports(shown) {
@@ -243,8 +239,7 @@ fn filter_form(
             ui.add_enabled_ui(filter.enabled, |ui| {
                 ui.label(label);
             });
-            ui.add_enabled(filter.enabled, egui::DragValue::new(value).range(range))
-                .on_hover_text(tip);
+            crate::widgets::with_help(ui, tip, |ui| ui.add_enabled(filter.enabled, egui::DragValue::new(value).range(range)));
             ui.end_row();
         }
     });
@@ -317,12 +312,9 @@ impl MonitorApp {
     fn route_test(&mut self, ui: &mut egui::Ui, kind: RouteKind) {
         let busy = self.routes.testing.is_some();
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(!busy, egui::Button::new("Test"))
-                .on_hover_text(
-                    "Brings the route up the way a run would and connects through it to the \
-                     check target. VPN starts wireproxy, and Tor its own tor, for the test and stops it again.",
-                )
+            if crate::widgets::with_help(ui, "Brings the route up the way a run would and connects through it to the \
+                     check target. VPN starts wireproxy, and Tor its own tor, for the test and stops it again.", |ui| ui
+                .add_enabled(!busy, egui::Button::new("Test")))
                 .clicked()
             {
                 self.routes.start_test(kind, self.options.data_dir.clone(), ui.ctx());
@@ -373,26 +365,33 @@ impl MonitorApp {
         form_grid("settings_routes_default", ui).show(ui, |ui| {
             ui.label("Default route");
             ui.vertical(|ui| {
-                egui::ComboBox::from_id_salt("route-default")
-                    .selected_text(draft.default_route.label())
-                    .show_ui(ui, |ui| {
-                        for kind in RouteKind::ALL {
-                            ui.selectable_value(&mut draft.default_route, kind, kind.label())
-                                .on_hover_text(kind.explain());
-                        }
-                    })
-                    .response
-                    .on_hover_text(draft.default_route.explain());
+                let routes = crate::widgets::list_help(
+                    "Default route",
+                    RouteKind::ALL
+                        .iter()
+                        .map(|kind| (kind.label(), kind.explain())),
+                );
+                crate::widgets::with_help(ui, routes, |ui| {
+                    egui::ComboBox::from_id_salt("route-default")
+                        .selected_text(draft.default_route.label())
+                        .show_ui(ui, |ui| {
+                            for kind in RouteKind::ALL {
+                                ui.selectable_value(&mut draft.default_route, kind, kind.label());
+                            }
+                        })
+                        .response
+                });
                 hint(ui, draft.default_route.summary());
             });
             ui.end_row();
             ui.label("Private addresses");
             ui.vertical(|ui| {
-                ui.checkbox(&mut draft.allow_lan, "Allow private network addresses")
-                    .on_hover_text(
-                        "Off: the Internet route reaches public addresses only, never this \
+                crate::widgets::with_help(
+                    ui,
+                    "Off: the Internet route reaches public addresses only, never this \
                          computer or your local network.",
-                    );
+                    |ui| ui.checkbox(&mut draft.allow_lan, "Allow private network addresses"),
+                );
             });
             ui.end_row();
         });
@@ -416,10 +415,7 @@ impl MonitorApp {
             if draft.tor.mode == TorMode::Own {
                 ui.label("Tor program");
                 ui.vertical(|ui| {
-                    ui.add(text_field(&mut draft.tor.program).desired_width(crate::theme::edit_width(260.0)))
-                        .on_hover_text(
-                            "Path to a tor program; empty uses PATH, then the copy installed below.",
-                        );
+                    crate::widgets::with_help(ui, "Path to a tor program; empty uses PATH, then the copy installed below.", |ui| ui.add(text_field(&mut draft.tor.program).desired_width(crate::theme::edit_width(260.0))));
                     hint_tip(
                         ui,
                         "Started for each run, stopped when it ends.",
@@ -430,17 +426,13 @@ impl MonitorApp {
             } else {
                 ui.label("SOCKS address");
                 ui.vertical(|ui| {
-                    ui.add(text_field(&mut draft.tor.socks).desired_width(crate::theme::edit_width(260.0)))
-                        .on_hover_text(
-                            "Where your Tor listens (a tor service uses 127.0.0.1:9050). Antinomie \
-                             does not start it; names are resolved by Tor.",
-                        );
+                    crate::widgets::with_help(ui, "Where your Tor listens (a tor service uses 127.0.0.1:9050). Antinomie \
+                             does not start it; names are resolved by Tor.", |ui| ui.add(text_field(&mut draft.tor.socks).desired_width(crate::theme::edit_width(260.0))));
                 });
                 ui.end_row();
             }
             ui.label("Check target");
-            ui.add(text_field(&mut draft.tor.probe).desired_width(crate::theme::edit_width(260.0)))
-                .on_hover_text("host:port connected through Tor before a run; empty checks only that Tor answers.");
+            crate::widgets::with_help(ui, "host:port connected through Tor before a run; empty checks only that Tor answers.", |ui| ui.add(text_field(&mut draft.tor.probe).desired_width(crate::theme::edit_width(260.0))));
             ui.end_row();
         });
         if self.routes.draft.tor.mode == TorMode::Own {
@@ -457,28 +449,19 @@ impl MonitorApp {
         form_grid("settings_routes_vpn", ui).show(ui, |ui| {
             ui.label("WireGuard proxy program");
             ui.vertical(|ui| {
-                ui.add(text_field(&mut draft.vpn.wireproxy).desired_width(crate::theme::edit_width(260.0)))
-                    .on_hover_text(
-                        "Path to the wireproxy program; empty uses PATH, then the copy installed below.",
-                    );
+                crate::widgets::with_help(ui, "Path to the wireproxy program; empty uses PATH, then the copy installed below.", |ui| ui.add(text_field(&mut draft.vpn.wireproxy).desired_width(crate::theme::edit_width(260.0))));
             });
             ui.end_row();
             ui.label("Configuration file");
             ui.vertical(|ui| {
-                ui.add(text_field(&mut draft.vpn.config).desired_width(crate::theme::edit_width(260.0)))
-                    .on_hover_text(
-                        "A wireproxy configuration with your WireGuard peer and a [Socks5] section. \
+                crate::widgets::with_help(ui, "A wireproxy configuration with your WireGuard peer and a [Socks5] section. \
                          Antinomie starts wireproxy for each run and stops it afterwards. \
-                         WireGuard runs in userspace, so no root is needed.",
-                    );
+                         WireGuard runs in userspace, so no root is needed.", |ui| ui.add(text_field(&mut draft.vpn.config).desired_width(crate::theme::edit_width(260.0))));
                 hint(ui, "Needs [Socks5] with BindAddress = 127.0.0.1:25344.");
             });
             ui.end_row();
             ui.label("Check target");
-            ui.add(text_field(&mut draft.vpn.probe).desired_width(crate::theme::edit_width(260.0)))
-                .on_hover_text(
-                    "host:port connected through the tunnel before a run; empty skips it.",
-                );
+            crate::widgets::with_help(ui, "host:port connected through the tunnel before a run; empty skips it.", |ui| ui.add(text_field(&mut draft.vpn.probe).desired_width(crate::theme::edit_width(260.0))));
             ui.end_row();
             ui.label("OpenVPN");
             hint(ui, "Not supported.").on_hover_text(
@@ -520,8 +503,7 @@ impl MonitorApp {
             });
             ui.end_row();
             ui.label("Check target");
-            ui.add(text_field(&mut draft.socks5.probe).desired_width(crate::theme::edit_width(260.0)))
-                .on_hover_text("host:port connected through the proxy before a run; empty checks only the proxy login.");
+            crate::widgets::with_help(ui, "host:port connected through the proxy before a run; empty checks only the proxy login.", |ui| ui.add(text_field(&mut draft.socks5.probe).desired_width(crate::theme::edit_width(260.0))));
             ui.end_row();
         });
         self.route_test(ui, RouteKind::Socks5);
@@ -553,17 +535,13 @@ impl MonitorApp {
                 ui.end_row();
                 ui.label("Port offset");
                 ui.vertical(|ui| {
-                    ui.add(egui::DragValue::new(&mut draft.inetsim.port_offset).range(0..=60000))
-                        .on_hover_text(
-                            "A guest connection to port P goes to INetSim's port P plus the offset, \
-                             so INetSim can run as your user on high ports (bind its services there).",
-                        );
+                    crate::widgets::with_help(ui, "A guest connection to port P goes to INetSim's port P plus the offset, \
+                             so INetSim can run as your user on high ports (bind its services there).", |ui| ui.add(egui::DragValue::new(&mut draft.inetsim.port_offset).range(0..=60000)));
                 });
                 ui.end_row();
             }
             ui.label("DNS answers");
-            ui.add(text_field(&mut draft.inetsim.sinkhole).desired_width(crate::theme::edit_width(160.0)))
-                .on_hover_text("Every name resolves to this address. It is never connected to.");
+            crate::widgets::with_help(ui, "Every name resolves to this address. It is never connected to.", |ui| ui.add(text_field(&mut draft.inetsim.sinkhole).desired_width(crate::theme::edit_width(160.0))));
             ui.end_row();
             ui.label("Program");
             inetsim_chip(ui, "inetsim", &found_inetsim);

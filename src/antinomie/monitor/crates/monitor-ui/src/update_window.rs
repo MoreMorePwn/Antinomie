@@ -120,15 +120,15 @@ impl UpdateWindow {
                 } else if !*outbound && self.answer.is_none() {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new("Downloads are off.").color(theme::muted()));
-                        if ui
-                            .button("Allow downloads")
-                            .on_hover_text(
-                                "Antinomie contacts no server unless you allow it. This turns on \
+                        if crate::widgets::with_help(
+                            ui,
+                            "Antinomie contacts no server unless you allow it. This turns on \
                                  Tools > Settings > Detection > Allow outbound catalog and rule \
                                  downloads. The check sends one request to api.github.com, only \
                                  when you ask.",
-                            )
-                            .clicked()
+                            |ui| ui.button("Allow downloads"),
+                        )
+                        .clicked()
                         {
                             *outbound = true;
                             ask = true;
@@ -138,8 +138,8 @@ impl UpdateWindow {
                     answer_text(ui, self.answer.as_ref());
                 }
                 ui.add_space(6.0);
-                if ui
-                    .add_enabled(
+                if crate::widgets::with_help(ui, "Sends one request to api.github.com", |ui| {
+                    ui.add_enabled(
                         self.worker.is_none() && *outbound,
                         egui::Button::new(if self.answer.is_some() {
                             "Check again"
@@ -147,8 +147,8 @@ impl UpdateWindow {
                             "Check now"
                         }),
                     )
-                    .on_hover_text("Sends one request to api.github.com")
-                    .clicked()
+                })
+                .clicked()
                 {
                     ask = true;
                 }

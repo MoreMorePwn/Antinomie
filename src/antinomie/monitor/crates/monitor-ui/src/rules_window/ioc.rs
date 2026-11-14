@@ -86,10 +86,12 @@ impl Model {
                 Some(masked) => ui.colored_label(theme::good(), format!("set ({masked})")),
                 None => ui.colored_label(theme::neutral_accent(), "not set"),
             };
-            if ui
-                .button("API keys…")
-                .on_hover_text("Open the API keys window to set the abuse.ch Auth-Key.")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "Open the API keys window to set the abuse.ch Auth-Key.",
+                |ui| ui.button("API keys…"),
+            )
+            .clicked()
             {
                 self.requested = Some(super::RulesAction::ApiKeys);
             }
@@ -99,15 +101,7 @@ impl Model {
         let busy = self.job.is_some();
         ui.horizontal_wrapped(|ui| {
             let has_key = self.ioc.key_masked.is_some();
-            if ui
-                .add_enabled(
-                    !busy,
-                    egui::Button::new(
-                        RichText::new("Download / Update all").color(theme::palette().primary_text),
-                    )
-                    .fill(theme::primary()),
-                )
-                .on_hover_text({
+            if crate::widgets::with_help(ui, {
                     // A typical size: the real sizes are asked when it starts.
                     let typical: u64 = self
                         .ioc
@@ -125,22 +119,27 @@ impl Model {
                         },
                         crate::values::short_size(typical)
                     )
-                })
+                }, |ui| ui
+                .add_enabled(
+                    !busy,
+                    egui::Button::new(
+                        RichText::new("Download / Update all").color(theme::palette().primary_text),
+                    )
+                    .fill(theme::primary()),
+                ))
                 .clicked()
             {
                 self.ioc_update(data_dir, *outbound, None);
             }
             if busy
-                && ui
-                    .button("Cancel")
-                    .on_hover_text("Stop the running download; nothing is changed.")
+                && crate::widgets::with_help(ui, "Stop the running download; nothing is changed.", |ui| ui
+                    .button("Cancel"))
                     .clicked()
             {
                 self.cancel_job();
             }
-            if ui
-                .button("Open datasets folder")
-                .on_hover_text("Show the folder where the datasets are kept.")
+            if crate::widgets::with_help(ui, "Show the folder where the datasets are kept.", |ui| ui
+                .button("Open datasets folder"))
                 .clicked()
             {
                 let root = ioc::feeds::root(data_dir);

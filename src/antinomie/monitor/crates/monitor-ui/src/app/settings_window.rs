@@ -6,6 +6,7 @@ use super::dialogs::{form_grid, text_size_control};
 use super::widgets::hint_tip;
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 use crate::widgets::{self, chip, Tone};
 
 /// The pages of the Settings window, in list order.
@@ -131,14 +132,13 @@ impl MonitorApp {
                 ui.vertical(|ui| {
                     let mut value = self.settings.analysis_limits.get(field.setting);
                     let speed = f64::from((field.max - field.min) / 200).max(1.0);
-                    let changed = ui
+                    let changed = crate::widgets::with_help(ui, format!("{} to {} {}", field.min, field.max, field.unit), |ui| ui
                         .add(
                             egui::DragValue::new(&mut value)
                                 .range(field.min..=field.max)
                                 .speed(speed)
                                 .suffix(format!(" {}", field.unit)),
-                        )
-                        .on_hover_text(format!("{} to {} {}", field.min, field.max, field.unit))
+                        ))
                         .changed();
                     if changed {
                         self.settings.analysis_limits.set(field.setting, value);
@@ -153,16 +153,13 @@ impl MonitorApp {
             }
             ui.label("Ghidra for Disassembly");
             ui.vertical(|ui| {
-                ui.checkbox(
-                    &mut self.settings.analysis_limits.ghidra_disassembly,
-                    "List with Ghidra when Decompilation is not selected",
-                )
-                .on_hover_text(
-                    "A run with Disassembly but without Decompilation also starts Ghidra, which lists \
+                crate::widgets::with_help(ui, "A run with Disassembly but without Decompilation also starts Ghidra, which lists \
                      every architecture with labels and cross references. The built-in rows show first. \
                      Needs Ghidra (Manage tools); the time limit and the listing size apply. \
-                     With Decompilation selected there is only the one Ghidra run, whatever this says.",
-                );
+                     With Decompilation selected there is only the one Ghidra run, whatever this says.", |ui| ui.checkbox(
+                    &mut self.settings.analysis_limits.ghidra_disassembly,
+                    "List with Ghidra when Decompilation is not selected",
+                ));
             });
             ui.end_row();
         });
@@ -299,7 +296,7 @@ impl MonitorApp {
                     |ui| {
                         save = ui
                             .add_enabled(stopped, primary_button("Save settings"))
-                            .on_disabled_hover_text("Stop the running VM to save settings.")
+                            .reason_tip("Stop the running VM to save settings.")
                             .clicked();
                         close = ui.button("Close").clicked();
                     },
@@ -332,11 +329,16 @@ impl MonitorApp {
             self.appearance_rows(ui, ctx);
             self.time_zone_row(ui);
             ui.label("Trace colors");
-            ui.checkbox(
-                &mut self.settings.trace_colors,
-                "Color syscall rows by category",
-            )
-            .on_hover_text("Tint each syscall by its category, like Wireshark's coloring rules");
+            crate::widgets::with_help(
+                ui,
+                "Tint each syscall by its category, like Wireshark's coloring rules",
+                |ui| {
+                    ui.checkbox(
+                        &mut self.settings.trace_colors,
+                        "Color syscall rows by category",
+                    )
+                },
+            );
             ui.end_row();
         });
     }
@@ -450,11 +452,16 @@ impl MonitorApp {
         });
         ui.end_row();
         ui.label("Toolbar");
-        ui.checkbox(
-            &mut self.settings.minimal_toolbar,
-            "Minimal toolbar (icons only)",
-        )
-        .on_hover_text("Show only icons on the toolbar buttons; the names are in the hover text.");
+        crate::widgets::with_help(
+            ui,
+            "Show only icons on the toolbar buttons; the names are in the hover text.",
+            |ui| {
+                ui.checkbox(
+                    &mut self.settings.minimal_toolbar,
+                    "Minimal toolbar (icons only)",
+                )
+            },
+        );
         ui.end_row();
     }
 
@@ -483,12 +490,11 @@ impl MonitorApp {
                 }
                 ui.end_row();
                 ui.label("Recording quota");
-                ui.add(
+                crate::widgets::with_help(ui, "The most disk space the recordings may use.", |ui| ui.add(
                     egui::DragValue::new(&mut self.settings.quota_gib)
                         .range(1..=4096)
                         .suffix(" GiB"),
-                )
-                .on_hover_text("The most disk space the recordings may use.");
+                ));
                 ui.end_row();
                 if let Some(path) = &self.snapshot.capture_dir {
                     ui.label("Recording");
@@ -504,22 +510,18 @@ impl MonitorApp {
             theme::section(ui, "Limits and timing");
             form_grid("settings_recording_limits", ui).show(ui, |ui| {
                 ui.label("Process cores: default budget");
-                ui.add(
+                crate::widgets::with_help(ui, "Stored-byte budget a process core starts with. Each guest accepts up to a maximum of its own, so the budget in effect can be lower.", |ui| ui.add(
                     egui::DragValue::new(&mut self.settings.core_budget_mib)
                         .range(1..=1024)
                         .suffix(" MiB"),
-                )
-                .on_hover_text(
-                    "Stored-byte budget a process core starts with. Each guest accepts up to a maximum of its own, so the budget in effect can be lower.",
-                );
+                ));
                 ui.end_row();
                 ui.label("Shutdown timeout");
-                ui.add(
+                crate::widgets::with_help(ui, "How long a VM is given to shut down before it is stopped.", |ui| ui.add(
                     egui::DragValue::new(&mut self.settings.timeout)
                         .range(1..=120)
                         .suffix(" s"),
-                )
-                .on_hover_text("How long a VM is given to shut down before it is stopped.");
+                ));
                 ui.end_row();
             });
         });
@@ -546,24 +548,21 @@ impl MonitorApp {
                     self.settings.live_detection_minutes = minutes.clamp(MIN, MAX);
                 }
             });
-        })
-        .response
-        .on_hover_text(
-            "How often the detection engines scan a run whose program is still running (at least 2 minutes). Off scans only when the run ends. Scan now on the Detection tab scans at once; the scan at the end of the run always happens.",
-        );
+            crate::widgets::help(
+                ui,
+                "How often the detection engines scan a run whose program is still running (at least 2 minutes).\n\nOff scans only when the run ends. Scan now on the Detection tab scans at once; the scan at the end of the run always happens.",
+            );
+        });
     }
 
     fn detection_page(&mut self, ui: &mut egui::Ui) {
         form_grid("settings_detection", ui).show(ui, |ui| {
             ui.label("After a run");
             ui.vertical(|ui| {
-                ui.checkbox(
+                crate::widgets::with_help(ui, "Scans a run with YARA, IDS and Sigma once its evidence is ready, and again when the installed rule packs change. A run whose VM stopped is scanned with what it recorded, and the result says so. Scan still works when this is off.", |ui| ui.checkbox(
                     &mut self.settings.automatic_detection,
                     "Scan runs with IDS and Sigma when they end",
-                )
-                .on_hover_text(
-                    "Scans a run with YARA, IDS and Sigma once its evidence is ready, and again when the installed rule packs change. A run whose VM stopped is scanned with what it recorded, and the result says so. Scan still works when this is off.",
-                );
+                ));
             });
             ui.end_row();
             ui.label("While a program runs");
@@ -571,13 +570,10 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Downloads");
             ui.vertical(|ui| {
-                ui.checkbox(
+                crate::widgets::with_help(ui, "Only the Detection rules Check and Download buttons use the network. Scans stay offline.", |ui| ui.checkbox(
                     &mut self.settings.outbound_catalog,
                     "Allow outbound catalog and rule downloads",
-                )
-                .on_hover_text(
-                    "Only the Detection rules Check and Download buttons use the network. Scans stay offline.",
-                );
+                ));
             });
             ui.end_row();
             ui.label("Rule packs");
@@ -608,42 +604,30 @@ impl MonitorApp {
         form_grid("settings_notifications", ui).show(ui, |ui| {
             ui.label("Live findings");
             ui.vertical(|ui| {
-                ui.checkbox(
+                crate::widgets::with_help(ui, "The first HIGH finding of each rule in a run that is still going raises one toast; later matches of the same rule add ×N to it. Applies at once.", |ui| ui.checkbox(
                     &mut self.settings.toast_high_findings,
                     "Toast for live HIGH findings",
-                )
-                .on_hover_text(
-                    "The first HIGH finding of each rule in a run that is still going raises one toast; later matches of the same rule add ×N to it. Applies at once.",
-                );
+                ));
             });
             ui.end_row();
             ui.label("Runs");
             ui.vertical(|ui| {
-                ui.checkbox(
+                crate::widgets::with_help(ui, "One toast per run when its program tree really ends: green for exit 0, neutral for another exit code, a stop or a time limit, a warning for a crash or a kill. It has Open Triage, and Open sample for a library sample. Applies at once.", |ui| ui.checkbox(
                     &mut self.settings.toast_run_finished,
                     "Toast when a run finishes",
-                )
-                .on_hover_text(
-                    "One toast per run when its program tree really ends: green for exit 0, neutral for another exit code, a stop or a time limit, a warning for a crash or a kill. It has Open Triage, and Open sample for a library sample. Applies at once.",
-                );
+                ));
             });
             ui.end_row();
             ui.label("Start");
             ui.vertical(|ui| {
-                ui.checkbox(
+                crate::widgets::with_help(ui, "Start asks first when the VM has no snapshot, because then nothing can restore the disk and what the program changes stays in it. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.", |ui| ui.checkbox(
                     &mut self.settings.warn_no_snapshot,
                     "Warn before starting a VM with no snapshot",
-                )
-                .on_hover_text(
-                    "Start asks first when the VM has no snapshot, because then nothing can restore the disk and what the program changes stays in it. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.",
-                );
-                ui.checkbox(
+                ));
+                crate::widgets::with_help(ui, "Clear in Activity asks first, because the saved log cannot be brought back. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.", |ui| ui.checkbox(
                     &mut self.settings.warn_clear_activity,
                     "Ask before clearing Activity",
-                )
-                .on_hover_text(
-                    "Clear in Activity asks first, because the saved log cannot be brought back. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.",
-                );
+                ));
             });
             ui.end_row();
         });
@@ -670,13 +654,10 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Imported files");
             ui.vertical(|ui| {
-                ui.checkbox(
+                crate::widgets::with_help(ui, "After Add file, sends the file's SHA-256 (nothing else) to MalwareBazaar with your abuse.ch key (Tools > API keys) and keeps its signature as a family candidate, shown as looked up by hash. Off by default; without a key nothing is sent.", |ui| ui.checkbox(
                     &mut self.settings.sample_hash_lookup,
                     "Look imported files up at MalwareBazaar",
-                )
-                .on_hover_text(
-                    "After Add file, sends the file's SHA-256 (nothing else) to MalwareBazaar with your abuse.ch key (Tools > API keys) and keeps its signature as a family candidate, shown as looked up by hash. Off by default; without a key nothing is sent.",
-                );
+                ));
             });
             ui.end_row();
         });
@@ -814,38 +795,54 @@ impl MonitorApp {
         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
             form_grid("settings_disks", ui).show(ui, |ui| {
                 ui.label("Extraction limit");
-                ui.add(
-                    egui::DragValue::new(&mut self.settings.disks.extract_cap_mib)
-                        .range(1..=4096)
-                        .suffix(" MiB"),
-                )
-                .on_hover_text("Largest guest file the Disks tab extracts without asking");
+                crate::widgets::with_help(
+                    ui,
+                    "Largest guest file the Disks tab extracts without asking",
+                    |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut self.settings.disks.extract_cap_mib)
+                                .range(1..=4096)
+                                .suffix(" MiB"),
+                        )
+                    },
+                );
                 ui.end_row();
                 ui.label("Hash limit");
-                ui.add(
-                    egui::DragValue::new(&mut self.settings.disks.hash_cap_mib)
-                        .range(1..=1024)
-                        .suffix(" MiB"),
-                )
-                .on_hover_text("Largest guest file the Disks tab hashes on request");
+                crate::widgets::with_help(
+                    ui,
+                    "Largest guest file the Disks tab hashes on request",
+                    |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut self.settings.disks.hash_cap_mib)
+                                .range(1..=1024)
+                                .suffix(" MiB"),
+                        )
+                    },
+                );
                 ui.end_row();
                 ui.label("Dump hashes");
                 ui.vertical(|ui| {
-                    ui.checkbox(
-                        &mut self.settings.disks.dump_hash,
-                        "SHA-256 of each disk dump",
-                    )
-                    .on_hover_text(
+                    crate::widgets::with_help(
+                        ui,
                         "Hash the whole image of a disk dump (what sha256sum prints). \
                          Views are never hashed.",
+                        |ui| {
+                            ui.checkbox(
+                                &mut self.settings.disks.dump_hash,
+                                "SHA-256 of each disk dump",
+                            )
+                        },
                     );
-                    ui.checkbox(
-                        &mut self.settings.disks.source_digests,
-                        "SHA-256 of each source layer",
-                    )
-                    .on_hover_text(
+                    crate::widgets::with_help(
+                        ui,
                         "Also hash every layer of the disk chain a dump was read from. \
                          Doubles the time of a dump; for evidence-grade provenance.",
+                        |ui| {
+                            ui.checkbox(
+                                &mut self.settings.disks.source_digests,
+                                "SHA-256 of each source layer",
+                            )
+                        },
                     );
                 });
                 ui.end_row();
@@ -858,11 +855,8 @@ impl MonitorApp {
         form_grid("settings_advanced", ui).show(ui, |ui| {
             ui.label("FPS counter");
             ui.vertical(|ui| {
-                ui.checkbox(&mut self.settings.show_fps, "Show FPS counter")
-                    .on_hover_text(
-                        "Shows frames per second, frame time and UI build time in the window corner. \
-                         It reads only frames that are painted anyway, so an idle window shows idle.",
-                    );
+                crate::widgets::with_help(ui, "Shows frames per second, frame time and UI build time in the window corner. \
+                         It reads only frames that are painted anyway, so an idle window shows idle.", |ui| ui.checkbox(&mut self.settings.show_fps, "Show FPS counter"));
             });
             ui.end_row();
         });
@@ -872,44 +866,31 @@ impl MonitorApp {
             ui.label("VM start and guest connection timeouts");
             ui.vertical(|ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.add(
+                    crate::widgets::with_help(ui, "How long a start waits for the guest to connect at KVM speed.", |ui| ui.add(
                         egui::DragValue::new(&mut self.settings.start.guest_connect_secs)
                             .range(antinomie_monitor_core::StartSettings::GUEST_CONNECT_SECS)
                             .suffix(" s guest connection"),
-                    )
-                    .on_hover_text("How long a start waits for the guest to connect at KVM speed.");
-                    ui.add(
+                    ));
+                    crate::widgets::with_help(ui, "TCG is software emulation, 10 to 50 times slower than KVM. Every start wait is this many times longer when a VM runs with TCG.", |ui| ui.add(
                         egui::DragValue::new(&mut self.settings.start.tcg_multiplier)
                             .range(antinomie_monitor_core::StartSettings::TCG_MULTIPLIER)
                             .prefix("TCG multiplier x"),
-                    )
-                    .on_hover_text(
-                        "TCG is software emulation, 10 to 50 times slower than KVM. Every start wait is this many times longer when a VM runs with TCG.",
-                    );
+                    ));
                 });
-                ui.add(
+                crate::widgets::with_help(ui, "How long the first run of a boot waits for a systemd guest to finish booting, at KVM speed (stretched by the TCG multiplier like the other waits). A guest still booting then gets the program anyway, with a warning on the run. Guests without systemd (BusyBox) never wait.", |ui| ui.add(
                     egui::DragValue::new(&mut self.settings.start.boot_wait_secs)
                         .range(antinomie_monitor_core::StartSettings::BOOT_WAIT_SECS)
                         .suffix(" s boot wait before a run"),
-                )
-                .on_hover_text(
-                    "How long the first run of a boot waits for a systemd guest to finish booting, at KVM speed (stretched by the TCG multiplier like the other waits). A guest still booting then gets the program anyway, with a warning on the run. Guests without systemd (BusyBox) never wait.",
-                );
-                ui.add(
+                ));
+                crate::widgets::with_help(ui, "How long a run on a Routed VM waits, at KVM speed (stretched by the TCG multiplier), for the guest to have its network address from the gateway's DHCP. A guest without one then gets the program anyway, with a note on the run that its first connections may fail with \"network is unreachable\". 0 starts the program without waiting.", |ui| ui.add(
                     egui::DragValue::new(&mut self.settings.start.network_wait_secs)
                         .range(antinomie_monitor_core::StartSettings::NETWORK_WAIT_SECS)
                         .suffix(" s network wait before a run"),
-                )
-                .on_hover_text(
-                    "How long a run on a Routed VM waits, at KVM speed (stretched by the TCG multiplier), for the guest to have its network address from the gateway's DHCP. A guest without one then gets the program anyway, with a note on the run that its first connections may fail with \"network is unreachable\". 0 starts the program without waiting.",
-                );
-                ui.checkbox(
+                ));
+                crate::widgets::with_help(ui, "A VM set to KVM runs with TCG when /dev/kvm cannot be used, instead of refusing to start. A VM set to Default always does.", |ui| ui.checkbox(
                     &mut self.settings.start.kvm_fallback,
                     "Use TCG when KVM is unavailable",
-                )
-                .on_hover_text(
-                    "A VM set to KVM runs with TCG when /dev/kvm cannot be used, instead of refusing to start. A VM set to Default always does.",
-                );
+                ));
                 let tcg = antinomie_monitor_core::accel::Choice {
                     accelerator: antinomie_monitor_core::accel::Accelerator::Tcg,
                     fallback: None,

@@ -254,18 +254,22 @@ impl ApiKeysWindow {
             {
                 self.save(data_dir, key);
             }
-            if ui
-                .add_enabled(
-                    state.masked.is_some() && self.testing.is_none(),
-                    egui::Button::new("Test"),
-                )
-                .on_hover_text("Asks the service whether it accepts the saved key")
-                .on_disabled_hover_text(if state.masked.is_none() {
+            if crate::widgets::with_help_or(
+                ui,
+                "Asks the service whether it accepts the saved key",
+                if state.masked.is_none() {
                     "Save a key first"
                 } else {
                     "A test is already running"
-                })
-                .clicked()
+                },
+                |ui| {
+                    ui.add_enabled(
+                        state.masked.is_some() && self.testing.is_none(),
+                        egui::Button::new("Test"),
+                    )
+                },
+            )
+            .clicked()
             {
                 self.test(ctx, data_dir, curl, key);
             }

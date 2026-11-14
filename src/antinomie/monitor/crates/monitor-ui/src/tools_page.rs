@@ -249,24 +249,25 @@ pub(crate) fn tool_row_with(
                     });
                 }
             } else if (tool.system.is_none() || own_chosen)
-                && ui
-                    .add_enabled(
-                        enabled && !running,
-                        egui::Button::new(
-                            RichText::new(format!(
-                                "Install {} · {}",
-                                tool.version.split(' ').next().unwrap_or(&tool.version),
-                                crate::values::short_size(tool.size)
-                            ))
-                            .color(theme::palette().primary_text),
+                && crate::widgets::with_help(
+                    ui,
+                    format!("{} · downloads from its upstream release", tool.version),
+                    |ui| {
+                        ui.add_enabled(
+                            enabled && !running,
+                            egui::Button::new(
+                                RichText::new(format!(
+                                    "Install {} · {}",
+                                    tool.version.split(' ').next().unwrap_or(&tool.version),
+                                    crate::values::short_size(tool.size)
+                                ))
+                                .color(theme::palette().primary_text),
+                            )
+                            .fill(theme::primary()),
                         )
-                        .fill(theme::primary()),
-                    )
-                    .on_hover_text(format!(
-                        "{} · downloads from its upstream release",
-                        tool.version
-                    ))
-                    .clicked()
+                    },
+                )
+                .clicked()
             {
                 command = Some(Command::InstallTool {
                     id: tool.id.clone(),
@@ -275,12 +276,13 @@ pub(crate) fn tool_row_with(
         });
     });
     if let (Some(own), Some(_)) = (own, &tool.system) {
-        ui.checkbox(own, "Use Antinomie's own copy instead")
-            .on_hover_text(
-                "The program is the copy Antinomie installs under its data folder, even though \
+        crate::widgets::with_help(
+            ui,
+            "The program is the copy Antinomie installs under its data folder, even though \
                  the system has one. Until it is installed the system's copy is used. Install all \
                  still skips a tool the system has.",
-            );
+            |ui| ui.checkbox(own, "Use Antinomie's own copy instead"),
+        );
     }
     // Where Antinomie's own copy is saved, on a line of its own: the path is
     // long and the row's buttons stay at its right.

@@ -228,10 +228,10 @@ impl MonitorApp {
             .show(ctx, |ui| {
                 ui.label(OWNERSHIP_RULE);
                 ui.add_space(6.0);
-                if ui
-                    .button("Change shortcuts…")
-                    .on_hover_text("Settings > Keyboard: one row per action")
-                    .clicked()
+                if crate::widgets::with_help(ui, "Settings > Keyboard: one row per action", |ui| {
+                    ui.button("Change shortcuts…")
+                })
+                .clicked()
                 {
                     open_keyboard = true;
                 }

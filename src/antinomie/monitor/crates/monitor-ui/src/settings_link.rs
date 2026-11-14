@@ -9,10 +9,10 @@ const REQUEST: &str = "open-settings-page";
 /// A small button "Open <page> settings"; returns whether it was pressed, and
 /// has already asked the app to open the page then.
 pub(crate) fn button(ui: &mut egui::Ui, page: &'static str) -> bool {
-    let pressed = ui
-        .small_button(format!("Open {page} settings"))
-        .on_hover_text(format!("Tools > Settings > {page}"))
-        .clicked();
+    let pressed = crate::widgets::with_help(ui, format!("Tools > Settings > {page}"), |ui| {
+        ui.small_button(format!("Open {page} settings"))
+    })
+    .clicked();
     if pressed {
         request(ui.ctx(), page);
     }

@@ -214,9 +214,8 @@ impl Model {
     fn toolbar(&mut self, ui: &mut egui::Ui, data_dir: &Path, outbound: bool) {
         ui.horizontal_wrapped(|ui| {
             let busy = self.job.is_some();
-            if ui
-                .add_enabled(!busy, egui::Button::new("Reload local rules"))
-                .on_hover_text("Read the installed packs and groups from the rules folder again. No network.")
+            if crate::widgets::with_help(ui, "Read the installed packs and groups from the rules folder again. No network.", |ui| ui
+                .add_enabled(!busy, egui::Button::new("Reload local rules")))
                 .clicked()
             {
                 self.loaded = false;
@@ -224,24 +223,21 @@ impl Model {
                 self.rows_key.clear();
                 self.ensure(data_dir);
             }
-            if ui
-                .add_enabled(!busy, egui::Button::new("Check for updates"))
-                .on_hover_text("Read the rule catalog from the network. Needs Allow downloads; scans stay offline.")
+            if crate::widgets::with_help(ui, "Read the rule catalog from the network. Needs Allow downloads; scans stay offline.", |ui| ui
+                .add_enabled(!busy, egui::Button::new("Check for updates")))
                 .clicked()
             {
                 self.refresh_catalog(data_dir, outbound);
             }
             if busy
-                && ui
-                    .button("Cancel")
-                    .on_hover_text("Stop the running job; nothing is changed.")
+                && crate::widgets::with_help(ui, "Stop the running job; nothing is changed.", |ui| ui
+                    .button("Cancel"))
                     .clicked()
             {
                 self.cancel_job();
             }
-            if ui
-                .button("Open rules directory")
-                .on_hover_text("Show the folder where the installed rules are kept.")
+            if crate::widgets::with_help(ui, "Show the folder where the installed rules are kept.", |ui| ui
+                .button("Open rules directory"))
                 .clicked()
             {
                 let root = ruleset::rules_root(data_dir);
@@ -280,14 +276,13 @@ impl Model {
         if !*outbound {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Downloads are off.").color(theme::muted()));
-                if ui
-                    .button("Allow downloads")
-                    .on_hover_text(format!(
+                if crate::widgets::with_help(ui, format!(
                         "Antinomie contacts no server unless you allow it. This turns on Tools > Settings > Detection > Allow outbound catalog and rule downloads. \
                          Only Check for updates and installing or updating a pack use the network, \
                          and only the hosts listed here; scans stay offline.\n{}",
                         self.hosts_line()
-                    ))
+                    ), |ui| ui
+                    .button("Allow downloads"))
                     .clicked()
                 {
                     *outbound = true;
@@ -624,11 +619,8 @@ impl Model {
         id: &str,
         name: &str,
     ) {
-        let clicked = ui
-            .button(format!("{} Rules", egui_phosphor::regular::ARROW_SQUARE_OUT))
-            .on_hover_text(
-                "Opens every rule of this set in a window of its own, with a filter, sorting, an on/off box per rule and the rule's details. The window stays open while you use other pages.",
-            )
+        let clicked = crate::widgets::with_help(ui, "Opens every rule of this set in a window of its own, with a filter, sorting, an on/off box per rule and the rule's details. The window stays open while you use other pages.", |ui| ui
+            .button(format!("{} Rules", egui_phosphor::regular::ARROW_SQUARE_OUT)))
             .clicked();
         if clicked {
             let engine = self.engine.clone();

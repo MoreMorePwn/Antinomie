@@ -302,10 +302,12 @@ impl Model {
     }
 
     pub(super) fn remove_button(&mut self, ui: &mut egui::Ui, data_dir: &Path, id: &str) {
-        if ui
-            .button("Remove")
-            .on_hover_text("Deletes this pack and its retained versions from this computer.")
-            .clicked()
+        if crate::widgets::with_help(
+            ui,
+            "Deletes this pack and its retained versions from this computer.",
+            |ui| ui.button("Remove"),
+        )
+        .clicked()
         {
             self.remove_pack(data_dir, id);
         }

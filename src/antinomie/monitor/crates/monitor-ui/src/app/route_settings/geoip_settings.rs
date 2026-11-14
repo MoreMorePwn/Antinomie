@@ -353,16 +353,18 @@ impl MonitorApp {
                     .color(theme::heading()),
             );
             let idle = self.routes.geoip.checking.is_none() && self.routes.geoip.update.is_none();
-            if ui
-                .add_enabled(
-                    outbound && idle,
-                    egui::Button::new("Check for a newer month"),
-                )
-                .on_hover_text("Two small requests to download.db-ip.com; nothing is downloaded")
-                .on_disabled_hover_text(
-                    "Turn on Settings > Detection > Allow outbound catalog and rule downloads",
-                )
-                .clicked()
+            if crate::widgets::with_help_or(
+                ui,
+                "Two small requests to download.db-ip.com; nothing is downloaded",
+                "Turn on Settings > Detection > Allow outbound catalog and rule downloads",
+                |ui| {
+                    ui.add_enabled(
+                        outbound && idle,
+                        egui::Button::new("Check for a newer month"),
+                    )
+                },
+            )
+            .clicked()
             {
                 self.routes.geoip.start_check(&ctx, &curl);
             }
@@ -385,14 +387,11 @@ impl MonitorApp {
                 } else if self.routes.geoip.update.is_none() {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(format!("DB-IP published {}.", latest.month));
-                        if ui
-                            .button(format!("Download {}", latest.month))
-                            .on_hover_text(
-                                "DB-IP publishes no signature, so a newer month cannot be checked \
+                        if crate::widgets::with_help(ui, "DB-IP publishes no signature, so a newer month cannot be checked \
                                  against a pinned SHA-256: it is fetched over HTTPS and its hash is \
                                  recorded in the tool record. The month pinned in Antinomie stays \
-                                 checked.",
-                            )
+                                 checked.", |ui| ui
+                            .button(format!("Download {}", latest.month)))
                             .clicked()
                         {
                             let data_dir = self.options.data_dir.clone();
