@@ -5,6 +5,7 @@
 //! being shown, and the painting of instructions and decompiled source. Each
 //! host decides what its lines are and where they come from; the look and the
 //! wording live here.
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use eframe::egui::{self, text::LayoutJob, Color32, FontId, Sense, TextFormat, TextStyle};
 use std::hash::Hash;
@@ -82,7 +83,7 @@ pub(crate) fn function_list<'a>(
     egui::ScrollArea::vertical()
         .id_salt(("function-list", id))
         .auto_shrink([false, false])
-        .show_rows(ui, height, count, |ui, range| {
+        .show_rows_contained(ui, height, count, |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for position in range {
                 let function = function(position);

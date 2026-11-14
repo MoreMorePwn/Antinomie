@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Volatility install, plugin catalog and import windows.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 impl MemoryView {
     /// Volatility was installed or removed: list its plugins again.
@@ -228,7 +229,7 @@ impl MemoryView {
                 };
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         for plugin in entries {
                             let present = installed.iter().find(|i| i.plugin.id == plugin.id);
                             egui::Frame::new()

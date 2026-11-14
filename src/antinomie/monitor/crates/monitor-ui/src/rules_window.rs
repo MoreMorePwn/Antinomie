@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Library → Detection rules. Catalog checks and downloads happen only from buttons.
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use antinomie_monitor_core::ruleset::{self, Catalog, IndexedRule, Registry};
 use eframe::egui::{self, RichText};
@@ -192,7 +193,7 @@ impl Model {
             .auto_shrink([false, false])
             .animated(false)
             .id_salt("rule-manager-body")
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 self.contents(ui, data_dir, outbound, detection);
             });
         self.requested.take()

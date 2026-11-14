@@ -3,6 +3,8 @@
 //! Overview box. The base image is the root, each checkpoint hangs from its
 //! parent, and a "You are here" node marks where the next snapshot attaches.
 use super::{graph_layout, mode_label};
+#[cfg(test)]
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use antinomie_monitor_core::VmSnapshotTree;
 use eframe::egui;
@@ -279,7 +281,7 @@ mod tests {
             },
             |root| {
                 egui::CentralPanel::default().show(root, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().show_contained(ui, |ui| {
                         marker = ui.cursor().min.y;
                         paint(ui, &tree, &mut None, view, 300.0, true);
                         ui.allocate_space(egui::vec2(10.0, 2000.0));

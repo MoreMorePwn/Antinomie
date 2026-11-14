@@ -2,6 +2,7 @@
 //! Scrolling for the Details panel: one vertical area with a stable id, kept
 //! where the user left it while the same thing stays selected, and a process
 //! tree height that grows with the window and can be dragged.
+use crate::scroll_contain::ScrollContained as _;
 use eframe::egui;
 use std::hash::{Hash, Hasher};
 
@@ -36,7 +37,7 @@ pub(crate) fn show<R>(
     if before.is_some_and(|before| before != key) {
         area = area.vertical_scroll_offset(0.0);
     }
-    area.show(ui, |ui| add(ui, viewport)).inner
+    area.show_contained(ui, |ui| add(ui, viewport)).inner
 }
 
 /// The height of the process tree in a panel `viewport` high: the user's drag

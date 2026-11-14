@@ -43,7 +43,7 @@ pub(super) fn match_cards(
         .id_salt("detection-matches")
         .max_height(list_height(ui))
         .auto_shrink([false, true])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             let mut draw = |ui: &mut egui::Ui, rows: &[&Vec<Cell>], from: usize| {
                 for (index, row) in rows.iter().enumerate() {
                     let row = row.as_slice();
@@ -693,7 +693,7 @@ mod tests {
                             egui::ScrollArea::vertical()
                                 .id_salt("page")
                                 .auto_shrink([false, false])
-                                .show(ui, |ui| {
+                                .show_contained(ui, |ui| {
                                     ui.label("Matches");
                                     ui.add_space(40.0);
                                     list = ui

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The packet table (TShark's rows) and the selected packet's details and bytes.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use std::cmp::Ordering;
 
 /// The sort state of the Packets table.
@@ -579,7 +580,7 @@ impl NetworkView {
                 egui::ScrollArea::both()
                     .id_salt("packet_bytes")
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         ui.add(
                             egui::Label::new(hex_job(&bytes, &mono, marked, hovered))
                                 .selectable(true)

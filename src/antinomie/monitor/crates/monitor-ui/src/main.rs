@@ -47,6 +47,7 @@ mod run_state_line;
 mod runs;
 mod sample_tags;
 mod samples_view;
+mod scroll_contain;
 mod settings_link;
 mod snapshots;
 mod stat_cache;

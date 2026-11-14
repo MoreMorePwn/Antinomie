@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Live and recorded trace table.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 impl MonitorApp {
     pub(super) fn invocations(&self) -> Vec<InvocationSummary> {
@@ -501,7 +502,7 @@ impl MonitorApp {
             .id_salt("trace_categories")
             .max_height(chip_height * 2.0 + if roomy { 8.0 } else { 5.0 })
             .auto_shrink([false, true])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 // The row height of a wrapped layout is read when it starts
                 // (egui 0.36), so the chip spacing is set on a scope around it.
                 ui.scope(|ui| {
@@ -676,7 +677,7 @@ impl MonitorApp {
         egui::ScrollArea::vertical()
             .id_salt("empty_trace")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 let width = ui.available_width().min(620.0);
                 ui.add_space(((ui.available_height() - 360.0) / 3.0).clamp(12.0, 80.0));
                 ui.horizontal(|ui| {

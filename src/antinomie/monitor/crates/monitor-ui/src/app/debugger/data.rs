@@ -4,6 +4,7 @@
 //! shown with the shared hex rows.
 use super::*;
 use crate::hex_view::{self, Cell};
+use crate::scroll_contain::ScrollContained as _;
 use antinomie_monitor_core::debug::{
     view::{decode_cpsr, decode_rflags, MemoryWindow, WindowKind, MAX_READ_SIZE},
     ArchTag, RegKind,
@@ -17,7 +18,7 @@ pub(super) fn registers_column(ui: &mut egui::Ui, view: &DebugView) {
     egui::ScrollArea::both()
         .id_salt("debugger-registers-scroll")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             theme::section(ui, "Registers");
             registers(ui, view);
         });
@@ -28,7 +29,7 @@ pub(super) fn stack_pane(ui: &mut egui::Ui, view: &DebugView) {
     egui::ScrollArea::both()
         .id_salt("debugger-stack-scroll")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             window_rows(
                 ui,
                 view,

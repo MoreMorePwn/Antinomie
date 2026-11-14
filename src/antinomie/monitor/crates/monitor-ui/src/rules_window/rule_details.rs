@@ -2,6 +2,7 @@
 //! The right pane of a rules window: the selected rule's name, its metadata
 //! as a two-column grid, and its source text on a code background.
 use super::page::severity_tone;
+use crate::scroll_contain::ScrollContained as _;
 use crate::{theme, widgets, widgets::Tone};
 use antinomie_monitor_core::ruleset::IndexedRule;
 use eframe::egui::{self, RichText};
@@ -102,7 +103,7 @@ pub(super) fn show(
     egui::ScrollArea::vertical()
         .id_salt("rule-detail")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             ui.add(egui::Label::new(theme::section_title(ui, &rule.name)).wrap());
             ui.add_space(ROW_GAP);
             egui::Grid::new("rule-meta")
@@ -188,7 +189,7 @@ pub(super) fn code_block(ui: &mut egui::Ui, text: &str) {
             egui::ScrollArea::horizontal()
                 .id_salt("rule-code")
                 .auto_shrink([false, true])
-                .show(ui, |ui| {
+                .show_contained(ui, |ui| {
                     ui.add(
                         egui::Label::new(RichText::new(text).monospace().color(theme::text()))
                             .wrap_mode(egui::TextWrapMode::Extend)

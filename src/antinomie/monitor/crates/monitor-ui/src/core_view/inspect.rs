@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Registers, mappings and notes of the selected core.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 /// The Capture issues header's id: the same whatever the count, so it stays
 /// open or closed when an issue is added.
@@ -273,7 +274,7 @@ impl CoreView {
         );
         egui::ScrollArea::vertical()
             .id_salt("core-registers")
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 let groups: &[(&str, &[&str])] = &[
                     ("Instruction pointer", &["rip", "eip", "pc"]),
                     ("Stack and frame", &["rsp", "esp", "rbp", "ebp", "sp", "lr"]),
@@ -582,7 +583,7 @@ impl CoreView {
         let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + 2.0;
         egui::ScrollArea::both()
             .id_salt(("core-hex", self.mapping_index, self.window_offset))
-            .show_rows(ui, row_height, row_count, |ui, range| {
+            .show_rows_contained(ui, row_height, row_count, |ui, range| {
                 for row in range {
                     let address = mapping.start + self.window_offset + row as u64 * 16;
                     let line = crate::hex_view::row_text(address, |at| {
@@ -1058,7 +1059,7 @@ fn notes_table(
                 egui::ScrollArea::vertical()
                     .id_salt(("core-note-detail-scroll", &record.dir))
                     .max_height(128.0)
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         ui.set_max_width((ui.clip_rect().right() - ui.max_rect().left()).max(80.0));
                         ui.add(egui::Label::new(detail).selectable(true).wrap());
                     });

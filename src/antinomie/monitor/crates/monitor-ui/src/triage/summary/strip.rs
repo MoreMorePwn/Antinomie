@@ -6,6 +6,7 @@
 //! opens the picture in Library > Screenshots, whose viewer steps through the
 //! run with the arrow keys.
 use super::thumb::Thumb;
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use antinomie_monitor_core::timed_shots::{time_label, RunShot};
 use eframe::egui::{self, RichText};
@@ -28,7 +29,7 @@ impl Strip {
         egui::ScrollArea::horizontal()
             .id_salt("summary-timed-strip")
             .auto_shrink([false, true])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     for shot in shots {
                         ui.vertical(|ui| {

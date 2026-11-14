@@ -324,7 +324,7 @@ impl Viewer {
                 egui::ScrollArea::both()
                     .id_salt("sample_viewer_page")
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         ui.add(
                             egui::TextEdit::multiline(&mut text.as_str())
                                 .code_editor()
@@ -354,7 +354,7 @@ impl Viewer {
         egui::ScrollArea::both()
             .id_salt("sample_viewer_strings")
             .auto_shrink([false, false])
-            .show_rows(ui, height, list.len(), |ui, range| {
+            .show_rows_contained(ui, height, list.len(), |ui, range| {
                 for (offset, text) in &list[range] {
                     ui.add(
                         egui::Label::new(

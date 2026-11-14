@@ -308,7 +308,7 @@ pub(super) fn evidence_list(
         .id_salt(salt)
         .max_height(max_height)
         .auto_shrink([false, true])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             ui.set_min_width(table_width);
             egui::Grid::new(("detection-evidence-table", finding.rule_id.as_str()))
                 .num_columns(if journal { 3 } else { 2 })
@@ -517,7 +517,7 @@ fn finding_body(
     egui::ScrollArea::vertical()
         .id_salt("detection-finding-body")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.add(
                     egui::Label::new(
@@ -665,7 +665,7 @@ fn rule_lines(ui: &mut egui::Ui, id: egui::Id, text: &str, wrap: bool) {
     egui::ScrollArea::new([!wrap, true])
         .id_salt(id)
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             let label = egui::Label::new(RichText::new(text).monospace().color(theme::text()))
                 .selectable(true);
             ui.add(if wrap { label.wrap() } else { label.extend() });

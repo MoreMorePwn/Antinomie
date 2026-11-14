@@ -3,6 +3,7 @@
 //! collapse. The viewer only draws it: every line, nesting level and byte
 //! range comes from TShark.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use antinomie_monitor_core::packet_filter::{DetailNode, PacketTree};
 
 /// The key a line's expanded state is remembered under: its kind of node
@@ -79,7 +80,7 @@ pub(super) fn detail_tree(
         .id_salt("packet_tree_scroll")
         .auto_shrink([false, false])
         .min_scrolled_height(row_height * 3.0)
-        .show_rows(ui, row_height, rows.len(), |ui, range| {
+        .show_rows_contained(ui, row_height, rows.len(), |ui, range| {
             for shown in range {
                 let at = rows[shown];
                 let node = &tree.nodes[at];

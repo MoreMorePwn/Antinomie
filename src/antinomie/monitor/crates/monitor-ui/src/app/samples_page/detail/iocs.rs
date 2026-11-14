@@ -237,7 +237,7 @@ impl MonitorApp {
         egui::ScrollArea::vertical()
             .id_salt("sample-iocs-page")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 self.iocs_body(ui, data, &mut state, &mut go, table_height);
             });
         self.iocs_poll(ui.ctx(), &mut state);

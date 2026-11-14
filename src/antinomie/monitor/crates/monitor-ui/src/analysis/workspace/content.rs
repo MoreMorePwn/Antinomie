@@ -4,6 +4,7 @@
 //! view only asks for the page it shows.
 use super::*;
 use crate::analysis::row_menu::preview_matches;
+use crate::scroll_contain::ScrollContained as _;
 use antinomie_monitor_core::ANALYSIS_PREVIEW_MAX_SIZE;
 use std::fmt::Write as _;
 
@@ -178,7 +179,7 @@ pub(super) fn show(
             egui::ScrollArea::both()
                 .id_salt("analysis-content")
                 .auto_shrink([false, false])
-                .show(ui, |ui| {
+                .show_contained(ui, |ui| {
                     let size = zoomed_text_px(ui, state);
                     let wrap = !matches!(state.format, Format::Hex);
                     ui.add(

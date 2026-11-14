@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Triage for the selected run: process activity, files, HTTP/DNS and eBPF.
 //! Rows are observations from captured syscalls and packets, not a verdict.
+use crate::scroll_contain::ScrollContained as _;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -595,7 +596,7 @@ impl TriageView {
         let jump = egui::ScrollArea::vertical()
             .id_salt(page)
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.set_max_height(viewport);
                 match self.section {
                     Section::Summary | Section::Properties | Section::Detection | Section::Ioc => {

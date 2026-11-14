@@ -5,6 +5,7 @@
 //! re-executions of one binary) is not drawn here: the list only counts
 //! parents and children.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use antinomie_monitor_core::samples::{
     Library, LibraryCheck, RunStats, SampleRecord, SeenRun, Tag, Verification,
 };
@@ -641,7 +642,7 @@ impl MonitorApp {
                     .id_salt("samples_edit_tags_list")
                     .max_height(most.max(160.0))
                     .auto_shrink([false, true])
-                    .show(ui, |ui| picker.show(ui, &suggested, known_custom));
+                    .show_contained(ui, |ui| picker.show(ui, &suggested, known_custom));
                 crate::widgets::footer(ui, |ui| {
                     save = ui.button("Save").clicked();
                     cancel = ui.button("Cancel").clicked();

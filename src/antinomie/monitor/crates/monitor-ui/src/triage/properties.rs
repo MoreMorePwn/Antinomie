@@ -354,7 +354,7 @@ impl View {
         egui::ScrollArea::vertical()
             .id_salt("triage-properties")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 for (title, subtitle, labels) in [
                     (
                         "File identification",

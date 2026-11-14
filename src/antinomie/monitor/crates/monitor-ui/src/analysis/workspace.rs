@@ -17,6 +17,7 @@ use super::{
     row_menu::{self, RowCommand, RowWindows},
     section_title, ReportAction,
 };
+use crate::scroll_contain::ScrollContained as _;
 use crate::widgets::fit_table::{Col as TableColumn, FitBuilder};
 use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisExportFormat, AnalysisKind, AnalysisListingPage,
@@ -338,7 +339,7 @@ fn render(
     egui::ScrollArea::vertical()
         .id_salt("analysis-workspace")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             ui.set_max_height(height);
             ui.set_min_height(height);
             if matches!(
@@ -627,13 +628,13 @@ fn overview(
             egui::ScrollArea::vertical()
                 .id_salt("analysis-overview-identity")
                 .auto_shrink([false, false])
-                .show(&mut columns[0], |ui| {
+                .show_contained(&mut columns[0], |ui| {
                     action = identity(ui, report, Some((&report.id, 0)))
                 });
             egui::ScrollArea::vertical()
                 .id_salt("analysis-overview")
                 .auto_shrink([false, false])
-                .show(&mut columns[1], |ui| {
+                .show_contained(&mut columns[1], |ui| {
                     if let Some(next) = categories(ui, report, state, Some((&report.id, 1))) {
                         action = Some(next);
                     }
@@ -643,7 +644,7 @@ fn overview(
         egui::ScrollArea::vertical()
             .id_salt("analysis-overview")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 action = identity(ui, report, None);
                 ui.add_space(8.0);
                 if let Some(next) = categories(ui, report, state, None) {

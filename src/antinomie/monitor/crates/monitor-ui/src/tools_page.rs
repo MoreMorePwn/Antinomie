@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Library > Analysis tools: the optional static-analysis tools, whether the
 //! system has them, and installing Antinomie's own copy when it does not.
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use crate::widgets::{chip, Tone};
 use antinomie_monitor_core::geoip::{self, Origin, Status};
@@ -35,7 +36,7 @@ pub(crate) fn show(
     egui::ScrollArea::vertical()
         .id_salt("analysis_tools")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             ui.label("Tools used by static analysis.").on_hover_text(
                 "Static analysis uses these tools when they are installed on this system. \
                  When one is missing, Antinomie can download it from its upstream release \

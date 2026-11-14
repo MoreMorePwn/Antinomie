@@ -5,6 +5,7 @@ use super::relations::model::Interest;
 use super::rows::{self, Part};
 use super::state::Built;
 use super::{header::dot, Act, Destination};
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use crate::triage::{attack, presentation, process_cells, ArchiveScan, FileTab};
 use antinomie_monitor_core::mitre::Tactic;
@@ -473,7 +474,7 @@ fn line(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
             .id_salt(("summary-line", title))
             .auto_shrink([false, true])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
                     ui.label(RichText::new(title).strong().color(theme::heading()));

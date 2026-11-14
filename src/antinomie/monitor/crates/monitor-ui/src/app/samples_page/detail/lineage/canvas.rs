@@ -941,7 +941,7 @@ mod tests {
             },
             |root| {
                 egui::CentralPanel::default().show(root, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().show_contained(ui, |ui| {
                         let (rect, _) = ui.allocate_exact_size(
                             Vec2::new(ui.available_width(), 300.0),
                             egui::Sense::hover(),

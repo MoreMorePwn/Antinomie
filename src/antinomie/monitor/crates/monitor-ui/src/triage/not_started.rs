@@ -9,7 +9,7 @@ pub(crate) fn not_started_panel(ui: &mut egui::Ui, run: &NotStartedRun) -> bool 
     let mut export = false;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             ui.label(theme::section_title(ui, "This run did not start"));
             ui.add_space(4.0);
             ui.add(

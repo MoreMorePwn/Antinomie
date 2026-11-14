@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The mockup's card: a bordered panel with a heading, for grouping facts on
 //! a page (Identity, Categories, register groups).
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use eframe::egui::{self, RichText, Stroke};
 
@@ -87,6 +88,6 @@ pub fn bounded_menu<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R)
     egui::ScrollArea::vertical()
         .max_height((screen.height() * 0.7).max(160.0))
         .auto_shrink([true, true])
-        .show(ui, body)
+        .show_contained(ui, body)
         .inner
 }

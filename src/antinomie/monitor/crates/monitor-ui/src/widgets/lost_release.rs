@@ -9,6 +9,8 @@
 //! scrolling until the next click. A pointer that leaves the window therefore
 //! ends the drag in progress; the next press starts a new one.
 
+#[cfg(test)]
+use crate::scroll_contain::ScrollContained as _;
 use eframe::egui;
 use std::sync::Arc;
 
@@ -51,7 +53,7 @@ mod tests {
             },
             |root| {
                 egui::CentralPanel::default().show(root, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().show_contained(ui, |ui| {
                         let (rect, _) = ui.allocate_exact_size(
                             egui::vec2(300.0, 100.0),
                             egui::Sense::click_and_drag(),

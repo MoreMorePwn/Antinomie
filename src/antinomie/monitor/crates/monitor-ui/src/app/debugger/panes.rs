@@ -4,6 +4,7 @@
 //! them from the strip, each independently, and the tab remembers which are
 //! open. Open panes share the width of the area below the strip.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use crate::widgets::{self, Tone};
 use antinomie_monitor_core::debug::view::Controller;
 
@@ -179,7 +180,7 @@ pub(super) fn show(
         egui::ScrollArea::horizontal()
             .id_salt("debugger-panes-row")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 let height = ui.available_height();
                 ui.allocate_ui(egui::vec2(total, height), row);
             });
@@ -219,7 +220,7 @@ fn cell(ui: &mut egui::Ui, pane: Pane, pane_ui: &mut impl FnMut(&mut egui::Ui, P
                 scroll
                     .id_salt(("debugger-pane", pane.key()))
                     .auto_shrink([false, false])
-                    .show(ui, |ui| pane_ui(ui, pane));
+                    .show_contained(ui, |ui| pane_ui(ui, pane));
             });
         });
 }

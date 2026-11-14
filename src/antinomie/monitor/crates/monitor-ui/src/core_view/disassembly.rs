@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Disassembly of captured code and its painting.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 impl CoreView {
     pub(super) fn disassembly(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
@@ -147,7 +148,7 @@ impl CoreView {
                         egui::ScrollArea::both()
                             .id_salt("core-code")
                             .auto_shrink([false, false])
-                            .show_rows(ui, row_height, lines.len(), |ui, range| {
+                            .show_rows_contained(ui, row_height, lines.len(), |ui, range| {
                                 for index in range {
                                     crate::code_listing::text_instruction(ui, lines[index]);
                                 }
@@ -191,7 +192,7 @@ impl CoreView {
         let switched = egui::ScrollArea::horizontal()
             .id_salt("core-listing-view")
             .auto_shrink([false, true])
-            .show(ui, |ui| crate::widgets::segmented(ui, choices, &mut view))
+            .show_contained(ui, |ui| crate::widgets::segmented(ui, choices, &mut view))
             .inner;
         if switched {
             self.show_decompiled = view == View::Decompilation;
@@ -392,7 +393,7 @@ fn paint_source(ui: &mut egui::Ui, body: &str) {
     egui::ScrollArea::both()
         .id_salt("core-decomp")
         .auto_shrink([false, false])
-        .show_rows(ui, row_height, lines.len(), |ui, range| {
+        .show_rows_contained(ui, row_height, lines.len(), |ui, range| {
             for index in range {
                 ui.add(
                     egui::Label::new(crate::code_listing::highlight(lines[index], &font)).extend(),

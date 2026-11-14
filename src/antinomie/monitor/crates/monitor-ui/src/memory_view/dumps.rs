@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The list of RAM dumps, their identity and deletion.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 impl MemoryView {
     /// Open the Import dump… window (the palette and the button).
@@ -273,7 +274,7 @@ impl MemoryView {
         egui::ScrollArea::vertical()
             .id_salt("memory_dump_list")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if let Some(progress) = cx.dumping {
                     let fraction = progress.completed as f32 / progress.total.max(1) as f32;

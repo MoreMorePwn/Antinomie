@@ -11,7 +11,7 @@ impl View {
         egui::ScrollArea::vertical()
             .id_salt("ioc-summary")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for ty in Type::ALL {
                         let count = self.count_of(Some(ty));

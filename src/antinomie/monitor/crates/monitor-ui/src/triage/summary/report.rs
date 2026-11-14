@@ -377,7 +377,7 @@ pub(super) fn content(
     egui::ScrollArea::vertical()
         .id_salt("triage-summary")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             if let Some(error) = &view.scan_error {
                 crate::activity::error(ui, format!("The saved-recording index failed: {error}"));
             }

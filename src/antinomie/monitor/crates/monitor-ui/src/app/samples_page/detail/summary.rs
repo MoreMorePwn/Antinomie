@@ -83,7 +83,7 @@ impl MonitorApp {
         egui::ScrollArea::vertical()
             .id_salt("sample_summary")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 // Room for the scroll bar, so no table or box runs under it.
                 ui.set_width((ui.available_width() - parts::SCROLL_GUTTER).max(0.0));
                 verdict(ui, data);

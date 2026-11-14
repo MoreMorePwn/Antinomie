@@ -1552,7 +1552,7 @@ fn row_frame(
         |root| {
             let area = egui::ScrollArea::vertical()
                 .id_salt("page")
-                .show(root, |ui| {
+                .show_contained(root, |ui| {
                     let mut acts = Vec::new();
                     rect = ui
                         .scope(|ui| panels::interest_row(ui, interest, scan, &mut acts))

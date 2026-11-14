@@ -7,6 +7,7 @@
 mod before_deletion;
 mod hash_state;
 mod text_mode;
+use crate::scroll_contain::ScrollContained as _;
 pub(in crate::triage) use before_deletion::DATA_DIR;
 use text_mode::View;
 
@@ -421,7 +422,7 @@ impl Open {
         egui::ScrollArea::vertical()
             .id_salt("file-reconstruction-bytes")
             .auto_shrink([false, false])
-            .show_rows(ui, height, rows, |ui, range| {
+            .show_rows_contained(ui, height, rows, |ui, range| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for row in range {
                     let offset = (row * ROW) as u64;
@@ -509,7 +510,7 @@ impl Open {
                 egui::ScrollArea::both()
                     .id_salt("file-reconstruction-diff")
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         for (number, line) in lines.iter().enumerate() {
                             let (mark, color) = match line.change {
                                 Change::Same => (' ', theme::muted()),
@@ -545,7 +546,7 @@ impl Open {
         egui::ScrollArea::vertical()
             .id_salt("file-reconstruction-side-scroll")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 let before = self.view;
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut self.view, View::Hex, "Hex")

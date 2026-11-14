@@ -5,6 +5,7 @@
 //! captured, `~~` shared mapping, `!!` unreadable) in both modes, so a gap in
 //! the text is a gap in the file.
 use super::{tint, Open};
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use antinomie_monitor_core::file_reconstruct::{Cell, State, START};
 use eframe::egui::{self, RichText};
@@ -163,7 +164,7 @@ impl Open {
         egui::ScrollArea::both()
             .id_salt("file-reconstruction-text")
             .auto_shrink([false, false])
-            .show_rows(ui, height, rows, |ui, range| {
+            .show_rows_contained(ui, height, rows, |ui, range| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 for row in range {
                     let offset = (row * TEXT_ROW) as u64;
