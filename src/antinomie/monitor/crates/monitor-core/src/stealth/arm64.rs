@@ -25,6 +25,8 @@ pub fn arm_machine(profile: &StealthProfile) -> Option<&'static ArmMachine> {
     let kind = match profile.preset {
         StealthPreset::CloudVps => ArmKind::Cloud,
         StealthPreset::RealisticServer => ArmKind::Server,
+        // An IoT device is a Raspberry Pi, whatever the firmware says.
+        StealthPreset::Iot => ArmKind::Board,
         // A desktop without UEFI: a single-board computer on its device tree.
         _ if !profile.firmware.is_uefi() => ArmKind::Board,
         _ => ArmKind::Workstation,
@@ -572,8 +574,9 @@ pub fn board_dtb(
     std::fs::write(out, tree.to_bytes()).map_err(|error| format!("board device tree: {error}"))
 }
 
-/// What still tells an arm64 VM apart, most telling first. `machine`: the
-/// arm64 machine it presents (UEFI boots), else QEMU's own identity.
+/// What still tells an arm64 VM apart by its machine, most telling first.
+/// `machine`: the arm64 machine it presents, else QEMU's own identity
+/// (`uefi`: booted through UEFI, which fills QEMU's SMBIOS tables).
 pub fn giveaways(
     machine: Option<&ArmMachine>,
     uefi: bool,
@@ -619,10 +622,8 @@ pub fn giveaways(
              machine of this CPU with KASLR has",
         );
     }
-    found.extend([
-        "the emulated display (virtio-gpu)",
-        "a fresh boot: minutes of uptime",
-    ]);
+    // The display and the uptime follow the VM's settings: see
+    // `StealthProfile::still_visible`.
     found
 }
 
@@ -650,6 +651,7 @@ mod tests {
             Some(ArmKind::Workstation)
         );
         assert_eq!(kind(StealthPreset::CloudVps), Some(ArmKind::Cloud));
+        assert_eq!(kind(StealthPreset::Iot), Some(ArmKind::Board));
         assert_eq!(kind(StealthPreset::Transparent), None);
         let mut off = profile(StealthPreset::RealisticServer);
         off.identity_enabled = false;

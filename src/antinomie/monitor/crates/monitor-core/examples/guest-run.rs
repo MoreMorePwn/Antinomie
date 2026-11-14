@@ -33,7 +33,7 @@
 //! outbound forwarding and overrides NAT, as in the application.
 //! `"vm": {"routed": true}` wires the VM's card to Antinomie's own gateway
 //! (Routed network: its DHCP gives the lease; runs keep the default route).
-//! `"vm": {"stealth": "desktop"}` (or `"laptop"`, `"server"`, or a whole
+//! `"vm": {"stealth": "desktop"}` (or `"laptop"`, `"server"`, `"iot"`, or a whole
 //! stealth profile object) launches the VM with a realistic hardware identity;
 //! `"laptop:dell-latitude-5420"` copies that catalog machine.
 //! `"network_capture": true` (NAT VMs) starts a network capture before the
@@ -974,6 +974,7 @@ fn stealth_profile(
                 "desktop" => StealthPreset::RealisticDesktop,
                 "laptop" => StealthPreset::RealisticLaptop,
                 "server" => StealthPreset::RealisticServer,
+                "iot" => StealthPreset::Iot,
                 "transparent" => StealthPreset::Transparent,
                 other => return Err(format!("plan.vm.stealth: unknown preset {other}")),
             };

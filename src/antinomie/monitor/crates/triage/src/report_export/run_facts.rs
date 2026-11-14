@@ -265,11 +265,11 @@ fn environment(run: &RunSummary) -> Vec<Fact> {
                 env.vm_name, env.cpus, env.ram_mib, env.network
             ),
         ));
-        // The preset's menu label ends "(as before)", which only means
-        // something next to an older release; a report names the profile.
+        // As the app names the profile now ("Normal QEMU", "Desktop"),
+        // whatever release recorded the run.
         out.push(Fact::new(
             "Stealth profile",
-            env.stealth.replace(" (as before)", ""),
+            antinomie_monitor_core::stealth::StealthPreset::recorded_label(&env.stealth),
         ));
         if !env.rule_packs.is_empty() {
             // "name version", the version whole (a snapshot id is matched by
@@ -315,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn the_environment_names_the_architecture_and_the_profile_without_its_menu_suffix() {
+    fn the_environment_names_the_architecture_and_the_profile_as_the_app_does_now() {
         let mut run = record(RunState::Finished, None);
         run.environment = Some(antinomie_monitor_core::run_environment::RunEnvironment {
             base_name: "BusyBox".into(),
@@ -332,10 +332,7 @@ mod tests {
                 .map(|fact| fact.value.clone())
         };
         assert_eq!(value("Architecture").as_deref(), Some("arm64"));
-        assert_eq!(
-            value("Stealth profile").as_deref(),
-            Some("Transparent QEMU")
-        );
+        assert_eq!(value("Stealth profile").as_deref(), Some("Normal QEMU"));
     }
 
     #[test]
