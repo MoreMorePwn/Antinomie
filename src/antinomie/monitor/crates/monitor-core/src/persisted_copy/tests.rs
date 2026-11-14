@@ -66,7 +66,7 @@ fn mirai_like() -> (Watch, Vec<GuestProcess>, HashSet<u64>) {
 
 #[test]
 fn only_new_processes_outside_the_tree_are_candidates() {
-    let (watch, now, tree) = mirai_like();
+    let (mut watch, now, tree) = mirai_like();
     assert!(watch.armed());
     let names: Vec<&str> = watch
         .candidates(&now, &tree)
@@ -77,17 +77,28 @@ fn only_new_processes_outside_the_tree_are_candidates() {
 }
 
 #[test]
-fn a_child_of_the_tree_not_yet_in_it_is_not_a_candidate() {
+fn a_child_of_the_tree_waits_one_list_and_is_read_if_still_outside() {
     // The sample (pid 668, cookie 101) forked pid 670 the host has not read
     // the fork of: it runs the sample's image but is the tree's own child.
-    let (watch, mut now, tree) = mirai_like();
+    let (mut watch, mut now, mut tree) = mirai_like();
     now.push(process(670, 107, 668, "a", 23));
-    let names: Vec<&str> = watch
-        .candidates(&now, &tree)
-        .iter()
-        .map(|process| process.command.as_str())
-        .collect();
-    assert_eq!(names, ["cron", ".e", "systemd-timesyn"]);
+    let names = |watch: &mut Watch, now: &[GuestProcess], tree: &HashSet<u64>| {
+        watch
+            .candidates(now, tree)
+            .iter()
+            .map(|process| process.identity.tgid)
+            .collect::<Vec<u32>>()
+    };
+    // First list: deferred.
+    assert_eq!(names(&mut watch, &now, &tree), [1049, 1050, 1060]);
+    // Second list, still outside the tree (it escaped tracing): read.
+    assert_eq!(names(&mut watch, &now, &tree), [1049, 1050, 1060, 670]);
+    // A child that entered the tree by the second list is not read.
+    let (mut watch, mut now, _) = mirai_like();
+    now.push(process(671, 108, 668, "a", 24));
+    assert_eq!(names(&mut watch, &now, &tree), [1049, 1050, 1060]);
+    tree.insert(108);
+    assert_eq!(names(&mut watch, &now, &tree), [1049, 1050, 1060]);
 }
 
 #[test]

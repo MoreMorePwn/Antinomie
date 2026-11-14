@@ -342,7 +342,7 @@ impl Worker {
                 }
                 continue;
             };
-            let Some(run) = session.runs.get(&cookie) else {
+            let Some(run) = session.runs.get_mut(&cookie) else {
                 continue;
             };
             let next = run

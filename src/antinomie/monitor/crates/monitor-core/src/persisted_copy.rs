@@ -161,6 +161,9 @@ pub(crate) enum Looked {
     Copy,
     /// The guest could not read its program; tried again while checks last.
     Unreadable(u8),
+    /// The tree's child, outside the tree on one list: read on the next if
+    /// still outside.
+    Deferred,
 }
 
 /// A program outside the tree being read and hashed, a few chunks per turn of
@@ -300,12 +303,13 @@ impl Watch {
 
     /// The processes worth reading, oldest first: alive now, not before the
     /// launch, not in the recorded tree, not looked at already. A process
-    /// whose parent (in the same list) is in the tree is the tree's own
-    /// child that the host has not read the fork of yet (a slow guest
-    /// forking many children at once): the guest traces it, so it is not
-    /// read, and the next list finds it in the tree.
+    /// whose parent (in the same list) is in the tree may be the tree's own
+    /// child whose fork the host has not read yet (a slow guest forking many
+    /// children at once): it is deferred for one list, and read like any
+    /// other on the next list if it is still outside the tree (a child that
+    /// escaped tracing).
     pub(crate) fn candidates<'a>(
-        &self,
+        &mut self,
         processes: &'a [GuestProcess],
         tree: &HashSet<u64>,
     ) -> Vec<&'a GuestProcess> {
@@ -317,20 +321,33 @@ impl Watch {
             .filter(|process| tree.contains(&process.identity.task_cookie))
             .map(|process| process.identity.tgid)
             .collect();
-        let mut found: Vec<&GuestProcess> = processes
+        let outside: Vec<&GuestProcess> = processes
             .iter()
             .filter(|process| {
                 let key = (process.identity.tgid, process.identity.task_cookie);
-                !baseline.contains(&key)
-                    && !tree.contains(&process.identity.task_cookie)
-                    && !in_tree.contains(&process.parent_tgid)
-                    && match self.looked.get(&key) {
-                        None => true,
-                        Some(Looked::Unreadable(tries)) => *tries < UNREADABLE_TRIES,
-                        Some(_) => false,
-                    }
+                !baseline.contains(&key) && !tree.contains(&process.identity.task_cookie)
             })
             .collect();
+        let mut found = Vec::new();
+        for process in outside {
+            let key = (process.identity.tgid, process.identity.task_cookie);
+            let wanted = match self.looked.get(&key) {
+                // First seen as the tree's child: wait one list, if there is
+                // room to remember it.
+                None if in_tree.contains(&process.parent_tgid)
+                    && self.looked.len() < LOOKED_MAX =>
+                {
+                    self.looked.insert(key, Looked::Deferred);
+                    false
+                }
+                None | Some(Looked::Deferred) => true,
+                Some(Looked::Unreadable(tries)) => *tries < UNREADABLE_TRIES,
+                Some(_) => false,
+            };
+            if wanted {
+                found.push(process);
+            }
+        }
         found.sort_by_key(|process| process.identity.start_boot_ns);
         found
     }
