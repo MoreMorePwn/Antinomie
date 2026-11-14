@@ -3,6 +3,7 @@
 //! objective, with the capabilities behind a selected technique below.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 use std::collections::BTreeMap;
 
 /// Enterprise ATT&CK tactics in matrix order; others follow by name.
@@ -191,8 +192,9 @@ pub(super) fn show(ui: &mut egui::Ui, section: &AnalysisSection, state: &mut Cap
                                                 .selected(selected)
                                                 .wrap(),
                                         );
-                                        let response = response
-                                            .on_hover_text(technique.capabilities.join("\n"));
+                                        // The capabilities behind the count.
+                                        let response =
+                                            response.value_tip(technique.capabilities.join("\n"));
                                         if response.clicked() {
                                             state.selected = (!selected).then_some(key);
                                         }

@@ -399,22 +399,32 @@ impl ReportDialog {
                 });
                 ui.add_space(6.0);
                 ui.label(theme::section_title(ui, "Options"));
-                ui.checkbox(
-                    &mut self.choices.defang,
-                    "Defang indicators in HTML, PDF and Markdown",
-                )
-                .on_hover_text("hxxp://example[.]com. JSON, MISP and STIX keep the raw values.");
+                crate::widgets::with_help(
+                    ui,
+                    "hxxp://example[.]com. JSON, MISP and STIX keep the raw values.",
+                    |ui| {
+                        ui.checkbox(
+                            &mut self.choices.defang,
+                            "Defang indicators in HTML, PDF and Markdown",
+                        )
+                    },
+                );
                 ui.add_space(6.0);
                 ui.label(theme::section_title(ui, "Folder"));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.choices.folder)
-                        .hint_text(crate::theme::placeholder(ui, hint))
-                        .desired_width(f32::INFINITY),
-                )
-                .on_hover_text(format!(
-                    "Empty: {}. A path that is not absolute is inside the data folder.",
-                    default.display()
-                ));
+                crate::widgets::with_help(
+                    ui,
+                    format!(
+                        "Empty: {}. A path that is not absolute is inside the data folder.",
+                        default.display()
+                    ),
+                    |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.choices.folder)
+                                .hint_text(crate::theme::placeholder(ui, hint))
+                                .desired_width(f32::INFINITY),
+                        )
+                    },
+                );
             });
             ui.add_space(4.0);
             ui.label(
@@ -459,14 +469,17 @@ impl ReportDialog {
                     if running {
                         cancel_run = ui.button("Cancel").clicked();
                     } else {
-                        start = ui
-                            .add_enabled(ready, egui::Button::new("Export"))
-                            .on_disabled_hover_text(if self.exported {
+                        start = crate::widgets::with_help_or(
+                            ui,
+                            "",
+                            if self.exported {
                                 "Already written. Change a choice to write another set."
                             } else {
                                 "Choose a format"
-                            })
-                            .clicked();
+                            },
+                            |ui| ui.add_enabled(ready, egui::Button::new("Export")),
+                        )
+                        .clicked();
                         close = ui.button("Close").clicked();
                     }
                 },

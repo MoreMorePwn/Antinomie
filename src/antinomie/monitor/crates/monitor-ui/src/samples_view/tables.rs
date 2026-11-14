@@ -71,34 +71,35 @@ impl SamplesView {
                 &families,
             );
             let ticked = &mut self.filters.tags;
-            egui::ComboBox::from_id_salt("samples_tags")
-                .selected_text(match ticked.len() {
-                    0 => "Tags: all".to_string(),
-                    1 => format!("Tags: {}", ticked.iter().next().map_or("", String::as_str)),
-                    n => format!("Tags: {n} ticked"),
-                })
-                .height(360.0)
-                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                .show_ui(ui, |ui| {
-                    if ui
-                        .add_enabled(!ticked.is_empty(), egui::Button::new("Clear"))
-                        .clicked()
-                    {
-                        ticked.clear();
-                    }
-                    for (tag, count) in &tags {
-                        let mut on = ticked.contains(tag);
-                        if ui.checkbox(&mut on, format!("{tag}  ({count})")).changed() {
-                            if on {
-                                ticked.insert(tag.clone());
-                            } else {
-                                ticked.remove(tag);
+            crate::widgets::with_help(ui, "Samples with any of the ticked tags", |ui| {
+                egui::ComboBox::from_id_salt("samples_tags")
+                    .selected_text(match ticked.len() {
+                        0 => "Tags: all".to_string(),
+                        1 => format!("Tags: {}", ticked.iter().next().map_or("", String::as_str)),
+                        n => format!("Tags: {n} ticked"),
+                    })
+                    .height(360.0)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .add_enabled(!ticked.is_empty(), egui::Button::new("Clear"))
+                            .clicked()
+                        {
+                            ticked.clear();
+                        }
+                        for (tag, count) in &tags {
+                            let mut on = ticked.contains(tag);
+                            if ui.checkbox(&mut on, format!("{tag}  ({count})")).changed() {
+                                if on {
+                                    ticked.insert(tag.clone());
+                                } else {
+                                    ticked.remove(tag);
+                                }
                             }
                         }
-                    }
-                })
-                .response
-                .on_hover_text("Samples with any of the ticked tags");
+                    })
+                    .response
+            });
             if self.filters.active() && ui.button("Clear filters").clicked() {
                 self.filters = Filters::default();
             }
@@ -337,7 +338,7 @@ impl SamplesView {
                             crate::theme::spinner(ui);
                             if ui
                                 .small_button("Cancel")
-                                .on_hover_text("Stop this download; nothing is kept")
+                                .on_hover_text("Stop; nothing is kept")
                                 .clicked()
                             {
                                 cancel.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -599,16 +600,14 @@ impl SamplesView {
                             }
                             let can = cx.running && !pending;
                             let destination = guest_path(info, sample.pushes.len());
-                            if ui
-                                .add_enabled(can && runs_here, egui::Button::new("Send and run…"))
-                                .on_hover_text(format!(
+                            if crate::widgets::with_help_or(ui, format!(
                                     "Send to {destination}, then open Run program with it to choose how it runs"
-                                ))
-                                .on_disabled_hover_text(if runs_here {
+                                ), if runs_here {
                                     "Start the VM first"
                                 } else {
                                     verdict.as_ref().err().map_or("", String::as_str)
-                                })
+                                }, |ui| ui
+                                .add_enabled(can && runs_here, egui::Button::new("Send and run…")))
                                 .clicked()
                             {
                                 let uid = if self.as_root { 0 } else { 1000 };
@@ -634,12 +633,10 @@ impl SamplesView {
                                     }),
                                 });
                             }
-                            if ui
-                                .add_enabled(can, egui::Button::new("Send to VM"))
-                                .on_hover_text(format!(
+                            if crate::widgets::with_help(ui, format!(
                                     "Send to {destination} without running it (executable)"
-                                ))
-                                .on_disabled_hover_text("Start the VM first")
+                                ), |ui| ui
+                                .add_enabled(can, egui::Button::new("Send to VM")).on_disabled_hover_text("Start the VM first"))
                                 .clicked()
                             {
                                 action = Some(SamplesAction::Push {

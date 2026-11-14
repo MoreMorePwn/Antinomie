@@ -210,14 +210,22 @@ impl AddDialog {
                             {
                                 self.start_probe(ctx, data_dir);
                             }
-                            if ui
-                                .add_enabled(can_choose && !busy, egui::Button::new("Choose file…"))
-                                .on_disabled_hover_text(if busy {
+                            if crate::widgets::with_help_or(
+                                ui,
+                                "",
+                                if busy {
                                     "Wait for the file to be added"
                                 } else {
                                     "No file chooser: install zenity to browse, or type the path"
-                                })
-                                .clicked()
+                                },
+                                |ui| {
+                                    ui.add_enabled(
+                                        can_choose && !busy,
+                                        egui::Button::new("Choose file…"),
+                                    )
+                                },
+                            )
+                            .clicked()
                             {
                                 outcome = Outcome::ChooseFile;
                             }
@@ -329,16 +337,19 @@ impl AddDialog {
                         });
                 }
                 ui.add_space(6.0);
-                ui.add_enabled(
-                    !busy,
-                    egui::Checkbox::new(
-                        &mut self.delete_original,
-                        "Delete the original after it is archived",
-                    ),
-                )
-                .on_hover_text(
+                crate::widgets::with_help(
+                    ui,
                     "The archive is read back and its hash checked first. The file is deleted \
                      with a plain delete and its path is logged.",
+                    |ui| {
+                        ui.add_enabled(
+                            !busy,
+                            egui::Checkbox::new(
+                                &mut self.delete_original,
+                                "Delete the original after it is archived",
+                            ),
+                        )
+                    },
                 );
                 if let Some(error) = &self.error {
                     ui.colored_label(theme::error(), error);

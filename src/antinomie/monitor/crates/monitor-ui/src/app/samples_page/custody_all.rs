@@ -120,10 +120,12 @@ impl CustodyAll {
                 }
             },
             |ui| {
-                if ui
-                    .add_enabled(self.loading.is_none(), egui::Button::new("Verify all"))
-                    .on_hover_text("Recompute every hash of every sample and the library index")
-                    .clicked()
+                if crate::widgets::with_help(
+                    ui,
+                    "Recompute every hash of every sample and the library index",
+                    |ui| ui.add_enabled(self.loading.is_none(), egui::Button::new("Verify all")),
+                )
+                .clicked()
                 {
                     self.stale = true;
                 }

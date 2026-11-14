@@ -5,6 +5,7 @@
 //! It only reads the archive; it never runs or unpacks anything.
 use super::*;
 use crate::analysis::workspace::content::{parse_offset, render, Format};
+use crate::widgets::Tip as _;
 use std::sync::Arc;
 
 /// One page, as Static analysis › Content reads it.
@@ -247,7 +248,7 @@ impl Viewer {
                 ] {
                     if ui
                         .add_enabled(enabled, egui::Button::new(icon))
-                        .on_hover_text(hover)
+                        .name_tip(hover)
                         .clicked()
                     {
                         target = Some(offset);
@@ -313,10 +314,12 @@ impl Viewer {
                     self.offset,
                     &data[self.offset as usize..end as usize],
                 );
-                if ui
-                    .button(format!("{} Copy page", egui_phosphor::regular::COPY))
-                    .on_hover_text(format!("Copy this page as {}", format.label()))
-                    .clicked()
+                if crate::widgets::with_help(
+                    ui,
+                    format!("Copy this page as {}", format.label()),
+                    |ui| ui.button(format!("{} Copy page", egui_phosphor::regular::COPY)),
+                )
+                .clicked()
                 {
                     ui.ctx().copy_text(text.clone());
                 }

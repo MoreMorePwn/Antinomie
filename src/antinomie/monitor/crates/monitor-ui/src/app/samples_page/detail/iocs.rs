@@ -208,14 +208,8 @@ pub(super) fn check_online(
     row: &SampleIoc,
     go: &mut Option<Go>,
 ) {
-    let response = ui
-        .add_enabled(have_key, egui::Button::new("Check online"))
-        .on_hover_text(
-            "Opens the newest run with this indicator in Triage; turn on online lookups there",
-        )
-        .on_disabled_hover_text(
-            "No abuse.ch key is stored. Add one in Tools > API keys to ask abuse.ch about an indicator.",
-        );
+    let response = crate::widgets::with_help_or(ui, "Opens the newest run with this indicator in Triage; turn on online lookups there", "No abuse.ch key is stored. Add one in Tools > API keys to ask abuse.ch about an indicator.", |ui| ui
+        .add_enabled(have_key, egui::Button::new("Check online")));
     if response.clicked() {
         if let Some(seen) = row.sightings.last() {
             *go = Some(Go::Triage(seen.run, key_of(row)));
@@ -346,8 +340,7 @@ impl MonitorApp {
                     "Show hxxp and [.] instead of live values; Copy follows it",
                 ),
             ] {
-                if widgets::toggle_chip(ui, label, *flag, None)
-                    .on_hover_text(tip)
+                if crate::widgets::with_help(ui, tip, |ui| widgets::toggle_chip(ui, label, *flag, None))
                     .clicked()
                 {
                     *flag = !*flag;
@@ -373,12 +366,11 @@ impl MonitorApp {
             match selected {
                 Some(row) => check_online(ui, key, row, go),
                 None => {
-                    ui.add_enabled(false, egui::Button::new("Check online"))
-                        .on_disabled_hover_text(if key {
+                    crate::widgets::with_help_or(ui, "", if key {
                             "Select an indicator first"
                         } else {
                             "No abuse.ch key is stored. Add one in Tools > API keys to ask abuse.ch about an indicator."
-                        });
+                        }, |ui| ui.add_enabled(false, egui::Button::new("Check online")));
                 }
             }
         });
@@ -581,10 +573,10 @@ impl MonitorApp {
                     .runs
                     .iter()
                     .any(|entry| entry.number == seen.run && entry.folder);
-                if ui
-                    .add_enabled(has_folder, egui::Button::new(parts::run_name(seen.run)))
-                    .on_disabled_hover_text("The run's folder was deleted")
-                    .clicked()
+                if crate::widgets::with_help_or(ui, "", "The run's folder was deleted", |ui| {
+                    ui.add_enabled(has_folder, egui::Button::new(parts::run_name(seen.run)))
+                })
+                .clicked()
                 {
                     *go = Some(Go::Triage(seen.run, key_of(row)));
                     ui.close();

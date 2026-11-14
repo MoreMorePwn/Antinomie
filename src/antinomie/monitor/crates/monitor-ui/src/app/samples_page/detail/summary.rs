@@ -453,10 +453,10 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
             // The report's own state: green only when every check finished.
             let (word, tone) = report_state(report.state);
             widgets::chip(ui, word, tone);
-            if ui
-                .button("Open Static analysis")
-                .on_hover_text("Open this report in the Static analysis tab")
-                .clicked()
+            if crate::widgets::with_help(ui, "Open this report in the Static analysis tab", |ui| {
+                ui.button("Open Static analysis")
+            })
+            .clicked()
             {
                 *go = Some(Go::Report(AnalysisKind::Metadata));
             }
@@ -545,10 +545,12 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                             .on_hover_text(&result);
                     },
                 );
-                open = ui
-                    .button("Open")
-                    .on_hover_text(format!("Open {label} in Static analysis"))
-                    .clicked();
+                open = crate::widgets::with_help(
+                    ui,
+                    format!("Open {label} in Static analysis"),
+                    |ui| ui.button("Open"),
+                )
+                .clicked();
                 if let Some(notice) = &notice {
                     ui.allocate_ui_with_layout(
                         egui::vec2(notice_width, 0.0),
@@ -995,18 +997,20 @@ fn archive_state(
                 }
                 None => {}
             }
-            if ui
-                .add_enabled(data.archived && !verifying, egui::Button::new("Verify"))
-                .on_hover_text("Read the archive back and compare its SHA-256")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "Read the archive back and compare its SHA-256",
+                |ui| ui.add_enabled(data.archived && !verifying, egui::Button::new("Verify")),
+            )
+            .clicked()
             {
                 *go = Some(Go::Verify);
             }
-            if ui
-                .add_enabled(data.archived, egui::Button::new("View content"))
-                .on_hover_text("Open the archived file in the viewer")
-                .on_disabled_hover_text("The archive was removed")
-                .clicked()
+            if crate::widgets::with_help(ui, "Open the archived file in the viewer", |ui| {
+                ui.add_enabled(data.archived, egui::Button::new("View content"))
+                    .on_disabled_hover_text("The archive was removed")
+            })
+            .clicked()
             {
                 *go = Some(Go::View);
             }

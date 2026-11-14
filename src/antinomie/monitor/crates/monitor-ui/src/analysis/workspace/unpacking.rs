@@ -112,10 +112,12 @@ fn details(ui: &mut egui::Ui, layer: &UnpackLayer) -> Option<ReportAction> {
         if layer.index != 0 {
             match &layer.report_id {
                 Some(id) => {
-                    if ui
-                        .button("Show its analysis")
-                        .on_hover_text("Open this layer's own static analysis in the Report list")
-                        .clicked()
+                    if crate::widgets::with_help(
+                        ui,
+                        "Open this layer's own static analysis in the Report list",
+                        |ui| ui.button("Show its analysis"),
+                    )
+                    .clicked()
                     {
                         action = Some(ReportAction::ShowReport {
                             report_id: id.clone(),

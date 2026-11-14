@@ -11,6 +11,7 @@
 use super::detail::Data;
 use super::note_picker::{lineage_nodes, Candidates, Picker};
 use super::*;
+use crate::widgets::Tip as _;
 use crate::widgets::{self, Tone};
 use antinomie_monitor_core::samples::{Note, NoteRef, RefKind, MAX_NOTE};
 
@@ -128,7 +129,8 @@ pub(super) fn chip(
                 .stroke(egui::Stroke::NONE),
         )
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(if exists {
+        // A reference's kind and whether it is still there.
+        .value_tip(if exists {
             format!("{} · open it", reference.kind.label())
         } else {
             format!(
@@ -143,7 +145,7 @@ pub(super) fn chip(
         && exists
         && ui
             .add(egui::Button::new(RichText::new("↗").small().color(tone.fg())).fill(tone.bg()))
-            .on_hover_text("Open the file in its window")
+            .name_tip("Open in its window")
             .clicked()
     {
         out = ChipOut::OpenFile;

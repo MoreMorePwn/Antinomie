@@ -275,22 +275,26 @@ fn header(
         let run = state.linked_run().map(str::to_owned);
         let mut open_run = None;
         if let Some(run_id) = run {
-            if ui
-                .button(format!("{} Run", egui_phosphor::regular::PLAY_CIRCLE))
-                .on_hover_text(format!("Open run {run_id} in Run History"))
-                .clicked()
+            if crate::widgets::with_help(ui, format!("Open run {run_id} in Run History"), |ui| {
+                ui.button(format!("{} Run", egui_phosphor::regular::PLAY_CIRCLE))
+            })
+            .clicked()
             {
                 open_run = Some(ReportAction::OpenRun { run_id });
             }
         }
         if let Some(offset) = selected_offset(report, state) {
-            if ui
-                .button(format!(
-                    "{} Show 0x{offset:x} in Content",
-                    egui_phosphor::regular::FILE_MAGNIFYING_GLASS
-                ))
-                .on_hover_text("Open the file content at the selected row's offset")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "Open the file content at the selected row's offset",
+                |ui| {
+                    ui.button(format!(
+                        "{} Show 0x{offset:x} in Content",
+                        egui_phosphor::regular::FILE_MAGNIFYING_GLASS
+                    ))
+                },
+            )
+            .clicked()
             {
                 state.content.go_to(offset);
                 state.tab = Tab::Content;

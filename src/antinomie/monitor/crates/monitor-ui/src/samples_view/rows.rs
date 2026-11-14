@@ -218,19 +218,16 @@ impl SamplesView {
         let ready = self.key_saved && self.searching.is_none();
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button(format!("{} Key", egui_phosphor::regular::KEY))
-                    .on_hover_text(format!(
+                if crate::widgets::with_help(ui, format!(
                         "Change the {} in Tools > API keys",
                         samples::source_api_key(self.source).label()
-                    ))
+                    ), |ui| ui
+                    .button(format!("{} Key", egui_phosphor::regular::KEY)))
                     .clicked()
                 {
                     self.want_keys = true;
                 }
-                if ui
-                    .add_enabled(ready, egui::Button::new("Newest (all)"))
-                    .on_hover_text(match self.source {
+                if crate::widgets::with_help(ui, match self.source {
                         Source::MalwareBazaar => {
                             "MalwareBazaar's latest 100 uploads of every type (it lists no \
                              architectures for these)"
@@ -239,33 +236,30 @@ impl SamplesView {
                             "This list is the last 24 hours, not an archive (hashes only until \
                              searched or downloaded)"
                         }
-                    })
+                    }, |ui| ui
+                    .add_enabled(ready, egui::Button::new("Newest (all)")))
                     .clicked()
                 {
                     self.text.clear();
                     all = true;
                 }
                 if self.source == Source::MalShare
-                    && ui
+                    && crate::widgets::with_help(ui, "Official dated SHA-256 lists. This is separate from the last-24-hours list. Cached-only mode covers local metadata. Archive dates are date-only observations, not first-seen timestamps. Type and architecture are unknown until a sample is downloaded.", |ui| ui
                         .add_enabled(
                             self.searching.is_none(),
                             egui::Button::new("Newest in range"),
-                        )
-                        .on_hover_text(
-                            "Official dated SHA-256 lists. This is separate from the last-24-hours list. Cached-only mode covers local metadata. Archive dates are date-only observations, not first-seen timestamps. Type and architecture are unknown until a sample is downloaded.",
-                        )
+                        ))
                         .clicked()
                 {
                     self.search_dated(cx, false);
                 }
-                if ui
-                    .add_enabled(ready, egui::Button::new("Newest Linux"))
-                    .on_hover_text(match self.source {
+                if crate::widgets::with_help(ui, match self.source {
                         Source::MalwareBazaar => {
                             "The newest ELF programs and shell scripts: what the VMs run"
                         }
                         Source::MalShare => "This list is the last 24 hours, not an archive",
-                    })
+                    }, |ui| ui
+                    .add_enabled(ready, egui::Button::new("Newest Linux")))
                     .clicked()
                 {
                     self.text.clear();
@@ -402,10 +396,10 @@ impl SamplesView {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Linux families:").color(theme::muted()));
             for (name, about) in samples::STARTERS {
-                if ui
-                    .add_enabled(ready, egui::Button::new(*name).small())
-                    .on_hover_text(*about)
-                    .clicked()
+                if crate::widgets::with_help(ui, *about, |ui| {
+                    ui.add_enabled(ready, egui::Button::new(*name).small())
+                })
+                .clicked()
                 {
                     self.text = (*name).into();
                     search = Some((*name).into());

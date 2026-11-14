@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! What the sample window's Custody log tab, the global custody view and the
 //! export dialog share: the verify banner, the check mark, the head hash.
+use crate::widgets::Tip as _;
 use crate::widgets::Tone;
 use antinomie_monitor_core::samples::{short, ChainCheck, EntryState};
 use eframe::egui::{self, RichText};
@@ -54,10 +55,12 @@ pub(super) fn banner(ui: &mut egui::Ui, check: &ChainCheck, verifying: bool) -> 
                         }
                     }
                 }
-                if ui
-                    .add_enabled(!verifying, egui::Button::new("Verify"))
-                    .on_hover_text("Recompute every hash and compare with the library index")
-                    .clicked()
+                if crate::widgets::with_help(
+                    ui,
+                    "Recompute every hash and compare with the library index",
+                    |ui| ui.add_enabled(!verifying, egui::Button::new("Verify")),
+                )
+                .clicked()
                 {
                     verify = true;
                 }
@@ -86,7 +89,7 @@ pub(super) fn head(ui: &mut egui::Ui, hash: &str) {
     }
     if ui
         .small_button(egui_phosphor::regular::COPY)
-        .on_hover_text("Copy the head hash, to keep it somewhere else")
+        .name_tip("Copy the head hash")
         .clicked()
     {
         ui.ctx().copy_text(hash.to_owned());

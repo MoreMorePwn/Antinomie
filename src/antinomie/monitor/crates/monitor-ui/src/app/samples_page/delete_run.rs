@@ -272,11 +272,8 @@ impl DeleteRun {
                                 self.keep.insert(item.key.clone(), keep);
                             }
                             if item.place == ArtifactPlace::Outside {
-                                ui.label(
-                                    RichText::new(egui_phosphor::regular::INFO)
-                                        .color(theme::muted()),
-                                )
-                                .on_hover_text(
+                                crate::widgets::help(
+                                    ui,
                                     "Keep copies this file into the sample's record. Delete does not copy it: the original stays in the VM until you delete it from Memory or Network.",
                                 );
                             }

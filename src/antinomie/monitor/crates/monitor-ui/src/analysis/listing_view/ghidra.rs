@@ -5,6 +5,7 @@
 //! which one is on screen and for which architecture; an address in a row
 //! jumps to its row.
 use super::*;
+use crate::widgets::Tip as _;
 use crate::widgets::{chip, Tone};
 use antinomie_monitor_core::{
     analysis::ARCHITECTURE_MARK, AnalysisDisassembly, AnalysisReference, AnalysisReferenceKind,
@@ -104,9 +105,8 @@ pub(super) fn source_bar(
                     crate::values::thousands(disassembly.instructions)
                 ));
                 if builtin
-                    && ui
-                        .small_button(format!("Show {} rows", builtin_name(section)))
-                        .on_hover_text("Switch to the built-in disassembler's rows")
+                    && crate::widgets::with_help(ui, "Switch to the built-in disassembler's rows", |ui| ui
+                        .small_button(format!("Show {} rows", builtin_name(section))))
                         .clicked()
                 {
                     state.builtin = true;
@@ -119,9 +119,8 @@ pub(super) fn source_bar(
                     ui.label(architecture);
                 }
                 if let Some(disassembly) = ghidra {
-                    if ui
-                        .small_button(format!("Show {} listing", disassembly.tool))
-                        .on_hover_text("Switch to Ghidra's listing with labels and references")
+                    if crate::widgets::with_help(ui, "Switch to Ghidra's listing with labels and references", |ui| ui
+                        .small_button(format!("Show {} listing", disassembly.tool)))
                         .clicked()
                     {
                         state.builtin = false;
@@ -233,23 +232,27 @@ pub(super) fn instruction_cells(
         if xrefs.is_empty() {
             return;
         }
-        ui.menu_button(
-            format!("{} {}", egui_phosphor::regular::ARROW_UP, xrefs.len()),
-            |ui| {
-                ui.label(format!("Referenced from {} place(s)", xrefs.len()));
-                for xref in xrefs {
-                    if ui
-                        .button(format!("{} {:x}", kind_word(xref.kind), xref.address))
-                        .clicked()
-                    {
-                        *jump = Some(xref.address);
-                        ui.close();
-                    }
-                }
-            },
-        )
-        .response
-        .on_hover_text("Where this address is called, jumped to or read from");
+        {
+            {
+                ui.menu_button(
+                    format!("{} {}", egui_phosphor::regular::ARROW_UP, xrefs.len()),
+                    |ui| {
+                        ui.label(format!("Referenced from {} place(s)", xrefs.len()));
+                        for xref in xrefs {
+                            if ui
+                                .button(format!("{} {:x}", kind_word(xref.kind), xref.address))
+                                .clicked()
+                            {
+                                *jump = Some(xref.address);
+                                ui.close();
+                            }
+                        }
+                    },
+                )
+                .response
+                .name_tip("Referenced from");
+            }
+        }
     });
 }
 

@@ -43,10 +43,12 @@ pub(super) fn notes(
             // A bound a setting raises leads to that setting's field; the rest
             // (a file that disagrees with itself, an unpacking depth) are fixed.
             if let Some(setting) = limit.setting
-                && ui
-                    .small_button("Analysis settings…")
-                    .on_hover_text("Open Settings > Analysis at the setting that raises this bound")
-                    .clicked()
+                && crate::widgets::with_help(
+                    ui,
+                    "Open Settings > Analysis at the setting that raises this bound",
+                    |ui| ui.small_button("Analysis settings…"),
+                )
+                .clicked()
             {
                 action = Some(ReportAction::OpenAnalysisLimit(setting));
             }
@@ -57,12 +59,8 @@ pub(super) fn notes(
                 && section.kind != AnalysisKind::Regex
             {
                 let label = format!("Run again with 2× time ({})", antinomie_monitor_core::analysis::duration_text(seconds));
-                if ui
-                    .add_enabled(finished, egui::Button::new(label))
-                    .on_hover_text(
-                        "Run this check again, alone, with twice the time it had; the rest of the analysis is not repeated",
-                    )
-                    .on_disabled_hover_text("Wait for the analysis to finish")
+                if crate::widgets::with_help_or(ui, "Run this check again, alone, with twice the time it had; the rest of the analysis is not repeated", "Wait for the analysis to finish", |ui| ui
+                    .add_enabled(finished, egui::Button::new(label)))
                     .clicked()
                 {
                     action = Some(ReportAction::RunCheckLonger {
@@ -72,9 +70,8 @@ pub(super) fn notes(
                     });
                 }
             }
-            if ui
-                .button("Time limit settings…")
-                .on_hover_text("Open Settings, where the time each analysis tool may run is set")
+            if crate::widgets::with_help(ui, "Open Settings, where the time each analysis tool may run is set", |ui| ui
+                .button("Time limit settings…"))
                 .clicked()
             {
                 action = Some(ReportAction::OpenAnalysisSettings);

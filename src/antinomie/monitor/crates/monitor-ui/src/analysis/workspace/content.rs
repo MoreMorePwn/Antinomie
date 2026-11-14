@@ -5,6 +5,7 @@
 use super::*;
 use crate::analysis::row_menu::preview_matches;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::ANALYSIS_PREVIEW_MAX_SIZE;
 use std::fmt::Write as _;
 
@@ -112,7 +113,7 @@ pub(super) fn show(
         ] {
             if ui
                 .add_enabled(enabled, egui::Button::new(icon))
-                .on_hover_text(hover)
+                .name_tip(hover)
                 .clicked()
             {
                 target = Some(offset);
@@ -165,14 +166,16 @@ pub(super) fn show(
     match preview {
         Some(Ok(page)) if preview_matches(page, report, state.offset, data_len) => {
             let text = render(state.format, page.offset, &page.data);
-            if ui
-                .button(format!("{} Copy page", egui_phosphor::regular::COPY))
-                .on_hover_text(format!(
+            if crate::widgets::with_help(
+                ui,
+                format!(
                     "Copy these {} as {}",
                     crate::values::file_size(page.data.len() as u64),
                     state.format.label()
-                ))
-                .clicked()
+                ),
+                |ui| ui.button(format!("{} Copy page", egui_phosphor::regular::COPY)),
+            )
+            .clicked()
             {
                 ui.ctx().copy_text(text.clone());
             }

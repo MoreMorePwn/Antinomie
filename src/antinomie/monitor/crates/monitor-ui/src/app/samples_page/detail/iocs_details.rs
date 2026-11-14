@@ -146,11 +146,18 @@ impl MonitorApp {
                             .runs
                             .iter()
                             .any(|run| run.number == seen.run && run.folder);
-                        if ui
-                            .add_enabled(folder, egui::Button::new("Open in Triage ›").small())
-                            .on_disabled_hover_text("The run's folder was deleted")
-                            .on_hover_text("Open this run in Triage at this indicator")
-                            .clicked()
+                        if crate::widgets::with_help_or(
+                            ui,
+                            "Open this run in Triage at this indicator",
+                            "The run's folder was deleted",
+                            |ui| {
+                                ui.add_enabled(
+                                    folder,
+                                    egui::Button::new("Open in Triage ›").small(),
+                                )
+                            },
+                        )
+                        .clicked()
                         {
                             go = Some(Go::Triage(seen.run, key_of(row)));
                         }

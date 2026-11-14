@@ -3,6 +3,7 @@
 //! children, latest run, short SHA-256), a search field, a tag filter that
 //! keeps samples with every selected tag, and Roots only.
 use super::{picker::TagPicker, *};
+use crate::widgets::Tip as _;
 use crate::{
     sample_tags,
     widgets::{self, fit_table, Tone},
@@ -170,24 +171,32 @@ impl MonitorApp {
             },
             |ui| {
                 add = ui.button("Add file…").clicked();
-                download = ui
-                    .button("Download…")
-                    .on_hover_text("Search MalwareBazaar and MalShare; downloads land here")
-                    .clicked();
-                custody = ui
-                    .button("Custody log")
-                    .on_hover_text("What happened to every sample, with the hash chain checked")
-                    .clicked();
-                verify = ui
-                    .add_enabled(
-                        self.samples_page.verifying.is_none(),
-                        egui::Button::new("Verify all"),
-                    )
-                    .on_hover_text("Read every archive back and compare its SHA-256")
-                    .clicked();
+                download = crate::widgets::with_help(
+                    ui,
+                    "Search MalwareBazaar and MalShare; downloads land here",
+                    |ui| ui.button("Download…"),
+                )
+                .clicked();
+                custody = crate::widgets::with_help(
+                    ui,
+                    "What happened to every sample, with the hash chain checked",
+                    |ui| ui.button("Custody log"),
+                )
+                .clicked();
+                verify = crate::widgets::with_help(
+                    ui,
+                    "Read every archive back and compare its SHA-256",
+                    |ui| {
+                        ui.add_enabled(
+                            self.samples_page.verifying.is_none(),
+                            egui::Button::new("Verify all"),
+                        )
+                    },
+                )
+                .clicked();
                 refresh = ui
                     .button(egui_phosphor::regular::ARROW_CLOCKWISE)
-                    .on_hover_text("Read the library and the runs again")
+                    .name_tip("Refresh")
                     .clicked();
             },
         );
@@ -228,8 +237,8 @@ impl MonitorApp {
             );
             crate::widgets::clear_button(ui, &edit, &mut self.samples_page.query);
             let count = self.samples_page.tag_filter.len();
-            if ui
-                .selectable_label(
+            if crate::widgets::with_help(ui, "Samples that have every selected tag", |ui| {
+                ui.selectable_label(
                     self.samples_page.tags_open,
                     if count == 0 {
                         "Tags ▾".to_owned()
@@ -237,8 +246,8 @@ impl MonitorApp {
                         format!("Tags ({count}) ▾")
                     },
                 )
-                .on_hover_text("Samples that have every selected tag")
-                .clicked()
+            })
+            .clicked()
             {
                 self.samples_page.tags_open = !self.samples_page.tags_open;
             }
@@ -248,9 +257,10 @@ impl MonitorApp {
             if count > 0 && widgets::link(ui, "Clear").clicked() {
                 self.samples_page.tag_filter.clear();
             }
-            if widgets::toggle_chip(ui, "Roots only", self.samples_page.roots_only, None)
-                .on_hover_text("Samples with no known parent")
-                .clicked()
+            if crate::widgets::with_help(ui, "Samples with no known parent", |ui| {
+                widgets::toggle_chip(ui, "Roots only", self.samples_page.roots_only, None)
+            })
+            .clicked()
             {
                 self.samples_page.roots_only = !self.samples_page.roots_only;
             }

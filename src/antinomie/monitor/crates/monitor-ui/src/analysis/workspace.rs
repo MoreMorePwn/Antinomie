@@ -19,6 +19,7 @@ use super::{
 };
 use crate::scroll_contain::ScrollContained as _;
 use crate::widgets::fit_table::{Col as TableColumn, FitBuilder};
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisExportFormat, AnalysisKind, AnalysisListingPage,
     AnalysisReport, AnalysisSection, AnalysisSpecimenPage, AnalysisState,
@@ -434,7 +435,7 @@ fn results(
         if forced.is_none()
             && ui
                 .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
-                .on_hover_text("Open this category in a separate pane")
+                .name_tip("Open in a pane")
                 .clicked()
         {
             action = Some(ReportAction::OpenSection {
@@ -776,7 +777,7 @@ fn identity(
                         ui.horizontal(|ui| {
                             if ui
                                 .small_button(egui_phosphor::regular::COPY)
-                                .on_hover_text(format!("Copy {label}"))
+                                .name_tip(format!("Copy {label}"))
                                 .clicked()
                             {
                                 ui.ctx().copy_text(value.clone());
@@ -826,10 +827,10 @@ pub(super) fn paired_card<R>(
 
 /// The small Run button of a category; true when it was pressed.
 fn run_button(ui: &mut egui::Ui, enabled: bool, hover: &str) -> bool {
-    ui.add_enabled(enabled, egui::Button::new("Run").small())
-        .on_hover_text(hover)
-        .on_disabled_hover_text("Wait for the analysis to finish")
-        .clicked()
+    crate::widgets::with_help_or(ui, hover, "Wait for the analysis to finish", |ui| {
+        ui.add_enabled(enabled, egui::Button::new("Run").small())
+    })
+    .clicked()
 }
 
 /// Why a category that is not in the report cannot be opened.

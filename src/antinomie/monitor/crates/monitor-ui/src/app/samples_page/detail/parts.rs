@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Small drawing helpers the sample window's tabs share.
 use super::*;
+use crate::widgets::Tip as _;
 
 /// A Summary section: its label (with a count when it has one), then `body`.
 pub(super) fn section(
@@ -66,7 +67,7 @@ pub(super) fn copyable(ui: &mut egui::Ui, label: &str, value: &str) {
         if !value.is_empty()
             && ui
                 .small_button(egui_phosphor::regular::COPY)
-                .on_hover_text(format!("Copy {label}"))
+                .name_tip(format!("Copy {label}"))
                 .clicked()
         {
             ui.ctx().copy_text(value.to_owned());
@@ -156,7 +157,7 @@ pub(super) fn copy_row_in(
             }
             if ui
                 .small_button(egui_phosphor::regular::COPY)
-                .on_hover_text(format!("Copy {label}"))
+                .name_tip(format!("Copy {label}"))
                 .clicked()
             {
                 ui.ctx().copy_text(value.to_owned());
@@ -262,9 +263,10 @@ pub(super) fn fitted_up_to(
 /// analysis. True when clicked.
 pub(super) fn open_all(ui: &mut egui::Ui, text: &str) -> bool {
     ui.add_space(4.0);
-    ui.button(text)
-        .on_hover_text("Open the whole list in Static analysis")
-        .clicked()
+    crate::widgets::with_help(ui, "Open the whole list in Static analysis", |ui| {
+        ui.button(text)
+    })
+    .clicked()
 }
 
 #[cfg(test)]

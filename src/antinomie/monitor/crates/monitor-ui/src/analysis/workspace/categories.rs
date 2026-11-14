@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Overview's Categories card: one row per analysis category.
 use super::*;
+use crate::widgets::Tip as _;
 
 /// Every category the analysis can run: its state and size, a name that
 /// opens its tab and the way to open it in a separate pane. One this report
@@ -118,7 +119,9 @@ pub(super) fn categories(
                                     .truncate(),
                                 )
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text(format!(
+                                // The title is cut to the column: whole, with
+                                // the summary, on hover.
+                                .value_tip(format!(
                                     "{}\n{}",
                                     section_title(kind),
                                     section.summary
@@ -165,7 +168,7 @@ pub(super) fn categories(
                         );
                         if ui
                             .button(egui_phosphor::regular::ARROW_SQUARE_OUT)
-                            .on_hover_text("Open category in a separate pane")
+                            .name_tip("Open in a pane")
                             .clicked()
                         {
                             action = Some(ReportAction::OpenSection {

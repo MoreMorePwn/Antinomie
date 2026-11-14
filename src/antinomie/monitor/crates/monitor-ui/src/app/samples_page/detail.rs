@@ -576,31 +576,33 @@ impl MonitorApp {
             }
         };
         let buttons = |ui: &mut egui::Ui| {
-            if ui
-                .button("Export report…")
-                .on_hover_text(
-                    "A report of the sample: identity, static analysis, every run, lineage, \
+            if crate::widgets::with_help(
+                ui,
+                "A report of the sample: identity, static analysis, every run, lineage, \
                          indicators and custody. HTML, PDF, JSON, MISP, STIX or Markdown",
-                )
-                .clicked()
+                |ui| ui.button("Export report…"),
+            )
+            .clicked()
             {
                 chosen = Some(Action::Report);
             }
-            if ui
-                .button("Export custody record…")
-                .on_hover_text("JSON with a verifier, or HTML; optionally signed with your own key")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "JSON with a verifier, or HTML; optionally signed with your own key",
+                |ui| ui.button("Export custody record…"),
+            )
+            .clicked()
             {
                 chosen = Some(Action::Export);
             }
-            if ui
-                .add_enabled(can_run, egui::Button::new("Run in VM…"))
-                .on_hover_text(
-                    "Send the archive into the running VM (its SHA-256 is read back first) \
+            if crate::widgets::with_help_or(
+                ui,
+                "Send the archive into the running VM (its SHA-256 is read back first) \
                          and open Run program with it",
-                )
-                .on_disabled_hover_text(why.clone().unwrap_or_else(|| "Start a VM first".into()))
-                .clicked()
+                why.clone().unwrap_or_else(|| "Start a VM first".into()),
+                |ui| ui.add_enabled(can_run, egui::Button::new("Run in VM…")),
+            )
+            .clicked()
             {
                 chosen = Some(Action::RunInVm);
             }
@@ -618,19 +620,15 @@ impl MonitorApp {
                                 .desired_width(280.0)
                                 .hint_text(crate::theme::placeholder(ui, "/bin/sh -c ls")),
                         );
-                        if ui
-                            .add_enabled(!program.trim().is_empty(), egui::Button::new("Send and open Run program"))
-                            .on_hover_text(
-                                "Sends the library into the running VM, then opens Run program with the program and LD_PRELOAD set to the library",
-                            )
+                        if crate::widgets::with_help(ui, "Sends the library into the running VM, then opens Run program with the program and LD_PRELOAD set to the library", |ui| ui
+                            .add_enabled(!program.trim().is_empty(), egui::Button::new("Send and open Run program")))
                             .clicked()
                         {
                             chosen = Some(Action::LoadInto(program.trim().to_owned()));
                             ui.close();
                         }
-                    })
-                    .response
-                    .on_hover_text("Run a program with this library preloaded into it");
+                    });
+                    crate::widgets::help(ui, "Run a program with this library preloaded into it");
                 });
                 ui.data_mut(|d| d.insert_temp(memory, program));
             }

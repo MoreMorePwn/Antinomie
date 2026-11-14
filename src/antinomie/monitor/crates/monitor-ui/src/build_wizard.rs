@@ -238,8 +238,9 @@ impl BuildWizard {
                 }
                 Kind::DebianXfce => "Debian 13 with the desktop you choose, as from the installer",
             };
-            ui.radio_value(&mut self.profile, index, profile.label)
-                .on_hover_text(detail);
+            crate::widgets::with_help(ui, detail, |ui| {
+                ui.radio_value(&mut self.profile, index, profile.label)
+            });
             ui.small(format!("    {detail}"));
         }
         ui.add_space(6.0);
@@ -381,12 +382,12 @@ impl BuildWizard {
                 antinomie_monitor_core::byte_size::short_size(size),
                 dir.display()
             ));
-            if ui
-                .small_button("Delete")
-                .on_hover_text(
-                    "The next native Debian Minimal build downloads and unpacks it again.",
-                )
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "The next native Debian Minimal build downloads and unpacks it again.",
+                |ui| ui.small_button("Delete"),
+            )
+            .clicked()
             {
                 self.probe.remove(
                     ui.ctx(),
@@ -598,15 +599,20 @@ impl BuildWizard {
         );
         ui.add_space(4.0);
         ui.label("HTTP proxy (leave empty for none)");
-        ui.add(
-            egui::TextEdit::singleline(&mut options.proxy)
-                .desired_width(crate::theme::plain_edit_width(420.0))
-                .hint_text(crate::theme::placeholder(
-                    ui,
-                    "http://user:password@host:port/",
-                )),
-        )
-        .on_hover_text("The proxy is used while building and is not kept in the image.");
+        crate::widgets::with_help(
+            ui,
+            "The proxy is used while building and is not kept in the image.",
+            |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut options.proxy)
+                        .desired_width(crate::theme::plain_edit_width(420.0))
+                        .hint_text(crate::theme::placeholder(
+                            ui,
+                            "http://user:password@host:port/",
+                        )),
+                )
+            },
+        );
         let mut probe = options.clone();
         probe.hostname = "probe".into();
         match probe.validate(self.kind()) {
@@ -624,12 +630,17 @@ impl BuildWizard {
         let automatic = build::automatic_base_name(kind, &self.options[self.profile].desktop);
         ui.horizontal(|ui| {
             ui.label("Base name");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.options[self.profile].name)
-                    .desired_width(crate::theme::plain_edit_width(320.0))
-                    .hint_text(crate::theme::placeholder(ui, &automatic)),
-            )
-            .on_hover_text("Shown in the base list; leave empty for the automatic name.");
+            crate::widgets::with_help(
+                ui,
+                "Shown in the base list; leave empty for the automatic name.",
+                |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.options[self.profile].name)
+                            .desired_width(crate::theme::plain_edit_width(320.0))
+                            .hint_text(crate::theme::placeholder(ui, &automatic)),
+                    )
+                },
+            );
         });
         ui.add_space(6.0);
         let options = self.options[self.profile].clone();

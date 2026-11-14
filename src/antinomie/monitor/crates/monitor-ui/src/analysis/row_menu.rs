@@ -5,6 +5,7 @@
 use super::records::{self, Column};
 use super::ReportAction;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisKind, AnalysisRange, AnalysisReport, AnalysisSpecimenPage,
 };
@@ -134,8 +135,12 @@ fn note_item(
             crate::app::note_menu_item(ui, Some(sha256), note_ref(report, kind, entry));
         }
         None => {
-            ui.add_enabled(false, egui::Button::new("Add note…"))
-                .on_disabled_hover_text("This report did not record its specimen's SHA-256");
+            crate::widgets::with_help_or(
+                ui,
+                "",
+                "This report did not record its specimen's SHA-256",
+                |ui| ui.add_enabled(false, egui::Button::new("Add note…")),
+            );
         }
     }
 }
@@ -176,10 +181,10 @@ pub(super) fn menu(
         }
     }
     if let Some(offset) = records::file_offset(entry, specimen_len).filter(|_| content) {
-        if ui
-            .button("Show in Content")
-            .on_hover_text(format!("Open the file content at 0x{offset:x}"))
-            .clicked()
+        if crate::widgets::with_help(ui, format!("Open the file content at 0x{offset:x}"), |ui| {
+            ui.button("Show in Content")
+        })
+        .clicked()
         {
             command = Some(RowCommand::ShowInContent(offset));
             ui.close();
@@ -286,7 +291,7 @@ fn copy_value(ui: &mut egui::Ui, label: &str, value: &str) {
         ui.strong(label);
         if ui
             .button(egui_phosphor::regular::COPY)
-            .on_hover_text(format!("Copy full {label}"))
+            .name_tip(format!("Copy full {label}"))
             .clicked()
         {
             ui.ctx().copy_text(value.to_owned());

@@ -580,25 +580,30 @@ fn artifact_buttons(
         || output.availability == Availability::WithVm && output.kind == Kind::Snapshot)
         && run_there;
     let reason = output.kind.open_unavailable().unwrap_or(why);
-    if ui
-        .add_enabled(
-            can_open && output.kind.open_unavailable().is_none(),
-            egui::Button::new(output.kind.open_label()).small(),
-        )
-        .on_disabled_hover_text(if run_there {
+    if crate::widgets::with_help_or(
+        ui,
+        "",
+        if run_there {
             reason
         } else {
             "The run's folder was deleted"
-        })
-        .clicked()
+        },
+        |ui| {
+            ui.add_enabled(
+                can_open && output.kind.open_unavailable().is_none(),
+                egui::Button::new(output.kind.open_label()).small(),
+            )
+        },
+    )
+    .clicked()
     {
         *act = Some(Act::Open(output.number, output.kind));
     }
     if go_to_run
-        && ui
-            .add_enabled(run_there, egui::Button::new("Go to run").small())
-            .on_disabled_hover_text("The run's folder was deleted")
-            .clicked()
+        && crate::widgets::with_help_or(ui, "", "The run's folder was deleted", |ui| {
+            ui.add_enabled(run_there, egui::Button::new("Go to run").small())
+        })
+        .clicked()
     {
         *act = Some(Act::GoToRun(output.number));
     }
@@ -606,10 +611,10 @@ fn artifact_buttons(
         output.availability,
         Availability::InRun | Availability::Kept(..)
     ) && !output.path.as_os_str().is_empty();
-    if ui
-        .add_enabled(folder, egui::Button::new("Open folder").small())
-        .on_disabled_hover_text(why)
-        .clicked()
+    if crate::widgets::with_help_or(ui, "", why, |ui| {
+        ui.add_enabled(folder, egui::Button::new("Open folder").small())
+    })
+    .clicked()
     {
         crate::evidence::reveal(ui.ctx(), &output.path);
     }
@@ -626,10 +631,10 @@ fn artifact_menu(
         Availability::Deleted => "The file was deleted",
         _ => "The file is missing",
     };
-    if ui
-        .add_enabled(here, egui::Button::new(output.kind.open_label()))
-        .on_disabled_hover_text(why)
-        .clicked()
+    if crate::widgets::with_help_or(ui, "", why, |ui| {
+        ui.add_enabled(here, egui::Button::new(output.kind.open_label()))
+    })
+    .clicked()
     {
         *act = Some(Act::Open(output.number, output.kind));
         ui.close();
@@ -638,24 +643,27 @@ fn artifact_menu(
         *act = Some(Act::GoToRun(output.number));
         ui.close();
     }
-    if ui
-        .add_enabled(here, egui::Button::new("Open folder"))
-        .on_disabled_hover_text(why)
-        .clicked()
+    if crate::widgets::with_help_or(ui, "", why, |ui| {
+        ui.add_enabled(here, egui::Button::new("Open folder"))
+    })
+    .clicked()
     {
         crate::evidence::reveal(ui.ctx(), &output.path);
         ui.close();
     }
     ui.separator();
     let is_file = here && crate::stat_cache::is_file(&output.path);
-    if ui
-        .add_enabled(is_file, egui::Button::new("Copy SHA-256"))
-        .on_disabled_hover_text(if here {
+    if crate::widgets::with_help_or(
+        ui,
+        "",
+        if here {
             "A memory dump is a folder of files"
         } else {
             why
-        })
-        .clicked()
+        },
+        |ui| ui.add_enabled(is_file, egui::Button::new("Copy SHA-256")),
+    )
+    .clicked()
     {
         copy_sha256(ui.ctx(), output.path.clone());
         ui.close();

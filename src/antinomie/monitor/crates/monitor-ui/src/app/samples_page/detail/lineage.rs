@@ -4,6 +4,7 @@
 //! its bar (system binaries, levels, run filter), a details line for the
 //! selected node and the per-run table behind a clicked edge label.
 use super::{parts, *};
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::samples::{
     build_lineage, EdgeKind, Known, LineageGraph, LineageOptions, NodeKind, NoteRef, RefKind,
     RunLineage,
@@ -324,19 +325,16 @@ fn stepper(ui: &mut egui::Ui, label: &str, value: &mut usize, max: usize) {
     ui.label(RichText::new(label).color(theme::muted()));
     if ui
         .add_enabled(*value > 0, egui::Button::new("−").small())
-        .on_hover_text(format!("One level fewer of {}", label.to_lowercase()))
+        .name_tip("One level fewer")
         .clicked()
     {
         *value -= 1;
     }
     ui.label(value.to_string());
-    if ui
-        .add_enabled(*value < max, egui::Button::new("+").small())
-        .on_hover_text(if *value < max {
-            format!("One more level of {}", label.to_lowercase())
-        } else {
-            "No deeper level exists".to_owned()
-        })
+    let more = ui.add_enabled(*value < max, egui::Button::new("+").small());
+    if more
+        .name_tip("One more level")
+        .reason_tip("No deeper level exists")
         .clicked()
     {
         *value += 1;
@@ -371,10 +369,7 @@ pub(super) fn section(ui: &mut egui::Ui, state: &mut State, data: &Data) -> Opti
             (graph.hidden_system, graph.max_parents, graph.max_children)
         };
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut state.hide_system, "Hide system binaries")
-                .on_hover_text(
-                    "Programs of the base image (a system path, a known hash, never written by a run) are left out; what they did is shown under the program that ran them",
-                );
+            crate::widgets::with_help(ui, "Programs of the base image (a system path, a known hash, never written by a run) are left out; what they did is shown under the program that ran them", |ui| ui.checkbox(&mut state.hide_system, "Hide system binaries"));
             if state.hide_system && hidden > 0 {
                 ui.label(RichText::new(format!("{hidden} hidden")).small().color(theme::muted()));
             }
@@ -566,10 +561,12 @@ fn details(ui: &mut egui::Ui, state: &mut State, data: &Data, out: &mut Option<O
                 }
             }
             NodeKind::Captured | NodeKind::Lost if !node.path.is_empty() => {
-                let ask = ui
-                    .button("Add to Samples…")
-                    .on_hover_text("Read the file from a run's saved disk and add it")
-                    .clicked();
+                let ask = crate::widgets::with_help(
+                    ui,
+                    "Read the file from a run's saved disk and add it",
+                    |ui| ui.button("Add to Samples…"),
+                )
+                .clicked();
                 if ask {
                     *out = Some(promote_out(&cached.graph, node));
                 }

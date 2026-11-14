@@ -8,6 +8,7 @@ use super::{parts, summary::vm_name, *};
 use crate::app::captures::{self, ProcessSelection};
 use crate::widgets::fit_table;
 use crate::widgets::fit_table::{Col, FitBuilder};
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::capture_processes::CaptureProcess;
 use std::sync::mpsc;
 
@@ -458,11 +459,8 @@ impl MonitorApp {
                                 if parts_icon(
                                     ui,
                                     egui_phosphor::regular::TERMINAL_WINDOW,
-                                    if known {
-                                        "Open terminal"
-                                    } else {
-                                        "Open the run's VM in the sidebar first"
-                                    },
+                                    "Open terminal",
+                                    "Open the run's VM in the sidebar first",
                                     known,
                                 ) {
                                     *go = Some(Go::Terminal(run.id.clone()));
@@ -479,6 +477,7 @@ impl MonitorApp {
                                     ui,
                                     egui_phosphor::regular::STOP,
                                     "Stop run and descendants",
+                                    "Stop run and descendants (not running now)",
                                     live,
                                 ) {
                                     *go = Some(Go::Stop(run.id.clone()));
@@ -538,10 +537,10 @@ impl MonitorApp {
             },
             |ui| {
                 self.delete_run_item(ui, entry, go);
-                if ui
-                    .add_enabled(entry.folder, egui::Button::new("Open Triage"))
-                    .on_disabled_hover_text("The run's folder was deleted")
-                    .clicked()
+                if crate::widgets::with_help_or(ui, "", "The run's folder was deleted", |ui| {
+                    ui.add_enabled(entry.folder, egui::Button::new("Open Triage"))
+                })
+                .clicked()
                 {
                     *go = Some(Go::Triage(run.id.clone()));
                 }
@@ -654,11 +653,15 @@ fn paths_of(data: &Data, run: &RunSummary, own: bool) -> std::collections::HashS
     paths
 }
 
-fn parts_icon(ui: &mut egui::Ui, glyph: &str, tooltip: &str, enabled: bool) -> bool {
-    ui.add_enabled(enabled, egui::Button::new(glyph).frame(false))
-        .on_hover_text(tooltip)
-        .on_disabled_hover_text(tooltip)
-        .clicked()
+/// An icon in a table cell: its name, or why it is disabled (a cell has no
+/// room for a help icon).
+fn parts_icon(ui: &mut egui::Ui, glyph: &str, name: &str, reason: &str, enabled: bool) -> bool {
+    let response = ui.add_enabled(enabled, egui::Button::new(glyph).frame(false));
+    if enabled {
+        response.name_tip(name).clicked()
+    } else {
+        response.reason_tip(reason).clicked()
+    }
 }
 
 /// The environment the run started in, folded away by default.
@@ -779,13 +782,16 @@ impl MonitorApp {
     fn delete_run_item(&self, ui: &mut egui::Ui, entry: &RunEntry, go: &mut Option<Go>) {
         let live = self.sample_run_live(&entry.run);
         let enabled = entry.folder && !live;
-        let response = ui
-            .add_enabled(enabled, egui::Button::new("Delete run…"))
-            .on_disabled_hover_text(if live {
+        let response = crate::widgets::with_help_or(
+            ui,
+            "",
+            if live {
                 "The run is still running; stop it first"
             } else {
                 "The run's folder was already deleted"
-            });
+            },
+            |ui| ui.add_enabled(enabled, egui::Button::new("Delete run…")),
+        );
         if response.clicked() {
             *go = Some(Go::Delete(entry.run.id.clone()));
             ui.close();
