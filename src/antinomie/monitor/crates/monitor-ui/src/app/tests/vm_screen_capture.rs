@@ -122,12 +122,14 @@ fn idle(app: &mut MonitorApp, ctx: &egui::Context, frames: usize) -> egui::FullO
 }
 
 #[test]
-fn a_click_in_the_vm_screen_captures_the_keyboard_and_a_banner_says_so() {
+fn a_click_in_the_vm_screen_captures_the_keyboard_and_the_toolbar_says_so() {
     let (mut app, ctx, dir) = app_with_screen("banner");
     let before = idle(&mut app, &ctx, 2);
     assert!(!app.vm_screen.is_captured());
     assert_eq!(captured_texts(&before), 0);
-    assert!(!texts(&before).iter().any(|(t, _)| t == "Keyboard captured"));
+    assert!(!texts(&before)
+        .iter()
+        .any(|(t, _)| t == crate::vm_screen::CAPTURED));
     // The hint invites the click.
     assert!(texts(&before)
         .iter()
@@ -135,21 +137,23 @@ fn a_click_in_the_vm_screen_captures_the_keyboard_and_a_banner_says_so() {
     click(&mut app, &ctx, egui::pos2(640.0, 400.0));
     let after = idle(&mut app, &ctx, 2);
     assert!(app.vm_screen.is_captured(), "the click captures");
-    // The toolbar says so, and the banner over the picture says how to release.
-    assert!(captured_texts(&after) >= 1, "{:?}", texts(&after));
-    assert!(texts(&after).iter().any(|(t, _)| t == "Keyboard captured"));
-    let banner = texts(&after)
+    // The toolbar says so and how to release; nothing is drawn over the picture.
+    assert_eq!(captured_texts(&after), 1, "{:?}", texts(&after));
+    let hint = texts(&after)
         .into_iter()
         .find(|(text, _)| text == crate::vm_screen::CAPTURED)
         .unwrap()
         .1;
-    // The banner sits on the screen, below the toolbar.
     let toolbar = texts(&after)
         .into_iter()
         .find(|(text, _)| text == "Ctrl+Alt+Del")
         .unwrap()
         .1;
-    assert!(banner.top() > toolbar.bottom(), "{banner:?} {toolbar:?}");
+    assert!(
+        (hint.center().y - toolbar.center().y).abs() < 4.0,
+        "{hint:?} {toolbar:?}"
+    );
+    assert!(hint.left() > toolbar.right());
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -168,14 +172,33 @@ fn the_capture_ends_when_the_window_loses_focus() {
         events: vec![egui::Event::WindowFocused(false)],
         ..Default::default()
     };
-    let output = draw_input(&mut app, &ctx, input);
-    let output = if app.vm_screen.is_captured() {
-        idle(&mut app, &ctx, 1)
-    } else {
-        output
-    };
+    draw_input(&mut app, &ctx, input);
+    // The toolbar was drawn before the screen let go in that frame; the next
+    // frame has no text.
+    let output = idle(&mut app, &ctx, 1);
     assert!(!app.vm_screen.is_captured());
     assert_eq!(captured_texts(&output), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_detached_screen_keeps_its_capture_while_the_main_window_is_unfocused() {
+    let (mut app, ctx, dir) = app_with_screen("detached");
+    click(&mut app, &ctx, egui::pos2(640.0, 400.0));
+    idle(&mut app, &ctx, 2);
+    assert!(app.vm_screen.is_captured());
+    // The main window's context says "unfocused" while the detached window
+    // that shows the tab has the focus: the capture stays.
+    let main = egui::Context::default();
+    let socket = app.snapshot.vm_screen.clone();
+    let _ = main.run_ui(
+        egui::RawInput {
+            focused: false,
+            ..Default::default()
+        },
+        |_| app.vm_screen.sync(&main, socket.as_deref(), true),
+    );
+    assert!(app.vm_screen.is_captured(), "the capture was dropped");
     let _ = std::fs::remove_dir_all(dir);
 }
 
