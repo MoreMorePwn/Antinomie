@@ -55,7 +55,7 @@ impl MonitorApp {
                 format!(
                     "{} {} is installed",
                     egui_phosphor::regular::CHECK,
-                    base.label
+                    crate::app::installed_base_name(base)
                 ),
             );
         }

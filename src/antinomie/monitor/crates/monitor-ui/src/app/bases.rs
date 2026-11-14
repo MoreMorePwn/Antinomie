@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Base image choice and the download window.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 impl MonitorApp {
     pub(super) fn open_downloads(&mut self) {
@@ -83,7 +84,7 @@ impl MonitorApp {
                 }
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         let rows = current
                             .iter()
                             .chain(other.iter())
@@ -351,8 +352,37 @@ pub(super) fn newer_base<'a>(
         .find(|remote| remote.label == base.label && remote_is_current(remote))
 }
 
+/// "r22" for a base's Antinomie revision, empty when it is not recorded.
+pub(super) fn revision_text(revision: Option<u32>) -> String {
+    revision
+        .map(|revision| format!("r{revision}"))
+        .unwrap_or_default()
+}
+
+/// An installed base's name with its architecture and revision, e.g.
+/// "BusyBox · arm64 · r22". A base without a recorded revision names the
+/// Antinomie version it is for instead, when that is known.
+pub(super) fn installed_base_name(base: &BaseSummary) -> String {
+    let mut name = format!(
+        "{} · {}",
+        antinomie_monitor_core::base_label_plain(&base.label),
+        base.arch().label()
+    );
+    match base.revision {
+        Some(revision) => name.push_str(&format!(" · {}", revision_text(Some(revision)))),
+        None => {
+            if let Some(version) =
+                antinomie_monitor_core::base_app_version(None, base.min_app_version.as_deref())
+            {
+                name.push_str(&format!(" · Antinomie {version}"));
+            }
+        }
+    }
+    name
+}
+
 pub(super) fn base_choice_label(base: &BaseSummary) -> String {
-    let name = versioned_label(&base.label, base.revision, base.min_app_version.as_deref());
+    let name = installed_base_name(base);
     let label = if base.fixed_display {
         name
     } else {
