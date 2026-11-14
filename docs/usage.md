@@ -428,7 +428,8 @@ VM is several times slower than an x86-64 one; it always starts with TCG and
 its waits (**Tools > Settings > Advanced**, TCG multiplier). Its screen shows
 on the VM screen tab or in the QEMU window, as for x86-64 VMs. The host needs `qemu-system-aarch64`, AAVMF
 (`qemu-efi-aarch64`) for the UEFI machines below and `gdb-multiarch` for the
-debugger console.
+debugger console. An arm64 VM needs at least 512 MiB of RAM: an installed arm64
+base lists and enforces that minimum even where its bundle declares less.
 
 **Getting a base.** The Build base wizard builds x86-64 bases. Build an arm64
 BusyBox base with the kit and import it (**Add base → Import base…**):

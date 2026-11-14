@@ -485,6 +485,17 @@ pub(crate) fn resolve_in_bundle(root: &Path, recorded: &Path) -> Result<PathBuf,
 }
 
 impl Bundle {
+    /// The least RAM a VM on this base needs: the guest profile's minimum
+    /// (256 MiB for a base without one), and for an arm64 base never less than
+    /// the machine's floor, whatever its `bundle.json` says.
+    pub fn min_ram_mib(&self) -> u32 {
+        let declared = self.guest.as_ref().map_or(256, |guest| guest.min_ram_mib);
+        if self.arch == crate::api::GuestArch::AARCH64 {
+            declared.max(crate::vm::VIRT_MIN_RAM_MIB)
+        } else {
+            declared
+        }
+    }
     /// The base runs Debian's own signed modules: a Debian image (the only
     /// bases with a guest profile), whose builder accepts only the stock
     /// kernel profile, Debian's configuration. Drivers that are modules there
@@ -884,12 +895,19 @@ pub(crate) fn validate_vm_bundle(
 ) -> Result<(), String> {
     validate_vm(vm)?;
     vm.launch.validate_for(options)?;
+    if bundle.arch == crate::api::GuestArch::AARCH64 && vm.ram_mib < bundle.min_ram_mib() {
+        return Err(format!(
+            "an arm64 guest requires at least {} MiB RAM",
+            bundle.min_ram_mib()
+        ));
+    }
     if let Some(guest) = &bundle.guest {
         guest.validate()?;
-        if vm.ram_mib < guest.min_ram_mib || vm.disk_gib < guest.min_disk_gib {
+        if vm.ram_mib < bundle.min_ram_mib() || vm.disk_gib < guest.min_disk_gib {
             return Err(format!(
                 "guest requires at least {} MiB RAM and {} GiB disk",
-                guest.min_ram_mib, guest.min_disk_gib
+                bundle.min_ram_mib(),
+                guest.min_disk_gib
             ));
         }
     }
@@ -998,6 +1016,37 @@ mod bundle_paths_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_arm64_bundle_needs_at_least_512_mib_whatever_it_declares() {
+        let bundle = |extra: serde_json::Value| -> Bundle {
+            let mut value = serde_json::json!({
+                "kernel": "kernel", "base_disk": "base.qcow2", "kernel_append": "",
+                "kernel_version": "6.12.94", "schema_id": 1,
+            });
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(value).unwrap()
+        };
+        let guest = |ram: u32| {
+            serde_json::json!({"guest": {"id": "g", "label": "G", "min_ram_mib": ram,
+                "min_disk_gib": 1, "requires_credentials": false, "graphical": false}})
+        };
+        assert_eq!(bundle(serde_json::json!({})).min_ram_mib(), 256);
+        assert_eq!(
+            bundle(serde_json::json!({"arch": "arm64"})).min_ram_mib(),
+            512
+        );
+        let mut arm = guest(256);
+        arm["arch"] = "arm64".into();
+        assert_eq!(bundle(arm).min_ram_mib(), 512);
+        let mut big = guest(2048);
+        big["arch"] = "arm64".into();
+        assert_eq!(bundle(big).min_ram_mib(), 2048);
+        assert_eq!(bundle(guest(256)).min_ram_mib(), 256);
+    }
+
     use super::*;
 
     fn guest_fixture() -> (PathBuf, BackendOptions, Bundle, VmConfig) {

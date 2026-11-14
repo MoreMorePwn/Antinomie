@@ -2098,7 +2098,7 @@ impl From<&crate::distribution::CatalogBase> for RemoteBase {
             kind: base.kind.clone(),
             kernel_version: base.kernel_version.clone(),
             fixed_display: base.fixed_display,
-            min_ram_mib: base.min_ram_mib,
+            min_ram_mib: base.min_ram_floor_mib(),
             min_disk_gib: base.min_disk_gib,
             total_size: base.total_size,
             revision: base.antinomie_revision,

@@ -62,7 +62,45 @@ pub struct CatalogBase {
     pub built_with: Option<String>,
     /// Oldest Antinomie version that can run the base.
     pub min_app_version: Option<String>,
+    /// The guest architecture, named as `Bundle.arch` is (`"arm64"`); absent
+    /// for x86-64.
+    pub arch: Option<String>,
     pub files: Vec<CatalogFile>,
+}
+
+impl CatalogBase {
+    /// The guest architecture of the base: an absent `arch` is x86-64.
+    pub fn guest_arch(&self) -> crate::api::GuestArch {
+        match self.arch.as_deref() {
+            Some("arm64" | "aarch64") => crate::api::GuestArch::AARCH64,
+            _ => crate::api::GuestArch::X86_64,
+        }
+    }
+
+    /// The least RAM a VM on the base needs: the catalog's figure, and for an
+    /// arm64 base never less than the arm64 machine's floor.
+    pub fn min_ram_floor_mib(&self) -> u32 {
+        if self.guest_arch() == crate::api::GuestArch::AARCH64 {
+            self.min_ram_mib.max(crate::vm::VIRT_MIN_RAM_MIB)
+        } else {
+            self.min_ram_mib
+        }
+    }
+}
+
+/// The newest base of `kind` for the guest architecture `arch` (the highest
+/// Antinomie revision, then the latest creation time): a catalog lists the
+/// architectures side by side, so the tie of a revision is never broken by
+/// position.
+pub fn newest_base<'a>(
+    bases: &'a [CatalogBase],
+    kind: &str,
+    arch: crate::api::GuestArch,
+) -> Option<&'a CatalogBase> {
+    bases
+        .iter()
+        .filter(|base| base.kind == kind && base.guest_arch() == arch)
+        .max_by(|a, b| (a.antinomie_revision, &a.created).cmp(&(b.antinomie_revision, &b.created)))
 }
 
 /// One file of a base.
@@ -776,6 +814,52 @@ mod tests {
         assert!(error.contains("integrity"), "{error}");
     }
 
+    fn fixture_catalog() -> Catalog {
+        let files = || serde_json::json!([{"name": "kernel", "size": 1, "sha256": "c".repeat(64)}]);
+        let text = serde_json::json!({
+            "schema": 1,
+            "bases": [
+                {"identity": "1".repeat(64), "label": "BusyBox x86-64", "kind": "busybox",
+                 "min_ram_mib": 256, "antinomie_revision": 22, "antinomie_source": "a".repeat(64), "files": files(), "created": "2026-11-11T21:29:00Z"},
+                {"identity": "2".repeat(64), "label": "BusyBox arm64", "kind": "busybox",
+                 "arch": "arm64", "min_ram_mib": 256, "antinomie_revision": 22, "antinomie_source": "a".repeat(64), "files": files(),
+                 "created": "2026-11-11T22:08:00Z"},
+                {"identity": "3".repeat(64), "label": "Debian x86-64", "kind": "debian",
+                 "antinomie_revision": 22, "antinomie_source": "a".repeat(64), "files": files(), "created": "2026-11-11T23:00:00Z"},
+                {"identity": "4".repeat(64), "label": "BusyBox old", "kind": "busybox",
+                 "antinomie_revision": 21, "antinomie_source": "a".repeat(64), "files": files(), "created": "2026-11-05T10:00:00Z"},
+            ]
+        });
+        parse_catalog(text.to_string().as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn newest_base_picks_by_architecture_not_by_position_or_time() {
+        use crate::api::GuestArch;
+        let mut catalog = fixture_catalog();
+        let x86 = newest_base(&catalog.bases, "busybox", GuestArch::X86_64).unwrap();
+        assert_eq!(x86.label, "BusyBox x86-64");
+        let arm = newest_base(&catalog.bases, "busybox", GuestArch::AARCH64).unwrap();
+        assert_eq!(arm.label, "BusyBox arm64");
+        // The arm64 entry listed last, or created last, never wins for x86-64.
+        catalog.bases.reverse();
+        let x86 = newest_base(&catalog.bases, "busybox", GuestArch::X86_64).unwrap();
+        assert_eq!(x86.label, "BusyBox x86-64");
+        assert!(newest_base(&catalog.bases, "gnome", GuestArch::X86_64).is_none());
+    }
+
+    #[test]
+    fn an_arm64_catalog_entry_shows_at_least_the_arm64_minimum() {
+        let catalog = fixture_catalog();
+        let remote: Vec<_> = catalog
+            .bases
+            .iter()
+            .map(crate::api::RemoteBase::from)
+            .collect();
+        assert_eq!(remote[0].min_ram_mib, 256);
+        assert_eq!(remote[1].min_ram_mib, 512);
+    }
+
     #[test]
     #[ignore = "network: hits the public Hugging Face bucket"]
     fn fetches_real_bucket_catalog_and_downloads_reference_base() {
@@ -789,13 +873,9 @@ mod tests {
         )
         .expect("catalog");
         assert!(validate_catalog(&catalog).is_ok());
-        // The newest BusyBox: the one for the current contract revision.
-        let base = catalog
-            .bases
-            .iter()
-            .filter(|base| base.kind == "busybox")
-            .max_by_key(|base| base.antinomie_revision)
-            .expect("busybox base present");
+        // The newest x86-64 BusyBox: the one for the current contract revision.
+        let base = newest_base(&catalog.bases, "busybox", crate::api::GuestArch::X86_64)
+            .expect("x86-64 busybox base present");
         let target = staging("real");
         let bundle = download_base(
             Path::new("curl"),

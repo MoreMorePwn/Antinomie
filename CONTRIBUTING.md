@@ -500,5 +500,5 @@ not replace the tag or imply that an existing release archive was rebuilt.
 Every push runs `.github/workflows/ci.yml` (`scripts/check-privacy.sh`,
 `scripts/check-module-size.py`, `cargo fmt --check`, strict Clippy, the release-mode tests, the build-script
 tests and shellcheck); `.github/workflows/nightly.yml` boots the current
-BusyBox base under KVM every night and runs one Auto job on it
-(`tests/ci/nightly-vm.py`).
+x86-64 BusyBox base under KVM every night and runs one Auto job on it
+(`tests/ci/nightly-vm.py`; `NIGHTLY_BASE_ARCH=arm64` runs the arm64 BusyBox instead).

@@ -88,6 +88,7 @@ jobs:
       - name: Build-script tests
         run: |
           python3 tests/monitor/test-guest-resources.py
+          python3 tests/monitor/test-nightly-vm.py
           python3 tests/monitor/test-build-base.py
           python3 tests/monitor/test-debian-image.py
           python3 tests/monitor/test-native-coverage.py
