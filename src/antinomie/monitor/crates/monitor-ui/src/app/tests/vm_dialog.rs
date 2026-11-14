@@ -74,18 +74,12 @@ fn new_vm_prefers_capable_bases_and_existing_defaults_remain_implicit() {
     assert_eq!(app.draft.base_identity.as_deref(), Some("legacy"));
     assert_eq!(
         base_choice_label(&app.snapshot.bases[0]),
-        format!(
-            "Linux 6.12.94 · Antinomie {} (legacy)",
-            antinomie_monitor_core::first_app_version(APP_REVISION).unwrap()
-        )
+        format!("Linux 6.12.94 · x86-64 · r{APP_REVISION} (legacy)")
     );
     app.snapshot.bases[1].fixed_display = true;
     assert_eq!(
         base_choice_label(&app.snapshot.bases[1]),
-        format!(
-            "Linux 6.12.94 · Antinomie {}",
-            antinomie_monitor_core::first_app_version(APP_REVISION).unwrap()
-        )
+        format!("Linux 6.12.94 · x86-64 · r{APP_REVISION}")
     );
 }
 

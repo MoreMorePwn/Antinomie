@@ -165,7 +165,7 @@ fn the_sidebar_vm_line_is_the_base_image_name_and_the_architecture() {
     assert!(
         shown
             .iter()
-            .any(|(text, _)| text == "Debian 13 (Minimal) · x86-64"),
+            .any(|(text, _)| *text == format!("Debian 13 (Minimal) · x86-64 · r{APP_REVISION}")),
         "{shown:?}"
     );
     assert!(
@@ -193,7 +193,7 @@ fn the_sidebar_vm_line_names_an_arm64_base_as_arm64() {
     assert!(
         shown
             .iter()
-            .any(|(text, _)| text == "Debian 13 (Minimal) · arm64"),
+            .any(|(text, _)| *text == format!("Debian 13 (Minimal) · arm64 · r{APP_REVISION}")),
         "{shown:?}"
     );
 }
