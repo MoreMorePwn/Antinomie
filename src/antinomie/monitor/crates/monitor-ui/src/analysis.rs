@@ -216,10 +216,10 @@ fn identity_fields(ui: &mut egui::Ui, request: &mut ExecRequest) {
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 for (label, id) in [("Root", 0), ("Normal user", 1000), ("Nobody", 65534)] {
-                    if ui
-                        .selectable_label(request.uid == id && request.gid == id, label)
-                        .on_hover_text(format!("UID {id}, GID {id}"))
-                        .clicked()
+                    if crate::widgets::with_help(ui, format!("UID {id}, GID {id}"), |ui| {
+                        ui.selectable_label(request.uid == id && request.gid == id, label)
+                    })
+                    .clicked()
                     {
                         (request.uid, request.gid) = (id, id);
                     }
@@ -271,12 +271,20 @@ fn run_in(ui: &mut egui::Ui, choice: &mut RunIn, uid: u32) {
             .selected_text(choice.label())
             .show_ui(ui, |ui| {
                 for option in RunIn::ALL {
-                    ui.selectable_value(choice, option, option.label())
-                        .on_hover_text(option.description());
+                    ui.selectable_value(choice, option, option.label());
                 }
             })
             .response
             .labelled_by(label.id);
+        crate::widgets::help(
+            ui,
+            crate::widgets::list_help(
+                "Run in",
+                RunIn::ALL
+                    .iter()
+                    .map(|option| (option.label(), option.description())),
+            ),
+        );
     });
     let mut extra = String::new();
     if choice.guest_desktop() {
@@ -313,8 +321,9 @@ pub(crate) fn selection(
     );
     let master = tree_lines::row(ui, &root, char_width, |ui| {
         tree_lines::caret(ui, &mut state);
-        ui.checkbox(&mut selection.enabled, "Static analysis")
-            .on_hover_text("Analyze the initial executable only")
+        crate::widgets::with_help(ui, "Analyze the initial executable only", |ui| {
+            ui.checkbox(&mut selection.enabled, "Static analysis")
+        })
     });
     if state.is_open() {
         ui.add_enabled_ui(selection.enabled, |ui| {
@@ -449,8 +458,9 @@ fn check(
 ) {
     if let Some(reason) = unavailable {
         selection.checks.retain(|check| *check != kind);
-        ui.add_enabled(false, egui::Checkbox::new(&mut false, kind.label()))
-            .on_disabled_hover_text(reason);
+        crate::widgets::with_help_or(ui, "", reason, |ui| {
+            ui.add_enabled(false, egui::Checkbox::new(&mut false, kind.label()))
+        });
         return;
     }
     let mut selected = selection.checks.contains(&kind);

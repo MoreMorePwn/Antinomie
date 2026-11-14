@@ -33,6 +33,7 @@ impl MonitorApp {
             name: "New VM".into(),
             // New VMs look like an ordinary PC; saved ones keep what they had.
             stealth: antinomie_monitor_core::stealth::StealthProfile::realistic(
+            // On an arm64 base without an uptime (its guest ignores one).
                 antinomie_monitor_core::stealth::StealthPreset::RealisticDesktop,
                 &antinomie_monitor_core::stealth::host_cpu_vendor(),
             ),
@@ -549,38 +550,55 @@ impl MonitorApp {
                 });
             },
             |ui| {
-                // Right to left: the main action lands rightmost.
-                let run = if uploading {
-                    ui.add_enabled(
-                        ready && program_ready && valid && self.pending_upload.is_none(),
-                        primary_button(&format!("{} Upload", egui_phosphor::regular::UPLOAD_SIMPLE)),
-                    )
-                    .on_hover_text(
-                        "Upload as executable. The program is then set to its guest path in this window, ready to Run.",
-                    )
-                    .on_disabled_hover_text("Choose the host file and the guest path")
+                // Right to left: the main action lands rightmost; one help
+                // icon at the left end explains the buttons, and why one is
+                // greyed.
+                let can_run = if uploading {
+                    ready && program_ready && valid && self.pending_upload.is_none()
                 } else {
-                    ui.add_enabled(
-                        ready && program_ready && valid,
-                        primary_button(&format!("{} Run", egui_phosphor::regular::PLAY)),
-                    )
-                    .on_disabled_hover_text("Enter the executable to run")
+                    ready && program_ready && valid
                 };
-                start = run.clicked();
-                let analyze = ui
-                    .add_enabled(
-                        ready && !uploading && self.exec.analysis.enabled && program_ready && valid,
-                        egui::Button::new("Analyze only"),
-                    )
-                    .on_hover_text("Acquire the file and run static analysis without launching it")
-                    .on_disabled_hover_text(if uploading {
-                        "Upload the file first"
+                let run = ui.add_enabled(
+                    can_run,
+                    primary_button(&if uploading {
+                        format!("{} Upload", egui_phosphor::regular::UPLOAD_SIMPLE)
                     } else {
-                        "Needs Static analysis and an executable"
-                    });
+                        format!("{} Run", egui_phosphor::regular::PLAY)
+                    }),
+                );
+                start = run.clicked();
+                let can_analyze =
+                    ready && !uploading && self.exec.analysis.enabled && program_ready && valid;
+                let analyze = ui.add_enabled(can_analyze, egui::Button::new("Analyze only"));
                 analyze_clicked = analyze.clicked();
                 cancel = ui.button("Cancel").clicked();
                 run_rects = Some((run.rect, analyze.rect));
+                let mut text = String::new();
+                if !can_run {
+                    text.push_str(if uploading {
+                        "Upload: choose the host file and the guest path.\n\n"
+                    } else {
+                        "Run: enter the executable to run.\n\n"
+                    });
+                }
+                if !can_analyze {
+                    text.push_str(if uploading {
+                        "Analyze only: upload the file first.\n\n"
+                    } else {
+                        "Analyze only: needs Static analysis and an executable.\n\n"
+                    });
+                }
+                if uploading {
+                    text.push_str(
+                        "- **Upload**: upload as executable. The program is then set to its guest path in this window, ready to Run.\n",
+                    );
+                } else {
+                    text.push_str("- **Run**: start the program in the VM and record it.\n");
+                }
+                text.push_str(
+                    "- **Analyze only**: acquire the file and run static analysis without launching it.",
+                );
+                crate::widgets::help(ui, text);
             },
         );
         if start {
