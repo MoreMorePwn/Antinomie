@@ -622,6 +622,7 @@ fn view_with_capture() -> (egui::Context, NetworkView) {
     let ctx = egui::Context::default();
     theme::install(&ctx);
     let view = NetworkView {
+        arrival: crate::arrival::Arrival::already_open(&ctx),
         captures_for: Some((None, vec![])),
         captures: vec![fixture_capture()],
         ..Default::default()
@@ -1405,4 +1406,23 @@ fn a_capture_row_says_which_run_it_belongs_to() {
     let idle = view.run_line(&capture);
     assert_eq!(idle.text, "Run: VM-wide");
     assert_eq!(idle.run_id, None);
+}
+
+#[test]
+fn a_capture_list_is_read_again_when_the_window_is_opened_again() {
+    let (ctx, mut view) = view_with_capture();
+    for frame in 0..3 {
+        network_frame(&ctx, &mut view, f64::from(frame) * 0.1, vec![]);
+    }
+    assert!(view.listing.is_none(), "drawn in a row: no new listing");
+    assert_eq!(view.captures.len(), 1);
+    // Another tab shows for a few frames, then the window comes back.
+    for _ in 0..3 {
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+    }
+    network_frame(&ctx, &mut view, 1.0, vec![]);
+    assert!(
+        view.listing.is_some(),
+        "opening the window lists the folders again"
+    );
 }

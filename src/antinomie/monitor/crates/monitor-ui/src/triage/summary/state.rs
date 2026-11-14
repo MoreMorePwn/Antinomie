@@ -78,11 +78,12 @@ pub(in crate::triage) struct State {
     /// Indicators: the categories listed past their first few.
     pub more: [bool; 4],
     pub(super) built: Option<Built>,
-    pub thumb: super::thumb::Thumb,
     /// The strip of the run's timed screenshots.
     pub strip: super::strip::Strip,
-    /// The run's screenshot was clicked: the app opens it.
+    /// A screenshot of the run was clicked: the app opens it in the viewer.
     pub open_screenshot: Option<std::path::PathBuf>,
+    /// The redirect button was clicked: the app opens Library > Screenshots.
+    pub open_screenshots_page: bool,
 }
 
 /// What the detections of the run were when `Built` was made.

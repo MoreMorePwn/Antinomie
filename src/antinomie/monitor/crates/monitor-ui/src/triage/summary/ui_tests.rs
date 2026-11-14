@@ -1253,9 +1253,14 @@ fn sections_of(out: &egui::FullOutput, needle: &str) -> Vec<(String, egui::Color
     found
 }
 
-/// Numbers are in the text colour, every other word muted, and there are
-/// at least `numbers` of them.
-fn numbers_strong_words_muted(out: &egui::FullOutput, needle: &str, numbers: usize) {
+/// Numbers are in `number_color` (the row's own colour), every other word
+/// muted, and there are at least `numbers` of them.
+fn numbers_strong_words_muted(
+    out: &egui::FullOutput,
+    needle: &str,
+    numbers: usize,
+    number_color: egui::Color32,
+) {
     let mut seen = 0;
     for (text, color) in sections_of(out, needle) {
         let word = text.trim().trim_matches('\u{b7}').trim();
@@ -1263,7 +1268,7 @@ fn numbers_strong_words_muted(out: &egui::FullOutput, needle: &str, numbers: usi
             continue;
         }
         if word.parse::<u64>().is_ok() {
-            assert_eq!(color, theme::text(), "{word} in {needle}");
+            assert_eq!(color, number_color, "{word} in {needle}");
             seen += 1;
         } else {
             assert_eq!(color, theme::muted(), "{word} in {needle}");
@@ -1279,20 +1284,21 @@ fn the_one_line_rows_have_strong_numbers_and_muted_words() {
     view.scan.as_mut().unwrap().network_counts = Some((641, 2, 3));
     let ctx = context(16.0);
     let out = settle(&ctx, &mut view, WIDE, None);
-    numbers_strong_words_muted(&out, "created", 4);
-    numbers_strong_words_muted(&out, "HTTP", 3);
-    numbers_strong_words_muted(&out, "syscalls", 2);
+    numbers_strong_words_muted(&out, "created", 4, theme::triage_files());
+    numbers_strong_words_muted(&out, "HTTP", 3, theme::triage_network());
+    numbers_strong_words_muted(&out, "syscalls", 2, theme::text());
     let tactic = Tactic::ALL
         .into_iter()
         .map(|tactic| tactic.name())
         .find(|name| texts(&out).iter().any(|(t, _)| t.starts_with(name)))
         .expect("a tactic row");
-    numbers_strong_words_muted(&out, tactic, 1);
-    // The three rows read the same: number (text colour) against word (muted).
+    numbers_strong_words_muted(&out, tactic, 1, theme::triage_mitre());
+    // The rows read the same: number (the row's colour) against word (muted).
     assert_ne!(theme::text(), theme::muted());
 }
 
 mod fold;
+mod screenshots;
 mod scroll;
 
 /// A view of a Merlin-like run: one Elastic family rule among twelve weak

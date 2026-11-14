@@ -64,6 +64,12 @@ pub fn is_light() -> bool {
     theme().is_light()
 }
 
+/// The zebra stripe of the Statistics window's tables: it contrasts with the
+/// window background in every theme.
+pub fn stripe_strong() -> Color32 {
+    palette().stripe_strong
+}
+
 pub fn bg() -> Color32 {
     palette().bg
 }
@@ -225,6 +231,32 @@ pub fn tree_branch(level: usize) -> Color32 {
 pub fn category(index: usize) -> Color32 {
     let palette = palette();
     [palette.string, palette.pointer, palette.name, palette.good][index % 4]
+}
+
+/// A scroll bar that always takes its room (the Summary's lists and rows),
+/// with the handle in the text colour like the app's floating bars: the solid
+/// preset alone draws it in the dark widget fill.
+pub fn solid_scroll() -> egui::style::ScrollStyle {
+    egui::style::ScrollStyle {
+        foreground_color: true,
+        ..egui::style::ScrollStyle::solid()
+    }
+}
+
+/// The Triage Summary's four one-line rows each have their own text colour,
+/// taken from the active theme's syntax colours (readable in the dark, light
+/// and blue themes): MITRE ATT&CK, processes of interest, files and network.
+pub fn triage_mitre() -> Color32 {
+    palette().pointer
+}
+pub fn triage_processes() -> Color32 {
+    palette().string
+}
+pub fn triage_files() -> Color32 {
+    palette().good
+}
+pub fn triage_network() -> Color32 {
+    palette().number
 }
 
 pub use crate::triage::tone::{Tone, ValueKind};
@@ -952,6 +984,7 @@ mod tests {
             for color in [
                 p.selection_soft,
                 p.stripe,
+                p.stripe_strong,
                 p.good_bg,
                 p.warn_bg,
                 p.error_bg,

@@ -278,11 +278,14 @@ waits for the disk, and a tick that arrives while the previous picture is still
 being written is dropped (and counted). A run keeps at most 500 pictures or 256 MiB;
 at the limit the series stops and the run's notes say so.
 
-In **Triage > Summary**, a run with timed screenshots shows them as a strip with
-the run-relative time under each picture. A click opens the picture in
-**Library > Screenshots**, whose viewer steps through the run with the Left and
-Right arrow keys. There the series is grouped under its run ("timed screenshots of
-run ...") and each cell shows its run-relative time. The report lists the series in
+In **Triage > Summary**, a run with timed screenshots shows them in a box titled
+**Screenshots (N)**, a strip with the run-relative time under each picture. A click
+opens the picture in a viewer window over Triage (it does not switch to
+**Library > Screenshots**); the viewer steps through the run with the Left and
+Right arrow keys. The small arrow icon beside the title (**Open in Screenshots**)
+opens **Library > Screenshots**, where the series is grouped under its run
+("timed screenshots of run ...", a link that opens that run in Triage) and each
+cell shows its run-relative time. The report lists the series in
 its notes, and the evidence bundle holds the pictures under `screenshots/` (at most
 100 pictures and 64 MiB, evenly spaced when the series is longer; the manifest says
 how many were left out).
@@ -1015,7 +1018,7 @@ The network capture is the guest's own view on every route.
   **Mermaid** to copy what is shown; edges read fork, exec, write, run, connect, inject, signal),
   then one line each for **MITRE ATT&CK**, **Processes of interest**, **Files** and
   **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines** (three cards of one height, so the state tag and **Open results** line up),
-  the notes and the run's last screenshot. The Summary states observations only: no
+  the notes (one bullet each) and the **Screenshots (N)** strip. The four one-line rows each have their own text colour (from the theme, so they read in the dark, light and blue themes). The Summary states observations only: no
   verdict and no score. Family
   candidates and tags show only what a detection or rule named, so a run nothing
   matched has none.
@@ -1909,6 +1912,10 @@ and follows that selection. **Core dumps** also lists the cores a trigger took,
 as "Trigger: <rule> (<tier>)", for a run whose Core dump on exit is off, whether
 the VM is running or stopped. `core_state` in `artifacts.json` means the exit
 core only; "Disabled" there never means the run has no cores.
+
+The **Network** capture list, the **Memory** dump list and the **Core dumps** list read
+their folders again whenever their window is opened or the app window is focused;
+the refresh button beside each title stays for a manual read.
 
 **Triage > Summary** ends with a **Run artifacts** box: the selected run's cores,
 memory dumps and capture segments in the rows of the sample page's Artifacts

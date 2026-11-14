@@ -621,7 +621,7 @@ fn an_opened_row_keeps_every_value_under_its_own_column() {
 }
 
 #[test]
-fn numeric_columns_sit_at_the_right_edge_of_their_cells() {
+fn the_frame_column_of_the_network_tables_sits_at_the_left_edge() {
     let ctx = context();
     let (_temp, mut view) = view(Section::Network);
     {
@@ -636,14 +636,12 @@ fn numeric_columns_sit_at_the_right_edge_of_their_cells() {
     let out = settle(&ctx, &mut view);
     let header = find(&out, "Frame");
     let frame = find(&out, "#3");
-    // The number and its header end together at the column's right edge; a
-    // left-aligned pair would start together instead.
+    // The number and its header start together at the column's left edge.
     assert!(
-        (header.right() - frame.right()).abs() < 3.0,
+        (header.left() - frame.left()).abs() < 3.0,
         "header {header:?} cell {frame:?}"
     );
     let endpoint = find(&out, "Endpoint");
-    // Text columns stay at the left edge.
     assert!(endpoint.left() > header.right());
 }
 

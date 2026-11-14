@@ -1,16 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The Summary's thumbnail of the run's last screenshot: decoded on a thread,
-//! drawn small, a click opens it in the Screenshots page.
+//! The Summary's thumbnail of one of the run's screenshots: decoded on a thread,
+//! drawn small, a click opens it in the viewer.
 use eframe::egui;
 use std::{
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver},
 };
-
-/// The longest side the thumbnail is decoded to.
-const SIDE: usize = 480;
-/// How wide it is drawn.
-pub(super) const WIDTH: f32 = 168.0;
 
 #[derive(Default)]
 pub(in crate::triage) struct Thumb {
@@ -21,12 +16,8 @@ pub(in crate::triage) struct Thumb {
 }
 
 impl Thumb {
-    /// Draw the picture at `path`; true when it was clicked.
-    pub(super) fn show(&mut self, ui: &mut egui::Ui, path: &Path) -> bool {
-        self.show_sized(ui, path, WIDTH, SIDE)
-    }
-
-    /// [`Self::show`] drawn `width` wide from a picture decoded to `side`.
+    /// Draw the picture at `path` `width` wide, decoded to `side`; true when
+    /// it was clicked.
     pub(super) fn show_sized(
         &mut self,
         ui: &mut egui::Ui,

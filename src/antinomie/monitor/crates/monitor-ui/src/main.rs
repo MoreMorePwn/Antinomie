@@ -4,6 +4,7 @@ mod analysis;
 mod api_keys_window;
 mod app;
 mod archive;
+mod arrival;
 mod background;
 mod branding;
 mod build_wizard;

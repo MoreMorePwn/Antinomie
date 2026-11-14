@@ -184,56 +184,55 @@ fn detector(
 }
 
 /// What the run recorded about itself: facts about its recording and its
-/// device profile that are no warning, with the run's last screenshot.
-fn notes(
-    ui: &mut egui::Ui,
-    notes: &[String],
-    shot: Option<(&std::path::Path, &mut super::thumb::Thumb)>,
-) -> bool {
-    let mut open = false;
-    if notes.is_empty() && shot.is_none() {
-        return open;
+/// device profile that are no warning, one bullet each.
+fn notes(ui: &mut egui::Ui, notes: &[String]) {
+    if notes.is_empty() {
+        return;
     }
     presentation::frame().show(ui, |ui| {
         ui.set_width(ui.available_width());
-        if !notes.is_empty() {
-            presentation::heading(ui, "Notes", "");
-        }
+        presentation::heading(ui, "Notes", "");
         for note in notes {
-            ui.add(egui::Label::new(RichText::new(note).color(theme::muted())).wrap());
+            ui.add(
+                egui::Label::new(RichText::new(format!("\u{2022} {note}")).color(theme::muted()))
+                    .wrap(),
+            );
         }
         // A reached quota is changed in the Recording settings.
         if notes.iter().any(|note| note.contains("recording quota")) {
             crate::settings_link::button(ui, "Recording");
         }
-        if let Some((path, thumb)) = shot {
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new("Last screenshot")
-                    .small()
-                    .color(theme::muted()),
-            );
-            open = thumb.show(ui, path);
-        }
     });
-    open
 }
 
-/// The run's timed screenshots as a strip, with the run-relative time under
-/// each; the path of a clicked one. Nothing when the run took none.
+/// The run's screenshots as a strip, with the run-relative time under each:
+/// the path of a clicked one, and whether the redirect button beside the title
+/// was clicked. Nothing when the run took none.
 fn timed_shots(
     ui: &mut egui::Ui,
     shots: &[antinomie_monitor_core::timed_shots::RunShot],
     strip: &mut super::strip::Strip,
-) -> Option<std::path::PathBuf> {
+) -> (Option<std::path::PathBuf>, bool) {
     if shots.is_empty() {
-        return None;
+        return (None, false);
     }
     ui.add_space(10.0);
     let mut clicked = None;
+    let mut redirect = false;
     presentation::frame().show(ui, |ui| {
         ui.set_width(ui.available_width());
-        presentation::heading(ui, "Timed screenshots", &shots.len().to_string());
+        ui.horizontal(|ui| {
+            ui.label(theme::section_title(ui, screenshots_title(shots.len())));
+            redirect = ui
+                .add(
+                    egui::Button::new(RichText::new(egui_phosphor::regular::ARROW_SQUARE_OUT))
+                        .frame(false),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Open in Screenshots")
+                .clicked();
+        });
+        ui.add_space(8.0);
         ui.label(
             RichText::new(
                 "Click a picture to open it; the viewer steps through the run with the arrow keys.",
@@ -243,7 +242,12 @@ fn timed_shots(
         );
         clicked = strip.show(ui, shots);
     });
-    clicked
+    (clicked, redirect)
+}
+
+/// The title of the Summary's screenshots box.
+pub(super) fn screenshots_title(count: usize) -> String {
+    format!("Screenshots ({count})")
 }
 
 /// What the run saved: its cores, memory dumps, capture segments and trigger
@@ -478,16 +482,13 @@ pub(super) fn content(
             shown.extend(antinomie_triage::network_reach::unreachable_note(
                 &scan.signals,
             ));
-            let shot = view.run_facts.screenshot.clone();
-            if notes(
-                ui,
-                &shown,
-                shot.as_deref().map(|path| (path, &mut state.thumb)),
-            ) {
-                acts.push(Act::Screenshot(shot.unwrap_or_default()));
-            }
-            if let Some(path) = timed_shots(ui, &view.run_facts.timed, &mut state.strip) {
+            notes(ui, &shown);
+            let (clicked, redirect) = timed_shots(ui, &view.run_facts.timed, &mut state.strip);
+            if let Some(path) = clicked {
                 acts.push(Act::Screenshot(path));
+            }
+            if redirect {
+                acts.push(Act::ScreenshotsPage);
             }
             run_artifacts(ui, view);
         });

@@ -36,11 +36,16 @@ pub(super) fn item(ui: &mut egui::Ui, parts: &[Part<'_>], hint: &str) -> bool {
 
 /// One label made of sections that are numbers (strong, normal text colour)
 /// or words (muted), so that it wraps as a unit.
-fn counted_job(ui: &egui::Ui, sections: &[(String, bool)], underline: bool) -> egui::WidgetText {
+fn counted_job(
+    ui: &egui::Ui,
+    sections: &[(String, bool)],
+    underline: bool,
+    number_color: egui::Color32,
+) -> egui::WidgetText {
     let mut job = egui::text::LayoutJob::default();
     for (text, number) in sections {
         let rich = if *number {
-            RichText::new(text).strong().color(theme::text())
+            RichText::new(text).strong().color(number_color)
         } else {
             RichText::new(text).color(theme::muted())
         };
@@ -59,7 +64,7 @@ fn counted_job(ui: &egui::Ui, sections: &[(String, bool)], underline: bool) -> e
 pub(super) fn counted_item(ui: &mut egui::Ui, sections: &[(String, bool)], hint: &str) -> bool {
     let out = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
         let hot = ui.response().hovered();
-        let text = counted_job(ui, sections, hot);
+        let text = counted_job(ui, sections, hot, theme::text());
         ui.add(egui::Label::new(text).selectable(false));
     });
     out.response
@@ -69,9 +74,9 @@ pub(super) fn counted_item(ui: &mut egui::Ui, sections: &[(String, bool)], hint:
 }
 
 /// The figures of a one-line row: "3 created \u{b7} 1 executed" or
-/// "Execution 2", numbers strong in the text colour and words muted.
+/// "Execution 2", numbers strong in `color` and words muted.
 /// Each is `(number, word, number first)`.
-pub(super) fn figures(ui: &mut egui::Ui, figures: &[(String, &str, bool)]) {
+pub(super) fn figures(ui: &mut egui::Ui, figures: &[(String, &str, bool)], color: egui::Color32) {
     let mut sections: Vec<(String, bool)> = Vec::new();
     for (at, (number, word, number_first)) in figures.iter().enumerate() {
         if at > 0 {
@@ -85,7 +90,7 @@ pub(super) fn figures(ui: &mut egui::Ui, figures: &[(String, &str, bool)]) {
             sections.push((number.clone(), true));
         }
     }
-    let text = counted_job(ui, &sections, false);
+    let text = counted_job(ui, &sections, false, color);
     ui.add(egui::Label::new(text).selectable(false));
 }
 
@@ -117,7 +122,7 @@ pub(super) fn scroll_list(
         .filter(|height| *height > 0.0)
         .unwrap_or(fallback);
     ui.scope(|ui| {
-        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        ui.spacing_mut().scroll = theme::solid_scroll();
         egui::ScrollArea::vertical()
             .id_salt(id)
             .max_height(height)

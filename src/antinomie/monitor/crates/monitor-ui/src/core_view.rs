@@ -187,6 +187,8 @@ enum Tab {
 
 #[derive(Default)]
 pub(crate) struct CoreView {
+    /// Reads the core list again when the window is opened or focused.
+    arrival: crate::arrival::Arrival,
     /// A core a note's chip asked for (a taken core's id, or
     /// `imported/<folder>`), selected when the list is drawn.
     note_target: Option<String>,
@@ -574,6 +576,10 @@ impl CoreView {
             }
         }
         self.manual.truncate(4096);
+        if self.arrival.arrived(ui.ctx()) {
+            // Opened or focused: the next check reads the folders again.
+            self.catalog_checked = None;
+        }
         if let Some(delay) = self.refresh_catalog_if_due(active, Instant::now()) {
             ui.ctx().request_repaint_after(delay);
         }

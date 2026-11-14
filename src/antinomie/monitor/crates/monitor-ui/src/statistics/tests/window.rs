@@ -23,11 +23,9 @@ fn b1_a_second_request_opens_no_second_window_and_asks_for_focus() {
     assert!(!rig.window.focus, "the focus request is taken by a frame");
     assert!(rig.window.drawn > 0);
     let shown = rig.texts();
-    let titles = shown
-        .iter()
-        .filter(|(text, _)| text.starts_with("Statistics ·"))
-        .count();
-    assert_eq!(titles, 1, "{shown:?}");
+    let titles = shown.iter().filter(|(text, _)| text == "run run-a").count();
+    // The title and the target line under it; a second window would add more.
+    assert_eq!(titles, 2, "{shown:?}");
 }
 
 #[test]
@@ -334,11 +332,7 @@ fn b_the_window_does_not_grow_by_itself_on_any_tab() {
         let place = |rig: &mut Rig| {
             let output = rig.frame(vec![]);
             let shown = texts(&output);
-            let title = shown
-                .iter()
-                .find(|(t, _)| t.starts_with("Statistics ·"))
-                .unwrap()
-                .1;
+            let title = shown.iter().find(|(t, _)| t.starts_with("run ")).unwrap().1;
             let copy = shown.iter().find(|(t, _)| t == "Copy").unwrap().1;
             (title.left(), title.top(), copy.top())
         };
@@ -348,5 +342,43 @@ fn b_the_window_does_not_grow_by_itself_on_any_tab() {
         }
         // It opened at about the size asked for, not the screen's.
         assert!(first.0 > 40.0, "{tab:?} fills the screen: {first:?}");
+    }
+}
+
+#[test]
+fn the_title_has_no_statistics_prefix_and_the_stripe_shows_in_every_theme() {
+    let (mut rig, _fixture) = rig_with_run();
+    rig.window.request_open(None);
+    rig.settle();
+    let shown = rig.texts();
+    assert!(
+        !shown
+            .iter()
+            .any(|(text, _)| text.starts_with("Statistics ·")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|(text, _)| text.starts_with("run ")));
+    // The table stripe differs from the window background by a visible step.
+    for choice in crate::theme::Theme::ALL {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx, choice);
+        let palette = crate::theme::palette();
+        let blend = |under: egui::Color32| {
+            let [sr, sg, sb, sa] = palette.stripe_strong.to_srgba_unmultiplied();
+            let mix = |a: u8, b: u8| {
+                (f32::from(a) * (1.0 - f32::from(sa) / 255.0)
+                    + f32::from(b) * f32::from(sa) / 255.0) as i32
+            };
+            [
+                mix(under.r(), sr) - i32::from(under.r()),
+                mix(under.g(), sg) - i32::from(under.g()),
+                mix(under.b(), sb) - i32::from(under.b()),
+            ]
+        };
+        for under in [palette.raised, palette.panel] {
+            let step = blend(under).into_iter().map(i32::abs).max().unwrap();
+            assert!(step >= 8, "{choice:?}: stripe step {step} over {under:?}");
+        }
+        assert!(palette.stripe_strong.a() > palette.stripe.a());
     }
 }
