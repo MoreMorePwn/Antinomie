@@ -537,6 +537,7 @@ fn trigger_row(
     let note = dump
         .error
         .as_ref()
+        .or(dump.note.as_ref())
         .map(|error| error.chars().take(160).collect::<String>())
         .or_else(|| dump.size.map(crate::values::short_size));
     result.acquired.push(AcquiredCore {

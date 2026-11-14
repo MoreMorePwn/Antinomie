@@ -39,6 +39,9 @@ impl CoreView {
                 if let Some(details) = sizes::manual_details(core) {
                     ui.add(egui::Label::new(egui::RichText::new(details).weak()).wrap());
                 }
+                if let Some(note) = &core.note {
+                    ui.add(egui::Label::new(note).wrap());
+                }
                 ui.label(format!(
                     "PID {} · task {} · start {} ns",
                     core.target.tgid, core.target.task_cookie, core.target.start_boot_ns

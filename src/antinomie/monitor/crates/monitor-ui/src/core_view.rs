@@ -491,7 +491,7 @@ impl CoreView {
                 self.detail = None;
                 self.strings.reset();
                 self.remember_asm_counts();
-                self.status = "Core is referenced in place; retain its original file.".into();
+                self.status = self.opened_status();
                 if let Some(text) = saved {
                     let (functions, bodies) = parse_ghidra(&text);
                     self.functions = functions;
@@ -519,6 +519,18 @@ impl CoreView {
             }
             Ok(Reply::Done(message)) => self.status = message,
         }
+    }
+
+    /// The status line of the core just opened: a complete live core that
+    /// lacks only pages that were not in memory says so, with the rule that
+    /// took it (item 35); any other core keeps the reminder that it is read
+    /// in place.
+    fn opened_status(&self) -> String {
+        self.manual
+            .iter()
+            .find(|core| Some(&core.directory) == self.selected_directory.as_ref())
+            .and_then(|core| core.note.clone())
+            .unwrap_or_else(|| "Core is referenced in place; retain its original file.".into())
     }
 
     /// Sends each distinct catalog issue to the activity log once.

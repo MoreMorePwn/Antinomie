@@ -101,6 +101,7 @@ impl Owner {
                 reason: None,
                 read_nonresident: request.read_nonresident,
                 coverage: None,
+                note: None,
             },
             sink: Sink::new(directory),
             initialized: false,
@@ -753,7 +754,7 @@ impl Session {
             self.manual_preflight(owner, &status)?;
         }
         if owner.summary.stored_size == status.size {
-            let complete = status.state == 3 && status.flags & 8 == 0;
+            let mut complete = status.state == 3 && status.flags & 8 == 0;
             let reason = guest_reason(&CoreOutcome {
                 state: status.state,
                 status: status.status,
@@ -764,7 +765,29 @@ impl Session {
                 budget: u64::from(owner.summary.max_size),
                 limits,
             });
-            if let Some(reason) = reason {
+            // Only pages that were not in memory are missing, and they were
+            // not to be read in: everything that was in memory is there, so
+            // the core is complete, with a note that says so (item 35).
+            let unread = status
+                .coverage
+                .as_ref()
+                .or(owner.summary.coverage.as_ref())
+                .filter(|_| !complete && owner.summary.reason.is_none())
+                .filter(|_| {
+                    reason
+                        .as_ref()
+                        .is_some_and(|r| r.code == CoreReasonCode::Coverage)
+                })
+                .and_then(|coverage| coverage.unread_pages_only(owner.summary.read_nonresident));
+            if let Some(pages) = unread {
+                complete = true;
+                let found = owner
+                    .summary
+                    .provenance
+                    .as_ref()
+                    .and_then(|p| p.finding.as_ref());
+                owner.summary.note = Some(crate::core_limits::unread_pages_note(pages, found));
+            } else if let Some(reason) = reason {
                 owner.summary.reason.get_or_insert(reason);
             }
             let issue = match (&owner.summary.reason, complete) {

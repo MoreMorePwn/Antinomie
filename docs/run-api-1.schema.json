@@ -750,7 +750,7 @@
       "properties": {
         "state": {
           "type": "string",
-          "description": "The artifact state: `in_progress`, `complete`, `partial`,\n`interrupted` or `failed`. A core is usually `partial`: the guest\ncopies only the pages that are resident."
+          "description": "The artifact state: `in_progress`, `complete`, `partial`,\n`interrupted` or `failed`. A core whose only gap is pages that were\nnot in memory (Read non-resident pages off) is `complete` with a\n`note`; one with lost thread contexts, or with pages missing although\nthey were to be read in, is `partial`."
         },
         "size": {
           "type": [
@@ -772,6 +772,13 @@
             "string",
             "null"
           ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What a complete core still lacks and why it was taken, for example\n\"12 pages that were not in memory were not captured (Read\nnon-resident pages was off). Taken because persistence.cron (High)\nmatched.\""
         },
         "path": {
           "type": [

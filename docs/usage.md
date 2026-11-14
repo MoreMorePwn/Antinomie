@@ -1900,10 +1900,17 @@ then gone as before. On an older base the run's notes say the base cannot hold
 a process at its exit, and a program that matches and exits within a few tens of
 milliseconds can be gone before the guest can pause it.
 
-A core is partial when the guest could not read every page: it copies only the
-pages that are in memory when it reads them (never swapped-out or untouched
-pages) and the thread contexts it could park. The core's message says which part
-is missing, thread contexts or pages, with the counts. On a base of contract
+The guest copies only the pages that are in memory when it reads a live core
+(never swapped-out or untouched pages) and the thread contexts it could park. A
+trigger core whose only gap is pages that were not in memory, with **Read
+non-resident pages** off, holds everything that was in memory: it is **Complete**,
+with a note such as "12 pages that were not in memory were not captured (Read
+non-resident pages was off). Taken because persistence.cron (High) matched." in the
+Core dumps view, the finding's Details, the run's features and the run API
+(`triggers[].core.note`). A core with lost thread contexts, or with pages missing
+although reading them was asked for, is partial, and its message says which part is
+missing, with the counts. Cores saved before 0.9.0 keep the state they were saved
+with. On a base of contract
 revision 22, **Read non-resident pages** (under the trigger's core, and in the
 **Dump core** dialog of a running process) reads the pages that are not in memory
 in as well, from swap or from the file a page belongs to, as a core on exit does;

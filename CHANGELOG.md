@@ -34,6 +34,11 @@ x86 programs by their own table.
   `triage_detection.evidence_limit`), and counts every hit it left out; the
   note says "325 hits, 100 saved ... Raise Saved hits per rule in Settings and
   scan again to keep more."
+- **A trigger core that lacks only pages not in memory is Complete** (Read
+  non-resident pages off), with a note saying how many pages were left out and
+  which rule took it, in Core dumps, Details, the run's features and the run
+  API (`note`). Lost thread contexts, or pages missing although they were to be
+  read in, stay Partial.
 - **A static analysis whose worker is gone no longer stays running.** A worker
   that was killed or crashed, or that shows no progress for far longer than its
   check may take, ends the analysis: the check it was running says "the

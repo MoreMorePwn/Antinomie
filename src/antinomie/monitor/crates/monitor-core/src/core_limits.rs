@@ -62,6 +62,27 @@ pub struct CoreCoverage {
 }
 
 impl CoreCoverage {
+    /// The pages left out of a live core whose only gap is pages that were
+    /// not in memory under the resident-only policy: every thread context is
+    /// there, some selected pages were not resident, none was read in, and
+    /// Read non-resident pages was off. Such a core holds everything that was
+    /// in memory, so it is complete (with a note), not partial. None for any
+    /// other core: lost thread contexts, or pages missing although reading
+    /// them was asked for, keep it partial.
+    pub fn unread_pages_only(&self, read_nonresident: bool) -> Option<u32> {
+        match self.pages_unavailable {
+            Some(pages)
+                if pages > 0
+                    && self.threads_lost == 0
+                    && self.pages_read_in == 0
+                    && !read_nonresident =>
+            {
+                Some(pages)
+            }
+            _ => None,
+        }
+    }
+
     /// The coverage words of a status reply (16 bytes).
     pub fn parse(words: &[u8]) -> Result<Self, String> {
         use crate::parser::u32_at;
@@ -119,6 +140,22 @@ impl CoreCoverage {
         };
         format!("Partial: {contexts}; {pages}{read_in}.")
     }
+}
+
+/// The note of a complete live core that lacks the `pages` that were not in
+/// memory ([`CoreCoverage::unread_pages_only`]), with the rule and tier that
+/// took it when the core came from a dump trigger.
+pub fn unread_pages_note(pages: u32, found: Option<&crate::provenance::FoundBy>) -> String {
+    let mut text = format!(
+        "{pages} page{} that {} not in memory {} not captured (Read non-resident pages was off).",
+        if pages == 1 { "" } else { "s" },
+        if pages == 1 { "was" } else { "were" },
+        if pages == 1 { "was" } else { "were" },
+    );
+    if let Some(found) = found {
+        text.push_str(&format!(" Taken because {} matched.", found.text()));
+    }
+    text
 }
 
 impl CoreLimits {
@@ -786,5 +823,40 @@ mod tests {
         assert!(bounds.text.starts_with("The process has more threads"));
         let deadline = ended_without_core(&outcome(5, -110, current), false);
         assert!(deadline.text.contains("before the core was taken"));
+    }
+
+    /// Item 35: a live core missing only pages that were not in memory,
+    /// with Read non-resident pages off, is complete with a note; lost
+    /// thread contexts or pages missing although they were to be read in
+    /// keep it partial.
+    #[test]
+    fn only_pages_not_in_memory_under_the_resident_policy_make_a_complete_core() {
+        let coverage = |threads_lost, pages: Option<u32>, read_in| CoreCoverage {
+            threads_lost,
+            pages_unavailable: pages,
+            pages_read_in: read_in,
+        };
+        assert_eq!(coverage(0, Some(12), 0).unread_pages_only(false), Some(12));
+        // Reading them was asked for: still partial.
+        assert_eq!(coverage(0, Some(12), 0).unread_pages_only(true), None);
+        // Lost thread contexts: partial.
+        assert_eq!(coverage(1, Some(12), 0).unread_pages_only(false), None);
+        // Nothing missing, or not counted: not this case.
+        assert_eq!(coverage(0, Some(0), 0).unread_pages_only(false), None);
+        assert_eq!(coverage(0, None, 0).unread_pages_only(false), None);
+        assert_eq!(coverage(0, Some(3), 2).unread_pages_only(false), None);
+        let found = crate::provenance::FoundBy {
+            rule: "persistence.cron".into(),
+            tier: crate::dump_trigger::TriggerTier::High,
+        };
+        assert_eq!(
+            unread_pages_note(12, Some(&found)),
+            "12 pages that were not in memory were not captured (Read non-resident pages was off). \
+             Taken because persistence.cron (High) matched."
+        );
+        assert_eq!(
+            unread_pages_note(1, None),
+            "1 page that was not in memory was not captured (Read non-resident pages was off)."
+        );
     }
 }

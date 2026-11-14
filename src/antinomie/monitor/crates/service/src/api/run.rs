@@ -195,8 +195,10 @@ pub struct RunVm {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RunDump {
     /// The artifact state: `in_progress`, `complete`, `partial`,
-    /// `interrupted` or `failed`. A core is usually `partial`: the guest
-    /// copies only the pages that are resident.
+    /// `interrupted` or `failed`. A core whose only gap is pages that were
+    /// not in memory (Read non-resident pages off) is `complete` with a
+    /// `note`; one with lost thread contexts, or with pages missing although
+    /// they were to be read in, is `partial`.
     pub state: String,
     /// Bytes on disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -205,6 +207,12 @@ pub struct RunDump {
     pub capture_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// What a complete core still lacks and why it was taken, for example
+    /// "12 pages that were not in memory were not captured (Read
+    /// non-resident pages was off). Taken because persistence.cron (High)
+    /// matched."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     /// Local-only, like `recording.directory`: absent from every remote reply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,

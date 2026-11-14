@@ -232,7 +232,7 @@ for engine scope), `gseq` (across the service, persisted, never reused), `ts_ms`
 | `run.program` | `{program_id, pid?, route}`: the program started (`program_id` is `program.id` of the run) |
 | `run.warning` | `{code, text}` |
 | `run.artifact` | `{artifact}` |
-| `run.trigger` | `{trigger?, note?}`: the preset's dump trigger took a dump (`trigger`: rule, tier, summary, syscall, pid, at_ms, and the `memory` and `core` dump with state, size, capture_id, error; no host path) or did less than asked (`note`) |
+| `run.trigger` | `{trigger?, note?}`: the preset's dump trigger took a dump (`trigger`: rule, tier, summary, syscall, pid, at_ms, and the `memory` and `core` dump with state, size, capture_id, error, note (what a complete core lacks: pages that were not in memory, and the rule that took it); no host path) or did less than asked (`note`) |
 | `run.assessment` | `{assessment}` |
 | `run.requeued` | `{attempt, reason}`; a `run.state` event with `state: queued` follows |
 | `run.finished` | `{outcome, failure?}`; the last event of a run |

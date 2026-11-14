@@ -246,6 +246,7 @@ mod tests {
             reason: None,
             read_nonresident: false,
             coverage: None,
+            note: None,
         }
     }
     #[test]

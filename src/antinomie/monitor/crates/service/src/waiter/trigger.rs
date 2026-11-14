@@ -58,6 +58,7 @@ fn dump_of(dump: &TriggerDump) -> RunDump {
         size: dump.size,
         capture_id: dump.capture_id.clone(),
         error: dump.error.clone(),
+        note: dump.note.clone(),
         path: dump.path.as_ref().map(|path| path.display().to_string()),
     }
 }
