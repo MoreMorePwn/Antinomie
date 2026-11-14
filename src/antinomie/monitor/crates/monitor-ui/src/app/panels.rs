@@ -372,7 +372,7 @@ impl MonitorApp {
     /// The Summary tab.
     fn summary_panel(&mut self, ui: &mut egui::Ui) {
         self.prepare_summary_snapshots(ui.ctx());
-        crate::summary::show(
+        let welcome = crate::summary::show(
             ui,
             &self.snapshot,
             &self.history,
@@ -380,6 +380,18 @@ impl MonitorApp {
             self.settings.quota_gib,
             &self.cpu_history,
         );
+        if let Some(welcome) = welcome {
+            use crate::summary::Welcome;
+            let ctx = ui.ctx().clone();
+            self.run_action(
+                &ctx,
+                match welcome {
+                    Welcome::ManageBases => Action::BaseImages,
+                    Welcome::NewVm => Action::NewVm,
+                    Welcome::ManageSamples => Action::SamplesPage,
+                },
+            );
+        }
         let id = egui::Id::new(crate::summary::configuration::CONFIGURE);
         let configure = ui.ctx().data_mut(|data| data.remove_temp::<bool>(id));
         if configure == Some(true) && self.can_configure_vm() {

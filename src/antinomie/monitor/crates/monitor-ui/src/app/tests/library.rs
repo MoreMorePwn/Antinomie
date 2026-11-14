@@ -122,3 +122,29 @@ fn links_to_the_old_windows_open_the_pages() {
         "the workspace took the request"
     );
 }
+
+#[test]
+fn the_overview_with_no_vm_has_the_logo_and_three_buttons_that_open_their_pages() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    app.selected = None;
+    app.layout.focus(Panel::Summary);
+    let shown = settle(&mut app, &ctx);
+    for button in ["Manage base images", "Create new VM", "Manage samples"] {
+        assert!(shown.iter().any(|(text, _)| text == button), "{button}");
+    }
+    assert!(!shown.iter().any(|(text, _)| text == "Select a VM"));
+    click_label(&mut app, &ctx, SIZE, "Create new VM");
+    assert!(app.create_open, "Create new VM opens the VM window");
+    let mut app = self::app();
+    app.selected = None;
+    app.layout.focus(Panel::Summary);
+    settle(&mut app, &ctx);
+    click_label(&mut app, &ctx, SIZE, "Manage base images");
+    let shown = settle(&mut app, &ctx);
+    assert!(
+        shown.iter().any(|(text, _)| text == "Download base…"),
+        "the Base images page is open: {shown:?}"
+    );
+}
