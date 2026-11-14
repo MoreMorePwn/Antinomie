@@ -168,8 +168,9 @@ fn initial_size(options: &BackendOptions, launch: &VmLaunchOptions) -> Option<(u
 /// gave this VM's disk; a disk provisioned before that keeps the base's.
 /// The VM's boot age option, as the profile fitted to the base keeps it
 /// (nothing on a base whose kernel does not take it, which the fitting set to
-/// 0), for x86-64 and arm64 alike. The guest takes antinomie_* options out of
-/// its command line before anything can read it.
+/// 0). The guest takes antinomie_* options out of its command line before
+/// anything can read it. An arm64 guest ignores the age, so its launch has
+/// none (`StealthProfile::for_arch`).
 fn boot_age_option(stealth: &crate::stealth::StealthProfile, debian: bool) -> String {
     if stealth.boot_age_s == 0 {
         return String::new();
@@ -502,18 +503,18 @@ impl VmProcess {
             crate::stealth::HostSupport::detect(&options.qemu)
         };
         // A preset this architecture cannot present (the IoT device on
-        // x86-64) starts as Normal QEMU.
+        // x86-64) starts as Normal QEMU; an arm64 guest takes no boot age.
         let arch = if virt {
             crate::api::GuestArch::AARCH64
         } else {
             crate::api::GuestArch::X86_64
         };
-        let arch_fallback = vm.stealth.arch_fallback(arch);
+        let arch_fallbacks = vm.stealth.arch_fallbacks(arch);
         let (mut stealth, fallbacks) = vm
             .stealth
             .for_arch(arch)
             .fitted_with(&base_support, &host_support);
-        let mut fallbacks: Vec<String> = arch_fallback
+        let mut fallbacks: Vec<String> = arch_fallbacks
             .iter()
             .chain(&fallbacks)
             .map(crate::stealth::Fallback::log_line)
@@ -764,7 +765,6 @@ impl VmProcess {
         }
         if virt {
             let mut append = virt::append(&boot.kernel_append, bootstrap, vm.launch.fast_emulation);
-            append.push_str(&boot_age_option(&stealth, bundle.runs_debian_modules()));
             virt::display_args(
                 &mut cmd,
                 virt::VirtDisplay {
@@ -1585,22 +1585,14 @@ mod tests {
     }
 
     #[test]
-    fn an_arm64_vm_takes_the_same_boot_age_option() {
-        // The arm64 launch appends `boot_age_option` after `virt::append`.
-        let mut stealth = crate::stealth::StealthProfile::iot();
-        stealth.boot_age_s = 734_512;
-        let append = format!(
-            "{}{}",
-            virt::append("console=ttyAMA0", 0x40000000, true),
-            boot_age_option(&stealth, false)
-        );
-        assert_eq!(
-            append,
-            "console=ttyAMA0 antinomie_boot_gpa=0x40000000 antinomie_kpti=off \
-             antinomie_boot_age=734512:continuous"
-        );
-        stealth.boot_age_s = 0;
-        assert_eq!(boot_age_option(&stealth, false), "");
+    fn an_arm64_vm_starts_without_a_boot_age() {
+        // Its guest ignores one (stealth::ARM64_UPTIME): the profile as an
+        // arm64 VM starts it has none, so the launch adds no option.
+        let stealth = crate::stealth::StealthProfile::iot();
+        assert!(stealth.boot_age_s > 0);
+        let arm = stealth.for_arch(crate::api::GuestArch::AARCH64);
+        assert_eq!(boot_age_option(&arm, false), "");
+        assert!(boot_age_option(&stealth, false).starts_with(" antinomie_boot_age="));
     }
 
     #[test]

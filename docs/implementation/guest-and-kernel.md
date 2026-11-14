@@ -1457,7 +1457,8 @@ machine of its profile's kind instead (`stealth/arm64.rs`, catalog
   Developer Platform with UEFI, a Raspberry Pi 4 Model B or Pi 5 when the
   profile's firmware is BIOS. IoT device (0.9.0, ANT-T0550): a Raspberry Pi 4
   Model B or Pi 5 whatever the firmware (`StealthProfile::iot`: BIOS, a home
-  network, a boot age in the server range, no facade or cloud state); an
+  network, a boot age in the server range that arm64 guests ignore for now, no
+  facade or cloud state); an
   x86-64 VM cannot present it and starts as Normal QEMU with a fallback line
   (`arch_fallback`), since the x86 catalog has no IoT device. The pick is stable for a VM (its UUID), and an
   identity whose `profile` names an arm64 machine keeps it. Transparent, or the

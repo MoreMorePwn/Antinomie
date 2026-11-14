@@ -545,13 +545,14 @@ for Cloud VPS, all booting UEFI (AAVMF) with that machine's SMBIOS tables, ACPI
 OEM IDs, CPU (MIDR and timer frequency), network card and SATA disk; with BIOS
 firmware, a Raspberry Pi 4 Model B or Pi 5 on a disguised device tree. The
 **IoT device (Raspberry Pi)** preset presents a Pi 4 or Pi 5 (picked by the VM's
-UUID) booting BIOS on its device tree, up for days to months as a device that is
-never switched off, on a home network, with nothing of a desktop; the window
+UUID) booting BIOS on its device tree, on a home network, with nothing of a
+desktop and an always-on uptime model (see below); the window
 suggests a BusyBox base (with **Use base** when an arm64 BusyBox base is
 installed and the VM is on Debian). An x86-64 VM lists it disabled ("arm64
 only": the catalog has no x86-64 IoT device); a VM that has it on an x86-64 base
-starts as Normal QEMU and says so. An arm64 VM now gets its uptime too (it booted
-fresh before whatever the profile said). The
+starts as Normal QEMU and says so. An arm64 VM shows a fresh boot whatever its
+**Uptime** (its guest kernel ignores the age); the window says so beside the
+setting. The
 **Device profile** window shows the arm64 machine list instead of the PC
 catalog (pick one, or let the preset pick by the VM's UUID), the machine's CPU
 instead of the x86 CPU settings, and, under **Still visible**, what an arm64

@@ -171,7 +171,7 @@ impl<'a> Fit<'a> {
         let base = current.map_or(BaseSupport::all(), |base| {
             BaseSupport::from_list(&base.stealth_support)
         });
-        let mut fallbacks: Vec<Fallback> = profile.arch_fallback(arch).into_iter().collect();
+        let mut fallbacks = profile.arch_fallbacks(arch);
         fallbacks.extend(profile.for_arch(arch).fallbacks(&base, host));
         Self {
             fallbacks,

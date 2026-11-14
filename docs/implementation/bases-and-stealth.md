@@ -49,7 +49,7 @@ virtio-gpu), q35 or i440FX by the chipset, QEMU's ACPI creator only once the
 identity hides the rest, one socket per CPU and no HPET when those are off,
 the metadata entry of a cloud profile only off Routed, the Debian-only facade
 entries only on Debian, and on arm64 QEMU's own card and disk without a
-machine and the boot age's entry. The
+machine. The
 guest kernel's own traces are handled in the guest (see "Guest stealth"
 below). A snapshot taken with other hardware may not restore after the
 profile changes.
@@ -1188,10 +1188,16 @@ a boot age when its preset is chosen (`StealthProfile.boot_age_s`,
 `BootAge::draw`, log-uniform: desktop and laptop 3 hours to 6 days, server and
 cloud 3 days to 120 days; Transparent 0), kept for the VM's life; `vm.rs` passes
 `antinomie_boot_age=SECONDS:MODEL` to a base listing `uptime` (from
-`CONFIG_ANTINOMIE_BOOT_AGE`); another base falls back to a fresh boot. Until
-ANT-T0550 the arm64 launch (`vm/virt.rs`) did not append it, so an arm64 VM
-always booted fresh although its base lists `uptime`; it now takes the same
-option (`vm.rs::boot_age_option`). The Device profile window's **Uptime** field
+`CONFIG_ANTINOMIE_BOOT_AGE`); another base falls back to a fresh boot. An
+arm64 VM shows a fresh boot although its base lists `uptime`:
+`ant_boot_age_init()` sets the wall clock back from the time read at
+`timekeeping_init()`, and arm64 has no persistent clock then (the PL031 RTC is
+read later, by `rtc_hctosys`), so the age is ignored (seen on the r22 arm64
+BusyBox base, ANT-T0550: `/proc/uptime` 7 s with a 16-day age passed). The
+arm64 launch does not pass it, and `StealthProfile::arch_fallbacks` gives an
+Uptime fallback ("Uptime not applied on arm64", `ARM64_UPTIME`) that the window
+shows on the setting; `for_arch` drops the age for arm64. A guest change would
+be needed (take the age at `rtc_hctosys` time when the wall clock is 0). The Device profile window's **Uptime** field
 takes a typed age (`parse_boot_age`: `3 d 4 h`, `90 min`) from 1 minute to the
 guest's `ANT_BOOT_AGE_MAX_S` (3 × 366 days, `BOOT_AGE_MAX_S`; `validate()`
 refuses more), shows the preset's range as the recommended one, and its dice

@@ -93,17 +93,16 @@ impl StealthProfile {
     /// What still tells this VM apart, most telling first. `self` is the
     /// profile as the VM starts it ([`fitted`](Self::fitted)).
     pub fn still_visible(&self, view: &VmView) -> Vec<&'static str> {
+        // As the architecture takes it: an IoT profile on x86-64 starts as
+        // Normal QEMU, an arm64 VM without a boot age.
+        let profile = self.for_arch(view.arch);
         if view.arch == GuestArch::AARCH64 {
-            return self.arm64_giveaways(view);
+            return profile.arm64_giveaways(view);
         }
-        if self.arch_fallback(view.arch).is_some() {
-            // An IoT profile on x86-64 starts as Normal QEMU.
-            return Self::transparent().still_visible(view);
+        if profile.cloud_provider().is_some() {
+            return profile.cloud_giveaways(view);
         }
-        if self.cloud_provider().is_some() {
-            return self.cloud_giveaways(view);
-        }
-        self.x86_giveaways(view)
+        profile.x86_giveaways(view)
     }
 
     /// [`still_visible`](Self::still_visible) for a VM of `arch` with the

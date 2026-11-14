@@ -67,7 +67,7 @@ pub enum StealthPreset {
     CloudVps,
     /// A Raspberry Pi 4 or 5 on its device tree (arm64 only): always on, no
     /// desktop. The x86 catalog has no such device, so an x86-64 VM starts
-    /// with QEMU's own identity ([`StealthProfile::arch_fallback`]).
+    /// with QEMU's own identity ([`StealthProfile::arch_fallbacks`]).
     Iot,
     /// The launch Antinomie used before profiles: QEMU's own identity. Shown
     /// as "Normal QEMU"; the stored name stays.
@@ -1342,29 +1342,46 @@ impl StealthProfile {
         }
     }
 
-    /// What a VM of `arch` starts with instead of this profile, when it
-    /// cannot present it: the IoT device on x86-64 starts as Normal QEMU.
-    pub fn arch_fallback(&self, arch: crate::api::GuestArch) -> Option<Fallback> {
-        let reason = self.preset.unavailable(arch)?;
-        Some(Fallback {
-            setting: FallbackSetting::Preset,
-            summary: format!(
-                "{} is {reason}: Normal QEMU will be used",
-                self.preset.label()
-            ),
-            note: format!("{}: {reason}; Normal QEMU used", self.preset.label()),
-            reason: format!("{reason}; choose another preset for this VM"),
-        })
+    /// What a VM of `arch` cannot take of this profile: the IoT device on
+    /// x86-64 starts as Normal QEMU, and an arm64 VM shows a fresh boot
+    /// whatever its uptime (see [`ARM64_UPTIME`]).
+    pub fn arch_fallbacks(&self, arch: crate::api::GuestArch) -> Vec<Fallback> {
+        if let Some(reason) = self.preset.unavailable(arch) {
+            return vec![Fallback {
+                setting: FallbackSetting::Preset,
+                summary: format!(
+                    "{} is {reason}: Normal QEMU will be used",
+                    self.preset.label()
+                ),
+                note: format!("{}: {reason}; Normal QEMU used", self.preset.label()),
+                reason: format!("{reason}; choose another preset for this VM"),
+            }];
+        }
+        if arch == crate::api::GuestArch::AARCH64 && self.boot_age_s > 0 {
+            return vec![Fallback {
+                setting: FallbackSetting::Uptime,
+                summary: "Uptime not applied on arm64: a fresh boot will be shown".into(),
+                note: format!(
+                    "Uptime of {}: {ARM64_UPTIME}; a fresh boot shown",
+                    boot_age_text(self.boot_age_s)
+                ),
+                reason: ARM64_UPTIME.into(),
+            }];
+        }
+        Vec::new()
     }
 
     /// This profile as a VM of `arch` presents it (see
-    /// [`arch_fallback`](Self::arch_fallback)).
+    /// [`arch_fallbacks`](Self::arch_fallbacks)).
     pub fn for_arch(&self, arch: crate::api::GuestArch) -> Self {
-        if self.arch_fallback(arch).is_some() {
-            Self::transparent()
-        } else {
-            self.clone()
+        if self.preset.unavailable(arch).is_some() {
+            return Self::transparent();
         }
+        let mut profile = self.clone();
+        if arch == crate::api::GuestArch::AARCH64 {
+            profile.boot_age_s = 0;
+        }
+        profile
     }
 
     /// A new instance of `provider`: its firmware strings, chipset, MAC
@@ -1847,7 +1864,7 @@ pub fn vm_fallbacks(
         } else {
             host
         };
-        let mut found: Vec<Fallback> = vm.stealth.arch_fallback(base.arch).into_iter().collect();
+        let mut found = vm.stealth.arch_fallbacks(base.arch);
         found.extend(
             vm.stealth
                 .for_arch(base.arch)
@@ -1877,12 +1894,21 @@ pub fn base_supporting<'a>(
         .filter(|base| arch.is_none_or(|arch| base.arch == arch))
         .find(|base| {
             let support = BaseSupport::from_list(&base.stealth_support);
+            // What no base of this architecture gives is not offered.
             !profile
-                .fallbacks(&support, host)
+                .arch_fallbacks(base.arch)
                 .iter()
+                .chain(&profile.for_arch(base.arch).fallbacks(&support, host))
                 .any(|fallback| fallback.setting == setting)
         })
 }
+
+/// Why an arm64 VM shows a fresh boot: the guest patch (0053) sets the
+/// boot's time back from the wall clock read at `timekeeping_init()`, and an
+/// arm64 guest has no persistent clock then (its RTC is read later), so it
+/// ignores the age. Passing it would change nothing; a guest change is needed.
+pub const ARM64_UPTIME: &str =
+    "the arm64 guest kernel ignores a boot age (it has no clock yet when it sets the boot's time)";
 
 /// Why an x86-64 VM cannot present the IoT device.
 const IOT_ARM64_ONLY: &str = "arm64 only (the catalog has no x86-64 IoT device)";

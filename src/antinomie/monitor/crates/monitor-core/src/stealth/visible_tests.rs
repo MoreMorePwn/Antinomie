@@ -143,8 +143,9 @@ fn an_x86_vm_cannot_present_the_iot_device_and_starts_as_normal_qemu() {
             assert!(preset.unavailable(GuestArch::X86_64).is_none());
         }
     }
-    assert!(profile.arch_fallback(GuestArch::AARCH64).is_none());
-    let fallback = profile.arch_fallback(GuestArch::X86_64).unwrap();
+    let fallbacks = profile.arch_fallbacks(GuestArch::X86_64);
+    assert_eq!(fallbacks.len(), 1, "{fallbacks:?}");
+    let fallback = &fallbacks[0];
     assert_eq!(fallback.setting, FallbackSetting::Preset);
     assert!(
         fallback.summary.contains("arm64 only"),
@@ -155,7 +156,7 @@ fn an_x86_vm_cannot_present_the_iot_device_and_starts_as_normal_qemu() {
         profile.for_arch(GuestArch::X86_64),
         StealthProfile::transparent()
     );
-    assert_eq!(profile.for_arch(GuestArch::AARCH64), profile);
+
     let vm = VmConfig {
         base_identity: Some("base".into()),
         stealth: profile.clone(),
@@ -164,8 +165,15 @@ fn an_x86_vm_cannot_present_the_iot_device_and_starts_as_normal_qemu() {
     let x86 = vm_fallbacks(&vm, &[base(GuestArch::X86_64, R22)], &HostSupport::all());
     assert_eq!(x86.len(), 1, "{x86:?}");
     assert_eq!(x86[0].setting, FallbackSetting::Preset);
+    // On arm64 only its uptime is not applied (see the arm64 test below).
     let arm = vm_fallbacks(&vm, &[base(GuestArch::AARCH64, R22)], &HostSupport::all());
-    assert!(arm.is_empty(), "{arm:?}");
+    assert_eq!(
+        arm.iter()
+            .map(|fallback| fallback.setting)
+            .collect::<Vec<_>>(),
+        [FallbackSetting::Uptime],
+        "{arm:?}"
+    );
     // Its list is Normal QEMU's.
     assert_eq!(
         profile.still_visible(&VmView::default()),
@@ -273,17 +281,36 @@ fn the_arm64_list_follows_the_machine_uptime_kpti_and_card() {
         }),
         "KPTI"
     ));
-    // The IoT device: the board's entries, and its boot age instead of a
-    // fresh boot (always running on BusyBox).
+    // The IoT device: the board's entries; a fresh boot, as the arm64 guest
+    // ignores a boot age (it says so beside Uptime).
     let iot = StealthProfile::iot();
+    assert!(iot.boot_age_s > 0);
     let list = iot.still_visible(&arm);
     assert!(has(&list, "BCM2711/BCM2712"), "{list:?}");
     assert!(!has(&list, "virtio network card") && !has(&list, "dummy-virt"));
-    assert!(!has(&list, "a fresh boot"), "{list:?}");
-    assert!(has(&list, "the boot age's step to the present"), "{list:?}");
-    let mut fresh = iot.clone();
-    fresh.boot_age_s = 0;
-    assert!(has(&fresh.still_visible(&arm), "a fresh boot"));
+    assert!(has(&list, "a fresh boot"), "{list:?}");
+    assert_eq!(iot.for_arch(GuestArch::AARCH64).boot_age_s, 0);
+    assert_eq!(iot.for_arch(GuestArch::AARCH64).identity, iot.identity);
+    let fallbacks = iot.arch_fallbacks(GuestArch::AARCH64);
+    assert_eq!(fallbacks.len(), 1);
+    assert_eq!(fallbacks[0].setting, FallbackSetting::Uptime);
+    assert!(fallbacks[0].summary.contains("fresh boot"));
+    // No other base of the architecture is offered for it.
+    let bases = [base(GuestArch::AARCH64, &[]), {
+        let mut other = base(GuestArch::AARCH64, R22);
+        other.id = "other".into();
+        other
+    }];
+    assert!(
+        base_supporting(
+            &iot,
+            FallbackSetting::Uptime,
+            Some("base"),
+            &bases,
+            &HostSupport::all()
+        )
+        .is_none()
+    );
     // A workstation without UEFI is shown as a board, and says so.
     let desktop = StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
     assert!(has(&desktop.still_visible(&arm), "AAVMF"));
