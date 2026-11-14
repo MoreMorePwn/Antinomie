@@ -307,12 +307,33 @@ fn push_row(
 /// x86-64 only), as an arm64 guest's programs are. Other files go to the tool.
 fn x86_tool_refuses(specimen: &[u8], tool: &str, what: &str) -> Option<String> {
     let arch = crate::samples::elf_arch(specimen)?;
-    (!matches!(arch, "x86_64" | "x86")).then(|| {
-        format!(
-            "{tool} {what} in x86 and x86-64 programs only; this program is for {arch}, \
-             which it cannot analyse. The Strings check lists its plain strings."
-        )
-    })
+    (!matches!(arch, "x86_64" | "x86")).then(|| x86_only_text(tool, what, arch))
+}
+
+fn x86_only_text(tool: &str, what: &str, arch: &str) -> String {
+    format!(
+        "{tool} {what} in x86 and x86-64 programs only; this program is for {arch}, \
+         which it cannot analyse. The Strings check lists its plain strings."
+    )
+}
+
+/// Why `kind` cannot run on the programs of a guest of `arch`, in the words
+/// the analysis gives when it refuses one: capa and FLOSS read x86 and
+/// x86-64 programs only. None for any other check, or an x86 guest. The Run
+/// program form greys these checks out with this reason (item 21).
+pub fn unavailable_on(kind: AnalysisKind, arch: crate::GuestArch) -> Option<String> {
+    let (tool, what) = match kind {
+        AnalysisKind::Capabilities => ("capa", "finds capabilities"),
+        AnalysisKind::Floss => ("FLOSS", "decodes strings"),
+        _ => return None,
+    };
+    if matches!(
+        arch.machine,
+        crate::GuestArch::ELF_X86_64 | crate::GuestArch::ELF_386
+    ) {
+        return None;
+    }
+    Some(x86_only_text(tool, what, &arch.label()))
 }
 
 fn unavailable(section: &mut AnalysisSection, reason: impl Into<String>) {
@@ -701,6 +722,19 @@ fn section_flags(flags: object::SectionFlags) -> (String, Vec<String>) {
 }
 #[cfg(test)]
 mod tests {
+    /// Item 21: the Run form greys capa and FLOSS out on an arm64 VM with
+    /// the words the analysis gives when it refuses such a program.
+    #[test]
+    fn the_checks_an_arm64_vm_cannot_run_say_why_in_the_analysis_words() {
+        use crate::GuestArch;
+        let reason = super::unavailable_on(AnalysisKind::Capabilities, GuestArch::AARCH64).unwrap();
+        assert!(reason.starts_with("capa finds capabilities in x86 and x86-64 programs only"));
+        assert!(reason.contains(&GuestArch::AARCH64.label()), "{reason}");
+        assert!(super::unavailable_on(AnalysisKind::Floss, GuestArch::AARCH64).is_some());
+        assert!(super::unavailable_on(AnalysisKind::Floss, GuestArch::X86_64).is_none());
+        assert!(super::unavailable_on(AnalysisKind::Strings, GuestArch::AARCH64).is_none());
+    }
+
     #[test]
     fn capa_and_floss_say_plainly_that_they_skip_programs_of_other_architectures() {
         let elf = |machine: u16| {

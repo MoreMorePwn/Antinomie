@@ -291,6 +291,34 @@ impl CoreView {
         self.trigger_twins = catalog.triggers.into_iter().collect();
         self.catalog_issues = catalog.issues;
         self.catalog_checked = Some(Instant::now());
+        self.fold_trigger_twins();
+    }
+
+    /// A trigger core is one core: listed by its run's record and also among
+    /// the cores the boot took (the live list of a running VM, or a folder the
+    /// catalog has not read yet), it keeps one row, the manual one, which
+    /// gains the trigger's rule and run.
+    pub(super) fn fold_trigger_twins(&mut self) {
+        let manual: std::collections::HashSet<PathBuf> = self
+            .manual
+            .iter()
+            .map(|core| core.directory.clone())
+            .collect();
+        let mut folded = Vec::new();
+        self.acquired.retain(|core| {
+            let twin = core.trigger.is_some() && manual.contains(&core.directory);
+            if twin {
+                let rule = core
+                    .provenance
+                    .as_ref()
+                    .and_then(|provenance| provenance.finding.as_ref())
+                    .map(|finding| finding.rule.clone())
+                    .unwrap_or_default();
+                folded.push((core.directory.clone(), (rule, core.run_id.clone())));
+            }
+            !twin
+        });
+        self.trigger_twins.extend(folded);
     }
 }
 
@@ -521,10 +549,18 @@ fn trigger_row(
         _ => None,
     }
     .unwrap_or_else(|| path.clone());
-    if result.manual.iter().any(|core| core.directory == directory) {
-        result
-            .triggers
-            .push((directory, (label, artifacts.run_id.clone())));
+    // The capture folder of the manual core it is (a running VM keeps it in
+    // its boot's folder); the capture id says the same when paths differ.
+    if let Some(core) = result
+        .manual
+        .iter()
+        .find(|core| core.directory == directory || dump.capture_id.as_ref() == Some(&core.id))
+    {
+        let directory = core.directory.clone();
+        result.triggers.push((
+            directory,
+            (record.finding.rule.clone(), artifacts.run_id.clone()),
+        ));
         return;
     }
     if result
@@ -537,6 +573,7 @@ fn trigger_row(
     let note = dump
         .error
         .as_ref()
+        .or(dump.note.as_ref())
         .map(|error| error.chars().take(160).collect::<String>())
         .or_else(|| dump.size.map(crate::values::short_size));
     result.acquired.push(AcquiredCore {

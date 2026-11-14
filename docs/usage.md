@@ -264,9 +264,11 @@ another tab coming to the front. No app shortcut fires while it is captured.
 This works the same on a detached VM screen window, and dragging the tab of a
 detached window that holds only that tab moves the window.
 
-**Timed screenshots (a run's picture series).** In **Run program**, the **Screen**
-section has **Take a screenshot every N s** (off by default; N from 1 to 999,
-10 when you switch it on). While the run goes, the app reads the VM screen at that
+**Timed screenshots (a run's picture series).** In **Run program**, the **Timed
+Screenshot** section has **Take screenshots** with **every N s** beside it (off by
+default; N from 1 to 999, 10 at first; the interval shows, greyed, before the box is
+ticked) and **At most N pictures and N MiB per run** under it (500 pictures and
+256 MiB by default; 10 to 5,000 pictures and 16 to 4,096 MiB). While the run goes, the app reads the VM screen at that
 interval and saves each picture in the run's own folder as
 `screenshots/t+SSSSSS.s.png`, named by the time since the run started
 (`t+000123.4s.png` is 2 min 3.4 s in). It needs a VM whose **VM screen** is **In the
@@ -277,8 +279,12 @@ saved and how many were skipped, and a last picture is taken when the program tr
 ends. The pictures are taken and written on a worker thread of their own with their
 own connection to the screen: the VM screen tab does not have to be open, nothing
 waits for the disk, and a tick that arrives while the previous picture is still
-being written is dropped (and counted). A run keeps at most 500 pictures or 256 MiB;
-at the limit the series stops and the run's notes say so.
+being written is dropped (and counted). A run keeps at most the pictures and MiB set
+under the box (500 and 256 MiB unless changed); at the limit the series stops and the
+run's notes say so. The limits are options of the window and of `run exec`
+(`--screenshot-max-pictures N`, `--screenshot-max-mib MIB`); Auto mode's presets
+have only `record.screenshot_every_s` and keep the defaults (the preset format is
+fixed for 0.9.0).
 
 In **Triage > Summary**, a run with timed screenshots shows them in a box titled
 **Screenshots (N)**, a strip with the run-relative time under each picture. A click
@@ -362,9 +368,17 @@ packet history already has it, and specimen Content supports a byte-offset jump.
 3. **Run program** runs it. Set the **Executable**, **Arguments**,
    **Working directory** and **Environment**. **User** is Root, Normal user
    (1000), Nobody (65534, the unprivileged account every system has) or a custom
-   UID and GID. Under **Dumps**, **Dump when suspicious activity is seen** has
-   a **Minimum tier** of Low, Medium or High: the first finding at that tier or
-   above takes the dump. The trigger watches x86-64 and arm64 runs alike, 32-bit
+   UID and GID. The sections beside the program fields (**Analysis**, **Dumps**,
+   **Network**, **Timed Screenshot** and **Debugging**) fold with a click on their
+   title, and the window remembers which are folded. Under **Dumps**, **Dump when
+   suspicious activity is seen** has a **Minimum tier** of Low, Medium or High: the
+   first finding at that tier or above takes the dumps, no two closer than **At
+   least N s between two dumps**. Under it, **Core of the process that triggered it**
+   and **Memory dump** are separate boxes, each with its own settings beneath it:
+   the core its count (**At most N core(s) per run**), **Read non-resident pages**
+   and the core budget; the memory dump its count (**At most N memory dump(s) per
+   run**) and the VM RAM cap. Each count is kept on its own: a run that took its one
+   memory dump still takes cores up to its core count. The trigger watches x86-64 and arm64 runs alike, 32-bit
    programs (i386, AArch32) included. A run whose trigger took nothing says so in
    its notes: either no rule of that tier matched while the program ran, or the
    matches came too late (the process or the recording had ended), with the
@@ -430,8 +444,9 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    (and its future children); **Capture all** traces all of userspace. Neither
    stops or signals anything. A capture lists the processes it saw as a tree
    (named after the program each one ran); select one to see only its calls.
-7. **Take a screenshot every N s** (section **Screen**) saves the VM screen as a picture
-   at that interval while the run goes; see *Timed screenshots* under the VM screen.
+7. **Take screenshots every N s** (section **Timed Screenshot**) saves the VM screen as
+   a picture at that interval while the run goes, up to the limits set under it; see
+   *Timed screenshots* under the VM screen.
 8. With the guest network connected, select **Capture network** to record
    packets of the VM's network interface outside the guest. Stop it to finish the capture;
    each start creates a separate retained pcap in the boot recording.
@@ -562,7 +577,8 @@ says so.
 - **capa and FLOSS** analyse x86 and x86-64 programs only: Static Analysis
   reports them as unavailable for an arm64 or ARM program ("capa finds
   capabilities in x86 and x86-64 programs only; this program is for AArch64"),
-  and the Run form warns when they are chosen on an arm64 VM. The other checks
+  and on an arm64 VM the Run form lists them greyed out and unticked; the reason
+  shows when the pointer is over them. The other checks
   (metadata, structures, strings, entropy, hardening, rules, identification,
   disassembly) read arm64 programs. Disassembly decodes AArch64 and 32-bit ARM
   (ARM and Thumb, chosen by the ELF mapping symbols, or by the entry point's low
@@ -1117,7 +1133,13 @@ The network capture is the guest's own view on every route.
   choice is saved. A card shows the rule's title, severity tag and hit count, the
   description, the rule pack and every author, and the MITRE tags. **Details…**
   opens the rule: description, then the evidence locations as a scrollable
-  table (the full width of the window, twelve rows or more before it scrolls, a long location wraps and shows in full), the rule's metadata and its text (wrapped by default). The page scrolls
+  table (the full width of the window, twelve rows or more before it scrolls, a long location wraps and shows in full), the rule's metadata and its text (wrapped by default).
+  A scan saves up to **Settings > Detection rules > Saved hits per rule** hit
+  positions for each rule (100 by default, 16 to 10,000; YARA byte offsets and IDS
+  packets) and counts every hit past them, so a scan that left some out says so
+  plainly: "325 hits, 100 saved (at most 100 per rule). Raise Saved hits per rule in
+  Settings and scan again to keep more." The setting is kept in `settings.json`
+  (`triage_detection.evidence_limit`; 0 is the default). The page scrolls
   when a section grows. An empty result says how many inputs were not scanned
   and why. For IDS, "Rule packs: N rules" counts every rule in the enabled
   packs and the grey "N rules loaded" text at the right end of that line counts
@@ -1825,7 +1847,13 @@ YARA scan 60, UPX unpacking 240, Ghidra decompilation 840, Detect It Easy 120),
 and **Reset** puts the default back. A time set for one tool comes before the
 older **Time limit for every tool** below it, which still applies to the tools you
 did not set; a **Run again with twice the time** from a check's tab uses its own
-doubled time for that run. **Settings > Detection rules** has the same **Time
+doubled time for that run. An analysis whose sandboxed worker ends under it (killed,
+crashed) or gives no sign of life for twice its running check's time and two minutes
+more does not stay running: the check it was running is marked unavailable with
+"the analysis worker stopped unexpectedly (signal N)" (or "exit N", or "stopped
+responding"), the finished checks are kept, the ones it never started say "not run"
+and can be run from their tabs, and the report is written. The worker is followed
+while a memory dump pauses the VM too. **Settings > Detection rules** has the same **Time
 limits** for the detection engines, each with its "Default (N s)" and a **Reset**:
 the Triage YARA scan (100 s), Suricata (100 s; its retry and the sandbox time follow
 it at twice and 3.6 times), Sigma (110 s) and TShark (300 s per capture, with the
@@ -1871,7 +1899,9 @@ and the family Triage named.
 The command line and Auto mode have the same trigger: `run exec --dump-trigger
 TIER [--dump-kind core|memory|both]`, and the preset keys `dumps.dump_when_suspicious`,
 `minimum_tier`, `trigger_memory_dump` and `trigger_core` (see [auto-mode.md](auto-mode.md)). Both are off
-by default. `--core-nonresident` (preset key `dumps.read_non_resident_pages`) makes the
+by default. The window's core and memory dump have a count each; the preset's one
+`dumps.max_dumps` and `run exec` (one of each) set both counts alike. A run saved
+before the counts were separate, with one count, reads as that count for both. `--core-nonresident` (preset key `dumps.read_non_resident_pages`) makes the
 trigger's cores read the pages that are not in memory too, as **Read non-resident
 pages** does (a revision-22 base; it needs a core or both trigger); the result reports what fired or that it was armed and nothing matched.
 
@@ -1892,10 +1922,17 @@ then gone as before. On an older base the run's notes say the base cannot hold
 a process at its exit, and a program that matches and exits within a few tens of
 milliseconds can be gone before the guest can pause it.
 
-A core is partial when the guest could not read every page: it copies only the
-pages that are in memory when it reads them (never swapped-out or untouched
-pages) and the thread contexts it could park. The core's message says which part
-is missing, thread contexts or pages, with the counts. On a base of contract
+The guest copies only the pages that are in memory when it reads a live core
+(never swapped-out or untouched pages) and the thread contexts it could park. A
+trigger core whose only gap is pages that were not in memory, with **Read
+non-resident pages** off, holds everything that was in memory: it is **Complete**,
+with a note such as "12 pages that were not in memory were not captured (Read
+non-resident pages was off). Taken because persistence.cron (High) matched." in the
+Core dumps view, the finding's Details, the run's features and the run API
+(`triggers[].core.note`). A core with lost thread contexts, or with pages missing
+although reading them was asked for, is partial, and its message says which part is
+missing, with the counts. Cores saved before 0.9.0 keep the state they were saved
+with. On a base of contract
 revision 22, **Read non-resident pages** (under the trigger's core, and in the
 **Dump core** dialog of a running process) reads the pages that are not in memory
 in as well, from swap or from the file a page belongs to, as a core on exit does;
@@ -1928,8 +1965,19 @@ unknown ("Not in a run").
 run's short id and the sample's name; a click opens the run in Triage. The
 **This run only** checkbox keeps only the entries of the run selected in Triage
 and follows that selection. **Core dumps** also lists the cores a trigger took,
-as "Trigger: <rule> (<tier>)", for a run whose Core dump on exit is off, whether
-the VM is running or stopped. `core_state` in `artifacts.json` means the exit
+for a run whose Core dump on exit is off, whether the VM is running or stopped.
+A core is named by its process, the rule that took it and the time:
+`PID 1352 (bpfdoor.elf) · c2.bpf_backdoor · 2026-11-14 12:03:44` (the program is
+the run's; a core no rule took has no rule part; an imported core keeps its file
+name). The name is shown in the list and next to the hide-list icon. Above the
+core's path, the heading says where it came from: the run and how the core was
+taken (`Run f9c3d854 (bpfdoor.elf) · dump trigger, c2.bpf_backdoor (High)`,
+`· Dump core`, `· core dump on exit`, or **Imported**); a long path is shortened
+in the middle and shown whole on hover. A trigger core is one entry: the core the
+boot took (kept in `boots/<boot>/core-captures/`), with the trigger's rule and run.
+**Memory** names its dumps the same way: `<rule> · <time>` for a dump a trigger
+took, the time for the others, the file name for an imported one; the run and
+how it was taken show on hover. `core_state` in `artifacts.json` means the exit
 core only; "Disabled" there never means the run has no cores.
 
 The **Network** capture list, the **Memory** dump list and the **Core dumps** list read
@@ -2204,7 +2252,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   ...` (or after `--`), `--env K=V`, `--as user|root|UID:GID` (`user` is UID 1000),
   `--route drop|internet|inet_sim|tor|vpn|socks5` (a routed VM only), `--timeout-run
   SECONDS` (default 300: the run is then told to stop), `--net-capture`, `--memory-dump`,
-  `--core-dump`, `--screenshot-every SECONDS` (a picture of the VM screen every SECONDS, 1 to 999, and one when the tree ends; see *Timed screenshots*; the headless engine keeps QEMU's VNC display on a private socket for it), `--dump-trigger low|medium|high` (take a dump when the live Triage rules match at that tier or above, as the window's **Dump when suspicious activity is seen**; default off) with `--dump-kind core|memory|both` (default `core`; a core needs a revision-16 base), `--core-nonresident` (the trigger's cores also read pages that are not in memory, as **Read non-resident pages**; needs a core trigger and a revision-22 base), `--static CHECKS` (the guest-side analysis too), `--load-into PROGRAM` (the sample is a shared library: it is uploaded, then the guest program PROGRAM, an absolute path, runs with `LD_PRELOAD` set to it, and the run is linked to the library sample) and `--wait` (always on in
+  `--core-dump`, `--screenshot-every SECONDS` (a picture of the VM screen every SECONDS, 1 to 999, and one when the tree ends; see *Timed screenshots*; the headless engine keeps QEMU's VNC display on a private socket for it), `--screenshot-max-pictures N` and `--screenshot-max-mib MIB` (the series' limits, 10 to 5,000 pictures and 16 to 4,096 MiB; 500 and 256 MiB by default), `--dump-trigger low|medium|high` (take a dump when the live Triage rules match at that tier or above, as the window's **Dump when suspicious activity is seen**; default off) with `--dump-kind core|memory|both` (default `core`; a core needs a revision-16 base), `--core-nonresident` (the trigger's cores also read pages that are not in memory, as **Read non-resident pages**; needs a core trigger and a revision-22 base), `--static CHECKS` (the guest-side analysis too), `--load-into PROGRAM` (the sample is a shared library: it is uploaded, then the guest program PROGRAM, an absolute path, runs with `LD_PRELOAD` set to it, and the run is linked to the library sample) and `--wait` (always on in
   direct mode). The program runs in the app terminal as `/tmp/<sha8>-<name>`; the end of
   its output is in the result. The wait covers the evidence the way the window's runs do
   (network capture, memory dump and core finished, up to 300 s), then stops the VM and

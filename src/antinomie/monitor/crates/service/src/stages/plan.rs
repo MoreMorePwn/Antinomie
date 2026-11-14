@@ -109,6 +109,10 @@ pub fn effective(preset: &Preset, revert: RevertMode) -> Effective {
         // `validate::MAX_SCREENSHOT_EVERY_S`, checked at submit).
         screenshot_every_s: (preset.record.screenshot_every_s > 0)
             .then_some(preset.record.screenshot_every_s),
+        // The preset format is fixed for 0.9.0: no keys for the limits, so
+        // an Auto run keeps the defaults (500 pictures, 256 MiB).
+        screenshot_max_pictures: None,
+        screenshot_max_mib: None,
     };
     Effective {
         run_limit: Duration::from_secs(u64::from(program.run_time_s)),

@@ -118,11 +118,15 @@ impl MemoryView {
             }
             match self.dump() {
                 Some(dump) => {
-                    ui.label(
-                        RichText::new(dump_title(dump))
-                            .strong()
-                            .color(theme::heading()),
-                    );
+                    // Its name (`<rule> · <time>`, or an import's file name);
+                    // where it came from and its whole path on hover.
+                    let title = crate::evidence::title(ui, &dump.dir, &dump_title(dump));
+                    ui.label(RichText::new(title).strong().color(theme::heading()))
+                        .on_hover_text(format!(
+                            "{}\n{}",
+                            self.origin_of(dump),
+                            dump.path().display()
+                        ));
                 }
                 None => {
                     ui.colored_label(theme::muted(), "No dump open");
@@ -268,6 +272,7 @@ impl MemoryView {
             .iter()
             .map(|dump| self.cell_of(&self.link_of(dump)))
             .collect();
+        let origins: Vec<String> = shown.iter().map(|dump| self.origin_of(dump)).collect();
         let mut select = None;
         let mut delete = None;
         let font_size = cx.font_size;
@@ -294,7 +299,7 @@ impl MemoryView {
                     );
                     ui.add(egui::ProgressBar::new(fraction).desired_height(4.0));
                 }
-                for (dump, cell) in shown.into_iter().zip(cells) {
+                for ((dump, cell), origin) in shown.into_iter().zip(cells).zip(origins) {
                     if cx
                         .dumping
                         .is_some_and(|progress| progress.dump.id == dump.id)
@@ -321,7 +326,7 @@ impl MemoryView {
                     }
                     let row = row
                             .on_hover_text(format!(
-                                "{}\n{}{}\n\n{}",
+                                "{title}\n{origin}\n{}\n{}{}\n\n{}",
                                 dump.path().display(),
                                 dump.boot_id
                                     .as_ref()
@@ -456,6 +461,8 @@ pub(super) fn format_elapsed(ms: u64) -> String {
     }
 }
 
+/// A dump's name: an import's file name, else `<rule> · <time>` for one a
+/// dump trigger took and its time for the others.
 pub(super) fn dump_title(dump: &MemoryDump) -> String {
     if dump.imported {
         dump.file.file_name().map_or_else(
@@ -463,9 +470,15 @@ pub(super) fn dump_title(dump: &MemoryDump) -> String {
             |name| name.to_string_lossy().into_owned(),
         )
     } else {
-        crate::time_format::utc_seconds(dump.started_ms / 1000)
-            .trim_end_matches(" UTC")
-            .to_owned()
+        let rule = dump
+            .provenance
+            .as_ref()
+            .filter(|provenance| {
+                provenance.origin == antinomie_monitor_core::provenance::Origin::Trigger
+            })
+            .and_then(|provenance| provenance.finding.as_ref())
+            .map(|finding| finding.rule.as_str());
+        crate::dump_names::memory_name(rule, dump.started_ms)
     }
 }
 
@@ -708,6 +721,23 @@ impl MemoryView {
             tip: cell.tip,
             run_id: cell.run_id,
         }
+    }
+
+    /// Where a dump came from: its run and how it was taken, or Imported.
+    pub(super) fn origin_of(&self, dump: &MemoryDump) -> String {
+        if dump.imported {
+            return "Imported".into();
+        }
+        let provenance = dump
+            .provenance
+            .as_ref()
+            .filter(|found| found.origin != antinomie_monitor_core::provenance::Origin::Unknown)
+            .or_else(|| self.legacy_links.get(&dump.dir));
+        crate::dump_names::origin(
+            provenance,
+            &self.run_names,
+            crate::dump_names::DumpKind::Memory,
+        )
     }
 
     /// Whether This run only keeps a dump with this link.

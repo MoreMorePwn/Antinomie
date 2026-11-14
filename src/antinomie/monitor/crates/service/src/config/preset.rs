@@ -271,7 +271,10 @@ impl Dumps {
                 min_tier: self.minimum_tier,
                 memory: self.trigger_memory_dump,
                 core: self.trigger_core,
-                max_dumps: self.max_dumps,
+                // The preset's one count (its format is frozen for 0.9.0)
+                // is the count of both kinds.
+                max_cores: self.max_dumps,
+                max_memory_dumps: self.max_dumps,
                 cooldown_secs: self.dumps_apart_s,
                 ..DumpTrigger::default()
             }
@@ -1100,7 +1103,14 @@ mod tests {
         };
         let trigger = dumps.trigger().unwrap();
         assert!(trigger.memory && trigger.core);
-        assert_eq!((trigger.max_dumps, trigger.cooldown_secs), (3, 60));
+        assert_eq!(
+            (
+                trigger.max_cores,
+                trigger.max_memory_dumps,
+                trigger.cooldown_secs
+            ),
+            (3, 3, 60)
+        );
         assert!(dumps.takes_core() && dumps.takes_memory());
         dumps.trigger_core = false;
         dumps.trigger_memory_dump = false;

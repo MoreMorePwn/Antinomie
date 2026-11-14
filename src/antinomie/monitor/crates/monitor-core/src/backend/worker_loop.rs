@@ -733,6 +733,10 @@ impl Worker {
                 self.snapshot.last_error = Some(format!("guest info: {error}"));
             }
             session.analysis_tick(&mut self.snapshot, &self.sender);
+        } else if let Some(session) = self.session.as_mut().filter(|_| !exited) {
+            // The guest cannot be asked anything, but the analysis worker
+            // runs on the host: its progress and its end are still followed.
+            session.analysis_host_tick(&mut self.snapshot, &self.sender);
         }
     }
 

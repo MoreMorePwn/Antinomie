@@ -594,6 +594,14 @@ impl MonitorApp {
             "How long each engine may run before it is stopped; a scan that runs out of time says so.",
         );
         self.detection_timeouts(ui);
+        ui.add_space(12.0);
+        theme::section(ui, "Saved hits");
+        hint_tip(
+            ui,
+            "Hit positions each rule keeps.",
+            "How many hit positions of one rule a scan saves for its evidence (YARA byte offsets, IDS packets); every hit is still counted, and the scan says how many it left out. 16 to 10,000; the default is 100. A new value applies to the next scan.",
+        );
+        self.saved_hits_row(ui);
     }
 
     fn notifications_page(&mut self, ui: &mut egui::Ui) {

@@ -317,6 +317,14 @@ pub(crate) fn remove_process_core(roots: &[PathBuf], directory: &Path) -> Result
                 .map(|core| core.boot_id),
             None,
         ),
+        // Where a running VM keeps the cores it takes.
+        [boots, _, folder, id] if boots == "boots" && folder == "core-captures" => (
+            id.clone(),
+            crate::core_capture::load(&item)
+                .ok()
+                .map(|core| core.boot_id),
+            None,
+        ),
         [folder, run, core] if folder == "runs" && core == "core" => {
             let artifacts = item
                 .parent()
@@ -334,7 +342,7 @@ pub(crate) fn remove_process_core(roots: &[PathBuf], directory: &Path) -> Result
     if !metadata.is_dir() {
         return Err("the core is not a directory".into());
     }
-    let counted = if run_id.is_some() || parts[0] == "core-captures" {
+    let counted = if run_id.is_some() || parts.iter().any(|part| part == "core-captures") {
         fs::symlink_metadata(item.join("process.elf"))
             .ok()
             .filter(fs::Metadata::is_file)
@@ -547,10 +555,12 @@ mod tests {
     fn cores_of_every_kind_are_deleted_and_a_runs_core_reads_as_deleted() {
         let root = temp_root();
         let manual = root.join("core-captures/m1");
+        // A running VM keeps the cores it takes in its boot's folder.
+        let in_boot = root.join("boots/b1/core-captures/m2");
         let imported = root.join("core-dumps/i1");
         let run_dir = run(&root, "r1", vec![]);
         let on_exit = run_dir.join("core");
-        for dir in [&manual, &imported, &on_exit] {
+        for dir in [&manual, &in_boot, &imported, &on_exit] {
             fs::create_dir_all(dir).unwrap();
             fs::write(dir.join("process.elf"), vec![0u8; 64]).unwrap();
             fs::write(dir.join("metadata.json"), b"{}").unwrap();
@@ -568,8 +578,10 @@ mod tests {
         assert_eq!(artifacts.core_label(), "Deleted");
         assert_eq!(artifacts.core_dump, None);
         assert_eq!(remove_process_core(roots, &manual).unwrap().counted, 64);
+        let removed = remove_process_core(roots, &in_boot).unwrap();
+        assert_eq!((removed.name.as_str(), removed.counted), ("m2", 64));
         assert_eq!(remove_process_core(roots, &imported).unwrap().counted, 0);
-        assert!(!manual.exists() && !imported.exists() && !on_exit.exists());
+        assert!(!manual.exists() && !in_boot.exists() && !imported.exists() && !on_exit.exists());
         assert!(run_dir.join("artifacts.json").exists());
         fs::remove_dir_all(root).unwrap();
     }

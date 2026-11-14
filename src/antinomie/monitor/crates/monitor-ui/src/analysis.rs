@@ -10,11 +10,13 @@ mod listing_view;
 mod meaning;
 mod records;
 mod row_menu;
+mod run_options;
 mod source;
 pub(crate) mod workspace;
 pub(crate) use listing_view::{export_ghidra_text, index_ghidra_markers};
 pub(crate) use listing_view::{listing_fields, listing_row_with};
 pub(crate) use row_menu::{key_query, kind_of_name};
+use run_options::*;
 #[cfg(test)]
 pub(crate) use source::ARGUMENT_PLACEHOLDER;
 pub(crate) use source::{LaunchSource, ProgramSource, SourceOutcome, UploadFields};
@@ -68,132 +70,68 @@ pub(crate) fn launch_fields(
 ) -> LaunchOutcome {
     let mut outcome = LaunchOutcome::default();
     let spacing = ui.spacing().item_spacing.x;
+    // Room between the Program and the Analysis columns (item 18).
+    let gap = ui.text_style_height(&egui::TextStyle::Body) * 2.0;
     let min_pane = ui.text_style_height(&egui::TextStyle::Body) * 22.0;
-    if ui.available_width() >= min_pane * 2.0 + spacing {
-        crate::widgets::columns(ui, 2, |columns| {
-            outcome.source = fields(
-                &mut columns[0],
-                request,
-                args,
-                env,
-                capabilities.graphical,
-                source,
-            );
-            crate::theme::section(&mut columns[1], "Analysis");
-            selection(
-                &mut columns[1],
-                &mut request.analysis,
-                tools,
-                &mut outcome.install,
-            );
-            x86_tools_note(&mut columns[1], &request.analysis, capabilities.guest_arch);
-            capture_selection(&mut columns[1], request, capabilities, &mut outcome);
-            screenshot_selection(&mut columns[1], request, capabilities.screen);
-            debugger_selection(&mut columns[1], request, capabilities.debug_on_start);
+    if ui.available_width() >= min_pane * 2.0 + gap {
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            crate::widgets::columns(ui, 2, |columns| {
+                for column in columns.iter_mut() {
+                    column.spacing_mut().item_spacing.x = spacing;
+                }
+                outcome.source = fields(
+                    &mut columns[0],
+                    request,
+                    args,
+                    env,
+                    capabilities.graphical,
+                    source,
+                );
+                options(&mut columns[1], request, tools, capabilities, &mut outcome);
+            });
         });
     } else {
         outcome.source = fields(ui, request, args, env, capabilities.graphical, source);
         ui.add_space(6.0);
-        crate::theme::section(ui, "Analysis");
-        selection(ui, &mut request.analysis, tools, &mut outcome.install);
-        x86_tools_note(ui, &request.analysis, capabilities.guest_arch);
-        capture_selection(ui, request, capabilities, &mut outcome);
-        screenshot_selection(ui, request, capabilities.screen);
-        debugger_selection(ui, request, capabilities.debug_on_start);
+        options(ui, request, tools, capabilities, &mut outcome);
     }
     outcome
 }
 
-/// On a guest of another architecture than x86-64: capa and FLOSS, when
-/// chosen, cannot read its programs.
-fn x86_tools_note(
-    ui: &mut egui::Ui,
-    selection: &AnalysisSelection,
-    arch: antinomie_monitor_core::GuestArch,
-) {
-    if let Some(note) = x86_tools_text(selection, arch) {
-        crate::activity::warning(ui, note);
-    }
-}
-
-fn x86_tools_text(
-    selection: &AnalysisSelection,
-    arch: antinomie_monitor_core::GuestArch,
-) -> Option<String> {
-    let chosen = [AnalysisKind::Capabilities, AnalysisKind::Floss]
-        .iter()
-        .any(|kind| selection.checks.contains(kind));
-    (arch != antinomie_monitor_core::GuestArch::X86_64 && selection.enabled && chosen).then(|| {
-        format!(
-            "capa and FLOSS read x86 and x86-64 programs only: on this {} VM their checks \
-             report Unavailable.",
-            arch.label()
-        )
-    })
-}
-
-fn capture_selection(
+/// The sections beside the program fields, each folding (item 18).
+fn options(
     ui: &mut egui::Ui,
     request: &mut ExecRequest,
+    tools: &[ToolStatus],
     capabilities: LaunchCapabilities,
     outcome: &mut LaunchOutcome,
 ) {
-    let core_supported = capabilities.core_on_exit;
-    ui.add_space(12.0);
-    crate::theme::section(ui, "Dumps");
-    // The trigger comes first; the dumps taken when the program exits sit
-    // below its options.
-    trigger_selection(ui, request, capabilities);
-    ui.add_space(6.0);
-    ui.checkbox(&mut request.memory_dump_on_exit, "Memory Dump on Exit")
-        .on_hover_text("Dump VM RAM after the process tree exits. This is post-exit VM memory, not a process core.");
-    let core_enabled = core_supported && request.run_in == RunIn::AppTerminal;
-    if !core_enabled {
-        request.core_dump_on_exit = false;
-    }
-    ui.add_enabled(
-        core_enabled,
-        egui::Checkbox::new(&mut request.core_dump_on_exit, "Core Dump on Exit"),
-    )
-    .on_hover_text("Capture the launched root process before exit, including thread registers and selected memory. Native programs on x86-64 and arm64 guests, and 32-bit ARM programs on an arm64 guest (an ia32 or x32 program on an x86-64 guest gets no core); memory is filtered and bounded by the budget below, so captures may be partial. Some fatal exits, including SIGKILL, may leave register context unavailable. Thread synchronization and page faults may delay exit.")
-    .on_disabled_hover_text(core_unavailable_reason(core_supported));
-    let trigger_core = request.dump_trigger.as_ref().is_some_and(|plan| plan.core);
-    if core_enabled && request.core_dump_on_exit {
-        core_budget_row(ui, request, capabilities);
-    } else if !(core_supported && trigger_core) {
-        request.core_max_size = None;
-        request.core_timeout_ms = None;
-    }
-    if !core_enabled {
-        ui.add(
-            egui::Label::new(egui::RichText::new(core_unavailable_reason(core_supported)).weak())
-                .wrap(),
+    leave_out_unavailable(&mut request.analysis, capabilities.guest_arch);
+    folding_section(ui, "Analysis", |ui| {
+        selection(
+            ui,
+            &mut request.analysis,
+            tools,
+            &mut outcome.install,
+            capabilities.guest_arch,
         );
-    }
-    ui.add_space(12.0);
-    crate::theme::section(ui, "Network");
-    // A VM without a network card has nothing to capture: the box is off
-    // and says what to change, rather than a run that cannot start.
-    let card = capabilities.route.network != antinomie_monitor_core::VmNetwork::Disconnected;
-    if !card {
-        request.capture_network = false;
-    }
-    ui.add_enabled(
-        card,
-        egui::Checkbox::new(&mut request.capture_network, "Capture network from start until tree exits"),
-    )
-    .on_hover_text("Record VM network packets during this run. Packets are VM-wide, not attributed to this process.")
-    .on_disabled_hover_text(NO_NETWORK_CARD);
-    if !card {
-        ui.horizontal_wrapped(|ui| {
-            ui.add(egui::Label::new(egui::RichText::new(NO_NETWORK_CARD).weak()).wrap());
-            outcome.open_vm_settings = ui
-                .button("VM settings…")
-                .on_hover_text("Open this VM's settings (its network changes while it is stopped)")
-                .clicked();
-        });
-    }
-    crate::route_ui::selector(ui, request, &capabilities.route);
+    });
+    capture_selection(ui, request, capabilities, outcome);
+    screenshot_selection(ui, request, capabilities.screen);
+    debugger_selection(ui, request, capabilities.debug_on_start);
+}
+
+/// Checks that cannot run on this VM's programs (capa and FLOSS on an arm64
+/// VM) are left out of the selection: they are listed greyed out and
+/// unticked, with the reason (item 21).
+fn leave_out_unavailable(
+    selection: &mut AnalysisSelection,
+    arch: antinomie_monitor_core::GuestArch,
+) {
+    selection
+        .checks
+        .retain(|kind| antinomie_monitor_core::analysis::unavailable_on(*kind, arch).is_none());
 }
 
 /// The Network part of the Run form on a VM with `route`, for tests.
@@ -215,218 +153,6 @@ pub(crate) fn capture_selection_for_tests(
         guest_arch: Default::default(),
     };
     capture_selection(ui, request, capabilities, outcome);
-}
-
-/// Why the Run form offers no network capture.
-const NO_NETWORK_CARD: &str = "This VM has no network card, so there is nothing to capture. \
-     Set its network to Isolated, NAT or Routed and restart it.";
-
-/// Budget and deadline of the exit core, with what the guest accepts.
-fn core_budget_row(ui: &mut egui::Ui, request: &mut ExecRequest, capabilities: LaunchCapabilities) {
-    let limits = capabilities.core_limits;
-    let mut budget = request.core_max_size.unwrap_or_else(|| {
-        crate::core_budget::initial(limits.as_ref(), capabilities.core_default_mib)
-    });
-    let mut timeout = request.core_timeout_ms.unwrap_or_else(|| {
-        crate::core_budget::default_timeout_ms(limits.as_ref(), u64::from(budget))
-    });
-    if let Some(limits) = limits.as_ref()
-        && u64::from(budget) > limits.max_size
-    {
-        budget = limits.effective_budget(budget >> 20);
-        timeout = crate::core_budget::default_timeout_ms(Some(limits), u64::from(budget));
-    }
-    ui.indent("core-budget", |ui| {
-        if let Some(picked) =
-            crate::core_budget::show(ui, "run-core", &mut budget, &mut timeout, limits.as_ref())
-        {
-            ui.data_mut(|data| data.insert_temp(remembered_budget_id(), picked));
-        }
-        let (text, warn) = crate::core_budget::caption(limits.as_ref(), None, u64::from(budget));
-        let text = egui::RichText::new(text);
-        ui.add(
-            egui::Label::new(if warn {
-                text.color(crate::theme::warn())
-            } else {
-                text.weak()
-            })
-            .wrap(),
-        );
-    });
-    // Until the guest has said what it accepts, the request keeps the contract
-    // every guest has: 64 MiB and 5 s.
-    if limits.is_some() {
-        request.core_max_size = Some(budget);
-        request.core_timeout_ms = Some(timeout);
-    }
-}
-
-/// Dump on suspicious activity: which Triage tier, what to take, how often.
-fn trigger_selection(
-    ui: &mut egui::Ui,
-    request: &mut ExecRequest,
-    capabilities: LaunchCapabilities,
-) {
-    use antinomie_monitor_core::dump_trigger::{DumpTrigger, TriggerTier};
-    let mut on = request.dump_trigger.is_some();
-    ui.checkbox(&mut on, "Dump when suspicious activity is seen")
-        .on_hover_text("While the program runs, the Triage rules judge each call as it arrives. The first match at or above the chosen tier takes the dump you pick, within the budget below. The program is not stopped; a memory dump pauses the VM while QEMU writes it.");
-    if !on {
-        request.dump_trigger = None;
-        return;
-    }
-    let plan = request
-        .dump_trigger
-        .get_or_insert_with(DumpTrigger::default);
-    let core_ok = capabilities.core_on_exit;
-    ui.indent("dump-trigger", |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Minimum tier");
-            egui::ComboBox::from_id_salt("dump-trigger-tier")
-                .selected_text(plan.min_tier.label())
-                .show_ui(ui, |ui| {
-                    for tier in TriggerTier::ALL {
-                        ui.selectable_value(&mut plan.min_tier, tier, tier.label());
-                    }
-                })
-                .response
-                .on_hover_text("The lowest Triage tier that takes a dump: this tier and every tier above it. Triage tiers are Low, Medium and High; there is nothing above High.");
-        });
-        ui.checkbox(&mut plan.memory, "Memory dump")
-            .on_hover_text("Dump the VM's RAM. Skipped when the VM has more RAM than the cap below or the disk is too full.");
-        ui.add_enabled(
-            core_ok,
-            egui::Checkbox::new(&mut plan.core, "Core of the process that triggered it"),
-        )
-        .on_hover_text("A core of the process whose call matched, taken while it runs. Native programs on x86-64 and arm64 guests, and 32-bit ARM programs on an arm64 guest (not ia32 or x32 on an x86-64 guest); bounded by the budget. The guest copies only pages that are in memory when it reads them (not swapped-out or untouched ones) unless Read non-resident pages is ticked, so the core is often marked Partial, and its message says which part is missing. On a revision-22 base a process that ends is held at its exit for up to 50 ms, so one that exits right after the match still has its core taken; on an older base it can be gone first, and the run says so.")
-        .on_disabled_hover_text(core_unavailable_reason(core_ok));
-        if !core_ok {
-            plan.core = false;
-        }
-        if plan.core {
-            let nonresident = capabilities
-                .core_limits
-                .is_some_and(|limits| limits.nonresident);
-            ui.indent("dump-trigger-nonresident", |ui| {
-                ui.add_enabled(
-                    nonresident,
-                    egui::Checkbox::new(&mut request.core_nonresident, "Read non-resident pages"),
-                )
-                .on_hover_text("Also read the pages of the process that are not in memory (swapped out, or file pages the kernel dropped) into the core, as an exit core does. Reading from swap or disk takes longer and is bounded by the budget and the deadline; pages the process never touched hold nothing and stay out.")
-                .on_disabled_hover_text("Needs a base of guest contract revision 22: this guest copies only the pages that are in memory.");
-            });
-            if !nonresident {
-                request.core_nonresident = false;
-            }
-        }
-        if !plan.memory && !plan.core {
-            ui.colored_label(crate::theme::warn(), "Pick a memory dump, a core, or both.");
-        }
-        ui.horizontal_wrapped(|ui| {
-            ui.label("At most");
-            ui.add(egui::DragValue::new(&mut plan.max_dumps).range(1..=DumpTrigger::MAX_DUMPS));
-            ui.label("dump(s) per run, at least");
-            ui.add(
-                egui::DragValue::new(&mut plan.cooldown_secs)
-                    .range(0..=3600)
-                    .suffix(" s"),
-            );
-            ui.label("apart");
-        });
-        if plan.memory {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Memory dump only if the VM has at most");
-                ui.add(
-                    egui::DragValue::new(&mut plan.memory_max_mib)
-                        .range(256..=65536)
-                        .speed(64.0)
-                        .suffix(" MiB"),
-                );
-            });
-        }
-    });
-    let core = request.dump_trigger.as_ref().is_some_and(|plan| plan.core);
-    if core && !request.core_dump_on_exit {
-        core_budget_row(ui, request, capabilities);
-    }
-}
-
-/// Why the Run form offers no timed screenshots.
-const NO_SCREEN: &str = "Timed screenshots read the VM's screen in the app. Set VM screen to \"In the app (VNC)\" in the VM's settings; it applies at the next start of the VM.";
-
-/// Take a screenshot of the VM screen every N seconds during the run, kept in
-/// the run's own folder (ANT-T0487).
-fn screenshot_selection(ui: &mut egui::Ui, request: &mut ExecRequest, available: bool) {
-    use antinomie_monitor_core::timed_shots as shots;
-    ui.add_space(12.0);
-    crate::theme::section(ui, "Screen");
-    if !available {
-        request.screenshot_every_s = None;
-    }
-    let mut on = request.screenshot_every_s.is_some();
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(available, egui::Checkbox::new(&mut on, "Take a screenshot every"))
-            .on_hover_text("Save the VM screen as a picture at this interval while the run goes, with the run-relative time in its name. A screen that has not changed since the last picture is skipped.")
-            .on_disabled_hover_text(NO_SCREEN)
-            .changed()
-        {
-            request.screenshot_every_s = on.then_some(shots::DEFAULT_INTERVAL_S);
-        }
-        if let Some(every) = request.screenshot_every_s.as_mut() {
-            ui.add(
-                egui::DragValue::new(every)
-                    .range(shots::MIN_INTERVAL_S..=shots::MAX_INTERVAL_S)
-                    .suffix(" s"),
-            )
-            .on_hover_text(format!(
-                "{} to {} seconds",
-                shots::MIN_INTERVAL_S,
-                shots::MAX_INTERVAL_S
-            ));
-        }
-    });
-    let caption = if available {
-        format!(
-            "Pictures go to the run's own folder; a run keeps at most {} pictures or {} MiB.",
-            shots::MAX_SHOTS,
-            shots::MAX_BYTES / (1024 * 1024)
-        )
-    } else {
-        NO_SCREEN.to_owned()
-    };
-    ui.add(egui::Label::new(egui::RichText::new(caption).weak()).wrap());
-}
-
-fn debugger_selection(ui: &mut egui::Ui, request: &mut ExecRequest, supported: bool) {
-    ui.add_space(12.0);
-    crate::theme::section(ui, "Debugger");
-    let enabled = supported && request.run_in == RunIn::AppTerminal;
-    if !enabled {
-        request.debug_on_start = false;
-    }
-    let reason = if supported {
-        "Debug on start requires Run in: App terminal."
-    } else {
-        "Debug on start requires a base built for Antinomie 0.7.0."
-    };
-    ui.add_enabled(
-        enabled,
-        egui::Checkbox::new(&mut request.debug_on_start, "Debug on start"),
-    )
-    .on_hover_text("Stop the program before its first instruction (the loader's, for a dynamic program) and open the debugger on it. The run shows the gdb command to attach with; the program waits until a debugger continues it. Nothing runs in the guest for this.")
-    .on_disabled_hover_text(reason);
-    if !enabled {
-        ui.add(egui::Label::new(egui::RichText::new(reason).weak()).wrap());
-    }
-}
-
-fn core_unavailable_reason(core_supported: bool) -> &'static str {
-    if core_supported {
-        "Core capture requires Run in: App terminal; desktop launchers run a shell wrapper."
-    } else {
-        "Core capture needs a newer guest base. Rebuild or download a newer base image (Library > Base images)."
-    }
 }
 
 fn fields(
@@ -574,6 +300,7 @@ pub(crate) fn selection(
     selection: &mut AnalysisSelection,
     tools: &[ToolStatus],
     install: &mut bool,
+    arch: antinomie_monitor_core::GuestArch,
 ) -> egui::Response {
     use crate::tree_lines::{self, Prefix};
     let mono = egui::TextStyle::Monospace.resolve(ui.style());
@@ -624,7 +351,10 @@ pub(crate) fn selection(
                 }
                 for (position, &kind) in kinds.iter().enumerate() {
                     let leaf = branch.child(position + 1 == kinds.len());
-                    tree_lines::row(ui, &leaf, char_width, |ui| check(ui, selection, kind));
+                    let unavailable = antinomie_monitor_core::analysis::unavailable_on(kind, arch);
+                    tree_lines::row(ui, &leaf, char_width, |ui| {
+                        check(ui, selection, kind, unavailable.as_deref())
+                    });
                     needs_tool(ui, &leaf, char_width, selection, kind, tools, install);
                 }
             }
@@ -709,7 +439,20 @@ fn needs_tool(
     });
 }
 
-fn check(ui: &mut egui::Ui, selection: &mut AnalysisSelection, kind: AnalysisKind) {
+/// One check's box; a check this VM cannot run is greyed out and unticked,
+/// and says why on hover.
+fn check(
+    ui: &mut egui::Ui,
+    selection: &mut AnalysisSelection,
+    kind: AnalysisKind,
+    unavailable: Option<&str>,
+) {
+    if let Some(reason) = unavailable {
+        selection.checks.retain(|check| *check != kind);
+        ui.add_enabled(false, egui::Checkbox::new(&mut false, kind.label()))
+            .on_disabled_hover_text(reason);
+        return;
+    }
     let mut selected = selection.checks.contains(&kind);
     if ui.checkbox(&mut selected, kind.label()).changed() {
         if selected {
@@ -982,21 +725,188 @@ mod trigger_tests;
 mod tests {
     use super::*;
 
+    /// Item 21: on an arm64 VM capa and FLOSS are listed greyed out and
+    /// unticked (left out of the selection); the other checks stay.
     #[test]
-    fn an_arm64_run_form_says_capa_and_floss_cannot_read_its_programs() {
+    fn an_arm64_run_form_greys_out_and_unticks_capa_and_floss() {
         use antinomie_monitor_core::GuestArch;
-        let mut selection = AnalysisSelection {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut choices = AnalysisSelection {
             enabled: true,
             ..AnalysisSelection::default()
         };
-        selection.checks.clear();
-        assert_eq!(x86_tools_text(&selection, GuestArch::AARCH64), None);
-        selection.checks.push(AnalysisKind::Floss);
-        let note = x86_tools_text(&selection, GuestArch::AARCH64).unwrap();
-        assert!(note.contains("x86 and x86-64 programs only") && note.contains("arm64"));
-        assert_eq!(x86_tools_text(&selection, GuestArch::X86_64), None);
-        selection.enabled = false;
-        assert_eq!(x86_tools_text(&selection, GuestArch::AARCH64), None);
+        choices.checks = vec![
+            AnalysisKind::Metadata,
+            AnalysisKind::Capabilities,
+            AnalysisKind::Floss,
+        ];
+        let draw = |choices: &mut AnalysisSelection, arch| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 1200.0),
+                    )),
+                    ..Default::default()
+                },
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        selection(ui, choices, &[], &mut false, arch);
+                    });
+                },
+            );
+            crate::app::tests::texts(&output)
+                .into_iter()
+                .map(|(text, _)| text)
+                .collect::<Vec<_>>()
+        };
+        draw(&mut choices, GuestArch::AARCH64);
+        let texts = draw(&mut choices, GuestArch::AARCH64);
+        // Still listed, but no longer chosen.
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == AnalysisKind::Capabilities.label()),
+            "{texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == AnalysisKind::Floss.label()),
+            "{texts:?}"
+        );
+        assert_eq!(choices.checks, [AnalysisKind::Metadata]);
+        // The selection outside the tree drops them too (a folded section).
+        let mut folded = AnalysisSelection::default();
+        folded.checks.push(AnalysisKind::Floss);
+        leave_out_unavailable(&mut folded, GuestArch::AARCH64);
+        assert!(!folded.checks.contains(&AnalysisKind::Floss));
+        // On an x86-64 VM they can be ticked.
+        choices.checks.push(AnalysisKind::Floss);
+        draw(&mut choices, GuestArch::X86_64);
+        assert!(choices.checks.contains(&AnalysisKind::Floss));
+    }
+
+    /// Item 18: the Run form's sections fold, and a folded section still
+    /// clears what this VM cannot do.
+    #[test]
+    fn the_run_form_sections_fold_and_still_clear_what_the_vm_cannot_do() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let capabilities = LaunchCapabilities {
+            graphical: false,
+            screen: false,
+            core_on_exit: false,
+            debug_on_start: false,
+            core_limits: None,
+            core_default_mib: 256,
+            route: crate::route_ui::RouteChoice::fixed(
+                antinomie_monitor_core::VmNetwork::Disconnected,
+            ),
+            guest_arch: Default::default(),
+        };
+        let mut request = ExecRequest::default();
+        let draw = |request: &mut ExecRequest| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(500.0, 2000.0),
+                    )),
+                    ..Default::default()
+                },
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        options(
+                            ui,
+                            request,
+                            &[],
+                            capabilities,
+                            &mut LaunchOutcome::default(),
+                        );
+                    });
+                },
+            );
+            crate::app::tests::texts(&output)
+        };
+        draw(&mut request);
+        let texts = draw(&mut request);
+        for title in [
+            "Analysis",
+            "Dumps",
+            "Network",
+            "Timed Screenshot",
+            "Debugging",
+        ] {
+            assert!(texts.iter().any(|(t, _)| t == title), "{title}: {texts:?}");
+        }
+        assert!(!texts.iter().any(|(t, _)| t == "Debugger" || t == "Screen"));
+        // Fold every section, from the bottom up so the titles stay put.
+        let mut folded = 0;
+        for title in [
+            "Debugging",
+            "Timed Screenshot",
+            "Network",
+            "Dumps",
+            "Analysis",
+        ] {
+            let texts = draw(&mut request);
+            let at = texts.iter().find(|(t, _)| t == title).unwrap().1.center();
+            for pressed in [true, false] {
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(500.0, 2000.0),
+                        )),
+                        events: vec![
+                            egui::Event::PointerMoved(at),
+                            egui::Event::PointerButton {
+                                pos: at,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
+                            options(
+                                ui,
+                                &mut request,
+                                &[],
+                                capabilities,
+                                &mut LaunchOutcome::default(),
+                            );
+                        });
+                    },
+                );
+            }
+            folded += 1;
+        }
+        assert_eq!(folded, 5);
+        for _ in 0..20 {
+            draw(&mut request);
+        }
+        let texts = draw(&mut request);
+        assert!(
+            !texts.iter().any(|(t, _)| t == "Debug on start"),
+            "{texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|(t, _)| t == "Memory Dump on Exit"),
+            "{texts:?}"
+        );
+        // Folded, the sections still clear what this VM cannot do.
+        request.core_dump_on_exit = true;
+        request.capture_network = true;
+        request.debug_on_start = true;
+        request.screenshot_every_s = Some(10);
+        draw(&mut request);
+        assert!(!request.core_dump_on_exit);
+        assert!(!request.capture_network);
+        assert!(!request.debug_on_start);
+        assert_eq!(request.screenshot_every_s, None);
     }
 
     #[test]
@@ -1172,7 +1082,7 @@ mod tests {
         let mut choices = AnalysisSelection::default();
         let _ = ctx.run_ui(egui::RawInput::default(), |root| {
             egui::CentralPanel::default().show(root, |ui| {
-                selection(ui, &mut choices, &[], &mut false).request_focus();
+                selection(ui, &mut choices, &[], &mut false, Default::default()).request_focus();
             });
         });
         for enabled in [true, false] {
@@ -1189,7 +1099,7 @@ mod tests {
                 },
                 |root| {
                     egui::CentralPanel::default().show(root, |ui| {
-                        selection(ui, &mut choices, &[], &mut false);
+                        selection(ui, &mut choices, &[], &mut false, Default::default());
                     });
                 },
             );
@@ -1208,7 +1118,7 @@ mod tests {
                 },
                 |root| {
                     egui::CentralPanel::default().show(root, |ui| {
-                        selection(ui, &mut choices, &[], &mut false);
+                        selection(ui, &mut choices, &[], &mut false, Default::default());
                     });
                 },
             );
@@ -1234,7 +1144,7 @@ mod tests {
                 },
                 |root| {
                     egui::CentralPanel::default().show(root, |ui| {
-                        selection(ui, choices, &[], &mut false);
+                        selection(ui, choices, &[], &mut false, Default::default());
                     });
                 },
             );
@@ -1275,7 +1185,7 @@ mod tests {
                 },
                 |root| {
                     egui::CentralPanel::default().show(root, |ui| {
-                        selection(ui, choices, &[], &mut false);
+                        selection(ui, choices, &[], &mut false, Default::default());
                     });
                 },
             )

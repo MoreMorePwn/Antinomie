@@ -40,6 +40,9 @@ impl CoreView {
                 if let Some(details) = sizes::manual_details(core) {
                     ui.add(egui::Label::new(egui::RichText::new(details).weak()).wrap());
                 }
+                if let Some(note) = &core.note {
+                    ui.add(egui::Label::new(note).wrap());
+                }
                 ui.label(format!(
                     "PID {} · task {} · start {} ns",
                     core.target.tgid, core.target.task_cookie, core.target.start_boot_ns
@@ -122,17 +125,12 @@ impl CoreView {
             }
             return;
         };
-        let title = crate::evidence::title(ui, &record.dir, &record.label);
-        crate::theme::section(ui, &title);
+        // Where the core came from (its run, and trigger, Dump core, on exit
+        // or imported) above its path; the name is in the toolbar.
+        let origin = core_origin(&record, &self.run_names);
+        crate::theme::section(ui, &origin);
         let source_path = record.core.source.display().to_string();
-        ui.add(egui::Label::new(&source_path).truncate())
-            .on_hover_text(&source_path)
-            .context_menu(|ui| {
-                if ui.button("Copy core path").clicked() {
-                    ui.ctx().copy_text(source_path);
-                    ui.close();
-                }
-            });
+        crate::dump_names::path_line(ui, &source_path, "Copy core path");
         if !record.core.warnings.is_empty() {
             egui::CollapsingHeader::new(format!("Core warnings ({})", record.core.warnings.len()))
                 .show(ui, |ui| {

@@ -222,7 +222,7 @@ fn a_run_series_takes_pictures_of_a_live_screen_and_skips_the_unchanged() {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap();
-    let mut shots = TimedShots::start(socket.clone(), run.clone(), 1, started);
+    let mut shots = TimedShots::start(socket.clone(), run.clone(), 1, Bounds::default(), started);
     std::thread::sleep(Duration::from_millis(4600));
     let series = shots.finish().expect("the worker ends");
     assert!(series.taken >= 2, "{series:?}");
@@ -243,4 +243,47 @@ fn a_run_series_takes_pictures_of_a_live_screen_and_skips_the_unchanged() {
     drop(shots);
     let _ = server.join();
     std::fs::remove_dir_all(&run).unwrap();
+}
+
+/// Item 19 (2026-11-14): a run sets its own limits, within the bounds; what
+/// it leaves out keeps the defaults of 500 pictures and 256 MiB, and an old
+/// request without them loads with the defaults.
+#[test]
+fn a_run_sets_its_own_picture_limits_within_the_bounds() {
+    let mut request = crate::ExecRequest::default();
+    assert_eq!(Bounds::of(&request), Bounds::default());
+    assert_eq!(Bounds::default().pictures, 500);
+    assert_eq!(Bounds::default().bytes, 256 << 20);
+    request.screenshot_max_pictures = Some(40);
+    request.screenshot_max_mib = Some(64);
+    assert_eq!(
+        Bounds::of(&request),
+        Bounds {
+            pictures: 40,
+            bytes: 64 << 20
+        }
+    );
+    // Out of range is kept in range (the request check refuses it first).
+    request.screenshot_max_pictures = Some(1);
+    request.screenshot_max_mib = Some(1 << 20);
+    assert_eq!(Bounds::of(&request).pictures, 10);
+    assert_eq!(Bounds::of(&request).bytes, 4096 << 20);
+    request.path = "/bin/true".into();
+    request.screenshot_every_s = Some(10);
+    assert!(request.validate().unwrap_err().contains("pictures"));
+    request.screenshot_max_pictures = Some(100);
+    assert!(request.validate().unwrap_err().contains("MiB"));
+    request.screenshot_max_mib = Some(512);
+    assert!(request.validate().is_ok());
+    let old: crate::ExecRequest = serde_json::from_str(
+        r#"{"path":"/bin/x","args":[],"cwd":"/","env":[],"uid":0,"gid":0,"screenshot_every_s":10}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        (old.screenshot_max_pictures, old.screenshot_max_mib),
+        (None, None)
+    );
+    let saved = serde_json::to_value(&request).unwrap();
+    assert_eq!(saved["screenshot_max_pictures"], 100);
+    assert_eq!(saved["screenshot_max_mib"], 512);
 }

@@ -35,7 +35,7 @@ use self::{
     catalog::*,
     decompile::*,
     inspect::*,
-    list_rows::{ListOutcome, RowContext},
+    list_rows::{core_origin, opened_name, ListOutcome, RowContext},
     names::{mapping_labels, mapping_name, signal_text},
     sizes::manual_status,
 };
@@ -108,8 +108,8 @@ struct CoreCatalog {
     imported: Vec<CoreRecord>,
     acquired: Vec<AcquiredCore>,
     manual: Vec<ProcessCoreCapture>,
-    /// Manual cores that a run's dump trigger took, by folder: the label
-    /// "Trigger: <finding>" they are listed with, and the run.
+    /// Manual cores that a run's dump trigger took, by folder: the rule that
+    /// took each, and the run.
     triggers: Vec<(PathBuf, (String, String))>,
     issues: Vec<String>,
 }
@@ -260,7 +260,7 @@ pub(crate) struct CoreView {
     /// The run selected in Triage, which "This run only" follows.
     triage_run: Option<String>,
     this_run_only: bool,
-    /// Folders of cores a dump trigger took, with their "Trigger: ..." label.
+    /// Folders of cores a dump trigger took, with the rule and the run.
     trigger_twins: std::collections::HashMap<PathBuf, (String, String)>,
 }
 impl CoreView {
@@ -493,7 +493,7 @@ impl CoreView {
                 self.detail = None;
                 self.strings.reset();
                 self.remember_asm_counts();
-                self.status = "Core is referenced in place; retain its original file.".into();
+                self.status = self.opened_status();
                 if let Some(text) = saved {
                     let (functions, bodies) = parse_ghidra(&text);
                     self.functions = functions;
@@ -521,6 +521,18 @@ impl CoreView {
             }
             Ok(Reply::Done(message)) => self.status = message,
         }
+    }
+
+    /// The status line of the core just opened: a complete live core that
+    /// lacks only pages that were not in memory says so, with the rule that
+    /// took it (item 35); any other core keeps the reminder that it is read
+    /// in place.
+    fn opened_status(&self) -> String {
+        self.manual
+            .iter()
+            .find(|core| Some(&core.directory) == self.selected_directory.as_ref())
+            .and_then(|core| core.note.clone())
+            .unwrap_or_else(|| "Core is referenced in place; retain its original file.".into())
     }
 
     /// Sends each distinct catalog issue to the activity log once.
@@ -580,6 +592,7 @@ impl CoreView {
             // Opened or focused: the next check reads the folders again.
             self.catalog_checked = None;
         }
+        self.fold_trigger_twins();
         if let Some(delay) = self.refresh_catalog_if_due(active, Instant::now()) {
             ui.ctx().request_repaint_after(delay);
         }

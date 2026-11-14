@@ -666,6 +666,15 @@ pub struct ExecRequest {
     /// app", or a headless run that asked for the screen).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_every_s: Option<u32>,
+    /// The most pictures the timed screenshots keep for this run (10 to
+    /// 5000); `None` is 500. A desktop and `run exec` option; Auto mode's
+    /// presets keep the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_max_pictures: Option<u32>,
+    /// The most MiB of pictures the timed screenshots keep for this run (16
+    /// to 4096); `None` is 256.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_max_mib: Option<u32>,
 }
 
 impl ExecRequest {
@@ -737,6 +746,26 @@ impl ExecRequest {
                 "the screenshot interval must be {} to {} seconds",
                 crate::timed_shots::MIN_INTERVAL_S,
                 crate::timed_shots::MAX_INTERVAL_S
+            ));
+        }
+        let within = |value: Option<u32>, range: std::ops::RangeInclusive<u32>| {
+            value.is_none_or(|value| range.contains(&value))
+        };
+        if !within(
+            self.screenshot_max_pictures,
+            crate::timed_shots::PICTURES_RANGE,
+        ) {
+            return Err(format!(
+                "the screenshot limit must be {} to {} pictures per run",
+                crate::timed_shots::PICTURES_RANGE.start(),
+                crate::timed_shots::PICTURES_RANGE.end()
+            ));
+        }
+        if !within(self.screenshot_max_mib, crate::timed_shots::MIB_RANGE) {
+            return Err(format!(
+                "the screenshot limit must be {} to {} MiB per run",
+                crate::timed_shots::MIB_RANGE.start(),
+                crate::timed_shots::MIB_RANGE.end()
             ));
         }
         Ok(())
@@ -982,6 +1011,11 @@ pub struct ProcessCoreCapture {
     /// What the guest says the core lacks (CORE_STATUS COVERAGE, revision 22).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<crate::core_limits::CoreCoverage>,
+    /// What a complete core still lacks, in the words a user reads: a live
+    /// core whose only gap is pages that were not in memory (Read
+    /// non-resident pages off) says how many, and the rule that took it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 impl RunArtifacts {
@@ -2325,6 +2359,8 @@ impl Default for ExecRequest {
             sample: None,
             preloaded: Vec::new(),
             screenshot_every_s: None,
+            screenshot_max_pictures: None,
+            screenshot_max_mib: None,
         }
     }
 }

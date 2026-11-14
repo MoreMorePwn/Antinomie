@@ -1028,6 +1028,7 @@ mod dump_trigger {
                 capture_id: Some("c1".into()),
                 size: Some(4096),
                 error: None,
+                note: None,
             }),
         }
     }

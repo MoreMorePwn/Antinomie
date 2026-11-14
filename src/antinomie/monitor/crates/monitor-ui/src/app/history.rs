@@ -877,25 +877,44 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
         features.push(feature);
     }
     if let Some(every) = request.screenshot_every_s {
-        features.push(Feature::new(
-            0,
-            format!("Timed screenshots · every {every} s"),
-        ));
-    }
-    if let Some(plan) = &request.dump_trigger {
-        let what = match (plan.memory, plan.core) {
-            (true, true) => "memory and core",
-            (true, false) => "memory",
-            _ => "core",
-        };
-        let log = run.triggers.as_ref();
-        let taken = log.map_or(0, |log| log.records.len());
+        let bounds = antinomie_monitor_core::timed_shots::Bounds::of(request);
         features.push(Feature::new(
             0,
             format!(
-                "Dump on suspicious activity · {} or higher · {what} · {taken} of {} taken",
+                "Timed screenshots · every {every} s · at most {} pictures, {} MiB",
+                bounds.pictures,
+                bounds.bytes >> 20
+            ),
+        ));
+    }
+    if let Some(plan) = &request.dump_trigger {
+        let log = run.triggers.as_ref();
+        let records = log.map_or(&[][..], |log| log.records.as_slice());
+        // Each kind has its own count (item 29).
+        let counts = [
+            (
+                plan.core,
+                "core",
+                records.iter().filter(|r| r.core.is_some()).count(),
+                plan.max_cores,
+            ),
+            (
+                plan.memory,
+                "memory",
+                records.iter().filter(|r| r.memory.is_some()).count(),
+                plan.max_memory_dumps,
+            ),
+        ]
+        .into_iter()
+        .filter(|(asked, ..)| *asked)
+        .map(|(_, kind, taken, most)| format!("{kind} {taken} of {most} taken"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+        features.push(Feature::new(
+            0,
+            format!(
+                "Dump on suspicious activity · {} or higher · {counts}",
                 plan.min_tier.label(),
-                plan.max_dumps
             ),
         ));
         for record in log.iter().flat_map(|log| &log.records) {
@@ -918,7 +937,7 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
                 );
                 feature.available =
                     !matches!(dump.state, antinomie_monitor_core::RunArtifactState::Failed);
-                feature.hover = dump.error.clone();
+                feature.hover = dump.error.clone().or_else(|| dump.note.clone());
                 features.push(feature);
             }
         }

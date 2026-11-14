@@ -88,6 +88,44 @@ impl MonitorApp {
         }
     }
 
+    /// "Saved hits per rule" (Settings > Detection rules, item 25): the hit
+    /// positions a scan keeps for each rule, 16 to 10,000, with a Reset to
+    /// the default of 100. Kept in the engine settings (`settings.json`).
+    pub(super) fn saved_hits_row(&mut self, ui: &mut egui::Ui) {
+        use antinomie_monitor_core::analysis::detection::{
+            EVIDENCE_LIMIT_DEFAULT, EVIDENCE_LIMIT_RANGE,
+        };
+        let set = self.triage.detection_settings().evidence_limit;
+        let mut shown = self.triage.detection_settings().evidence_limit();
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Saved hits per rule");
+            if ui
+                .add(egui::DragValue::new(&mut shown).range(EVIDENCE_LIMIT_RANGE))
+                .on_hover_text(format!(
+                    "{} to {}",
+                    EVIDENCE_LIMIT_RANGE.start(),
+                    EVIDENCE_LIMIT_RANGE.end()
+                ))
+                .changed()
+            {
+                self.triage.detection_settings().evidence_limit = if shown == EVIDENCE_LIMIT_DEFAULT
+                {
+                    0
+                } else {
+                    shown
+                };
+            }
+            if ui
+                .add_enabled(set != 0, egui::Button::new("Reset"))
+                .on_hover_text(format!("Back to the default ({EVIDENCE_LIMIT_DEFAULT})"))
+                .on_disabled_hover_text(format!("Already the default ({EVIDENCE_LIMIT_DEFAULT})"))
+                .clicked()
+            {
+                self.triage.detection_settings().evidence_limit = 0;
+            }
+        });
+    }
+
     /// The tools that are not in the list of installable ones (binwalk and the
     /// built-in YARA scan) with their times.
     pub(super) fn built_in_timeouts(&mut self, ui: &mut egui::Ui) {

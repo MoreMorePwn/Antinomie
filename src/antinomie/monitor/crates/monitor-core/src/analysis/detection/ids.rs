@@ -8,8 +8,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Packet locations kept per finding; the alert count itself is complete.
-const EVIDENCE_PREVIEW_LIMIT: usize = 16;
 /// Selection notes kept in `Report::skipped`; the counts cover every rule.
 const SKIPPED_LIMIT: usize = 100;
 
@@ -223,6 +221,11 @@ fn alert(
             return;
         }
     };
+    // Packet locations kept per finding (Settings > Detection rules, "Saved
+    // hits per rule"); the alert count itself is complete.
+    let limit = report
+        .evidence_limit
+        .unwrap_or(u64::from(super::EVIDENCE_LIMIT_DEFAULT));
     let finding = &mut report.findings[index];
     finding.count += 1;
     // Pseudo-packets have no pcap_cnt. Preserve the alert without inventing a frame.
@@ -231,18 +234,19 @@ fn alert(
         .and_then(serde_json::Value::as_u64)
         .filter(|frame| *frame > 0 && *frame <= capture.packets)
     {
-        if finding.evidence.len() < EVIDENCE_PREVIEW_LIMIT {
+        if (finding.evidence.len() as u64) < limit {
             finding.evidence.push(Evidence::Packet {
                 capture: capture.original.clone(),
                 frame,
             });
         } else {
             report.omitted_evidence += 1;
+            report.over_limit += 1;
             // The count above is complete; only the preview is cut.
             report
                 .coverage
                 .get_or_insert_with(Coverage::default)
-                .evidence_preview_limit = Some(EVIDENCE_PREVIEW_LIMIT as u64);
+                .evidence_preview_limit = Some(limit);
         }
     } else {
         report.omitted_evidence += 1;
@@ -524,6 +528,7 @@ fn scan_budgeted(
     let tool_env: &[(&str, &str)] = if libs.is_empty() { &[] } else { &pair };
     let mut report = Report::empty(Engine::Ids, staged.request.identity.clone());
     report.selection = staged.selection.clone();
+    report.evidence_limit = Some(u64::from(staged.request.settings.evidence_limit()));
     let mut coverage = Coverage::default();
     // Rules the managed selection already left out count the same as these.
     coverage.add_selection_exclusions(Engine::Ids, &staged.warnings);
@@ -1324,12 +1329,23 @@ mod tests {
         let mut rules = std::collections::BTreeMap::new();
         rules.insert(7, "alert".to_owned());
         let mut budget = super::super::RuleTextBudget::new();
+        // The default keeps 100 positions: 20 alerts are all kept.
+        let mut default = Report::empty(Engine::Ids, test_identity());
+        for frame in 1..=20 {
+            let event = serde_json::json!({"event_type":"alert","pcap_cnt":frame,"alert":{"signature_id":7,"signature":"t"}});
+            alert(&event, &capture, &rules, &mut budget, &mut default);
+        }
+        assert_eq!(default.findings[0].evidence.len(), 20);
+        assert_eq!((default.over_limit, default.omitted_evidence), (0, 0));
+        // Saved hits per rule at its lowest, 16: every alert past it is counted.
+        report.evidence_limit = Some(16);
         for frame in 1..=20 {
             let event = serde_json::json!({"event_type":"alert","pcap_cnt":frame,"alert":{"signature_id":7,"signature":"t"}});
             alert(&event, &capture, &rules, &mut budget, &mut report);
         }
         assert_eq!(report.findings[0].count, 20, "the count is complete");
         assert_eq!(report.findings[0].evidence.len(), 16);
+        assert_eq!(report.over_limit, 4);
         assert_eq!(
             report.coverage.as_ref().unwrap().evidence_preview_limit,
             Some(16)

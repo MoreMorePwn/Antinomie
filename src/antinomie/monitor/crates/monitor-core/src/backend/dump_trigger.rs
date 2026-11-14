@@ -164,7 +164,10 @@ impl Worker {
             self.record_too_late(cookie, &finding, reason);
             return;
         }
-        if log.records.len() >= plan.max_dumps.min(RECORDS_MAX as u32) as usize || cooling {
+        // The core and the memory dump each have their own count; a match
+        // takes what still has room.
+        let (want_core, want_memory) = plan.room(log);
+        if (!want_core && !want_memory) || log.records.len() >= RECORDS_MAX || cooling {
             log.skipped += 1;
             if log.skipped == 1
                 && let Err(error) = run.persist_summary()
@@ -184,7 +187,7 @@ impl Worker {
             core: None,
         };
         let (run_id, root_pid) = (run.summary.id.clone(), run.summary.pid);
-        if plan.core {
+        if want_core {
             let request = (
                 run.summary.request.core_max_size,
                 run.summary.request.core_timeout_ms,
@@ -195,7 +198,7 @@ impl Worker {
                 // The exit is seen while the guest answers the process list.
                 core.error = Some(self.too_late_for(cookie, &finding));
             }
-            if gone && !plan.memory {
+            if gone && !want_memory {
                 // Nothing can be taken from a process that is gone: not an
                 // attempt, so the budget is kept for the next match.
                 let error = core.error.unwrap_or_default();
@@ -204,7 +207,7 @@ impl Worker {
             }
             record.core = Some(core);
         }
-        if plan.memory {
+        if want_memory {
             if record
                 .core
                 .as_ref()
@@ -493,6 +496,7 @@ impl Worker {
                             .as_ref()
                             .map(|reason| reason.text.clone())
                             .or_else(|| summary.issue.clone());
+                        core.note.clone_from(&summary.note);
                         touched = true;
                         if state == RunArtifactState::Failed
                             && record.memory.is_none()
@@ -692,8 +696,8 @@ mod tests {
     fn a_core_refused_for_a_missing_process_is_skipped_and_keeps_the_budget() {
         let mut log = TriggerLog::default();
         log.records.push(record(1160));
-        let max_dumps = 1usize;
-        assert!(log.records.len() >= max_dumps);
+        let plan = crate::dump_trigger::DumpTrigger::default();
+        assert_eq!(plan.room(&log), (false, false));
         let finding = log.records[0].finding.clone();
         drop_unattempted(&mut log, Some(0), &finding, "too late".into());
         assert!(log.records.is_empty());
@@ -701,7 +705,7 @@ mod tests {
         assert_eq!(log.missed[0].reason, "too late");
         assert_eq!(log.skipped, 0);
         // The next match finds room again.
-        assert!(log.records.len() < max_dumps);
+        assert_eq!(plan.room(&log), (true, false));
     }
 
     #[test]

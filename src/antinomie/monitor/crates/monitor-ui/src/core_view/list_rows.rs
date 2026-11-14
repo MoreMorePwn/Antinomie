@@ -249,11 +249,7 @@ impl CoreView {
             if !manual_shown[index] {
                 continue;
             }
-            let twin = self.trigger_twins.get(&core.directory);
-            let fallback = match twin {
-                Some((label, _)) => format!("{label} · PID {}", core.target.tgid),
-                None => format!("PID {} · {}", core.target.tgid, core.id),
-            };
+            let fallback = self.manual_name(core);
             let title = crate::evidence::title(ui, &core.directory, &fallback);
             let selected = self.selected_directory.as_ref() == Some(&core.directory);
             let state = manual_status(core);
@@ -271,8 +267,13 @@ impl CoreView {
                 Some(cell.line()),
                 font_size,
             );
+            let origin = crate::dump_names::origin(
+                self.manual_provenance(core).as_ref(),
+                &self.run_names,
+                crate::dump_names::DumpKind::Core,
+            );
             let row = row.on_hover_text(format!(
-                "{title}\n{state}\n{}\n\n{}",
+                "{title}\n{origin}\n{state}\n{}\n\n{}",
                 core.directory.display(),
                 cell.tip_text()
             ));
@@ -346,10 +347,7 @@ impl CoreView {
             if !acquired_shown[index] {
                 continue;
             }
-            let fallback = match &core.trigger {
-                Some(label) => label.clone(),
-                None => format!("Run {}", core.run_id),
-            };
+            let fallback = self.acquired_name(core);
             let title = crate::evidence::title(ui, &core.directory, &fallback);
             let selected = self.selected_directory.as_ref() == Some(&core.directory)
                 || self
@@ -373,8 +371,13 @@ impl CoreView {
                 Some(cell.line()),
                 font_size,
             );
+            let origin = crate::dump_names::origin(
+                core.provenance.as_ref(),
+                &self.run_names,
+                crate::dump_names::DumpKind::Core,
+            );
             let row = row.on_hover_text(format!(
-                "{title}\n{state}\n{}\n\n{}",
+                "{title}\n{origin}\n{state}\n{}\n\n{}",
                 core.directory.display(),
                 cell.tip_text()
             ));
@@ -594,6 +597,100 @@ impl CoreView {
         }
     }
 
+    /// What a core taken by hand or by a trigger says of where it came from:
+    /// its record, with the trigger's rule and run when its run's record
+    /// names it (a record from before provenance has neither).
+    pub(super) fn manual_provenance(
+        &self,
+        core: &ProcessCoreCapture,
+    ) -> Option<antinomie_monitor_core::provenance::Provenance> {
+        use antinomie_monitor_core::provenance::{Certainty, Origin, Provenance};
+        let mut provenance = core.provenance.clone();
+        if let Some((rule, run)) = self.trigger_twins.get(&core.directory) {
+            let found = provenance.get_or_insert_with(|| Provenance {
+                vm_id: core.vm_id.clone(),
+                boot_id: Some(core.boot_id.clone()),
+                certainty: Certainty::Exact,
+                pid: Some(core.target.tgid),
+                ..Provenance::default()
+            });
+            found.origin = Origin::Trigger;
+            found.run_id.get_or_insert_with(|| run.clone());
+            if found.finding.is_none() && !rule.is_empty() {
+                found.finding = Some(antinomie_monitor_core::provenance::FoundBy {
+                    rule: rule.clone(),
+                    ..Default::default()
+                });
+            }
+        }
+        provenance
+    }
+
+    /// The name a core taken by hand or by a trigger is listed under:
+    /// `PID <tgid> (<program>) · <rule> · <time>`.
+    pub(super) fn manual_name(&self, core: &ProcessCoreCapture) -> String {
+        let provenance = self.manual_provenance(core);
+        let link = self.manual_link(core);
+        let rule = provenance
+            .as_ref()
+            .and_then(|provenance| provenance.finding.as_ref())
+            .map(|finding| finding.rule.as_str());
+        let time = provenance
+            .as_ref()
+            .and_then(crate::dump_names::provenance_time)
+            .or_else(|| id_time(&core.id));
+        crate::dump_names::core_name(
+            core.target.tgid,
+            crate::dump_names::run_program(&self.run_names, link.run.as_deref()),
+            rule,
+            time,
+        )
+    }
+
+    /// The name a run's exit core or trigger core is listed under: its
+    /// process (the trigger's, else the run's own), rule and time; `Run <id>`
+    /// while the run's process is not known.
+    pub(super) fn acquired_name(&self, core: &AcquiredCore) -> String {
+        let run = self.run_names.get(&core.run_id);
+        let provenance = core.provenance.as_ref();
+        let pid = provenance
+            .and_then(|provenance| provenance.pid)
+            .or_else(|| run.and_then(|run| run.pid));
+        let Some(pid) = pid else {
+            return format!("Run {}", core.run_id);
+        };
+        crate::dump_names::core_name(
+            pid,
+            crate::dump_names::run_program(&self.run_names, Some(&core.run_id)),
+            provenance
+                .and_then(|provenance| provenance.finding.as_ref())
+                .map(|finding| finding.rule.as_str()),
+            provenance.and_then(crate::dump_names::provenance_time),
+        )
+    }
+
+    /// The name of the core in `directory`, as its row shows it.
+    pub(super) fn listed_name(&self, ui: &egui::Ui, directory: &Path) -> Option<String> {
+        let name = self
+            .manual
+            .iter()
+            .find(|core| core.directory == directory)
+            .map(|core| self.manual_name(core))
+            .or_else(|| {
+                self.acquired
+                    .iter()
+                    .find(|core| core.directory == directory)
+                    .map(|core| self.acquired_name(core))
+            })
+            .or_else(|| {
+                self.records
+                    .iter()
+                    .find(|record| record.dir == directory)
+                    .map(|record| record.label.clone())
+            })?;
+        Some(crate::evidence::title(ui, directory, &name))
+    }
+
     /// The Run column's text for a core.
     pub(super) fn cell_of(&self, link: &Link) -> CoreRunCell {
         let cell = crate::run_link::cell(
@@ -641,4 +738,63 @@ impl CoreRunCell {
             clickable: self.clickable,
         }
     }
+}
+
+/// The time a capture id starts with (`<20-digit ns>-<hex>`), in ms.
+fn id_time(id: &str) -> Option<u64> {
+    let digits = id.split('-').next()?;
+    (digits.len() == 20)
+        .then(|| digits.parse::<u64>().ok())
+        .flatten()
+        .map(|ns| ns / 1_000_000)
+}
+
+/// Whether a core is a file the analyst imported: its record says so, or it
+/// is kept under `core-dumps/` (an import saved before provenance).
+pub(super) fn is_imported(record: &CoreRecord) -> bool {
+    record.provenance.as_ref().is_some_and(|provenance| {
+        provenance.origin == antinomie_monitor_core::provenance::Origin::Imported
+    }) || record
+        .dir
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == "core-dumps")
+}
+
+/// The name of an opened core no row lists: an import's file name, else its
+/// process, rule and time as its record says.
+pub(super) fn opened_name(
+    ui: &egui::Ui,
+    record: &CoreRecord,
+    names: &crate::run_link::RunNames,
+) -> String {
+    let provenance = record.provenance.as_ref();
+    let run = provenance.and_then(|provenance| provenance.run_id.as_deref());
+    let pid = provenance
+        .and_then(|provenance| provenance.pid)
+        .or_else(|| run.and_then(|run| names.get(run)).and_then(|run| run.pid));
+    let name = match pid {
+        Some(pid) if !is_imported(record) => crate::dump_names::core_name(
+            pid,
+            crate::dump_names::run_program(names, run),
+            provenance
+                .and_then(|provenance| provenance.finding.as_ref())
+                .map(|finding| finding.rule.as_str()),
+            provenance.and_then(crate::dump_names::provenance_time),
+        ),
+        _ => record.label.clone(),
+    };
+    crate::evidence::title(ui, &record.dir, &name)
+}
+
+/// Where an opened core came from, the heading above its path.
+pub(super) fn core_origin(record: &CoreRecord, names: &crate::run_link::RunNames) -> String {
+    if is_imported(record) {
+        return "Imported".into();
+    }
+    crate::dump_names::origin(
+        record.provenance.as_ref(),
+        names,
+        crate::dump_names::DumpKind::Core,
+    )
 }

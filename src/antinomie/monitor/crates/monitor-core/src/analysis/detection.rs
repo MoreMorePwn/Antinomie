@@ -92,7 +92,16 @@ pub struct Settings {
     /// Seconds each engine may run (Settings > Detection rules); a 0 is the
     /// engine's default.
     pub timeouts: EngineTimeouts,
+    /// Hit positions saved per rule (Settings > Detection rules, "Saved hits
+    /// per rule"): YARA byte offsets and IDS packet frames. 0 is the default
+    /// ([`EVIDENCE_LIMIT_DEFAULT`]); settings saved before it read 0.
+    pub evidence_limit: u32,
 }
+
+/// Hit positions saved per rule when the setting is left at its default.
+pub const EVIDENCE_LIMIT_DEFAULT: u32 = 100;
+/// The range the setting accepts.
+pub const EVIDENCE_LIMIT_RANGE: std::ops::RangeInclusive<u32> = 16..=10_000;
 
 /// The tools of the detection worker whose time Settings sets one by one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,6 +183,15 @@ impl EngineTimeouts {
 }
 
 impl Settings {
+    /// The hit positions a scan saves per rule: the setting within
+    /// [`EVIDENCE_LIMIT_RANGE`], or [`EVIDENCE_LIMIT_DEFAULT`] when unset.
+    pub fn evidence_limit(&self) -> u32 {
+        match self.evidence_limit {
+            0 => EVIDENCE_LIMIT_DEFAULT,
+            set => set.clamp(*EVIDENCE_LIMIT_RANGE.start(), *EVIDENCE_LIMIT_RANGE.end()),
+        }
+    }
+
     /// The Sigma Python a scan runs: the one set here, else the Sigma tool
     /// installed in the data directory, else empty for the system Python.
     pub fn effective_sigma_python(&self) -> String {
@@ -528,6 +546,10 @@ impl Finding {
 /// text on the header now, so a saved report does not show it as a warning.
 pub const SIGMA_CATEGORY_CAVEAT: &str = "Category acceptance is not full compatibility. Syntax, backend conversion, logsource, and per-run evidence are counted separately.";
 
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
 fn without_sigma_caveat<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -550,6 +572,16 @@ pub struct Report {
     pub skipped_rules: u64,
     pub skipped: Vec<String>,
     pub omitted_evidence: u64,
+    /// The hit positions this scan saved per rule (the setting it ran with).
+    /// None on results saved before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_limit: Option<u64>,
+    /// Hits counted but not saved because their rule already had
+    /// `evidence_limit` positions: every one of them, so the saved and the
+    /// left-out positions add up to all the hits. Part of
+    /// `omitted_evidence`; 0 on results saved before it was counted.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub over_limit: u64,
     #[serde(deserialize_with = "without_sigma_caveat")]
     pub warnings: Vec<String>,
     pub source_digest: Option<String>,
@@ -605,6 +637,8 @@ impl Report {
             skipped_rules: 0,
             skipped: vec![],
             omitted_evidence: 0,
+            evidence_limit: None,
+            over_limit: 0,
             warnings: vec![],
             source_digest: None,
             selection: String::new(),

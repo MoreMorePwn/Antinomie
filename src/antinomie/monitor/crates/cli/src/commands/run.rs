@@ -94,6 +94,22 @@ pub struct Exec {
     /// named by the time since the run started.
     #[arg(long = "screenshot-every", value_name = "SECONDS")]
     pub screenshot_every: Option<u32>,
+    /// Keep at most N pictures of --screenshot-every for this run (10 to
+    /// 5000; default 500). The series ends with a note when it is reached.
+    #[arg(
+        long = "screenshot-max-pictures",
+        value_name = "N",
+        requires = "screenshot_every"
+    )]
+    pub screenshot_max_pictures: Option<u32>,
+    /// Keep at most MIB MiB of pictures of --screenshot-every for this run
+    /// (16 to 4096; default 256).
+    #[arg(
+        long = "screenshot-max-mib",
+        value_name = "MIB",
+        requires = "screenshot_every"
+    )]
+    pub screenshot_max_mib: Option<u32>,
     /// Take a core of the program before its address space exits.
     #[arg(long)]
     pub core_dump: bool,
@@ -228,6 +244,8 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
         memory_dump_on_exit: arguments.memory_dump,
         core_dump_on_exit: arguments.core_dump,
         screenshot_every_s: arguments.screenshot_every,
+        screenshot_max_pictures: arguments.screenshot_max_pictures,
+        screenshot_max_mib: arguments.screenshot_max_mib,
         route: arguments.route.as_deref().map(parse_route).transpose()?,
         core_max_size: dump_trigger
             .as_ref()
@@ -862,6 +880,41 @@ mod tests {
     }
 
     #[test]
+    fn the_screenshot_limits_reach_the_request_within_their_bounds() {
+        let request = request_for(&parse(&["--screenshot-every", "5"])).unwrap();
+        assert_eq!(
+            (request.screenshot_max_pictures, request.screenshot_max_mib),
+            (None, None)
+        );
+        let request = request_for(&parse(&[
+            "--screenshot-every",
+            "5",
+            "--screenshot-max-pictures",
+            "50",
+            "--screenshot-max-mib",
+            "32",
+        ]))
+        .unwrap();
+        assert_eq!(
+            (request.screenshot_max_pictures, request.screenshot_max_mib),
+            (Some(50), Some(32))
+        );
+        for (flag, bad) in [
+            ("--screenshot-max-pictures", "5"),
+            ("--screenshot-max-mib", "8000"),
+        ] {
+            let exec = parse(&["--screenshot-every", "5", flag, bad]);
+            assert!(request_for(&exec).is_err(), "{flag} {bad}");
+        }
+        // The limits need the screenshots.
+        let sha = "ab".repeat(32);
+        assert!(
+            Wrapper::try_parse_from(["x", "exec", sha.as_str(), "--screenshot-max-pictures", "50"])
+                .is_err()
+        );
+    }
+
+    #[test]
     fn a_path_in_the_environment_is_kept_and_a_bad_pair_is_refused() {
         let exec = parse(&["--env", "PATH=/x"]);
         let request = request_for(&exec).unwrap();
@@ -970,6 +1023,7 @@ mod tests {
                     size: Some(10),
                     capture_id: None,
                     error: None,
+                    note: None,
                     path: Some("/runs/r/core".into()),
                 }),
             }],

@@ -278,7 +278,8 @@ fn trigger_case(d: &mut Driver, vm_id: &str, delays: &[&str]) -> Result<(), Stri
             min_tier: TriggerTier::High,
             memory: false,
             core: true,
-            max_dumps: 1,
+            max_cores: 1,
+            max_memory_dumps: 1,
             cooldown_secs: 0,
             memory_max_mib: 0,
         };

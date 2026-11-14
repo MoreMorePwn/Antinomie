@@ -21,15 +21,19 @@ impl CoreView {
             {
                 self.hide_list = !self.hide_list;
             }
+            // The name the core's row has (`PID <tgid> (<program>) · <rule> ·
+            // <time>`, or an imported core's file name), not the file's name.
             let title = self
                 .selected
                 .as_ref()
-                .map(|record| record.label.clone())
+                .map(|record| {
+                    self.listed_name(ui, &record.dir)
+                        .unwrap_or_else(|| opened_name(ui, record, &self.run_names))
+                })
                 .or_else(|| {
-                    self.manual
-                        .iter()
-                        .find(|core| Some(&core.directory) == self.selected_directory.as_ref())
-                        .map(|core| format!("PID {} · {}", core.target.tgid, core.id))
+                    self.selected_directory
+                        .as_ref()
+                        .and_then(|directory| self.listed_name(ui, directory))
                 });
             match title {
                 Some(title) => {

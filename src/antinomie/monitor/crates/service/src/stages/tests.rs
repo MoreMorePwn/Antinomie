@@ -328,7 +328,10 @@ fn the_presets_dump_trigger_is_in_the_launch_request_with_its_limits() {
     let plan = r.dump_trigger.expect("the trigger is armed");
     assert_eq!(plan.min_tier, TriggerTier::High);
     assert!(plan.core && !plan.memory);
-    assert_eq!((plan.max_dumps, plan.cooldown_secs), (4, 90));
+    assert_eq!(
+        (plan.max_cores, plan.max_memory_dumps, plan.cooldown_secs),
+        (4, 4, 90)
+    );
     // The core of a trigger has the preset's budget though no exit core is asked.
     assert!(!r.core_dump_on_exit);
     assert_eq!(

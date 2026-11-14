@@ -288,8 +288,9 @@ its default is Standard's. The full list is in
   `dumps.minimum_tier` (`low`, `medium`, `high`; default `high`) or above:
   `trigger_core` (default on; a core of the process that made the call, within
   `core_budget_mib` and `core_deadline_ms`, needs a revision-16 base) and
-  `trigger_memory_dump` (default off), at most `max_dumps` (1) dumps
-  `dumps_apart_s` (30) seconds apart. The program is not stopped. The run's
+  `trigger_memory_dump` (default off), at most `max_dumps` (1) of each kind
+  (the window sets the core and memory dump counts apart; a preset's one count
+  applies to both), `dumps_apart_s` (30) seconds apart. The program is not stopped. The run's
   `run.triggers` lists each match (rule, tier, process, call, and the state and
   size of each dump; the path only for a local caller), `run.trigger_notes` says
   when it was armed and nothing matched, and `run.trigger` events report them as
@@ -316,7 +317,9 @@ the recording is saved without it and the run succeeds; `run.pending` lists
   `screenshot` with `run_time_ms` (sensitive: they show what the guest displayed,
   so reading them needs `evidence.view` and downloading `evidence.download`), and
   the evidence bundle holds up to 100 of them under `screenshots/`. A run keeps at
-  most 500 pictures or 256 MiB; the run's notes say how many were saved, skipped or
+  most 500 pictures or 256 MiB (an Auto run always has these limits: there is no
+  preset key for them; only the desktop's Run program and `run exec
+  --screenshot-max-pictures`/`--screenshot-max-mib` set others); the run's notes say how many were saved, skipped or
   dropped and whether a limit ended the series. A run may set any value from 0 to
   999 (`{"record": {"screenshot_every_s": N}}` in `overrides`, `auto submit
   --screenshot-every SECONDS`), which makes it Custom when it differs from the

@@ -336,6 +336,8 @@ pub(super) fn dump_taken(ui: &mut egui::Ui, values: &[(&'static str, RowValue)])
         });
         if let Some(error) = &dump.error {
             ui.colored_label(theme::warn(), error);
+        } else if let Some(note) = &dump.note {
+            ui.colored_label(theme::muted(), note);
         }
     }
     ui.add_space(8.0);

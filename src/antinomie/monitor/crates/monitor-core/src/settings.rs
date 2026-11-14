@@ -207,6 +207,14 @@ impl EngineSettings {
                 LIVE_DETECTION_MAX_MINUTES,
             )?;
         }
+        if self.triage_detection.evidence_limit != 0 {
+            within(
+                "triage_detection.evidence_limit (0 is the default, 100)",
+                self.triage_detection.evidence_limit,
+                *detection::EVIDENCE_LIMIT_RANGE.start(),
+                *detection::EVIDENCE_LIMIT_RANGE.end(),
+            )?;
+        }
         within("file_write_file_mib", self.file_write_file_mib, 1, 65_536)?;
         within("file_write_run_mib", self.file_write_run_mib, 1, 1_048_576)?;
         within("file_before_file_mib", self.file_before_file_mib, 1, 65_536)?;

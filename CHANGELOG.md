@@ -41,6 +41,44 @@ x86 programs by their own table.
   The Statistics window's title no longer repeats the word (it names the run
   or capture), and its tables' alternate rows use a stronger theme colour that
   shows against the window in the dark, light and blue themes.
+- **Run program window (0.9.0 UI round, ANT-T0550).** More room between the
+  Program and Analysis columns; Analysis, Dumps, Network, Timed Screenshot and
+  Debugging (renamed from Debugger) fold, and the window remembers which are
+  folded.
+- **Timed Screenshot limits.** The interval shows before the box is ticked, and
+  a run sets its own limits (10 to 5,000 pictures, 16 to 4,096 MiB; 500 and
+  256 MiB by default) in the window and with `run exec --screenshot-max-pictures`
+  and `--screenshot-max-mib`. Auto presets keep the defaults.
+- **capa and FLOSS on an arm64 VM** are listed greyed out and unticked in Run
+  program, with the analysis's reason on hover.
+- **Dump trigger: a count for each kind.** The core and the memory dump of
+  "Dump when suspicious activity is seen" are separate boxes, each with its own
+  settings and its own count (`max_cores`, `max_memory_dumps` in the run plan).
+  A plan saved with one `max_dumps` reads as that count for both.
+- **Saved hits per rule.** A detection scan saves up to 100 hit positions per
+  rule (was 16), set in Settings > Detection rules (16 to 10,000,
+  `triage_detection.evidence_limit`), and counts every hit it left out; the
+  note says "325 hits, 100 saved ... Raise Saved hits per rule in Settings and
+  scan again to keep more."
+- **A trigger core that lacks only pages not in memory is Complete** (Read
+  non-resident pages off), with a note saying how many pages were left out and
+  which rule took it, in Core dumps, Details, the run's features and the run
+  API (`note`). Lost thread contexts, or pages missing although they were to be
+  read in, stay Partial.
+- **Cores and memory dumps are named by process, rule and time.** Core dumps
+  shows `PID <pid> (<program>) · <rule> · <time>` in the list and next to the
+  hide-list icon instead of `process.elf`, and above the path where the core came
+  from (run, and trigger, Dump core, on exit or imported); the path is shortened in
+  the middle, whole on hover. Memory names a trigger's dump `<rule> · <time>`.
+- **A trigger core is listed once.** The core a running VM took for a trigger
+  was listed twice (by PID and by trigger); it is one entry with both. Cores in a
+  boot's `core-captures` folder are now read from disk, and can be deleted.
+- **A static analysis whose worker is gone no longer stays running.** A worker
+  that was killed or crashed, or that shows no progress for far longer than its
+  check may take, ends the analysis: the check it was running says "the
+  analysis worker stopped unexpectedly (signal N)", finished checks are kept and
+  the rest can be run again. The worker is also followed while a memory dump
+  pauses the VM.
 - **The right BusyBox and the right arm64 minimum after the r22 bases went
   public (ANT-T0485).** The catalog's optional `arch` field (`arm64`; absent
   means x86-64) is read. The nightly check boots the newest x86-64 BusyBox

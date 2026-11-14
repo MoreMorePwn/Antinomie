@@ -29,9 +29,49 @@ pub const MIN_INTERVAL_S: u32 = 1;
 pub const MAX_INTERVAL_S: u32 = 999;
 /// The interval a switched-on setting starts with.
 pub const DEFAULT_INTERVAL_S: u32 = 10;
-/// At most this many pictures, and this many bytes of them, per run.
+/// At most this many pictures, and this many bytes of them, per run, unless
+/// the run asks for other limits (`ExecRequest::screenshot_max_pictures`,
+/// `screenshot_max_mib`).
 pub const MAX_SHOTS: u64 = 500;
 pub const MAX_BYTES: u64 = 256 * 1024 * 1024;
+/// The limits a run may ask for: pictures per run and MiB of them per run.
+pub const PICTURES_RANGE: std::ops::RangeInclusive<u32> = 10..=5000;
+pub const MIB_RANGE: std::ops::RangeInclusive<u32> = 16..=4096;
+
+/// The limits of one run's series: the run's own, else the defaults (500
+/// pictures, 256 MiB).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bounds {
+    pub pictures: u64,
+    pub bytes: u64,
+}
+
+impl Default for Bounds {
+    fn default() -> Self {
+        Self {
+            pictures: MAX_SHOTS,
+            bytes: MAX_BYTES,
+        }
+    }
+}
+
+impl Bounds {
+    /// The limits `request` asks for, kept within [`PICTURES_RANGE`] and
+    /// [`MIB_RANGE`]; what it leaves out is the default.
+    pub fn of(request: &crate::ExecRequest) -> Self {
+        let default = Self::default();
+        Self {
+            pictures: request
+                .screenshot_max_pictures
+                .map_or(default.pictures, |n| {
+                    u64::from(n.clamp(*PICTURES_RANGE.start(), *PICTURES_RANGE.end()))
+                }),
+            bytes: request.screenshot_max_mib.map_or(default.bytes, |mib| {
+                u64::from(mib.clamp(*MIB_RANGE.start(), *MIB_RANGE.end())) << 20
+            }),
+        }
+    }
+}
 /// The folder inside a run's folder.
 pub const FOLDER: &str = "screenshots";
 const SERIES_FILE: &str = "series.json";
@@ -174,8 +214,8 @@ impl<F: FnMut() -> Option<Frame>> Shooter<F> {
         }
     }
 
-    #[cfg(test)]
-    fn with_bounds(mut self, shots: u64, bytes: u64) -> Self {
+    /// The same, with the run's own limits.
+    pub fn with_bounds(mut self, shots: u64, bytes: u64) -> Self {
         self.max_shots = shots;
         self.max_bytes = bytes;
         self
@@ -268,8 +308,15 @@ pub struct TimedShots {
 
 impl TimedShots {
     /// Start taking a picture of `socket` every `every_s` seconds into
-    /// `run_dir`; `started_ms` is the run's start (host Unix milliseconds).
-    pub fn start(socket: PathBuf, run_dir: PathBuf, every_s: u32, started_ms: u64) -> Self {
+    /// `run_dir`, within `bounds`; `started_ms` is the run's start (host Unix
+    /// milliseconds).
+    pub fn start(
+        socket: PathBuf,
+        run_dir: PathBuf,
+        every_s: u32,
+        bounds: Bounds,
+        started_ms: u64,
+    ) -> Self {
         let every_s = clamp_interval(every_s);
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -277,7 +324,8 @@ impl TimedShots {
             .name("antinomie-timed-shots".into())
             .spawn(move || {
                 let client = ScreenClient::start(socket, Arc::new(|| {}));
-                let mut shooter = Shooter::new(|| client.frame(), &run_dir, every_s);
+                let mut shooter = Shooter::new(|| client.frame(), &run_dir, every_s)
+                    .with_bounds(bounds.pictures, bounds.bytes);
                 let offset = elapsed_before(started_ms);
                 let begin = Instant::now();
                 let since_start = |at: Instant| (at - begin).as_millis() as u64 + offset;

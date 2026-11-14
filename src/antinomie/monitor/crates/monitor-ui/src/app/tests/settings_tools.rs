@@ -196,3 +196,96 @@ fn each_detection_engine_has_a_time_with_its_default_and_a_reset() {
         0
     );
 }
+
+/// Item 25: Settings > Detection rules has "Saved hits per rule" (100 by
+/// default); a set value travels with the saved detection settings.
+#[test]
+fn the_saved_hits_per_rule_are_set_on_the_detection_page() {
+    let ctx = context();
+    let size = egui::vec2(1280.0, 1000.0);
+    let mut app = app();
+    app.settings_open = true;
+    app.settings_page = SettingsPage::Detection;
+    // The section is below the engine times: scroll the page to it.
+    let scrolled = |app: &mut MonitorApp| {
+        let over = egui::pos2(640.0, 700.0);
+        let start = Instant::now();
+        loop {
+            let visible = shown(app, &ctx, size);
+            if has(&visible, "Saved hits per rule") {
+                return visible;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "never shown: {visible:?}"
+            );
+            for event in [
+                egui::Event::PointerMoved(over),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -120.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ] {
+                draw_input(
+                    app,
+                    &ctx,
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events: vec![event],
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    };
+    let visible = scrolled(&mut app);
+    assert!(has(&visible, "100"), "{visible:?}");
+    assert_eq!(app.triage.detection_settings().evidence_limit, 0);
+    app.triage.detection_settings().evidence_limit = 500;
+    let visible = scrolled(&mut app);
+    assert!(has(&visible, "500"), "{visible:?}");
+    let saved = serde_json::to_string(app.triage.detection_settings()).unwrap();
+    let back: antinomie_monitor_core::analysis::detection::Settings =
+        serde_json::from_str(&saved).unwrap();
+    assert_eq!(back.evidence_limit(), 500);
+    // The row's own Reset (each engine time has one too) brings 100 back.
+    let row = visible
+        .iter()
+        .find(|(text, _)| text == "Saved hits per rule")
+        .unwrap()
+        .1;
+    let reset = visible
+        .iter()
+        .find(|(text, rect)| text == "Reset" && (rect.center().y - row.center().y).abs() < 12.0)
+        .unwrap_or_else(|| panic!("no Reset beside the row: {visible:?}"))
+        .1
+        .center();
+    for event in [
+        egui::Event::PointerMoved(reset),
+        egui::Event::PointerButton {
+            pos: reset,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        },
+        egui::Event::PointerButton {
+            pos: reset,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ] {
+        draw_input(
+            &mut app,
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events: vec![event],
+                ..Default::default()
+            },
+        );
+    }
+    assert_eq!(app.triage.detection_settings().evidence_limit, 0);
+}

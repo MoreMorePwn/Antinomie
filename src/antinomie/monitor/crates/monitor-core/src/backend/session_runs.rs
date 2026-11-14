@@ -369,6 +369,16 @@ impl Session {
         }
         self.update_runs(snapshot);
     }
+    /// [`Self::analysis_tick`] without the guest: only the host-side worker
+    /// and the analyses a finished session left move on.
+    pub(super) fn analysis_host_tick(
+        &mut self,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+    ) {
+        self.analysis.host_tick();
+        self.analysis_updates(snapshot, sender);
+    }
     pub(super) fn analysis_tick(
         &mut self,
         snapshot: &mut Snapshot,

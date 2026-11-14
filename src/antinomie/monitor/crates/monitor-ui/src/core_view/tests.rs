@@ -164,6 +164,7 @@ fn live_manual_metadata_refresh_keeps_loaded_inspection_and_filters() {
         reason: None,
         read_nonresident: false,
         coverage: None,
+        note: None,
     };
     for (phase, state) in [
         (ProcessCorePhase::Admission, State::WaitingForRootExit),
@@ -835,6 +836,7 @@ fn unfinished_manual_core_shows_recorded_status_without_stale_context() {
         reason: None,
         read_nonresident: false,
         coverage: None,
+        note: None,
     });
     let output = settle(&ctx, &mut fixture.view, egui::vec2(1280.0, 900.0));
     let content = texts(&output);
@@ -1943,6 +1945,7 @@ fn a_note_chip_selects_its_core_and_a_core_row_names_the_vm_and_the_core() {
         reason: None,
         read_nonresident: false,
         coverage: None,
+        note: None,
     });
     // The imported core's folder is the fixture's own directory.
     let folder = fixture
