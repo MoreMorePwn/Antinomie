@@ -12,6 +12,8 @@ pub(crate) struct RunName {
     pub short: String,
     /// The sample the run executed: its library name, else the program's file name.
     pub sample: String,
+    /// The process the run started, when the guest reported it.
+    pub pid: Option<u32>,
 }
 
 /// The runs of the selected VM by id.
@@ -44,6 +46,7 @@ impl RunNames {
                     RunName {
                         short: short(&run.id),
                         sample,
+                        pid: Some(run.pid).filter(|pid| *pid > 0),
                     },
                 )
             })
@@ -138,6 +141,7 @@ mod tests {
             RunName {
                 short: "f9c3d854".into(),
                 sample: "bpfdoor.elf".into(),
+                pid: Some(1352),
             },
         );
         names

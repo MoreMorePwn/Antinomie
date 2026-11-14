@@ -1011,6 +1011,11 @@ pub struct ProcessCoreCapture {
     /// What the guest says the core lacks (CORE_STATUS COVERAGE, revision 22).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<crate::core_limits::CoreCoverage>,
+    /// What a complete core still lacks, in the words a user reads: a live
+    /// core whose only gap is pages that were not in memory (Read
+    /// non-resident pages off) says how many, and the rule that took it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 impl RunArtifacts {

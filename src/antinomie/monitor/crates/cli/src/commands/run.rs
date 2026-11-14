@@ -1023,6 +1023,7 @@ mod tests {
                     size: Some(10),
                     capture_id: None,
                     error: None,
+                    note: None,
                     path: Some("/runs/r/core".into()),
                 }),
             }],

@@ -35,7 +35,7 @@ use self::{
     catalog::*,
     decompile::*,
     inspect::*,
-    list_rows::{ListOutcome, RowContext},
+    list_rows::{core_origin, opened_name, ListOutcome, RowContext},
     names::{mapping_labels, mapping_name, signal_text},
     sizes::manual_status,
 };
@@ -108,8 +108,8 @@ struct CoreCatalog {
     imported: Vec<CoreRecord>,
     acquired: Vec<AcquiredCore>,
     manual: Vec<ProcessCoreCapture>,
-    /// Manual cores that a run's dump trigger took, by folder: the label
-    /// "Trigger: <finding>" they are listed with, and the run.
+    /// Manual cores that a run's dump trigger took, by folder: the rule that
+    /// took each, and the run.
     triggers: Vec<(PathBuf, (String, String))>,
     issues: Vec<String>,
 }
@@ -258,7 +258,7 @@ pub(crate) struct CoreView {
     /// The run selected in Triage, which "This run only" follows.
     triage_run: Option<String>,
     this_run_only: bool,
-    /// Folders of cores a dump trigger took, with their "Trigger: ..." label.
+    /// Folders of cores a dump trigger took, with the rule and the run.
     trigger_twins: std::collections::HashMap<PathBuf, (String, String)>,
 }
 impl CoreView {
@@ -586,6 +586,7 @@ impl CoreView {
             }
         }
         self.manual.truncate(4096);
+        self.fold_trigger_twins();
         if let Some(delay) = self.refresh_catalog_if_due(active, Instant::now()) {
             ui.ctx().request_repaint_after(delay);
         }

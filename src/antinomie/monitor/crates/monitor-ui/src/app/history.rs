@@ -936,7 +936,7 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
                 );
                 feature.available =
                     !matches!(dump.state, antinomie_monitor_core::RunArtifactState::Failed);
-                feature.hover = dump.error.clone();
+                feature.hover = dump.error.clone().or_else(|| dump.note.clone());
                 features.push(feature);
             }
         }

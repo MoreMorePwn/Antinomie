@@ -496,6 +496,7 @@ impl Worker {
                             .as_ref()
                             .map(|reason| reason.text.clone())
                             .or_else(|| summary.issue.clone());
+                        core.note.clone_from(&summary.note);
                         touched = true;
                         if state == RunArtifactState::Failed
                             && record.memory.is_none()

@@ -15,6 +15,7 @@ mod data_view;
 mod dependencies_window;
 mod details_scroll;
 mod disk_view;
+mod dump_names;
 mod evidence;
 mod evidence_delete;
 mod evidence_jobs;

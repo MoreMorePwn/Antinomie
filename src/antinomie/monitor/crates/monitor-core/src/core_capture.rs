@@ -108,7 +108,10 @@ pub fn load(directory: &Path) -> Result<ProcessCoreCapture, String> {
     record.file = record.file.map(|_| directory.join("process.elf"));
     Ok(record)
 }
-/// Enumerate bounded metadata under selected boot roots. No ELF is opened.
+/// Enumerate bounded metadata under the selected recording roots: their own
+/// `core-captures/` and each boot's `boots/<boot>/core-captures/`, where a
+/// running VM keeps the cores it takes (by hand or by a run's dump trigger).
+/// No ELF is opened.
 pub fn list(roots: &[PathBuf], vm_id: Option<&str>) -> Result<Vec<ProcessCoreCapture>, String> {
     Ok(list_with_issues(roots, vm_id)?.records)
 }
@@ -133,12 +136,12 @@ pub fn list_with_issues(roots: &[PathBuf], vm_id: Option<&str>) -> Result<Catalo
     let mut catalog = Catalog::default();
     let mut entries_count = 0usize;
     let mut metadata_size = 0u64;
-    'roots: for root in roots {
-        let entries = match fs::read_dir(root.join("core-captures")) {
+    'roots: for folder in capture_folders(roots) {
+        let entries = match fs::read_dir(&folder) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                catalog.issue(format!("manual core catalog {}: {error}", root.display()));
+                catalog.issue(format!("manual core catalog {}: {error}", folder.display()));
                 continue;
             }
         };
@@ -205,6 +208,26 @@ pub fn list_with_issues(roots: &[PathBuf], vm_id: Option<&str>) -> Result<Catalo
     Ok(catalog)
 }
 
+/// The `core-captures/` folders of these recording roots: the root's own and
+/// each boot's, at most [`RECORD_LIMIT`] boots per root.
+fn capture_folders(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut folders = Vec::new();
+    for root in roots {
+        folders.push(root.join("core-captures"));
+        let Ok(boots) = fs::read_dir(root.join("boots")) else {
+            continue;
+        };
+        let mut found: Vec<PathBuf> = boots
+            .flatten()
+            .take(RECORD_LIMIT)
+            .filter(|boot| boot.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|boot| boot.path().join("core-captures"))
+            .collect();
+        found.sort();
+        folders.extend(found);
+    }
+    folders
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +294,32 @@ mod tests {
                 .len(),
             0
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn the_cores_a_boot_took_are_listed_from_its_own_folder() {
+        let root =
+            std::env::temp_dir().join(format!("ant-boot-catalog-{}", crate::storage::unique_id()));
+        // Where a running VM writes them: boots/<boot>/core-captures/<id>.
+        let in_boot = root.join("boots/b1/core-captures/capture");
+        let at_root = root.join("core-captures/older");
+        fs::create_dir_all(&in_boot).unwrap();
+        fs::create_dir_all(&at_root).unwrap();
+        crate::storage::atomic_json(&in_boot.join("core.json"), &record(in_boot.clone())).unwrap();
+        let mut older = record(at_root.clone());
+        older.id = "older".into();
+        crate::storage::atomic_json(&at_root.join("core.json"), &older).unwrap();
+        // A stray file under boots/ is not a boot.
+        fs::write(root.join("boots/stray"), b"x").unwrap();
+        let report = list_with_issues(std::slice::from_ref(&root), Some("vm")).unwrap();
+        assert!(report.issues.is_empty(), "{:?}", report.issues);
+        let mut found: Vec<_> = report
+            .records
+            .iter()
+            .map(|core| core.directory.clone())
+            .collect();
+        found.sort();
+        assert_eq!(found, vec![in_boot, at_root]);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

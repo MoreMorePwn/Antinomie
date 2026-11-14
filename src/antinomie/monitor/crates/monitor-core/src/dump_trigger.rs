@@ -310,6 +310,12 @@ pub struct TriggerDump {
     pub capture_id: Option<String>,
     pub size: Option<u64>,
     pub error: Option<String>,
+    /// What a complete core still lacks, in the words a user reads: a live
+    /// core whose only gap is pages that were not in memory (Read
+    /// non-resident pages off), with the rule that took it. Absent otherwise
+    /// and in records saved before it existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// One trigger that took (or tried to take) dumps.

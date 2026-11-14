@@ -1943,8 +1943,19 @@ unknown ("Not in a run").
 run's short id and the sample's name; a click opens the run in Triage. The
 **This run only** checkbox keeps only the entries of the run selected in Triage
 and follows that selection. **Core dumps** also lists the cores a trigger took,
-as "Trigger: <rule> (<tier>)", for a run whose Core dump on exit is off, whether
-the VM is running or stopped. `core_state` in `artifacts.json` means the exit
+for a run whose Core dump on exit is off, whether the VM is running or stopped.
+A core is named by its process, the rule that took it and the time:
+`PID 1352 (bpfdoor.elf) · c2.bpf_backdoor · 2026-11-14 12:03:44` (the program is
+the run's; a core no rule took has no rule part; an imported core keeps its file
+name). The name is shown in the list and next to the hide-list icon. Above the
+core's path, the heading says where it came from: the run and how the core was
+taken (`Run f9c3d854 (bpfdoor.elf) · dump trigger, c2.bpf_backdoor (High)`,
+`· Dump core`, `· core dump on exit`, or **Imported**); a long path is shortened
+in the middle and shown whole on hover. A trigger core is one entry: the core the
+boot took (kept in `boots/<boot>/core-captures/`), with the trigger's rule and run.
+**Memory** names its dumps the same way: `<rule> · <time>` for a dump a trigger
+took, the time for the others, the file name for an imported one; the run and
+how it was taken show on hover. `core_state` in `artifacts.json` means the exit
 core only; "Disabled" there never means the run has no cores.
 
 **Triage > Summary** ends with a **Run artifacts** box: the selected run's cores,

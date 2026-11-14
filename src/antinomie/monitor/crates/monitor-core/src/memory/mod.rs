@@ -280,7 +280,10 @@ pub fn list(recording_dirs: &[PathBuf]) -> Vec<MemoryDump> {
         })
         .collect();
     dumps.sort_by(|a, b| b.started_ms.cmp(&a.started_ms).then(b.id.cmp(&a.id)));
-    dumps.dedup_by(|a, b| a.dir == b.dir);
+    // One dump, one entry: a folder reached through two recording roots (the
+    // same folder named twice, or by two spellings) is listed once.
+    let mut seen = std::collections::HashSet::new();
+    dumps.retain(|dump| seen.insert((dump.vm_id.clone(), dump.id.clone())));
     dumps
 }
 
@@ -1115,6 +1118,21 @@ mod tests {
         assert!(dump.runs().is_empty());
         delete(&dump).unwrap();
         assert!(list(std::slice::from_ref(&root)).is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_dump_reached_through_two_roots_is_listed_once() {
+        let root = temp("twice");
+        let dump = new_vm_dump(&root, &vm(), "boot", "Linux 6.12.94".into(), None).unwrap();
+        // The same recording folder by a second spelling, and named twice.
+        let alias = temp("alias").join("recordings");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let listed = list(&[root.clone(), alias.clone(), root.clone()]);
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!(listed[0].id, dump.id);
+        fs::remove_file(&alias).unwrap();
+        fs::remove_dir_all(alias.parent().unwrap()).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -39,6 +39,14 @@ x86 programs by their own table.
   which rule took it, in Core dumps, Details, the run's features and the run
   API (`note`). Lost thread contexts, or pages missing although they were to be
   read in, stay Partial.
+- **Cores and memory dumps are named by process, rule and time.** Core dumps
+  shows `PID <pid> (<program>) · <rule> · <time>` in the list and next to the
+  hide-list icon instead of `process.elf`, and above the path where the core came
+  from (run, and trigger, Dump core, on exit or imported); the path is shortened in
+  the middle, whole on hover. Memory names a trigger's dump `<rule> · <time>`.
+- **A trigger core is listed once.** The core a running VM took for a trigger
+  was listed twice (by PID and by trigger); it is one entry with both. Cores in a
+  boot's `core-captures` folder are now read from disk, and can be deleted.
 - **A static analysis whose worker is gone no longer stays running.** A worker
   that was killed or crashed, or that shows no progress for far longer than its
   check may take, ends the analysis: the check it was running says "the
