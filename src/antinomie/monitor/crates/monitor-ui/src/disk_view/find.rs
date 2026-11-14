@@ -115,10 +115,12 @@ impl DiskView {
                 });
             let enter = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             let can = !self.find.query.trim().is_empty() && !self.find.running;
-            if ui
-                .add_enabled(can, egui::Button::new("Find"))
-                .on_hover_text("Search the whole disk by name, path, glob or file content")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "Search the whole disk by name, path, glob or file content",
+                |ui| ui.add_enabled(can, egui::Button::new("Find")),
+            )
+            .clicked()
                 || (enter && can)
             {
                 start = true;
@@ -126,10 +128,10 @@ impl DiskView {
             if self.find.running {
                 theme::spinner(ui);
                 ui.colored_label(theme::muted(), "Searching…");
-                if ui
-                    .button("Cancel")
-                    .on_hover_text("Stop the search; nothing is kept")
-                    .clicked()
+                if crate::widgets::with_help(ui, "Stop the search; nothing is kept", |ui| {
+                    ui.button("Cancel")
+                })
+                .clicked()
                 {
                     self.cancel_find();
                 }

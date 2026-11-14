@@ -420,10 +420,10 @@ impl DiskView {
                             .margin(theme::TEXT_EDIT_MARGIN)
                             .desired_width(crate::theme::edit_width(320.0)),
                     );
-                    if ui
-                        .add_enabled(import.picker.is_none(), egui::Button::new("Browse…"))
-                        .on_disabled_hover_text("The file chooser is open")
-                        .clicked()
+                    if crate::widgets::with_help_or(ui, "", "The file chooser is open", |ui| {
+                        ui.add_enabled(import.picker.is_none(), egui::Button::new("Browse…"))
+                    })
+                    .clicked()
                     {
                         match std::process::Command::new("zenity")
                             .args([

@@ -96,11 +96,18 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
             let wrapped = ui.cursor().min.y - first_line > 1.0;
             if !wrapped && room >= 110.0 {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(input.archive.is_some(), egui::Button::new("Export report…"))
-                        .on_hover_text("Write this run's Triage as HTML, PDF, JSON, MISP or STIX")
-                        .on_disabled_hover_text("The run has no saved recording yet")
-                        .clicked()
+                    if crate::widgets::with_help_or(
+                        ui,
+                        "Write this run's Triage as HTML, PDF, JSON, MISP or STIX",
+                        "The run has no saved recording yet",
+                        |ui| {
+                            ui.add_enabled(
+                                input.archive.is_some(),
+                                egui::Button::new("Export report…"),
+                            )
+                        },
+                    )
+                    .clicked()
                     {
                         view.open_report(input);
                     }

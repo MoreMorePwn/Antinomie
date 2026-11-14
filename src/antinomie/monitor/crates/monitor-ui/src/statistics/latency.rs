@@ -10,6 +10,7 @@ use super::properties::Tone;
 use super::{duration_ns, int, time_text, Pick, TimeBase};
 use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::api::HostClockAnchor;
 use antinomie_monitor_core::syscall_groups::SyscallGroup;
 use antinomie_triage::statistics::blocking::BlockClass;
@@ -352,7 +353,7 @@ fn latency_table(
                 table_row.col(|ui| {
                     if ui
                         .selectable_label(chosen, egui_phosphor::regular::CHART_BAR)
-                        .on_hover_text("Draw this call's distribution below")
+                        .name_tip("Draw its distribution")
                         .clicked()
                     {
                         select = Some(key.clone());
@@ -380,9 +381,8 @@ fn latency_table(
                             pick = Some(Pick::Count(row_click(row)));
                             ui.close();
                         }
-                        if ui
-                            .button("Slowest 1 % in Trace")
-                            .on_hover_text("Only this call's calls at or above its 99th percentile (≈)")
+                        if crate::widgets::with_help(ui, "Only this call's calls at or above its 99th percentile (≈)", |ui| ui
+                            .button("Slowest 1 % in Trace"))
                             .clicked()
                         {
                             pick = Some(Pick::Count(slowest_percent_click(row)));
@@ -446,8 +446,9 @@ fn histogram(ui: &mut egui::Ui, state: &mut State, stats: &RunStatistics) {
                 int(row.timed)
             ),
         ));
-        ui.checkbox(&mut state.table, "Table")
-            .on_hover_text("The same numbers as rows");
+        crate::widgets::with_help(ui, "The same numbers as rows", |ui| {
+            ui.checkbox(&mut state.table, "Table")
+        });
     });
     if state.table {
         egui::Grid::new("statistics-latency-hist")

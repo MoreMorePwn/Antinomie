@@ -203,50 +203,59 @@ impl DiskView {
         let qemu_img = self.qemu_img.clone();
         ui.horizontal_wrapped(|ui| {
             for format in [ExportFormat::SparseRaw, ExportFormat::Qcow2] {
-                if ui
-                    .add_enabled(
-                        browsable && !busy_save,
-                        egui::Button::new(match format {
-                            ExportFormat::SparseRaw => "Save image to host…",
-                            ExportFormat::Qcow2 => "Save as qcow2…",
-                        }),
-                    )
-                    .on_hover_text(match format {
+                if crate::widgets::with_help_or(
+                    ui,
+                    match format {
                         ExportFormat::SparseRaw => "Write a sparse raw ext4 copy: holes stay holes",
                         ExportFormat::Qcow2 => {
                             "Write a compressed, standalone qcow2 copy (no backing file)"
                         }
-                    })
-                    .on_disabled_hover_text("Needs a finished dump, and no other save running")
-                    .clicked()
+                    },
+                    "Needs a finished dump, and no other save running",
+                    |ui| {
+                        ui.add_enabled(
+                            browsable && !busy_save,
+                            egui::Button::new(match format {
+                                ExportFormat::SparseRaw => "Save image to host…",
+                                ExportFormat::Qcow2 => "Save as qcow2…",
+                            }),
+                        )
+                    },
+                )
+                .clicked()
                 {
                     self.start_save_image(ui.ctx(), dump, &qemu_img, format);
                 }
             }
-            if ui
-                .add_enabled(
-                    browsable && !busy_verify,
-                    egui::Button::new("Verify SHA-256"),
-                )
-                .on_hover_text("Hash the image again and compare it with the recorded digest")
-                .on_disabled_hover_text("Needs a finished dump, and no other check running")
-                .clicked()
+            if crate::widgets::with_help_or(
+                ui,
+                "Hash the image again and compare it with the recorded digest",
+                "Needs a finished dump, and no other check running",
+                |ui| {
+                    ui.add_enabled(
+                        browsable && !busy_verify,
+                        egui::Button::new("Verify SHA-256"),
+                    )
+                },
+            )
+            .clicked()
             {
                 self.start_verify(ui.ctx(), dump, image.clone());
             }
             if ui.button("Open directory").clicked() {
                 self.action = Some(DiskAction::OpenWith(dump.dir.clone()));
             }
-            let delete = ui.add_enabled(
-                blocked.is_none(),
-                egui::Button::new(egui::RichText::new("Delete…").color(theme::error())),
+            let delete = crate::widgets::with_help_or(
+                ui,
+                "Permanently delete this dump from the recording folder",
+                blocked.as_deref().unwrap_or_default(),
+                |ui| {
+                    ui.add_enabled(
+                        blocked.is_none(),
+                        egui::Button::new(egui::RichText::new("Delete…").color(theme::error())),
+                    )
+                },
             );
-            let delete = match &blocked {
-                Some(reason) => delete.on_disabled_hover_text(reason),
-                None => {
-                    delete.on_hover_text("Permanently delete this dump from the recording folder")
-                }
-            };
             if delete.clicked() {
                 self.action = Some(DiskAction::Delete(Box::new(dump.clone())));
             }
@@ -424,57 +433,70 @@ impl DiskView {
         ui.horizontal_wrapped(|ui| {
             let viewable =
                 extractable && (size <= VIEW_CAP || entry.kind == DiskEntryKind::Symlink);
-            if ui
-                .add_enabled(viewable && !busy, egui::Button::new("Extract to view"))
-                .on_hover_text(
-                    "Copy the file to the host and show its bytes (UTF-8, hex, hexdump…)",
-                )
-                .on_disabled_hover_text(if extractable {
+            if crate::widgets::with_help_or(
+                ui,
+                "Copy the file to the host and show its bytes (UTF-8, hex, hexdump…)",
+                if extractable {
                     "Files over 16 MiB are Save-to-host only"
                 } else {
                     "Only files and link targets can be extracted"
-                })
-                .clicked()
+                },
+                |ui| ui.add_enabled(viewable && !busy, egui::Button::new("Extract to view")),
+            )
+            .clicked()
             {
                 self.request_extract(path.to_owned(), size, Intent::View);
             }
-            if ui
-                .add_enabled(extractable && !busy, egui::Button::new("Save to host…"))
-                .on_hover_text("Extract the file and save a copy where you choose")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "Extract the file and save a copy where you choose",
+                |ui| ui.add_enabled(extractable && !busy, egui::Button::new("Save to host…")),
+            )
+            .clicked()
             {
                 self.request_extract(path.to_owned(), size, Intent::Save);
             }
-            if ui
-                .add_enabled(extractable && !busy, egui::Button::new("Open with…"))
-                .on_hover_text("Extract the file and open it with the desktop's application")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "Extract the file and open it with the desktop's application",
+                |ui| ui.add_enabled(extractable && !busy, egui::Button::new("Open with…")),
+            )
+            .clicked()
             {
                 self.request_extract(path.to_owned(), size, Intent::OpenWith);
             }
-            if ui
-                .add_enabled(
-                    elf && !busy && entry.kind == DiskEntryKind::File,
-                    egui::Button::new("Hand to Static analysis"),
-                )
-                .on_hover_text("Extract the file and analyze it offline, in the isolated worker")
-                .on_disabled_hover_text("Only ELF files are handed over")
-                .clicked()
+            if crate::widgets::with_help_or(
+                ui,
+                "Extract the file and analyze it offline, in the isolated worker",
+                "Only ELF files are handed over",
+                |ui| {
+                    ui.add_enabled(
+                        elf && !busy && entry.kind == DiskEntryKind::File,
+                        egui::Button::new("Hand to Static analysis"),
+                    )
+                },
+            )
+            .clicked()
             {
                 self.request_extract(path.to_owned(), size, Intent::Analyze);
             }
-            let hash = ui
-                .add_enabled(
-                    can_hash
-                        && entry.kind == DiskEntryKind::File
-                        && size <= self.settings.hash_cap(),
-                    egui::Button::new("Compute hashes"),
-                )
-                .on_disabled_hover_text(format!(
+            let hash = crate::widgets::with_help_or(
+                ui,
+                "",
+                format!(
                     "Files over {} are not hashed",
                     crate::values::short_size(self.settings.hash_cap())
-                ))
-                .clicked();
+                ),
+                |ui| {
+                    ui.add_enabled(
+                        can_hash
+                            && entry.kind == DiskEntryKind::File
+                            && size <= self.settings.hash_cap(),
+                        egui::Button::new("Compute hashes"),
+                    )
+                },
+            )
+            .clicked();
             if hash {
                 if let Some(selection) = self.selection.as_mut() {
                     selection.hashed = true;

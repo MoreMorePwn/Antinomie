@@ -46,9 +46,8 @@ impl MemoryView {
                                     .margin(theme::TEXT_EDIT_MARGIN)
                                     .desired_width(crate::theme::edit_width(320.0)),
                             );
-                            if ui
-                                .add_enabled(import.picker.is_none(), egui::Button::new("Browse…"))
-                                .on_disabled_hover_text("The file chooser is open")
+                            if crate::widgets::with_help_or(ui, "", "The file chooser is open", |ui| ui
+                                .add_enabled(import.picker.is_none(), egui::Button::new("Browse…")))
                                 .clicked()
                             {
                                 match Command::new("zenity")
@@ -94,15 +93,12 @@ impl MemoryView {
                                             .iter()
                                             .any(|other| other.directory == base.directory);
                                         ui.add_enabled_ui(has, |ui| {
-                                            ui.selectable_value(
+                                            crate::widgets::with_help_or(ui, "", "Built before Antinomie 0.4.0: its kernel has no \
+                                                 symbol table. Download the 0.4.0 base for one.", |ui| ui.selectable_value(
                                                 &mut import.base,
                                                 Some(base.directory.clone()),
                                                 base_choice(base),
-                                            )
-                                            .on_disabled_hover_text(
-                                                "Built before Antinomie 0.4.0: its kernel has no \
-                                                 symbol table. Download the 0.4.0 base for one.",
-                                            );
+                                            ));
                                         });
                                     }
                                 });

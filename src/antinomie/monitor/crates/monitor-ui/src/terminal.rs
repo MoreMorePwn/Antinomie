@@ -275,6 +275,7 @@ impl Terminal {
                         .max_rect(grid.shrink(6.0))
                         .layout(egui::Layout::right_to_left(egui::Align::Max)),
                     |ui| {
+                        // Floating over the output: a name, no help icon.
                         ui.add(
                             egui::Button::new(format!(
                                 "{} {below} newer line{}",
@@ -283,7 +284,7 @@ impl Terminal {
                             ))
                             .fill(theme::raised()),
                         )
-                        .on_hover_text("Jump to the newest output (Shift+End)")
+                        .on_hover_text("Jump to newest (Shift+End)")
                     },
                 )
                 .inner;

@@ -8,6 +8,7 @@ mod before_deletion;
 mod hash_state;
 mod text_mode;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 pub(in crate::triage) use before_deletion::DATA_DIR;
 use text_mode::View;
 
@@ -74,19 +75,23 @@ pub(in crate::triage) fn menu(
     values: &[(&str, crate::triage::RowValue)],
 ) {
     if let Some(path) = row_path(table, values) {
-        if ui
-            .button("Open file history")
-            .on_hover_text("Show this file's calls as a graph in the Per-file history")
-            .clicked()
+        if crate::widgets::with_help(
+            ui,
+            "Show this file's calls as a graph in the Per-file history",
+            |ui| ui.button("Open file history"),
+        )
+        .clicked()
         {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new(HISTORY_REQUEST), path.clone()));
             ui.close();
         }
-        if ui
-            .button("Reconstruct contents…")
-            .on_hover_text("Open this file's reconstruction in the Per-file history")
-            .clicked()
+        if crate::widgets::with_help(
+            ui,
+            "Open this file's reconstruction in the Per-file history",
+            |ui| ui.button("Reconstruct contents…"),
+        )
+        .clicked()
         {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new(REQUEST), path));
@@ -549,14 +554,17 @@ impl Open {
             .show_contained(ui, |ui| {
                 let before = self.view;
                 ui.horizontal_wrapped(|ui| {
-                    ui.selectable_value(&mut self.view, View::Hex, "Hex")
-                        .on_hover_text("Sixteen bytes a row as hex and as characters");
-                    ui.selectable_value(&mut self.view, View::Utf8, "Text")
-                        .on_hover_text("The bytes as UTF-8; an invalid byte shows as \\xNN. ?? ## ~~ mark bytes with no value");
-                    ui.selectable_value(&mut self.view, View::Utf16, "UTF-16LE")
-                        .on_hover_text("Two bytes a character; a pair with an unknown byte shows as ?? ## ~~");
-                    ui.selectable_value(&mut self.view, View::Diff, "Text diff")
-                        .on_hover_text("Lines changed since the start of the run, for text files whose every byte is known");
+                    ui.selectable_value(&mut self.view, View::Hex, "Hex");
+                    ui.selectable_value(&mut self.view, View::Utf8, "Text");
+                    ui.selectable_value(&mut self.view, View::Utf16, "UTF-16LE");
+                    ui.selectable_value(&mut self.view, View::Diff, "Text diff");
+                    crate::widgets::help(
+                        ui,
+                        "- **Hex**: sixteen bytes a row as hex and as characters.\n\
+                         - **Text**: the bytes as UTF-8; an invalid byte shows as `\\xNN`. `?? ## ~~` mark bytes with no value.\n\
+                         - **UTF-16LE**: two bytes a character; a pair with an unknown byte shows as `?? ## ~~`.\n\
+                         - **Text diff**: lines changed since the start of the run, for text files whose every byte is known.",
+                    );
                 });
                 if self.view != before {
                     text_mode::remember(ui.ctx(), self.view);
@@ -614,16 +622,14 @@ impl Open {
     fn actions(&mut self, ui: &mut egui::Ui, file: &FileActivity, directory: Option<&Path>) {
         ui.horizontal_wrapped(|ui| {
             let can = directory.is_some() && self.saving.is_none();
-            let response = ui
-                .add_enabled(can, egui::Button::new("Save reconstruction"))
-                .on_hover_text("Unknown bytes save as 00; a .mask file next to it marks them (00 known, 01 unknown, 02 not captured, 03 mapping)");
+            let response = ui.add_enabled(can, egui::Button::new("Save reconstruction"));
             if let (true, true, Some(directory)) = (can, response.clicked(), directory) {
                 let target = directory.join("reconstructed");
                 let name = save_name(&file.path, file.first_ns);
                 let (ctx, map) = (ui.ctx().clone(), self.map.clone());
                 self.saving = Some(Pending::spawn(&ctx, move || save(&map, &target, &name)));
             }
-            if ui.button("Copy hex").on_hover_text("The byte map as hex, the first 256 KiB").clicked() {
+            if ui.button("Copy hex").clicked() {
                 let text = hex_dump(&self.map, COPY_LIMIT);
                 ui.ctx().copy_text(text);
             }
@@ -631,7 +637,6 @@ impl Open {
             let event = step.and_then(|step| step.event).and_then(|event| file.events.get(event as usize));
             if ui
                 .add_enabled(event.is_some(), egui::Button::new("Show call in Trace"))
-                .on_hover_text("Open the original syscall of the chosen call")
                 .clicked()
             {
                 if let Some(event) = event {
@@ -646,6 +651,12 @@ impl Open {
                     );
                 }
             }
+            crate::widgets::help(
+                ui,
+                "- **Save reconstruction**: unknown bytes save as `00`; a `.mask` file next to it marks them (`00` known, `01` unknown, `02` not captured, `03` mapping).\n\
+                 - **Copy hex**: the byte map as hex, the first 256 KiB.\n\
+                 - **Show call in Trace**: open the original syscall of the chosen call.",
+            );
         });
         if directory.is_none() {
             ui.weak("Saving needs a recording on disk.");
@@ -732,7 +743,7 @@ fn strip(ui: &mut egui::Ui, steps: &[model::Step], at: usize) -> Option<usize> {
         egui::Stroke::new(2.0_f32, theme::primary()),
     );
     response
-        .on_hover_text("Click to jump to a call")
+        .name_tip("Jump to a call")
         .interact_pointer_pos()
         .map(|pos| {
             (((pos.x - rect.left()) / rect.width() * steps.len() as f32).round() as usize)

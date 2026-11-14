@@ -2,6 +2,7 @@
 //! Choosing a Volatility plugin and its options, and the saved runs.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 
 /// Why the VM's memory cannot be analysed: Volatility 3 and MemNixFS read
 /// x86-64 guests only (an arm64 base carries no symbol table).
@@ -329,18 +330,22 @@ impl MemoryView {
                 .jobs
                 .iter()
                 .any(|job| job.run.dump_id == dump.id && job.run.plugin == current.name);
-            if ui
-                .add_enabled(
-                    !running,
-                    egui::Button::new(
-                        RichText::new(format!("{} Run", egui_phosphor::regular::PLAY))
-                            .color(theme::palette().primary_text),
+            if crate::widgets::with_help_or(
+                ui,
+                "Run the plugin on this dump; the result is saved with it",
+                "This plugin is already running on this dump",
+                |ui| {
+                    ui.add_enabled(
+                        !running,
+                        egui::Button::new(
+                            RichText::new(format!("{} Run", egui_phosphor::regular::PLAY))
+                                .color(theme::palette().primary_text),
+                        )
+                        .fill(theme::primary()),
                     )
-                    .fill(theme::primary()),
-                )
-                .on_hover_text("Run the plugin on this dump; the result is saved with it")
-                .on_disabled_hover_text("This plugin is already running on this dump")
-                .clicked()
+                },
+            )
+            .clicked()
             {
                 let values = self.values.get(&current.name).cloned().unwrap_or_default();
                 run = Some(memory::plugin_args(&current, &values));
@@ -524,10 +529,12 @@ impl MemoryView {
                             }
                             return;
                         }
-                        if ui
-                            .button("Set up again")
-                            .on_hover_text("Choose this plugin with these options")
-                            .clicked()
+                        if crate::widgets::with_help(
+                            ui,
+                            "Choose this plugin with these options",
+                            |ui| ui.button("Set up again"),
+                        )
+                        .clicked()
                         {
                             rerun = Some(run.clone());
                             ui.close();
@@ -868,7 +875,9 @@ fn plugin_choices(
                 selected,
                 RichText::new(&plugin.name).font(theme::mono(font_size - 1.0)),
             )
-            .on_hover_text(&plugin.help)
+            // The entry's description, which the header shows for the
+            // chosen one.
+            .value_tip(&plugin.help)
             .clicked()
         {
             chosen = Some(plugin.name.clone());
@@ -931,13 +940,17 @@ fn community_menu(
             });
         }
         ui.separator();
-        if ui
-            .button(format!(
-                "{} Plugin catalog…",
-                egui_phosphor::regular::STOREFRONT
-            ))
-            .on_hover_text("Download community plugins checked for this Volatility")
-            .clicked()
+        if crate::widgets::with_help(
+            ui,
+            "Download community plugins checked for this Volatility",
+            |ui| {
+                ui.button(format!(
+                    "{} Plugin catalog…",
+                    egui_phosphor::regular::STOREFRONT
+                ))
+            },
+        )
+        .clicked()
         {
             *catalog_open = true;
             ui.close();
@@ -947,10 +960,10 @@ fn community_menu(
             crate::folders::show_created_detached(dir);
             ui.close();
         }
-        if ui
-            .button("Reload plugin list")
-            .on_hover_text("After adding, changing or removing plugins")
-            .clicked()
+        if crate::widgets::with_help(ui, "After adding, changing or removing plugins", |ui| {
+            ui.button("Reload plugin list")
+        })
+        .clicked()
         {
             *reload = true;
             ui.close();
@@ -979,10 +992,10 @@ fn plugin_options(ui: &mut egui::Ui, current: &PluginInfo, values: &mut Vec<(Str
             match option.kind {
                 OptionKind::Bool => {
                     let mut on = value == "true";
-                    if ui
-                        .checkbox(&mut on, option.name.replace('_', " "))
-                        .on_hover_text(help)
-                        .changed()
+                    if crate::widgets::with_help(ui, help, |ui| {
+                        ui.checkbox(&mut on, option.name.replace('_', " "))
+                    })
+                    .changed()
                     {
                         *value = if on { "true".into() } else { String::new() };
                     }
@@ -1012,20 +1025,21 @@ fn plugin_options(ui: &mut egui::Ui, current: &PluginInfo, values: &mut Vec<(Str
                             .map(|value| value.to_string())
                             .unwrap_or_default(),
                     };
-                    ui.add(
-                        egui::TextEdit::singleline(value)
-                            .hint_text(crate::theme::placeholder(ui, hint))
-                            .font(egui::TextStyle::Monospace)
-                            .margin(theme::TEXT_EDIT_MARGIN)
-                            .desired_width(crate::theme::edit_width(
-                                if option.kind == OptionKind::Int {
-                                    90.0
-                                } else {
-                                    170.0
-                                },
-                            )),
-                    )
-                    .on_hover_text(help);
+                    crate::widgets::with_help(ui, help, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(value)
+                                .hint_text(crate::theme::placeholder(ui, hint))
+                                .font(egui::TextStyle::Monospace)
+                                .margin(theme::TEXT_EDIT_MARGIN)
+                                .desired_width(crate::theme::edit_width(
+                                    if option.kind == OptionKind::Int {
+                                        90.0
+                                    } else {
+                                        170.0
+                                    },
+                                )),
+                        )
+                    });
                 }
             }
         }

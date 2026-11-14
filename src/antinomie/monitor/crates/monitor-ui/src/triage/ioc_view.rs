@@ -672,13 +672,12 @@ impl View {
             };
             ui.separator();
             let mut on = self.online_on && key.is_some();
-            let response = ui
-                .add_enabled(key.is_some(), egui::Checkbox::new(&mut on, "Online lookups"))
-                .on_hover_text(if key.is_some() {
+            let response = crate::widgets::with_help(ui, if key.is_some() {
                     "Send public indicators that have no offline match to abuse.ch. Files are never sent."
                 } else {
                     "Needs an Auth-Key"
-                });
+                }, |ui| ui
+                .add_enabled(key.is_some(), egui::Checkbox::new(&mut on, "Online lookups")));
             if response.changed() {
                 self.online_on = on;
             }
@@ -686,9 +685,8 @@ impl View {
                 self.open_datasets = true;
             }
             let label = if ioc.scan.loaded.is_empty() { "Download" } else { "Update" };
-            if ui
-                .button(label)
-                .on_hover_text("Opens the datasets in the Rule manager")
+            if crate::widgets::with_help(ui, "Opens the datasets in the Rule manager", |ui| ui
+                .button(label))
                 .clicked()
             {
                 self.open_datasets = true;

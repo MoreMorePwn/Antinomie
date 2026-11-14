@@ -2,6 +2,7 @@
 //! The chips above Suspicious activity: tiers, categories, Show INFO and Show hidden.
 use super::rules::{Category, Tier, SUPPRESSION_VERSION};
 use super::*;
+use crate::widgets::Tip as _;
 
 impl TriageView {
     /// Chips that narrow the table. With none of a group selected the whole
@@ -26,15 +27,7 @@ impl TriageView {
         for tier in [Tier::High, Tier::Medium, Tier::Low] {
             let on = view.tiers == 0 || view.tier_on(tier);
             let label = tier.tag().to_uppercase();
-            if toggle_chip(ui, &label, on, counts.map(|counts| counts[tier.index()]))
-                .on_hover_text(format!(
-                    "{}: {}\n\n{}\n\nClick to show only this tier; click again to add or remove tiers.",
-                    tier.label(),
-                    tier.meaning(),
-                    super::rules::CONTEXT_NOTE
-                ))
-                .clicked()
-            {
+            if toggle_chip(ui, &label, on, counts.map(|counts| counts[tier.index()])).clicked() {
                 if view.tiers == 0 {
                     view.tiers = 1 << tier.index();
                 } else {
@@ -44,32 +37,31 @@ impl TriageView {
             }
         }
         let info = counts.map(|counts| counts[Tier::Info.index()]);
-        if toggle_chip(ui, "Show INFO", view.show_info, info)
-            .on_hover_text(format!(
-                "Info: {}\n\nINFO matches are always counted; their rows are built only when this is on. The calls stay in the recording either way.",
-                Tier::Info.meaning()
-            ))
-            .clicked()
-        {
+        if toggle_chip(ui, "Show INFO", view.show_info, info).clicked() {
             view.show_info = !view.show_info;
             changed = true;
         }
+        let mut tiers = crate::widgets::list_help(
+            "Tiers",
+            [Tier::High, Tier::Medium, Tier::Low, Tier::Info]
+                .iter()
+                .map(|tier| (tier.tag().to_uppercase(), tier.meaning())),
+        );
+        tiers.push_str(&format!(
+            "\n\nClick a tier to show only it; click again to add or remove tiers.\n\n\
+             **Show INFO**: INFO matches are always counted; their rows are built only when \
+             this is on. The calls stay in the recording either way.\n\n{}",
+            super::rules::CONTEXT_NOTE
+        ));
+        crate::widgets::help(ui, tiers);
         ui.separator();
         for category in Category::ALL {
             let on = view.categories == 0 || view.category_on(category);
             // The category's own icon where the others have a check mark: the
             // same one its markers and heat row carry in the graph.
             let icon = super::graph::category_icon(category);
-            let hover = if category == Category::Evasion {
-                format!(
-                    "{}\nEvasion lists the checks made through system calls and the answer each got. CPUID and RDTSC run inside the program and leave no call, so they are not visible here.",
-                    category.label()
-                )
-            } else {
-                category.label().to_owned()
-            };
             if toggle_chip_with(ui, icon, category.chip(), on, None)
-                .on_hover_text(hover)
+                .name_tip(category.label())
                 .clicked()
             {
                 if view.categories == 0 {
@@ -81,22 +73,27 @@ impl TriageView {
                 changed = true;
             }
         }
+        crate::widgets::help(
+            ui,
+            "Categories\n\nClick a category to show only it; click again to add or remove categories.\n\n**Evasion** lists the checks made through system calls and the answer each got. CPUID and RDTSC run inside the program and leave no call, so they are not visible here.",
+        );
         ui.separator();
         let hidden_label = if capped > 0 {
             "Show hidden / capped"
         } else {
             "Show hidden"
         };
-        if toggle_chip(ui, hidden_label, view.show_hidden, Some(hidden))
-            .on_hover_text(format!(
-                "Rows hidden because the process is outside the run's tree. {suppressed} frames of VM housekeeping (time sync, mirrors, link-local discovery) were skipped by the built-in suppression list, version {}; they are counted, not listed. Capped rows are counted in a \"+N more\" row.",
-                SUPPRESSION_VERSION
-            ))
-            .clicked()
-        {
+        if toggle_chip(ui, hidden_label, view.show_hidden, Some(hidden)).clicked() {
             view.show_hidden = !view.show_hidden;
             changed = true;
         }
+        crate::widgets::help(
+            ui,
+            format!(
+                "Show hidden\n\nRows hidden because the process is outside the run's tree.\n\n{suppressed} frames of VM housekeeping (time sync, mirrors, link-local discovery) were skipped by the built-in suppression list, version {}; they are counted, not listed.\n\nCapped rows are counted in a \"+N more\" row.",
+                SUPPRESSION_VERSION
+            ),
+        );
         if changed {
             self.scan_request.offsets[0] = 0;
             self.request_query_refresh();

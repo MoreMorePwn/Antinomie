@@ -180,12 +180,12 @@ fn memory(
         );
         let entered =
             response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-        let read = ui
-            .add_enabled(editable, egui::Button::new("Read"))
-            .on_hover_text(format!(
-                "Read {MEMORY_READ_SIZE} bytes (at most {MAX_READ_SIZE})"
-            ))
-            .clicked();
+        let read = crate::widgets::with_help(
+            ui,
+            format!("Read {MEMORY_READ_SIZE} bytes (at most {MAX_READ_SIZE})"),
+            |ui| ui.add_enabled(editable, egui::Button::new("Read")),
+        )
+        .clicked();
         if (read || entered) && editable {
             match state::parse_address(&panel.memory_input) {
                 Ok(addr) => {

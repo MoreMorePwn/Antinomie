@@ -2,6 +2,7 @@
 //! The list of RAM dumps, their identity and deletion.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 
 impl MemoryView {
     /// Open the Import dump… window (the palette and the button).
@@ -107,7 +108,7 @@ impl MemoryView {
                         .frame(false)
                         .selected(!self.hide_list),
                 )
-                .on_hover_text(if self.hide_list {
+                .name_tip(if self.hide_list {
                     "Show the dump list"
                 } else {
                     "Hide the dump list"
@@ -163,36 +164,40 @@ impl MemoryView {
             None
         };
         let full = egui::vec2(ui.available_width(), 0.0);
-        if ui
-            .add_enabled(
-                why.is_none() && !cx.pending,
-                egui::Button::new(format!("{} Dump memory", egui_phosphor::regular::MEMORY))
-                    .min_size(full),
-            )
-            .on_hover_text(
-                "Write the VM's RAM to a dump for analysis. The VM pauses while it is \
+        if crate::widgets::with_help_or(
+            ui,
+            "Write the VM's RAM to a dump for analysis. The VM pauses while it is \
                  written (seconds to minutes, by RAM size and disk speed) and then continues.",
-            )
-            .on_disabled_hover_text(why.unwrap_or("Waiting for the VM"))
-            .clicked()
+            why.unwrap_or("Waiting for the VM"),
+            |ui| {
+                ui.add_enabled(
+                    why.is_none() && !cx.pending,
+                    egui::Button::new(format!("{} Dump memory", egui_phosphor::regular::MEMORY))
+                        .min_size(full),
+                )
+            },
+        )
+        .clicked()
         {
             action = Some(MemoryAction::Dump);
         }
-        if ui
-            .add_enabled(
-                cx.vm.is_some() && cx.recordings.is_some(),
-                egui::Button::new(format!(
-                    "{} Import dump…",
-                    egui_phosphor::regular::FILE_ARROW_UP
-                ))
-                .min_size(full),
-            )
-            .on_hover_text(
-                "Analyse a dump made elsewhere (raw, LiME, ELF core, crash dump, VMware or \
+        if crate::widgets::with_help_or(
+            ui,
+            "Analyse a dump made elsewhere (raw, LiME, ELF core, crash dump, VMware or \
                  VirtualBox memory, hibernation file). The file stays where it is.",
-            )
-            .on_disabled_hover_text("Select a VM: imported dumps are kept with its recordings")
-            .clicked()
+            "Select a VM: imported dumps are kept with its recordings",
+            |ui| {
+                ui.add_enabled(
+                    cx.vm.is_some() && cx.recordings.is_some(),
+                    egui::Button::new(format!(
+                        "{} Import dump…",
+                        egui_phosphor::regular::FILE_ARROW_UP
+                    ))
+                    .min_size(full),
+                )
+            },
+        )
+        .clicked()
         {
             self.open_import();
         }
@@ -240,14 +245,13 @@ impl MemoryView {
             &tags,
         );
         let filter_id = ui.id().with(("table-filter", "memory-dump-history"));
-        ui.checkbox(&mut self.this_run_only, "This run only")
-            .on_hover_text(match &self.triage_run {
+        crate::widgets::with_help(ui, match &self.triage_run {
                 Some(run) => format!(
                     "Only the dumps of the run selected in Triage ({}). A by-hand dump counts for the runs that were live while it was written. It follows that selection.",
                     crate::run_link::short(run)
                 ),
                 None => "Only the dumps of the run selected in Triage. No run is selected there.".to_owned(),
-            });
+            }, |ui| ui.checkbox(&mut self.this_run_only, "This run only"));
         let shown: Vec<_> = self
             .dumps
             .iter()

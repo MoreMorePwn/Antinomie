@@ -8,6 +8,7 @@ use super::canvas;
 use super::chart;
 use super::model::NodeKind;
 use crate::theme;
+use crate::widgets::Tip as _;
 use eframe::egui::{self, RichText};
 use std::collections::BTreeSet;
 
@@ -46,38 +47,31 @@ struct Asked {
 /// box, the button that opens the window.
 fn header(ui: &mut egui::Ui, mode: &mut Mode, built: &Built, pop_out: bool) -> Asked {
     let mut asked = Asked::default();
-    ui.selectable_value(mode, Mode::Compact, "Compact")
-        .on_hover_text("The best 15 processes, files and endpoints, with what joins them");
-    ui.selectable_value(mode, Mode::Full, "Full").on_hover_text(
-        "Every process as a tree you open: the arrow on a box opens or closes what is under it. It starts with the paths to the findings open",
-    );
+    ui.selectable_value(mode, Mode::Compact, "Compact");
+    ui.selectable_value(mode, Mode::Full, "Full");
     if *mode == Mode::Full {
-        if ui
-            .small_button("Expand all")
-            .on_hover_text(
-                "Open every node, up to about 800 boxes; the rest stays closed and is counted",
-            )
-            .clicked()
-        {
+        if ui.small_button("Expand all").clicked() {
             asked.all = Some(All::Expand);
         }
-        if ui
-            .small_button("Collapse all")
-            .on_hover_text(
-                "Back to how Full starts: the root, the paths to the findings and what is under them",
-            )
-            .clicked()
-        {
+        if ui.small_button("Collapse all").clicked() {
             asked.all = Some(All::Collapse);
         }
     }
+    // One help icon for the row.
+    crate::widgets::help(
+        ui,
+        "- **Compact**: the best 15 processes, files and endpoints, with what joins them.\n\
+         - **Full**: every process as a tree you open: the arrow on a box opens or closes what is under it. It starts with the paths to the findings open.\n\
+         - **Expand all** (Full): open every node, up to about 800 boxes; the rest stays closed and is counted.\n\
+         - **Collapse all** (Full): back to how Full starts: the root, the paths to the findings and what is under them.",
+    );
     if let Some(rendered) = built.rendered(*mode) {
         crate::mermaid::button(ui, || chart::mermaid(&rendered.graph, &rendered.shown));
     }
     asked.pop_out = pop_out
         && ui
             .add(egui::Button::new(egui_phosphor::regular::ARROW_SQUARE_OUT).frame(false))
-            .on_hover_text("Open the relationships in their own window")
+            .name_tip("Open in a window")
             .clicked();
     asked
 }

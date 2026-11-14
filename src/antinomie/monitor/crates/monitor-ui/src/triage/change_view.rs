@@ -97,19 +97,21 @@ pub fn gap_note(ui: &mut egui::Ui, note: &retention::GapNote) {
     });
     ui.horizontal(|ui| {
         if note.limit
-            && ui
-                .small_button("Open this limit in Settings")
-                .on_hover_text("Settings > Analysis limits > Rebuilt file bytes")
-                .clicked()
+            && crate::widgets::with_help(
+                ui,
+                "Settings > Analysis limits > Rebuilt file bytes",
+                |ui| ui.small_button("Open this limit in Settings"),
+            )
+            .clicked()
         {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new(OPEN_REBUILD_LIMIT), true));
         }
         if let Some((stream, cookie, call)) = note.evidence {
-            if ui
-                .small_button("Show the syscall evidence")
-                .on_hover_text("Open the call in Trace")
-                .clicked()
+            if crate::widgets::with_help(ui, "Open the call in Trace", |ui| {
+                ui.small_button("Show the syscall evidence")
+            })
+            .clicked()
             {
                 ui.ctx().data_mut(|data| {
                     data.insert_temp(egui::Id::new("triage-call-jump"), (stream, cookie, call))

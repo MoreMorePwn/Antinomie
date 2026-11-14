@@ -79,10 +79,12 @@ pub(super) fn key_findings(
                 } else {
                     format!("Show more ({rest})")
                 };
-                if ui
-                    .button(label)
-                    .on_hover_text("List every finding in the same space, with a scroll bar")
-                    .clicked()
+                if crate::widgets::with_help(
+                    ui,
+                    "List every finding in the same space, with a scroll bar",
+                    |ui| ui.button(label),
+                )
+                .clicked()
                 {
                     *open = !*open;
                 }
@@ -344,14 +346,18 @@ pub(super) fn indicators(
                     acts.push(Act::Go(Destination::Ioc));
                 }
             }
-            copy = ui
-                .add_enabled(!found.is_empty(), egui::Button::new("Copy all"))
-                .on_hover_text("Copy every indicator as plain text, one per line, grouped")
-                .clicked();
-            export = ui
-                .add_enabled(!found.is_empty(), egui::Button::new("Export"))
-                .on_hover_text("Write the indicators as JSON beside the run's other files")
-                .clicked();
+            copy = crate::widgets::with_help(
+                ui,
+                "Copy every indicator as plain text, one per line, grouped",
+                |ui| ui.add_enabled(!found.is_empty(), egui::Button::new("Copy all")),
+            )
+            .clicked();
+            export = crate::widgets::with_help(
+                ui,
+                "Write the indicators as JSON beside the run's other files",
+                |ui| ui.add_enabled(!found.is_empty(), egui::Button::new("Export")),
+            )
+            .clicked();
         },
         |ui, acts| {
             if found.is_empty() {

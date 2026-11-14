@@ -107,7 +107,14 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
             for (column, title) in ["PID", "Parent", "State"].into_iter().enumerate() {
                 header.col(|ui| table_sort::header(ui, TABLE, column, title));
             }
-            header.col(|ui| fit_table::head(ui, ""));
+            // The last column's buttons are explained once, in its header.
+            header.col(|ui| {
+                crate::widgets::help(
+                    ui,
+                    "- **Show**: show this process's registers, memory and breakpoints.\n\
+                     - **Let go**: stop debugging this process; it then runs free.",
+                );
+            });
         })
         .body(|body| {
             body.rows(row_height, order.len(), |mut row| {
@@ -150,7 +157,6 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
                     if !inferior.selected
                         && ui
                             .add_enabled(enabled, egui::Button::new("Show").small())
-                            .on_hover_text("Show this process's registers, memory and breakpoints")
                             .clicked()
                     {
                         actions.push(PanelAction::Debug(DebugAction::SelectInferior {
@@ -159,7 +165,6 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
                     }
                     if ui
                         .add_enabled(enabled && !exited, egui::Button::new("Let go").small())
-                        .on_hover_text("Stop debugging this process; it then runs free")
                         .clicked()
                     {
                         actions.push(PanelAction::Debug(DebugAction::DetachInferior {
@@ -179,40 +184,46 @@ fn policy(ui: &mut egui::Ui, view: &DebugView, enabled: bool, actions: &mut Vec<
     let mut next: Option<ForkPolicy> = None;
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("At a fork").color(theme::muted()));
-        ui.add_enabled_ui(usable, |ui| {
-            egui::ComboBox::from_id_salt("debugger-fork-follow")
-                .selected_text(current.follow.label())
-                .show_ui(ui, |ui| {
-                    for mode in FOLLOW_MODES {
-                        if ui
-                            .selectable_label(current.follow == mode, mode.label())
-                            .clicked()
-                            && current.follow != mode
-                        {
-                            next = Some(ForkPolicy {
-                                follow: mode,
-                                ..current
-                            });
-                        }
+        crate::widgets::with_help_or(
+            ui,
+            "",
+            if view.caps.follow {
+                "An external debugger controls the process"
+            } else {
+                "This guest base cannot follow forks"
+            },
+            |ui| {
+                ui.add_enabled_ui(usable, |ui| {
+                    egui::ComboBox::from_id_salt("debugger-fork-follow")
+                        .selected_text(current.follow.label())
+                        .show_ui(ui, |ui| {
+                            for mode in FOLLOW_MODES {
+                                if ui
+                                    .selectable_label(current.follow == mode, mode.label())
+                                    .clicked()
+                                    && current.follow != mode
+                                {
+                                    next = Some(ForkPolicy {
+                                        follow: mode,
+                                        ..current
+                                    });
+                                }
+                            }
+                        });
+                    let mut detach = current.detach_other;
+                    if ui
+                        .checkbox(&mut detach, "Let the other process run")
+                        .changed()
+                    {
+                        next = Some(ForkPolicy {
+                            detach_other: detach,
+                            ..current
+                        });
                     }
-                });
-            let mut detach = current.detach_other;
-            if ui
-                .checkbox(&mut detach, "Let the other process run")
-                .changed()
-            {
-                next = Some(ForkPolicy {
-                    detach_other: detach,
-                    ..current
-                });
-            }
-        })
-        .response
-        .on_disabled_hover_text(if view.caps.follow {
-            "An external debugger controls the process"
-        } else {
-            "This guest base cannot follow forks"
-        });
+                })
+                .response
+            },
+        );
     });
     if let Some(policy) = next {
         actions.push(PanelAction::Debug(DebugAction::SetForkPolicy(policy)));

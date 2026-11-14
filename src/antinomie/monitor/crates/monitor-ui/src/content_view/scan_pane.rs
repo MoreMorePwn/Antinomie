@@ -5,6 +5,7 @@
 //! a time. A hit is a button that jumps the Content view to its offset.
 use super::ContentSource;
 use crate::widgets::fit_table::{Col, FitBuilder};
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::content_scan::{
     self, Scan, Stopped, StringsOptions, HITS_DEFAULT_COUNT, HITS_MAX_COUNT, MIN_LEN_RANGE,
 };
@@ -248,10 +249,7 @@ impl ScanPane {
                             .desired_width(crate::theme::plain_edit_width(280.0))
                             .id(egui::Id::new((salt, "content-pattern"))),
                     );
-                    ui.checkbox(&mut self.case_insensitive, "Ignore case")
-                        .on_hover_text(
-                            "Matches octets, not characters: \\xNN names one octet and . is any octet but a newline",
-                        );
+                    crate::widgets::with_help(ui, "Matches octets, not characters: \\xNN names one octet and . is any octet but a newline", |ui| ui.checkbox(&mut self.case_insensitive, "Ignore case"));
                 }
             });
             ui.horizontal_wrapped(|ui| {
@@ -362,7 +360,8 @@ impl ScanPane {
                         let place = RichText::new(source.place(hit.offset)).monospace();
                         if ui
                             .add(egui::Button::new(place).frame(false).truncate())
-                            .on_hover_text(format!(
+                            // Where the hit is, whole.
+                            .value_tip(format!(
                                 "{} · {} octets · click to show it in Content",
                                 source.hover(hit.offset),
                                 hit.len

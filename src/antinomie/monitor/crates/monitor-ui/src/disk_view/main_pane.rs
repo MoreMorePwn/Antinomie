@@ -71,14 +71,14 @@ impl DiskView {
                 .wrap(),
             );
             ui.add_space(10.0);
-            if ui
-                .add_enabled(
+            if crate::widgets::with_help(ui, "Shut down the running VM", |ui| {
+                ui.add_enabled(
                     cx.can_stop_vm,
                     egui::Button::new(format!("{} Stop VM", egui_phosphor::regular::STOP)),
                 )
-                .on_hover_text("Shut down the running VM")
                 .on_disabled_hover_text("No VM is running")
-                .clicked()
+            })
+            .clicked()
             {
                 self.action = Some(DiskAction::StopVm);
             }
@@ -273,11 +273,13 @@ impl DiskView {
             None
         };
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(why.is_none(), egui::Button::new("Open"))
-                .on_hover_text("Copy the allocated data into a temporary image and browse it")
-                .on_disabled_hover_text(why.unwrap_or(""))
-                .clicked()
+            if crate::widgets::with_help_or(
+                ui,
+                "Copy the allocated data into a temporary image and browse it",
+                why.unwrap_or(""),
+                |ui| ui.add_enabled(why.is_none(), egui::Button::new("Open")),
+            )
+            .clicked()
             {
                 self.wait_for(true);
                 self.action = Some(DiskAction::Open(self.pick.clone()));
@@ -334,11 +336,13 @@ impl DiskView {
         });
         let keep_blocked = self.keep_blocked(cx);
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(keep_blocked.is_none(), egui::Button::new("Keep as dump"))
-                .on_hover_text("Promote this image to a saved dump: a rename, no second conversion")
-                .on_disabled_hover_text(keep_blocked.clone().unwrap_or_default())
-                .clicked()
+            if crate::widgets::with_help_or(
+                ui,
+                "Promote this image to a saved dump: a rename, no second conversion",
+                keep_blocked.clone().unwrap_or_default(),
+                |ui| ui.add_enabled(keep_blocked.is_none(), egui::Button::new("Keep as dump")),
+            )
+            .clicked()
             {
                 self.wait_for(false);
                 self.action = Some(DiskAction::Keep);

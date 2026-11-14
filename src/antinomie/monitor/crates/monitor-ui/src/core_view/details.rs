@@ -3,6 +3,7 @@
 //! string or note chosen last in the Cores view.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::core_strings;
 
 /// One chosen row, as a title, where it came from and its fields.
@@ -122,7 +123,7 @@ impl CoreView {
                                 );
                                 if ui
                                     .small_button(egui_phosphor::regular::COPY)
-                                    .on_hover_text(format!("Copy {name}"))
+                                    .name_tip(format!("Copy {name}"))
                                     .clicked()
                                 {
                                     ui.ctx().copy_text(value.clone());

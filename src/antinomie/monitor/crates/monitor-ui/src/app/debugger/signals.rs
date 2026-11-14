@@ -2,6 +2,7 @@
 //! The signal handling table (gdb's `handle`): what the panel does when the
 //! program is about to receive each signal, and the latest signals seen.
 use super::*;
+use crate::widgets::Tip as _;
 use crate::{table_sort, widgets::fit_table};
 use antinomie_monitor_core::debug::{
     signal_policy::{default_action, signal_name, SignalNote, SignalTable},
@@ -90,7 +91,7 @@ pub(super) fn rows(
                     row.col(|ui| {
                         touched |= ui
                             .add_enabled(enabled, egui::Checkbox::without_text(value))
-                            .on_hover_text(field)
+                            .name_tip(field)
                             .changed();
                     });
                 }

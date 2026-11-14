@@ -138,28 +138,34 @@ impl DiskView {
                         }
                         for checkpoint in &checkpoints {
                             let source = DiskSourceSpec::Checkpoint(checkpoint.id.clone());
-                            if ui
-                                .selectable_label(
-                                    self.pick.source == source,
-                                    checkpoint_label(checkpoint),
-                                )
-                                .on_hover_text(
-                                    "The disk as it was when this checkpoint was saved. A \
+                            if crate::widgets::with_help(
+                                ui,
+                                "The disk as it was when this checkpoint was saved. A \
                                      crash-consistent checkpoint usually reads as not cleanly \
                                      unmounted.",
-                                )
-                                .clicked()
+                                |ui| {
+                                    ui.selectable_label(
+                                        self.pick.source == source,
+                                        checkpoint_label(checkpoint),
+                                    )
+                                },
+                            )
+                            .clicked()
                             {
                                 chosen = Some(source);
                             }
                         }
-                        if ui
-                            .selectable_label(
-                                self.pick.source == DiskSourceSpec::Base,
-                                "Installed base image",
-                            )
-                            .on_hover_text("The image this VM's disk was created from")
-                            .clicked()
+                        if crate::widgets::with_help(
+                            ui,
+                            "The image this VM's disk was created from",
+                            |ui| {
+                                ui.selectable_label(
+                                    self.pick.source == DiskSourceSpec::Base,
+                                    "Installed base image",
+                                )
+                            },
+                        )
+                        .clicked()
                         {
                             chosen = Some(DiskSourceSpec::Base);
                         }
@@ -211,17 +217,22 @@ impl DiskView {
             ui.horizontal(|ui| {
                 let supported = partition.fs == PartitionFs::Ext4;
                 let selected = measure.partition == Some(partition.index);
-                if ui
-                    .add_enabled(
-                        supported && !busy,
-                        egui::RadioButton::new(selected, partition.label()),
-                    )
-                    .on_disabled_hover_text(if supported {
+                if crate::widgets::with_help_or(
+                    ui,
+                    "",
+                    if supported {
                         "A request is on its way"
                     } else {
                         "Only ext2/3/4 partitions can be opened or dumped"
-                    })
-                    .clicked()
+                    },
+                    |ui| {
+                        ui.add_enabled(
+                            supported && !busy,
+                            egui::RadioButton::new(selected, partition.label()),
+                        )
+                    },
+                )
+                .clicked()
                 {
                     choose = Some(partition.index);
                 }
@@ -234,10 +245,12 @@ impl DiskView {
                     fs_text(partition),
                 );
                 if !supported
-                    && ui
-                        .add_enabled(!busy, egui::Button::new("Save partition to host…"))
-                        .on_hover_text("Write this partition's bytes to a file")
-                        .clicked()
+                    && crate::widgets::with_help(
+                        ui,
+                        "Write this partition's bytes to a file",
+                        |ui| ui.add_enabled(!busy, egui::Button::new("Save partition to host…")),
+                    )
+                    .clicked()
                 {
                     save = Some(partition.index);
                 }

@@ -35,12 +35,11 @@ impl TriageView {
         let [high, medium, low, info] = index.tiers;
         let mut pop_out = false;
         ui.horizontal_wrapped(|ui| {
-            pop_out = ui
+            pop_out = crate::widgets::with_help(ui, "The graph in its own resizable window, with Details beside it", |ui| ui
                 .button(format!(
                     "{} Open in window",
                     egui_phosphor::regular::ARROW_SQUARE_OUT
-                ))
-                .on_hover_text("The graph in its own resizable window, with Details beside it")
+                )))
                 .clicked();
             super::legend::button(ui);
             crate::mermaid::button(ui, || super::mermaid::phases(&index.phases));

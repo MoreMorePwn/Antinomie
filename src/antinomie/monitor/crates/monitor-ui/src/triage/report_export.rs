@@ -539,47 +539,54 @@ impl TriageView {
                                     ..Choices::default()
                                 };
                                 if *choices != defaults
-                                    && ui
-                                        .small_button("Reset to defaults")
-                                        .on_hover_text(
-                                            "Every section, HTML and PDF, Defang on, no bundle. \
+                                    && crate::widgets::with_help(
+                                        ui,
+                                        "Every section, HTML and PDF, Defang on, no bundle. \
                                              The folder stays.",
-                                        )
-                                        .clicked()
+                                        |ui| ui.small_button("Reset to defaults"),
+                                    )
+                                    .clicked()
                                 {
                                     *choices = defaults;
                                     edited = true;
                                 }
                             });
                             if !simple {
-                                edited |= ui
-                                    .checkbox(
-                                        &mut choices.bundle,
-                                        "Evidence bundle (.zip next to the report)",
-                                    )
-                                    .on_hover_text(
-                                        "The packet captures, the files the run dropped in an inner \
+                                edited |= crate::widgets::with_help(
+                                    ui,
+                                    "The packet captures, the files the run dropped in an inner \
                                          AES-256 zip (password: infected), the sample's custody \
                                          export and a SHA-256 manifest.",
-                                    )
-                                    .changed();
-                            }
-                            edited |= ui
-                                .checkbox(
-                                    &mut choices.defang,
-                                    "Defang indicators in HTML, PDF and Markdown",
-                                )
-                                .on_hover_text(
-                                    "On by default: hxxp://example[.]com. JSON, MISP and STIX \
-                                     keep the raw values.",
+                                    |ui| {
+                                        ui.checkbox(
+                                            &mut choices.bundle,
+                                            "Evidence bundle (.zip next to the report)",
+                                        )
+                                    },
                                 )
                                 .changed();
+                            }
+                            edited |= crate::widgets::with_help(
+                                ui,
+                                "On by default: hxxp://example[.]com. JSON, MISP and STIX \
+                                     keep the raw values.",
+                                |ui| {
+                                    ui.checkbox(
+                                        &mut choices.defang,
+                                        "Defang indicators in HTML, PDF and Markdown",
+                                    )
+                                },
+                            )
+                            .changed();
                             ui.add_space(6.0);
                             ui.label(theme::section_title(ui, "Folder"));
                             edited |= ui
                                 .add(
                                     egui::TextEdit::singleline(&mut choices.folder)
-                                        .hint_text(crate::theme::placeholder(ui, "<recording>/report"))
+                                        .hint_text(crate::theme::placeholder(
+                                            ui,
+                                            "<recording>/report",
+                                        ))
                                         .desired_width(f32::INFINITY),
                                 )
                                 .changed();
@@ -625,22 +632,27 @@ impl TriageView {
                                 cancel_run = true;
                             }
                         } else {
-                            if ui
-                                .add_enabled(
-                                    ready,
-                                    egui::Button::new(if large.is_some() {
-                                        "Export anyway"
-                                    } else {
-                                        "Export"
-                                    }),
-                                )
-                                .on_hover_text("Write the chosen files")
-                                .on_disabled_hover_text(if self.report.exported {
+                            if crate::widgets::with_help_or(
+                                ui,
+                                "",
+                                if self.report.exported {
                                     "Already written. Change a choice to write another set."
                                 } else {
                                     "Choose a format or the evidence bundle"
-                                })
-                                .clicked()
+                                },
+                                |ui| {
+                                    ui.add_enabled(
+                                        ready,
+                                        egui::Button::new(if large.is_some() {
+                                            "Export anyway"
+                                        } else {
+                                            "Export"
+                                        }),
+                                    )
+                                    .on_hover_text("Write the chosen files")
+                                },
+                            )
+                            .clicked()
                             {
                                 start = true;
                             }

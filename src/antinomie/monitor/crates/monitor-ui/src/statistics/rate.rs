@@ -397,8 +397,9 @@ pub(super) fn show(ui: &mut egui::Ui, state: &mut State, input: &Inputs<'_>) -> 
     let plot = input.plot(state);
     ui.horizontal(|ui| {
         interval_menu(ui, state, &plot);
-        ui.checkbox(&mut state.table, "Table")
-            .on_hover_text("The same numbers as rows, one per interval");
+        crate::widgets::with_help(ui, "The same numbers as rows, one per interval", |ui| {
+            ui.checkbox(&mut state.table, "Table")
+        });
         if let Some(peak) = &input.stats.peak_per_s {
             ui.colored_label(
                 crate::theme::muted(),
@@ -444,7 +445,7 @@ fn interval_menu(ui: &mut egui::Ui, state: &mut State, plot: &Plot) {
         None => format!("Auto ({})", super::duration_ns(plot.width_ns)),
         Some(_) => super::duration_ns(plot.width_ns),
     };
-    egui::ComboBox::from_id_salt("statistics-rate-interval")
+    crate::widgets::with_help(ui, "Calls are counted in the recording's own bins; an interval is rounded up to a whole number of them.", |ui| egui::ComboBox::from_id_salt("statistics-rate-interval")
         .selected_text(format!("Interval: {text}"))
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut state.interval, None, "Auto");
@@ -452,10 +453,7 @@ fn interval_menu(ui: &mut egui::Ui, state: &mut State, plot: &Plot) {
                 ui.selectable_value(&mut state.interval, Some(ns), label);
             }
         })
-        .response
-        .on_hover_text(
-            "Calls are counted in the recording's own bins; an interval is rounded up to a whole number of them.",
-        );
+        .response);
 }
 
 fn legend(ui: &mut egui::Ui, state: &mut State, input: &Inputs<'_>, out: &mut Out) {

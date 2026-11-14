@@ -2,6 +2,7 @@
 //! Registers, mappings and notes of the selected core.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 
 /// The Capture issues header's id: the same whatever the count, so it stays
 /// open or closed when an issue is added.
@@ -212,7 +213,7 @@ impl CoreView {
                 || (name == "pc" || name == "sp") && record.core.machine == core_dump::EM_ARM)
                 && ui
                     .small_button(egui_phosphor::regular::MEMORY)
-                    .on_hover_text("View memory at this register")
+                    .name_tip("View memory here")
                     .clicked()
             {
                 if let Some(index) = record

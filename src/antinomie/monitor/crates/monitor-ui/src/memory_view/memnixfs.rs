@@ -3,6 +3,7 @@
 //! report picker. A report is run like a plugin and saved with the dump; its
 //! result is shown by the same table, filters, messages and Files button.
 use super::*;
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::memory::memnixfs::{self, MemNixFs, Report};
 
 /// MemNixFS's availability: located (and able to start) on a worker thread.
@@ -166,7 +167,9 @@ impl MemoryView {
                                 report.name == current.name,
                                 RichText::new(report.name).font(theme::mono(font_size - 1.0)),
                             )
-                            .on_hover_text(report.help)
+                            // The entry's description, which the header
+                            // shows for the chosen one.
+                            .value_tip(report.help)
                             .clicked()
                         {
                             chosen = Some(report.name.to_owned());
@@ -178,22 +181,26 @@ impl MemoryView {
                 .jobs
                 .iter()
                 .any(|job| job.run.dump_id == dump.id && job.run.plugin == plugin);
-            if ui
-                .add_enabled(
-                    !running && linux,
-                    egui::Button::new(
-                        RichText::new(format!("{} Run", egui_phosphor::regular::PLAY))
-                            .color(theme::palette().primary_text),
-                    )
-                    .fill(theme::primary()),
-                )
-                .on_hover_text("Run the report on this dump; the result is saved with it")
-                .on_disabled_hover_text(if linux {
+            if crate::widgets::with_help_or(
+                ui,
+                "Run the report on this dump; the result is saved with it",
+                if linux {
                     "This report is already running on this dump"
                 } else {
                     "MemNixFS reads Linux dumps only"
-                })
-                .clicked()
+                },
+                |ui| {
+                    ui.add_enabled(
+                        !running && linux,
+                        egui::Button::new(
+                            RichText::new(format!("{} Run", egui_phosphor::regular::PLAY))
+                                .color(theme::palette().primary_text),
+                        )
+                        .fill(theme::primary()),
+                    )
+                },
+            )
+            .clicked()
             {
                 run = true;
             }

@@ -475,25 +475,35 @@ impl DiskView {
         let busy = self.saving_image.is_some();
         let saveable = row.browsable() && !busy;
         for format in [ExportFormat::SparseRaw, ExportFormat::Qcow2] {
-            if ui
-                .add_enabled(
-                    saveable,
-                    egui::Button::new(format!("Save image to host… ({})", format.label())),
-                )
-                .on_disabled_hover_text("Needs a finished dump, and no other save running")
-                .clicked()
+            if crate::widgets::with_help_or(
+                ui,
+                "",
+                "Needs a finished dump, and no other save running",
+                |ui| {
+                    ui.add_enabled(
+                        saveable,
+                        egui::Button::new(format!("Save image to host… ({})", format.label())),
+                    )
+                },
+            )
+            .clicked()
             {
                 choice = Some(RowMenu::Save(index, format));
                 ui.close();
             }
         }
-        if ui
-            .add_enabled(
-                row.browsable() && self.verify.is_none(),
-                egui::Button::new("Verify SHA-256"),
-            )
-            .on_disabled_hover_text("Needs a finished dump, and no other check running")
-            .clicked()
+        if crate::widgets::with_help_or(
+            ui,
+            "",
+            "Needs a finished dump, and no other check running",
+            |ui| {
+                ui.add_enabled(
+                    row.browsable() && self.verify.is_none(),
+                    egui::Button::new("Verify SHA-256"),
+                )
+            },
+        )
+        .clicked()
         {
             choice = Some(RowMenu::Verify(index));
             ui.close();

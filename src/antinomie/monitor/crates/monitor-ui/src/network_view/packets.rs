@@ -396,8 +396,9 @@ impl NetworkView {
                 crate::app::note_menu_item(ui, None, reference);
             }
             None => {
-                ui.add_enabled(false, egui::Button::new("Add note…"))
-                    .on_disabled_hover_text("Select this VM's capture first");
+                crate::widgets::with_help_or(ui, "", "Select this VM's capture first", |ui| {
+                    ui.add_enabled(false, egui::Button::new("Add note…"))
+                });
             }
         }
     }

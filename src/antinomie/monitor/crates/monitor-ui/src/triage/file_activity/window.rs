@@ -439,8 +439,7 @@ impl Window {
                     "Only files a call created, wrote, resized, renamed, linked, deleted or changed the attributes of",
                 ),
             ] {
-                if widgets::toggle_chip(ui, label, *flag, None)
-                    .on_hover_text(hover)
+                if crate::widgets::with_help(ui, hover, |ui| widgets::toggle_chip(ui, label, *flag, None))
                     .clicked()
                 {
                     *flag = !*flag;
@@ -456,17 +455,14 @@ impl Window {
                     ui.selectable_value(&mut self.order, order, order.label());
                 }
             });
-        egui::ComboBox::from_id_salt("file-activity-name")
+        crate::widgets::with_help(ui, "Which name a file renamed during the run is listed, searched and sorted by; the other one is shown under it", |ui| egui::ComboBox::from_id_salt("file-activity-name")
             .selected_text(format!("Name: {}", self.name_choice.label()))
             .show_ui(ui, |ui| {
                 for choice in NameChoice::ALL {
                     ui.selectable_value(&mut self.name_choice, choice, choice.label());
                 }
             })
-            .response
-            .on_hover_text(
-                "Which name a file renamed during the run is listed, searched and sorted by; the other one is shown under it",
-            );
+            .response);
     }
 
     fn history(
@@ -565,9 +561,8 @@ impl Window {
 
     /// The button at the top right of the history that opens the reconstruction.
     fn reconstruct_entry(&mut self, ui: &mut egui::Ui, file: &FileActivity) {
-        if ui
-            .button("Reconstruct contents…")
-            .on_hover_text("Replay this file's calls over what it held at the start of the run and see what each byte is")
+        if crate::widgets::with_help(ui, "Replay this file's calls over what it held at the start of the run and see what each byte is", |ui| ui
+            .button("Reconstruct contents…"))
             .clicked()
         {
             self.reconstruction = Some(reconstruct::Open::new(file));

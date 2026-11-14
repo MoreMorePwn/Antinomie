@@ -80,11 +80,8 @@ pub(crate) fn show_removable(ui: &mut egui::Ui, run: &RunSummary, in_run_list: b
         crate::activity::error(ui, message);
         if in_run_list
             && run.forgettable().is_ok()
-            && ui
-                .button("Remove")
-                .on_hover_text(
-                    "Take this run off the list. Its recording folder is already gone, so no file is deleted.",
-                )
+            && crate::widgets::with_help(ui, "Take this run off the list. Its recording folder is already gone, so no file is deleted.", |ui| ui
+                .button("Remove"))
                 .clicked()
         {
             remove = true;

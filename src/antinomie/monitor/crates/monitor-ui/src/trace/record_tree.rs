@@ -411,20 +411,24 @@ fn header(
     ui.horizontal_wrapped(|ui| {
         if holds_more {
             let readable = shown.directory.is_some() && field.raw_path.is_some();
-            let button = ui.add_enabled(
-                readable && state.loader.is_none(),
-                egui::Button::new(format!(
-                    "Decode all captured ({} bytes)",
-                    field.captured_len
-                )),
+            let button = crate::widgets::with_help_or(
+                ui,
+                "Read the field's whole capture and decode every record",
+                if readable {
+                    ""
+                } else {
+                    "The full capture is not readable here; only the preview is decoded"
+                },
+                |ui| {
+                    ui.add_enabled(
+                        readable && state.loader.is_none(),
+                        egui::Button::new(format!(
+                            "Decode all captured ({} bytes)",
+                            field.captured_len
+                        )),
+                    )
+                },
             );
-            let button = if readable {
-                button.on_hover_text("Read the field's whole capture and decode every record")
-            } else {
-                button.on_disabled_hover_text(
-                    "The full capture is not readable here; only the preview is decoded",
-                )
-            };
             if button.clicked()
                 && let Some(directory) = shown.directory
             {
@@ -436,10 +440,12 @@ fn header(
         if ui.button("Copy all as JSON").clicked() {
             action = Some(Action::Copy);
         }
-        if ui
-            .button("Save as JSON")
-            .on_hover_text("Write the records beside the run's other files, in records/")
-            .clicked()
+        if crate::widgets::with_help(
+            ui,
+            "Write the records beside the run's other files, in records/",
+            |ui| ui.button("Save as JSON"),
+        )
+        .clicked()
         {
             action = Some(Action::Save);
         }

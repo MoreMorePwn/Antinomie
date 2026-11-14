@@ -2,6 +2,7 @@
 //! The core list, its filters, and project export and import.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 
 impl CoreView {
     pub(super) fn list_toolbar(&mut self, ui: &mut egui::Ui) {
@@ -12,7 +13,7 @@ impl CoreView {
                         .frame(false)
                         .selected(!self.hide_list),
                 )
-                .on_hover_text(if self.hide_list {
+                .name_tip(if self.hide_list {
                     "Show the core list"
                 } else {
                     "Hide the core list"
@@ -93,10 +94,12 @@ impl CoreView {
             } else {
                 "Cancel process core".to_owned()
             };
-            if ui
-                .button(label)
-                .on_hover_text("Stop this capture and let the process continue")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "Stop this capture and let the process continue",
+                |ui| ui.button(label),
+            )
+            .clicked()
             {
                 action = Some(cancel);
             }

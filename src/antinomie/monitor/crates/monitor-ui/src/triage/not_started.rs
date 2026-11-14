@@ -60,9 +60,8 @@ pub(crate) fn not_started_panel(ui: &mut egui::Ui, run: &NotStartedRun) -> bool 
                 crate::widgets::fact_line(ui, check, found);
             }
             ui.add_space(10.0);
-            if ui
-                .button("Export report…")
-                .on_hover_text("Write this run's short report: the failure, the request, the static analysis and the sample")
+            if crate::widgets::with_help(ui, "Write this run's short report: the failure, the request, the static analysis and the sample", |ui| ui
+                .button("Export report…"))
                 .clicked()
             {
                 export = true;

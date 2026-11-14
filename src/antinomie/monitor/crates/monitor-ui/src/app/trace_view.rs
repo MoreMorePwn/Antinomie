@@ -330,11 +330,8 @@ impl MonitorApp {
                 self.select_process(selection);
             }
             self.trace_archive_pager(ui);
-            if ui
-                .button("Statistics of these calls")
-                .on_hover_text(
-                    "Open the Statistics window on the filter now applied (Ctrl+Shift+T opens it without one)",
-                )
+            if crate::widgets::with_help(ui, "Open the Statistics window on the filter now applied (Ctrl+Shift+T opens it without one)", |ui| ui
+                .button("Statistics of these calls"))
                 .clicked()
             {
                 let filter = self.applied_filter.clone();
@@ -344,15 +341,16 @@ impl MonitorApp {
         // The filter box has a row of its own below the toolbar, as before
         // egui 0.36, at every window and text size.
         ui.horizontal(|ui| {
-            let filter_width = ui.available_width().max(180.0);
-            crate::query::filter_edit(
-                ui,
-                &mut self.filter,
-                "syscall == openat",
-                filter_width,
-                crate::query::FilterScope::Syscall,
-            )
-            .on_hover_text(crate::query::HELP);
+            crate::widgets::with_help(ui, crate::query::filter_help(), |ui| {
+                let filter_width = ui.available_width().max(180.0);
+                crate::query::filter_edit(
+                    ui,
+                    &mut self.filter,
+                    "syscall == openat",
+                    filter_width,
+                    crate::query::FilterScope::Syscall,
+                )
+            });
         });
     }
 
@@ -1133,12 +1131,17 @@ fn trace_row_menu(
             );
         }
         Some(_) => {
-            ui.add_enabled(false, egui::Button::new("Add note…"))
-                .on_disabled_hover_text("This run did not start a sample of the library");
+            crate::widgets::with_help_or(
+                ui,
+                "",
+                "This run did not start a sample of the library",
+                |ui| ui.add_enabled(false, egui::Button::new("Add note…")),
+            );
         }
         None => {
-            ui.add_enabled(false, egui::Button::new("Add note…"))
-                .on_disabled_hover_text("Select a run to note one of its calls");
+            crate::widgets::with_help_or(ui, "", "Select a run to note one of its calls", |ui| {
+                ui.add_enabled(false, egui::Button::new("Add note…"))
+            });
         }
     }
 }

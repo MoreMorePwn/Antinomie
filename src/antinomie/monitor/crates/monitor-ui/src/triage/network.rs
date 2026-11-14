@@ -11,11 +11,13 @@ pub const OPEN_PACKETS: &str = "triage-open-packets";
 /// The button that links the derived tables to the raw capture.
 pub fn open_packets_button(ui: &mut egui::Ui, available: bool) {
     let label = format!("{} Open Packets", egui_phosphor::regular::NETWORK);
-    if ui
-        .add_enabled(available, egui::Button::new(label))
-        .on_hover_text("Show this run's capture in Packets")
-        .on_disabled_hover_text("This run has no packet capture")
-        .clicked()
+    if crate::widgets::with_help_or(
+        ui,
+        "Show this run's capture in Packets",
+        "This run has no packet capture",
+        |ui| ui.add_enabled(available, egui::Button::new(label)),
+    )
+    .clicked()
     {
         ui.ctx()
             .data_mut(|data| data.insert_temp(egui::Id::new(OPEN_PACKETS), true));

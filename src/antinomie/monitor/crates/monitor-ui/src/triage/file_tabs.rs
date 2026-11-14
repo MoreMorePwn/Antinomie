@@ -50,10 +50,6 @@ impl TriageView {
             visibility.hide_standard_io,
             None,
         )
-        .on_hover_text(format!(
-            "Hide stdin, stdout, stderr. {} rows in this table are standard input/output.",
-            count.stdio
-        ))
         .clicked()
         {
             visibility.hide_standard_io = !visibility.hide_standard_io;
@@ -65,10 +61,6 @@ impl TriageView {
             visibility.hide_libraries,
             None,
         )
-        .on_hover_text(format!(
-            "Hide shared libraries and the loader cache. {} rows in this table are libraries.",
-            count.library
-        ))
         .clicked()
         {
             visibility.hide_libraries = !visibility.hide_libraries;
@@ -97,13 +89,20 @@ impl TriageView {
         } else {
             "Failed attempts".to_owned()
         };
-        if toggle_chip(ui, &failed_label, visibility.show_failed, None)
-            .on_hover_text(hover)
-            .clicked()
-        {
+        if toggle_chip(ui, &failed_label, visibility.show_failed, None).clicked() {
             visibility.show_failed = !visibility.show_failed;
             changed = true;
         }
+        // One help icon for the three chips.
+        crate::widgets::help(
+            ui,
+            format!(
+                "- **Hide stdio**: hide stdin, stdout, stderr. {} rows in this table are standard input/output.\n\
+                 - **Hide library**: hide shared libraries and the loader cache. {} rows in this table are libraries.\n\
+                 - **Failed attempts**: {hover}",
+                count.stdio, count.library
+            ),
+        );
         if counted && count.total > 0 {
             let group = antinomie_monitor_core::analysis::detection::group_digits;
             let (hide_stdio, hide_library) = (
@@ -125,7 +124,7 @@ impl TriageView {
             if (hide_stdio && count.stdio > 0 || hide_library && count.library > 0)
                 && ui
                     .small_button("Show all")
-                    .on_hover_text("Turn the Hide chips off to list every row")
+                    .on_hover_text("Turn Hide chips off")
                     .clicked()
             {
                 self.scan_request.file_visibility.hide_standard_io = false;

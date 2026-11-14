@@ -172,18 +172,15 @@ impl View {
                 if loading {
                     theme::spinner(ui);
                 }
-                toggle = ui
+                toggle = crate::widgets::with_help(ui, "Show or hide the installed rule packs. The rule count is every rule in \
+                         the enabled packs; a scan can load fewer, and the line under Scan says how many and why.", |ui| ui
                     .add(
                         egui::Button::new(
                             RichText::new(format!("{caret} {title}")).color(theme::text()),
                         )
                         .frame(false)
                         .truncate(),
-                    )
-                    .on_hover_text(
-                        "Show or hide the installed rule packs. The rule count is every rule in \
-                         the enabled packs; a scan can load fewer, and the line under Scan says how many and why.",
-                    )
+                    ))
                     .clicked();
             },
             |ui| {
@@ -301,10 +298,10 @@ impl View {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Not scanned.").color(theme::muted()));
             let ready = self.rx.is_none() && self.identity.is_some();
-            if ui
-                .add_enabled(ready, egui::Button::new(self.scan_label()))
-                .on_hover_text("Scan this run with the installed rules.")
-                .clicked()
+            if crate::widgets::with_help(ui, "Scan this run with the installed rules.", |ui| {
+                ui.add_enabled(ready, egui::Button::new(self.scan_label()))
+            })
+            .clicked()
             {
                 self.scan_now(ui.ctx(), index, scan);
             }
@@ -320,14 +317,16 @@ impl View {
 
     fn scan_buttons(&mut self, ui: &mut egui::Ui, index: usize, scan: Option<&ArchiveScan>) {
         let ready = self.rx.is_none() && self.identity.is_some();
-        if ui
-            .add_enabled(ready, egui::Button::new(self.scan_label()))
-            .on_hover_text(if self.live_run {
+        if crate::widgets::with_help(
+            ui,
+            if self.live_run {
                 "Scan what the run has recorded so far, without waiting for the next timed scan."
             } else {
                 "Scan this run with the installed rules."
-            })
-            .clicked()
+            },
+            |ui| ui.add_enabled(ready, egui::Button::new(self.scan_label())),
+        )
+        .clicked()
         {
             self.scan_now(ui.ctx(), index, scan);
         }

@@ -199,13 +199,13 @@ impl RegexWindow {
 
     fn body(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(self.running.is_none(), egui::Button::new("Scan again"))
-                .on_hover_text(
-                    "Scan again with the patterns as the rule manager has them now \
+            if crate::widgets::with_help(
+                ui,
+                "Scan again with the patterns as the rule manager has them now \
                      (Library > Detection rules > Strings regex)",
-                )
-                .clicked()
+                |ui| ui.add_enabled(self.running.is_none(), egui::Button::new("Scan again")),
+            )
+            .clicked()
             {
                 self.start();
             }

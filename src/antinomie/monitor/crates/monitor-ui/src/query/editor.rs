@@ -2,6 +2,7 @@
 //! The filter bar: the edit box, its completions and its history.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 
 pub fn filter_edit(
     ui: &mut egui::Ui,
@@ -253,7 +254,7 @@ fn filter_edit_iter<'a>(
             ui.menu_button("Recent filters", |ui| {
                 crate::widgets::bounded_menu(ui, |ui| {
                     for entry in &history {
-                        if ui.add(egui::Button::new(entry).truncate()).on_hover_text(entry).clicked() { *text = entry.clone(); menu_changed = true; ui.close(); }
+                        if ui.add(egui::Button::new(entry).truncate()).value_tip(entry).clicked() { *text = entry.clone(); menu_changed = true; ui.close(); }
                     }
                 });
             });

@@ -7,6 +7,7 @@ use super::index::GraphIndex;
 use super::paint::{self, Colors};
 use super::view::{Frame, Metrics};
 use super::*;
+use crate::widgets::Tip as _;
 use eframe::egui::{Align2, Pos2, Rect, Sense};
 
 /// Zoom limits and the step of the buttons. Ctrl+wheel moves in finer steps.
@@ -106,7 +107,7 @@ impl Strip {
                 self.zoom > ZOOM_MIN + 1e-3,
                 egui::Button::new(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS).frame(false),
             )
-            .on_hover_text("Zoom out (Ctrl+wheel over the graph)");
+            .name_tip("Zoom out (Ctrl+wheel)");
         if out.clicked() {
             self.step_zoom(-1);
         }
@@ -130,7 +131,7 @@ impl Strip {
                 self.zoom < ZOOM_MAX - 1e-3,
                 egui::Button::new(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS).frame(false),
             )
-            .on_hover_text("Zoom in (Ctrl+wheel over the graph)");
+            .name_tip("Zoom in (Ctrl+wheel)");
         if zoom_in.clicked() {
             self.step_zoom(1);
         }
@@ -151,7 +152,7 @@ impl Strip {
             let arrow = if open { "▾" } else { "▸" };
             if ui
                 .add(egui::Button::new(arrow).frame(false))
-                .on_hover_text(if open {
+                .name_tip(if open {
                     "Collapse to one line"
                 } else {
                     "Show the activity graph"
@@ -170,7 +171,7 @@ impl Strip {
             }
             outcome.open_window = ui
                 .add(egui::Button::new(egui_phosphor::regular::ARROW_SQUARE_OUT).frame(false))
-                .on_hover_text("Open the activity graph in its own window")
+                .name_tip("Open in a window")
                 .clicked();
             if open {
                 self.zoom_buttons(ui);

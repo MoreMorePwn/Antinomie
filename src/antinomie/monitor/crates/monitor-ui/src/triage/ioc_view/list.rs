@@ -3,6 +3,7 @@
 //! the selected one.
 use super::*;
 use crate::widgets::fit_table::{Col, FitBuilder};
+use crate::widgets::Tip as _;
 use crate::{query, widgets::fit_table};
 
 /// The rows a filter keeps.
@@ -66,11 +67,8 @@ impl View {
                 .filter(|item| item.ty == ty && item.noise.is_some())
                 .count();
             if noisy > 0 || self.noise {
-                let chip = ui
-                    .selectable_label(self.noise, format!("Base image noise {noisy}"))
-                    .on_hover_text(
-                        "The guest's own clock sync, DHCP and apt traffic. Not the sample's; listed here, not dropped.",
-                    );
+                let chip = crate::widgets::with_help(ui, "The guest's own clock sync, DHCP and apt traffic. Not the sample's; listed here, not dropped.", |ui| ui
+                    .selectable_label(self.noise, format!("Base image noise {noisy}")));
                 if chip.clicked() {
                     self.noise = !self.noise;
                 }
@@ -340,7 +338,8 @@ impl View {
                             if let Some(evidence) = indicator.evidence.first() {
                                 if ui
                                     .small_button("Jump ▸")
-                                    .on_hover_text(&evidence.label)
+                                    // Where it jumps.
+                                    .value_tip(&evidence.label)
                                     .clicked()
                                 {
                                     *jump = jump_of(&evidence.jump);

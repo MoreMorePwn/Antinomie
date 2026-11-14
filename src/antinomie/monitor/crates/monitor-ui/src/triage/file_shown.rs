@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The menu of a file hash. The columns are in `antinomie_triage::file_shown`.
 use super::*;
+use crate::widgets::Tip as _;
 
 pub(super) use antinomie_triage::file_shown::*;
 
@@ -11,11 +12,7 @@ pub fn copy_hash_menu(ui: &mut egui::Ui, values: &[(&str, RowValue)]) {
         _ => None,
     });
     if let Some(hash) = hash {
-        if ui
-            .button("Copy SHA-256")
-            .on_hover_text(hash.as_str())
-            .clicked()
-        {
+        if ui.button("Copy SHA-256").value_tip(hash.as_str()).clicked() {
             ui.ctx().copy_text(hash.clone());
             ui.close();
         }

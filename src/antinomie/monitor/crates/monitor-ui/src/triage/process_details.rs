@@ -49,26 +49,28 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, values: &[(&str, Ro
     let total = files::number(values, "process.suspicious").unwrap_or(0);
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
-        if ui
-            .button("Show its calls")
-            .on_hover_text("Open the Syscall Trace filtered to this process")
-            .clicked()
+        if crate::widgets::with_help(
+            ui,
+            "Open the Syscall Trace filtered to this process",
+            |ui| ui.button("Show its calls"),
+        )
+        .clicked()
         {
             ui.ctx().data_mut(|data| {
                 data.insert_temp(egui::Id::new(TRACE_SCOPE), trace_filter(pid, cookie));
             });
         }
-        if ui
-            .button("Files it touched")
-            .on_hover_text("Opened files, filtered to this PID")
-            .clicked()
+        if crate::widgets::with_help(ui, "Opened files, filtered to this PID", |ui| {
+            ui.button("Files it touched")
+        })
+        .clicked()
         {
             view.scope_to_pid(ui.ctx(), Section::Files, pid);
         }
-        if ui
-            .add_enabled(total > 0, egui::Button::new("Suspicious activity"))
-            .on_hover_text("Suspicious activity, filtered to this PID")
-            .clicked()
+        if crate::widgets::with_help(ui, "Suspicious activity, filtered to this PID", |ui| {
+            ui.add_enabled(total > 0, egui::Button::new("Suspicious activity"))
+        })
+        .clicked()
         {
             view.scope_to_pid(ui.ctx(), Section::Process, pid);
         }

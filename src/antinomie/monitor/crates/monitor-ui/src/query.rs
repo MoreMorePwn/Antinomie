@@ -18,5 +18,22 @@ pub(crate) use self::{
     tables::*,
 };
 
+/// The filter syntax ([`HELP`]) as a help icon's text: each field and
+/// example line as code, the sentences after them as a paragraph.
+pub(crate) fn filter_help() -> String {
+    let mut lines = String::from("Filter syntax\n\n");
+    let mut prose = Vec::new();
+    for line in HELP.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if line.ends_with('.') {
+            prose.push(line);
+        } else {
+            lines.push_str(&format!("- `{line}`\n"));
+        }
+    }
+    lines.push('\n');
+    lines.push_str(&prose.join(" "));
+    lines
+}
+
 #[cfg(test)]
 mod tests;

@@ -131,17 +131,18 @@ impl TriageView {
         let mut open_ioc = false;
         ui.horizontal_wrapped(|ui| {
             if !hint.is_empty() {
-                ui.label(RichText::new(egui_phosphor::regular::INFO).color(theme::muted()))
-                    .on_hover_text(hint);
+                crate::widgets::help(ui, hint);
             }
             if self.new_tab == NewTab::Endpoints && antinomie_monitor_core::geoip::attribution_due()
             {
                 crate::tools_page::geoip_attribution(ui);
             }
-            if ui
-                .small_button("Open IOC")
-                .on_hover_text("Indicators with dataset matches, their process and evidence")
-                .clicked()
+            if crate::widgets::with_help(
+                ui,
+                "Indicators with dataset matches, their process and evidence",
+                |ui| ui.small_button("Open IOC"),
+            )
+            .clicked()
             {
                 open_ioc = true;
             }

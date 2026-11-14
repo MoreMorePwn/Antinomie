@@ -604,13 +604,17 @@ impl Inspector {
                 _ => "async",
             };
             ui.colored_label(theme::muted(), phase);
-            open_data = ui
-                .button(format!(
-                    "{} Open data…",
-                    egui_phosphor::regular::ARROW_SQUARE_OUT
-                ))
-                .on_hover_text("Show all captured bytes as text, hexdump, C array, Base64 and more")
-                .clicked();
+            open_data = crate::widgets::with_help(
+                ui,
+                "Show all captured bytes as text, hexdump, C array, Base64 and more",
+                |ui| {
+                    ui.button(format!(
+                        "{} Open data…",
+                        egui_phosphor::regular::ARROW_SQUARE_OUT
+                    ))
+                },
+            )
+            .clicked();
         });
         let length = ui.add(
             egui::Label::new(capture_text(field, capture_summary(field)))

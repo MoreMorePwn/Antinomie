@@ -91,11 +91,10 @@ pub(super) fn show(
         let idle = view.is_some_and(|view| !panel.waiting(view) && !view.loading);
         let can = live && idle;
         let tid = view.and_then(|view| view.selected_tid);
-        let button = |ui: &mut egui::Ui, enabled: bool, label: String, tip: &str| {
-            ui.add_enabled(enabled, egui::Button::new(label))
-                .on_hover_text(tip)
-                .on_disabled_hover_text(disabled_reason(view, stopped))
-                .clicked()
+        // One help icon ends the row: each button's meaning, and why the
+        // greyed ones are off.
+        let button = |ui: &mut egui::Ui, enabled: bool, label: String, _tip: &str| {
+            ui.add_enabled(enabled, egui::Button::new(label)).clicked()
         };
         if button(
             ui,
@@ -131,22 +130,25 @@ pub(super) fn show(
             actions.push(PanelAction::Debug(DebugAction::Refresh));
         }
         ui.separator();
-        if ui
-            .button("Detach")
-            .on_hover_text("Remove breakpoints; the process keeps running")
-            .clicked()
-        {
+        if ui.button("Detach").clicked() {
             actions.push(PanelAction::Detach { kill: false });
         }
-        if ui
-            .button("Detach and kill")
-            .on_hover_text(
-                "Ends the process now with SIGKILL, without letting it save or clean up.",
-            )
-            .clicked()
-        {
+        if ui.button("Detach and kill").clicked() {
             actions.push(PanelAction::Detach { kill: true });
         }
+        let mut text = String::from(
+            "Debugger controls\n\n\
+             - **Continue**: resume every thread.\n\
+             - **Step**: run one instruction of the selected thread; the other threads stay stopped.\n\
+             - **Stop**: stop every thread of the process.\n\
+             - **Refresh**: read the registers and memory again.\n\
+             - **Detach**: remove breakpoints; the process keeps running.\n\
+             - **Detach and kill**: end the process now with `SIGKILL`, without letting it save or clean up.",
+        );
+        if !can {
+            text = format!("{}\n\n{text}", disabled_reason(view, stopped));
+        }
+        crate::widgets::help(ui, text);
     });
     endpoint(ui, info);
 }

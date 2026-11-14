@@ -2,6 +2,7 @@
 //! The list of entries on the left: "Current disk (VM off)", the buttons to
 //! dump the disk or import an image, and the saved dumps (see [`super::dumps`]).
 use super::*;
+use crate::widgets::Tip as _;
 use crate::{network_view::capture_row, theme};
 use antinomie_monitor_core::disks::{DiskJobPurpose, DiskJobStage};
 
@@ -18,7 +19,7 @@ impl DiskView {
                     && self.waiting.is_none();
                 if ui
                     .add(egui::Button::new(egui_phosphor::regular::ARROW_CLOCKWISE).frame(false))
-                    .on_hover_text("Read the list of dumps again and measure the current disk")
+                    .name_tip("Refresh")
                     .clicked()
                 {
                     // The list is read again on the next frame.
@@ -50,21 +51,23 @@ impl DiskView {
         }
         ui.add_space(4.0);
         self.dump_button(ui, cx, true);
-        if ui
-            .add_enabled(
-                cx.recordings.is_some(),
-                egui::Button::new(format!(
-                    "{} Import image…",
-                    egui_phosphor::regular::FILE_ARROW_UP
-                ))
-                .min_size(egui::vec2(ui.available_width(), 0.0)),
-            )
-            .on_hover_text(
-                "Browse a raw ext4 image made elsewhere (the file stays where it is), or \
+        if crate::widgets::with_help_or(
+            ui,
+            "Browse a raw ext4 image made elsewhere (the file stays where it is), or \
                  convert a qcow2 image in the sandbox into a dump",
-            )
-            .on_disabled_hover_text("Select a VM: imported images are kept with its recordings")
-            .clicked()
+            "Select a VM: imported images are kept with its recordings",
+            |ui| {
+                ui.add_enabled(
+                    cx.recordings.is_some(),
+                    egui::Button::new(format!(
+                        "{} Import image…",
+                        egui_phosphor::regular::FILE_ARROW_UP
+                    ))
+                    .min_size(egui::vec2(ui.available_width(), 0.0)),
+                )
+            },
+        )
+        .clicked()
         {
             self.open_import();
         }

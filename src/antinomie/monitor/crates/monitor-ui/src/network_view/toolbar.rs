@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Display filter toolbar, quick filters and the Wireshark handoff.
 use super::*;
+use crate::widgets::Tip as _;
 
 /// Placeholders of the three filter boxes, each a valid example.
 const QUICK_SEARCH_HINT: &str = "filter e.g. port 443";
@@ -19,7 +20,7 @@ impl NetworkView {
                         .frame(false)
                         .selected(!self.hide_list),
                 )
-                .on_hover_text(if self.hide_list {
+                .name_tip(if self.hide_list {
                     "Show the capture list"
                 } else {
                     "Hide the capture list"
@@ -89,13 +90,14 @@ impl NetworkView {
                     .show(ui, |ui| {
                         ui.label("Quick Search");
                         let width = ui.available_width().max(100.0);
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.filter)
-                                .hint_text(crate::theme::placeholder(ui, QUICK_SEARCH_HINT))
-                                .margin(theme::TEXT_EDIT_MARGIN)
-                                .desired_width(crate::theme::edit_width(width)),
-                        )
-                        .on_hover_text(QUICK_SEARCH_HELP);
+                        crate::widgets::with_help(ui, QUICK_SEARCH_HELP, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.filter)
+                                    .hint_text(crate::theme::placeholder(ui, QUICK_SEARCH_HINT))
+                                    .margin(theme::TEXT_EDIT_MARGIN)
+                                    .desired_width(crate::theme::edit_width(width)),
+                            )
+                        });
                         ui.end_row();
                         ui.label("Display Filter");
                         let width = ui.available_width().max(100.0);

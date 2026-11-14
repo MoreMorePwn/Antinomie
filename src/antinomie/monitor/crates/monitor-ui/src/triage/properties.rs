@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Property jobs are isolated, on demand and tied to an exact run specimen.
 use super::*;
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::analysis::properties::{self as engine, FileProperties};
 
 type Identity = (std::path::PathBuf, String, Option<String>);
@@ -389,7 +390,7 @@ impl View {
                                         egui::Button::new(egui_phosphor::regular::ARROW_CLOCKWISE)
                                             .small(),
                                     )
-                                    .on_hover_text("Refresh unavailable properties for this file")
+                                    .name_tip("Refresh properties")
                                     .clicked();
                             }
                         });

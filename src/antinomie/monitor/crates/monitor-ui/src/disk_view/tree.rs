@@ -5,6 +5,7 @@
 //! listings. Symbolic links are shown with their target and never followed.
 use super::{display_name, mode_numeric, mode_rwx};
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 use crate::{
     app::{DEPTH_LIMIT, DIRECTORY_LIMIT, PAGE_LEN},
     theme,
@@ -532,7 +533,7 @@ fn entry_row(
         )
         .inner;
     if enabled && response.rect.width() + 1.0 >= name_width {
-        response = response.on_hover_text(&text);
+        response = response.value_tip(&text);
     }
     if enabled && response.clicked() {
         if directory {
@@ -572,7 +573,7 @@ fn entry_row(
         },
     );
     if !enabled {
-        response.on_disabled_hover_text(
+        response.reason_tip(
             "The name is not valid UTF-8 (or holds a separator); it cannot be addressed here",
         );
         return;

@@ -28,13 +28,17 @@ impl NetworkView {
             });
         });
         if let Some(active) = cx.active {
-            let button = ui
-                .add_enabled(
-                    !cx.pending,
-                    egui::Button::new(format!("{} Stop capture", egui_phosphor::regular::STOP))
-                        .min_size(egui::vec2(ui.available_width(), 0.0)),
-                )
-                .on_hover_text(format!("Stop writing {}", active.file.display()));
+            let button = crate::widgets::with_help(
+                ui,
+                format!("Stop writing {}", active.file.display()),
+                |ui| {
+                    ui.add_enabled(
+                        !cx.pending,
+                        egui::Button::new(format!("{} Stop capture", egui_phosphor::regular::STOP))
+                            .min_size(egui::vec2(ui.available_width(), 0.0)),
+                    )
+                },
+            );
             if button.clicked() {
                 action = Some(NetworkAction::Stop);
             }
@@ -46,16 +50,21 @@ impl NetworkView {
             } else {
                 None
             };
-            let button = ui
-                .add_enabled(
-                    why.is_none() && !cx.pending,
-                    egui::Button::new(format!("{} Start capture", egui_phosphor::regular::RECORD))
+            let button = crate::widgets::with_help_or(
+                ui,
+                "Record every packet of the VM's network interface, outside the guest",
+                why.unwrap_or("Waiting for the VM"),
+                |ui| {
+                    ui.add_enabled(
+                        why.is_none() && !cx.pending,
+                        egui::Button::new(format!(
+                            "{} Start capture",
+                            egui_phosphor::regular::RECORD
+                        ))
                         .min_size(egui::vec2(ui.available_width(), 0.0)),
-                )
-                .on_hover_text(
-                    "Record every packet of the VM's network interface, outside the guest",
-                )
-                .on_disabled_hover_text(why.unwrap_or("Waiting for the VM"));
+                    )
+                },
+            );
             if button.clicked() {
                 action = Some(NetworkAction::Start);
             }

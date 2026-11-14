@@ -137,10 +137,13 @@ impl TriageView {
     /// The Refresh, interval and status row of the sections that keep it.
     pub(super) fn refresh_row(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(input.archive.is_some(), egui::Button::new("Refresh"))
-                .on_disabled_hover_text("A whole-run index starts after the recording is saved")
-                .clicked()
+            if crate::widgets::with_help_or(
+                ui,
+                "",
+                "A whole-run index starts after the recording is saved",
+                |ui| ui.add_enabled(input.archive.is_some(), egui::Button::new("Refresh")),
+            )
+            .clicked()
             {
                 self.refresh_now(input);
             }
@@ -245,10 +248,13 @@ impl TriageView {
                 style.bg_stroke = egui::Stroke::NONE;
             }
             ui.menu_button(rich, |ui| {
-                if ui
-                    .add_enabled(input.archive.is_some(), egui::Button::new("Refresh now"))
-                    .on_disabled_hover_text("A whole-run index starts after the recording is saved")
-                    .clicked()
+                if crate::widgets::with_help_or(
+                    ui,
+                    "",
+                    "A whole-run index starts after the recording is saved",
+                    |ui| ui.add_enabled(input.archive.is_some(), egui::Button::new("Refresh now")),
+                )
+                .clicked()
                 {
                     self.refresh_now(input);
                     ui.close();

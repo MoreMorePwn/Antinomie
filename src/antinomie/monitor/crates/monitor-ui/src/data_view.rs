@@ -376,10 +376,10 @@ fn elide(value: &str) -> String {
 pub(crate) fn copy_items(ui: &mut egui::Ui, items: &[(String, String)]) {
     ui.label(RichText::new("Copy").color(theme::muted()));
     for (label, value) in items {
-        if ui
-            .add(egui::Button::new(label.as_str()).shortcut_text(elide(value)))
-            .on_hover_text(format!("Copy {}", label.to_lowercase()))
-            .clicked()
+        if crate::widgets::with_help(ui, format!("Copy {}", label.to_lowercase()), |ui| {
+            ui.add(egui::Button::new(label.as_str()).shortcut_text(elide(value)))
+        })
+        .clicked()
         {
             ui.ctx().copy_text(value.clone());
             ui.close();
@@ -718,21 +718,27 @@ impl DataWindow {
         }
         ui.horizontal_wrapped(|ui| {
             let label = ui.label("Format");
-            egui::ComboBox::from_id_salt(("data-format", &self.key))
-                .selected_text(self.format.label())
-                .show_ui(ui, |ui| {
-                    for format in DataFormat::ALL {
-                        ui.selectable_value(&mut self.format, format, format.label())
-                            .on_hover_text(format.hint());
-                    }
-                })
-                .response
-                .labelled_by(label.id)
-                .on_hover_text(self.format.hint());
+            let formats = crate::widgets::list_help(
+                "Format",
+                DataFormat::ALL
+                    .iter()
+                    .map(|format| (format.label(), format.hint())),
+            );
+            crate::widgets::with_help(ui, formats, |ui| {
+                egui::ComboBox::from_id_salt(("data-format", &self.key))
+                    .selected_text(self.format.label())
+                    .show_ui(ui, |ui| {
+                        for format in DataFormat::ALL {
+                            ui.selectable_value(&mut self.format, format, format.label());
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id)
+            });
             let copying = copy_format(self.format, &self.segments);
-            if ui
-                .button(format!("{} Copy", egui_phosphor::regular::COPY))
-                .on_hover_text(if copying == self.format {
+            if crate::widgets::with_help(
+                ui,
+                if copying == self.format {
                     format!("Copy as {}", self.format.label())
                 } else {
                     format!(
@@ -740,8 +746,10 @@ impl DataWindow {
                          copying them as text would change them",
                         self.format.label()
                     )
-                })
-                .clicked()
+                },
+                |ui| ui.button(format!("{} Copy", egui_phosphor::regular::COPY)),
+            )
+            .clicked()
             {
                 let text = if copying == self.format {
                     self.rendered().text.clone()
@@ -753,14 +761,14 @@ impl DataWindow {
             ui.menu_button("Copy as", |ui| {
                 for format in DataFormat::ALL {
                     let exact = copy_is_exact(format, &self.segments);
-                    if ui
-                        .add_enabled(exact, egui::Button::new(format.label()))
-                        .on_hover_text(format.hint())
-                        .on_disabled_hover_text(
-                            "These bytes are not text in this form: copying them would \
+                    if crate::widgets::with_help_or(
+                        ui,
+                        format.hint(),
+                        "These bytes are not text in this form: copying them would \
                              change them. Copy as Hex, Base64 or an escaped string.",
-                        )
-                        .clicked()
+                        |ui| ui.add_enabled(exact, egui::Button::new(format.label())),
+                    )
+                    .clicked()
                     {
                         let text = format_segments(format, &self.segments);
                         ui.ctx().copy_text(text);

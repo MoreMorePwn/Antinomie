@@ -3,6 +3,7 @@
 //! threads and its breakpoints.
 use super::*;
 use crate::widgets::fit_table::{Col, FitBuilder};
+use crate::widgets::Tip as _;
 use crate::{
     table_sort,
     widgets::fit_table::{self, Cell, Mark},
@@ -156,13 +157,16 @@ pub(super) fn breakpoints(
         );
         let entered =
             response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-        let add = ui
-            .add_enabled(editable && offered.is_ok(), egui::Button::new("Add"))
-            .on_disabled_hover_text(match offered {
+        let add = crate::widgets::with_help_or(
+            ui,
+            "",
+            match offered {
                 Err(why) => why,
                 Ok(()) => "Stop the process to change breakpoints",
-            })
-            .clicked();
+            },
+            |ui| ui.add_enabled(editable && offered.is_ok(), egui::Button::new("Add")),
+        )
+        .clicked();
         if (add || entered) && editable && offered.is_ok() {
             match state::parse_address(&panel.breakpoint_input) {
                 Ok(addr) => {
@@ -180,27 +184,34 @@ pub(super) fn breakpoints(
     ui.horizontal(|ui| {
         ui.weak("Add as");
         ui.add_enabled_ui(editable, |ui| {
-            egui::ComboBox::from_id_salt("debugger-breakpoint-kind")
-                .selected_text(KINDS[panel.breakpoint_kind].0)
-                .show_ui(ui, |ui| {
-                    for (index, (label, kind)) in KINDS.iter().enumerate() {
-                        let offered = kind_offered(view.caps, *kind);
-                        let item = ui
-                            .add_enabled_ui(offered.is_ok(), |ui| {
-                                ui.selectable_value(&mut panel.breakpoint_kind, index, *label)
-                            })
-                            .inner;
-                        if let Err(why) = offered {
-                            item.on_disabled_hover_text(why);
-                        }
-                    }
-                })
-                .response
-                .on_hover_text(
-                    "Software patches the code. Hardware and watchpoints use the CPU's debug \
+            crate::widgets::with_help(
+                ui,
+                "Software patches the code. Hardware and watchpoints use the CPU's debug \
                      registers (a few slots); a watch covers 8 bytes from the address, and a \
                      read watch also stops on writes, as the registers have no read-only mode.",
-                );
+                |ui| {
+                    egui::ComboBox::from_id_salt("debugger-breakpoint-kind")
+                        .selected_text(KINDS[panel.breakpoint_kind].0)
+                        .show_ui(ui, |ui| {
+                            for (index, (label, kind)) in KINDS.iter().enumerate() {
+                                let offered = kind_offered(view.caps, *kind);
+                                let item = ui
+                                    .add_enabled_ui(offered.is_ok(), |ui| {
+                                        ui.selectable_value(
+                                            &mut panel.breakpoint_kind,
+                                            index,
+                                            *label,
+                                        )
+                                    })
+                                    .inner;
+                                if let Err(why) = offered {
+                                    item.reason_tip(why);
+                                }
+                            }
+                        })
+                        .response
+                },
+            );
         });
     });
     if view.breakpoints.is_empty() {

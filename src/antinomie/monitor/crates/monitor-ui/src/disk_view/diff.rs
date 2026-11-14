@@ -11,6 +11,7 @@
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::disks::{
     reader::{DiffEntry, DiffReason, DiffResults, DiffStatus, DiskEntry},
     DiskSourceSpec,
@@ -395,22 +396,24 @@ impl DiskView {
         ui.menu_button("Compare with…", |ui| {
             crate::widgets::bounded_menu(ui, |ui| {
                 ui.add_enabled_ui(backend_ready, |ui| {
-                    if ui
-                        .button("Installed base image")
-                        .on_hover_text("What the VM's disk was created from")
-                        .on_disabled_hover_text(why)
-                        .clicked()
+                    if crate::widgets::with_help_or(
+                        ui,
+                        "What the VM's disk was created from",
+                        why,
+                        |ui| ui.button("Installed base image"),
+                    )
+                    .clicked()
                     {
                         chosen = Some(Against::Source(DiskSourceSpec::Base));
                     }
                     for checkpoint in source::offered(&self.checkpoints) {
-                        if ui
-                            .button(format!(
+                        if crate::widgets::with_help_or(ui, "", why, |ui| {
+                            ui.button(format!(
                                 "Checkpoint {}",
                                 source::checkpoint_label(checkpoint)
                             ))
-                            .on_disabled_hover_text(why)
-                            .clicked()
+                        })
+                        .clicked()
                         {
                             chosen = Some(Against::Source(DiskSourceSpec::Checkpoint(
                                 checkpoint.id.clone(),
@@ -420,13 +423,18 @@ impl DiskView {
                 });
                 ui.separator();
                 if selected_dump.is_some()
-                    && ui
-                        .add_enabled(
-                            cx.current_disk.is_some(),
-                            egui::Button::new("The open view"),
-                        )
-                        .on_disabled_hover_text("Open the current disk (or a checkpoint) first")
-                        .clicked()
+                    && crate::widgets::with_help_or(
+                        ui,
+                        "",
+                        "Open the current disk (or a checkpoint) first",
+                        |ui| {
+                            ui.add_enabled(
+                                cx.current_disk.is_some(),
+                                egui::Button::new("The open view"),
+                            )
+                        },
+                    )
+                    .clicked()
                 {
                     chosen = Some(Against::View);
                 }
@@ -641,7 +649,8 @@ impl DiskView {
                     .color(status_color(entry.status));
                 if ui
                     .selectable_label(selected == Some(index), label)
-                    .on_hover_text(if linked {
+                    // What the row's "◆ in Triage" mark means.
+                    .value_tip(if linked {
                         "Also listed in Triage › Changed files for the selected run"
                     } else {
                         ""

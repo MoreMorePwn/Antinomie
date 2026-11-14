@@ -197,13 +197,12 @@ impl View {
             ui.horizontal_wrapped(|ui| {
                 if !eligible.is_empty() {
                     let ready = self.online_on && self.job.is_none();
-                    if ui
-                        .add_enabled(ready, egui::Button::new("Check online"))
-                        .on_hover_text(if self.online_on {
+                    if crate::widgets::with_help(ui, if self.online_on {
                             "Ask abuse.ch about this value only"
                         } else {
                             "Turn on online lookups first"
-                        })
+                        }, |ui| ui
+                        .add_enabled(ready, egui::Button::new("Check online")))
                         .clicked()
                     {
                         self.start_online(eligible.clone());

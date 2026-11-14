@@ -68,11 +68,23 @@ impl CoreView {
                 }
             });
         });
-        if ui.add_enabled(unavailable.is_none(), egui::Button::new(format!("{} Dump core", egui_phosphor::regular::FILE_ARCHIVE))
-            .min_size(egui::vec2(ui.available_width(), 0.0)))
-            .on_hover_text("Pause a selected process, capture its resident memory and thread context, then resume")
-            .on_disabled_hover_text(unavailable.unwrap_or_default())
-            .clicked() {
+        if crate::widgets::with_help_or(
+            ui,
+            "Pause a selected process, capture its resident memory and thread context, then resume",
+            unavailable.unwrap_or_default(),
+            |ui| {
+                ui.add_enabled(
+                    unavailable.is_none(),
+                    egui::Button::new(format!(
+                        "{} Dump core",
+                        egui_phosphor::regular::FILE_ARCHIVE
+                    ))
+                    .min_size(egui::vec2(ui.available_width(), 0.0)),
+                )
+            },
+        )
+        .clicked()
+        {
             action = Some(CoreAction::Dump);
         }
         if let Some(reason) = unavailable {
@@ -83,7 +95,7 @@ impl CoreView {
         if let Some(cancel) = self.cancel_buttons(ui, can_cancel, boot_id) {
             action = Some(cancel);
         }
-        if ui
+        if crate::widgets::with_help_or(ui, "Reference a Linux x86-64, aarch64 or 32-bit ARM process core made elsewhere. The file stays where it is.", "Select a VM with a recording folder; wait for any current operation to finish.", |ui| ui
             .add_enabled(
                 !self.roots.is_empty() && self.job.is_none(),
                 egui::Button::new(format!(
@@ -91,13 +103,7 @@ impl CoreView {
                     egui_phosphor::regular::FILE_ARROW_UP
                 ))
                 .min_size(egui::vec2(ui.available_width(), 0.0)),
-            )
-            .on_hover_text(
-                "Reference a Linux x86-64, aarch64 or 32-bit ARM process core made elsewhere. The file stays where it is.",
-            )
-            .on_disabled_hover_text(
-                "Select a VM with a recording folder; wait for any current operation to finish.",
-            )
+            ))
             .clicked()
         {
             self.open_import_window();
@@ -143,15 +149,18 @@ impl CoreView {
             &tags,
         );
         let filter_id = ui.id().with(("table-filter", "core-history"));
-        ui.checkbox(&mut self.this_run_only, "This run only")
-            .on_hover_text(match &self.triage_run {
+        crate::widgets::with_help(
+            ui,
+            match &self.triage_run {
                 Some(run) => format!(
                     "Only the cores of the run selected in Triage ({}). It follows that selection.",
                     crate::run_link::short(run)
                 ),
                 None => "Only the cores of the run selected in Triage. No run is selected there."
                     .to_owned(),
-            });
+            },
+            |ui| ui.checkbox(&mut self.this_run_only, "This run only"),
+        );
         let manual_shown: Vec<_> = self
             .manual
             .iter()

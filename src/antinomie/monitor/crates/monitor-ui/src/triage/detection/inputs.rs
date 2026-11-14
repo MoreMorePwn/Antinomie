@@ -370,16 +370,14 @@ fn row(
         } else {
             "Scan"
         };
-        action.scan = ui
-            .add_enabled(scan.ready, egui::Button::new(RichText::new(label).small()))
-            .on_hover_text(format!(
+        action.scan = crate::widgets::with_help(ui, format!(
                 "Run the {engine} scan again for this run. It scans every {engine} input, not only this one."
-            ))
+            ), |ui| ui
+            .add_enabled(scan.ready, egui::Button::new(RichText::new(label).small())))
             .clicked();
         if input.outcome == InputOutcome::Failed {
-            action.log = ui
-                .small_button("Show log")
-                .on_hover_text("Open the result directory, which holds the detector log")
+            action.log = crate::widgets::with_help(ui, "Open the result directory, which holds the detector log", |ui| ui
+                .small_button("Show log"))
                 .clicked();
         }
     });
@@ -430,14 +428,14 @@ impl View {
         let hover = heading_hover(self.selected);
         let mut toggle = false;
         let heading = |ui: &mut egui::Ui| {
-            let clicked = ui
-                .add(
+            let clicked = crate::widgets::with_help(ui, hover, |ui| {
+                ui.add(
                     egui::Button::new(RichText::new(label).color(theme::text()))
                         .frame(false)
                         .truncate(),
                 )
-                .on_hover_text(hover)
-                .clicked();
+            })
+            .clicked();
             if let Some(counts) = counts {
                 ui.label(RichText::new(counts).small().color(theme::muted()));
             }

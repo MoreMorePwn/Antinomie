@@ -6,6 +6,7 @@
 //! core.
 use super::*;
 use crate::content_view::ContentSource;
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::content_scan::FileRange;
 
 /// The octets of `mapping` the core file holds.
@@ -52,8 +53,9 @@ impl CoreView {
                 .selected_text(&choices[index].0)
                 .show_ui(ui, |ui| {
                     for (position, (label, tip)) in choices.iter().enumerate() {
+                        // The mapping's details.
                         ui.selectable_value(&mut index, position, label)
-                            .on_hover_text(tip);
+                            .value_tip(tip);
                     }
                 });
         });

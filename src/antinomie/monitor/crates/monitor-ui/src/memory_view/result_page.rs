@@ -202,11 +202,11 @@ impl MemoryView {
         // The controls keep their size; the title takes what is left.
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.toggle_value(&mut self.show_log, "Messages")
-                    .on_hover_text(format!(
-                        "{}'s messages for this run",
-                        result.run.analyzer.label()
-                    ));
+                crate::widgets::with_help(
+                    ui,
+                    format!("{}'s messages for this run", result.run.analyzer.label()),
+                    |ui| ui.toggle_value(&mut self.show_log, "Messages"),
+                );
                 let text = self.text_view;
                 if crate::widgets::tab(ui, text, &crate::widgets::TabItem::new("Text"))
                     .on_hover_text("The result as plain text")
@@ -222,24 +222,26 @@ impl MemoryView {
                 }
                 ui.separator();
                 if result.has_files
-                    && ui
-                        .button(format!("{} Files", egui_phosphor::regular::FOLDER_OPEN))
-                        .on_hover_text("Open the files this run wrote")
-                        .clicked()
+                    && crate::widgets::with_help(ui, "Open the files this run wrote", |ui| {
+                        ui.button(format!("{} Files", egui_phosphor::regular::FOLDER_OPEN))
+                    })
+                    .clicked()
                 {
                     if let Err(error) = open_directory(&result.run.files()) {
                         status = Some(error);
                     }
                 }
                 if let Ok(table) = &result.table {
-                    if ui
-                        .button(format!("{} Copy", egui_phosphor::regular::COPY))
-                        .on_hover_text(if self.text_view {
+                    if crate::widgets::with_help(
+                        ui,
+                        if self.text_view {
                             "Copy this page as plain text"
                         } else {
                             "Copy this page as tab-separated text"
-                        })
-                        .clicked()
+                        },
+                        |ui| ui.button(format!("{} Copy", egui_phosphor::regular::COPY)),
+                    )
+                    .clicked()
                     {
                         ui.ctx().copy_text(if self.text_view {
                             memory::result_text(table, &result.shown)
@@ -323,12 +325,12 @@ impl MemoryView {
                 ui.horizontal_wrapped(|ui| {
                     ui.colored_label(theme::muted(), "Run in Volatility 3:");
                     for (plugin, what) in antinomie_monitor_core::memory::memnixfs::ROOT_FALLBACKS {
-                        if ui
-                            .button(format!("{what} ({plugin})"))
-                            .on_hover_text(format!(
-                                "Switch to Volatility 3 and run {plugin} on this dump"
-                            ))
-                            .clicked()
+                        if crate::widgets::with_help(
+                            ui,
+                            format!("Switch to Volatility 3 and run {plugin} on this dump"),
+                            |ui| ui.button(format!("{what} ({plugin})")),
+                        )
+                        .clicked()
                         {
                             self.analyzer = Analyzer::Volatility;
                             self.pending_plugin = Some((*plugin).to_owned());

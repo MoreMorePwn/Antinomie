@@ -312,12 +312,14 @@ impl ContentView {
         let size = source.size();
         let last_page = size.saturating_sub(1) / PAGE_SIZE * PAGE_SIZE;
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.mode, Mode::Hex, "Hex")
-                .on_hover_text("Sixteen octets a row, as hex and as characters");
-            ui.selectable_value(&mut self.mode, Mode::Text, "Text")
-                .on_hover_text(
-                    "The octets as raw text; a byte that is not printable shows as a dot",
-                );
+            crate::widgets::with_help(ui, "Sixteen octets a row, as hex and as characters", |ui| {
+                ui.selectable_value(&mut self.mode, Mode::Hex, "Hex")
+            });
+            crate::widgets::with_help(
+                ui,
+                "The octets as raw text; a byte that is not printable shows as a dot",
+                |ui| ui.selectable_value(&mut self.mode, Mode::Text, "Text"),
+            );
             ui.separator();
             let go = egui::TextEdit::singleline(&mut self.goto)
                 .hint_text(crate::theme::placeholder(
@@ -373,15 +375,19 @@ impl ContentView {
                 self.page_start = last_page;
             }
             ui.separator();
-            let open_strings = ui
-                .selectable_label(self.strings.open(), "Strings…")
-                .on_hover_text("Search for printable strings; runs only when you press Search");
+            let open_strings = crate::widgets::with_help(
+                ui,
+                "Search for printable strings; runs only when you press Search",
+                |ui| ui.selectable_label(self.strings.open(), "Strings…"),
+            );
             if open_strings.clicked() {
                 self.strings.toggle();
             }
-            let open_regex = ui
-                .selectable_label(self.regex.open(), "Regex…")
-                .on_hover_text("Search for a regular expression; runs only when you press Search");
+            let open_regex = crate::widgets::with_help(
+                ui,
+                "Search for a regular expression; runs only when you press Search",
+                |ui| ui.selectable_label(self.regex.open(), "Regex…"),
+            );
             if open_regex.clicked() {
                 self.regex.toggle();
             }

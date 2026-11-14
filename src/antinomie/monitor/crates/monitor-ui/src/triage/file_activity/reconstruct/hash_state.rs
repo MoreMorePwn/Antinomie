@@ -5,7 +5,7 @@
 //! unknown bytes or gaps cannot match the real file, so its hash control is
 //! disabled and says why.
 use super::{Hashed, Open, Pending};
-use crate::theme;
+use crate::widgets::Tip as _;
 use crate::widgets::{self, Tone};
 use antinomie_monitor_core::file_reconstruct::Incomplete;
 use eframe::egui::{self, RichText};
@@ -110,35 +110,30 @@ impl Open {
         }
         ui.horizontal(|ui| {
             let busy = self.hashing.is_some();
-            let button = ui.add_enabled(
-                blocker.is_none() && !busy && !current,
-                egui::Button::new("Hash this state"),
+            let button = crate::widgets::with_help_or(
+                ui,
+                "SHA-256, MD5 and SHA-1 of the file as reconstructed at the chosen call",
+                blocker.as_deref().unwrap_or_default(),
+                |ui| {
+                    ui.add_enabled(
+                        blocker.is_none() && !busy && !current,
+                        egui::Button::new("Hash this state"),
+                    )
+                },
             );
-            let button = match &blocker {
-                Some(reason) => button.on_disabled_hover_text(reason),
-                None => button.on_hover_text(
-                    "SHA-256, MD5 and SHA-1 of the file as reconstructed at the chosen call",
-                ),
-            };
             if button.clicked() {
                 self.start_hashing(&ui.ctx().clone());
             }
             if guest.is_empty() && !file.changed() {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(egui_phosphor::regular::INFO).color(theme::muted()),
-                    )
-                    .sense(egui::Sense::hover()),
-                )
-                .on_hover_text(
+                crate::widgets::help(
+                    ui,
                     "No guest hash: only read, and the guest hashes only programs, written files and deleted files.",
                 );
             }
             let last = file.hashes.iter().rev().find(|note| note.sha256.is_some());
             if let Some(note) = last {
-                if ui
-                    .button("Go to the last hash")
-                    .on_hover_text("Show the file as it stood when the guest took its last hash")
+                if crate::widgets::with_help(ui, "Show the file as it stood when the guest took its last hash", |ui| ui
+                    .button("Go to the last hash"))
                     .clicked()
                 {
                     let position = self.map.steps_until(note.time);
@@ -168,7 +163,7 @@ impl Open {
                         ui.label(RichText::new(label).strong().small());
                         if ui
                             .small_button(egui_phosphor::regular::COPY)
-                            .on_hover_text(format!("Copy the {label}"))
+                            .name_tip(format!("Copy the {label}"))
                             .clicked()
                         {
                             ui.ctx().copy_text(hex.clone());

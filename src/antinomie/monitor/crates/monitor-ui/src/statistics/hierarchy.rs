@@ -342,12 +342,9 @@ pub(super) fn show(
     partial: bool,
 ) -> Option<Click> {
     ui.horizontal(|ui| {
-        ui.checkbox(&mut state.failed_only, "Failed only").on_hover_text(
-            "Keep only calls that returned an error number. Percentages are then of the failed calls. \
-             Harmless errors such as EAGAIN and EINPROGRESS count too.",
-        );
-        ui.checkbox(&mut state.by_error, "By error")
-            .on_hover_text("Result first, then the calls that returned it: ENOENT, then openat, newfstatat.");
+        crate::widgets::with_help(ui, "Keep only calls that returned an error number. Percentages are then of the failed calls. \
+             Harmless errors such as EAGAIN and EINPROGRESS count too.", |ui| ui.checkbox(&mut state.failed_only, "Failed only"));
+        crate::widgets::with_help(ui, "Result first, then the calls that returned it: ENOENT, then openat, newfstatat.", |ui| ui.checkbox(&mut state.by_error, "By error"));
     });
     let sort =
         crate::triage::sort_current(ui.ctx(), TABLE).map(|spec| (spec.column, spec.descending));
