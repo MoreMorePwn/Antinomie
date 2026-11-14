@@ -1152,6 +1152,7 @@ mod tests {
             .unwrap_or(150);
         let (graph, layout) = parent_with(kids);
         let fit_all = std::env::var("ANTINOMIE_QA_FITALL").is_ok_and(|value| value == "1");
+        crate::app::tests::exit_after(40);
         eframe::run_native(
             "Antinomie graph QA",
             eframe::NativeOptions {

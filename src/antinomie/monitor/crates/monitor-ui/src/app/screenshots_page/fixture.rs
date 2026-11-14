@@ -76,6 +76,7 @@ fn native_timed_screenshots_fixture() {
     let seconds = var("ANTINOMIE_QA_SECONDS").parse::<u64>().unwrap_or(25);
     let data = PathBuf::from(var("ANTINOMIE_QA_DATA"));
     assert!(data.is_absolute(), "ANTINOMIE_QA_DATA must be a folder");
+    crate::app::tests::exit_after(seconds);
     eframe::run_native(
         "Antinomie Timed Screenshots QA",
         eframe::NativeOptions {

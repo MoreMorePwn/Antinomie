@@ -711,4 +711,14 @@ pub(crate) fn test_pcap() -> Vec<u8> {
     }
     file
 }
+/// A native fixture window closes itself at its deadline only while egui keeps
+/// drawing it: a window that stops being drawn (hidden, or a display that sends
+/// no more frames) never gets there and stays open, so this ends the test
+/// process a grace period after the deadline whatever the window does.
+pub(crate) fn exit_after(seconds: u64) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(seconds + 15));
+        std::process::exit(0);
+    });
+}
 mod stale_controls;

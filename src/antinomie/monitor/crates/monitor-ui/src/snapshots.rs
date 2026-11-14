@@ -1384,6 +1384,7 @@ pub(crate) mod tests {
             .and_then(|seconds| seconds.parse::<u64>().ok())
             .unwrap_or(30)
             .clamp(3, 120);
+        crate::app::tests::exit_after(seconds);
         eframe::run_native(
             "Antinomie Snapshot UI QA",
             eframe::NativeOptions {

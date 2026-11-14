@@ -172,6 +172,7 @@ fn native_statistics_fixture() {
     let fixture = Fixture::with_manifest(&calls(), manifest());
     let mut target = target(&fixture, "4c1e9a72");
     target.facts = Facts::of_run(&super::properties::run_summary(), "Finished, exit 0");
+    crate::app::tests::exit_after(seconds);
     eframe::run_native(
         "Antinomie Statistics QA",
         eframe::NativeOptions {

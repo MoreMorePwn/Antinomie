@@ -1723,6 +1723,7 @@ mod tests {
         println!(
             "Summary native fixture: state={state}, width={width}, font={font}, duration={seconds}s"
         );
+        crate::app::tests::exit_after(seconds);
         eframe::run_native(
             "Antinomie Summary QA",
             eframe::NativeOptions {

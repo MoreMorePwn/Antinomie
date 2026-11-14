@@ -1192,6 +1192,7 @@ mod tests {
                 pushes: Vec::new(),
             },
         ];
+        crate::app::tests::exit_after(seconds);
         eframe::run_native(
             "Antinomie Malware samples QA",
             eframe::NativeOptions {
