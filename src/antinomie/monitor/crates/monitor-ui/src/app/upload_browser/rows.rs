@@ -2,6 +2,7 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Cached flattened tree; only the viewport's fixed-height rows create widgets.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 pub(super) enum Row {
     Entry(Entry, usize),
@@ -105,7 +106,7 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
         .auto_shrink([false, false])
         .max_height(view.height.max(24.0))
         .min_scrolled_height(view.height.clamp(24.0, 100.0))
-        .show_rows(ui, row_height, browser.rows.len(), |ui, range| {
+        .show_rows_contained(ui, row_height, browser.rows.len(), |ui, range| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             #[cfg(test)]
             {
@@ -166,6 +167,20 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                                                 .clicked()
                                         {
                                             selected = Some(Action::SendRun(entry.path.clone()));
+                                            ui.close();
+                                        }
+                                        if available
+                                            && ui
+                                                .add_enabled(
+                                                    view.can_send,
+                                                    egui::Button::new("Send to VM"),
+                                                )
+                                                .on_hover_text(
+                                                    "Upload the file only; it is not run",
+                                                )
+                                                .clicked()
+                                        {
+                                            selected = Some(Action::SendOnly(entry.path.clone()));
                                             ui.close();
                                         }
                                         if !entry.directory
@@ -281,7 +296,7 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
         browser.rows_dirty = true;
         ui.ctx().request_repaint();
     }
-    if let Some(Action::Select(path) | Action::SendRun(path)) = &selected {
+    if let Some(Action::Select(path) | Action::SendRun(path) | Action::SendOnly(path)) = &selected {
         browser.selected = Some(path.clone());
     }
     selected

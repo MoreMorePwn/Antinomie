@@ -4,6 +4,7 @@
 //! on depth, only the viewport's rows create widgets) over the reader's
 //! listings. Symbolic links are shown with their target and never followed.
 use super::{display_name, mode_numeric, mode_rwx};
+use crate::scroll_contain::ScrollContained as _;
 use crate::{
     app::{DEPTH_LIMIT, DIRECTORY_LIMIT, PAGE_LEN},
     theme,
@@ -398,7 +399,7 @@ impl Tree {
         }
         #[cfg(test)]
         let mut drawn = 0;
-        area.show_rows(ui, row_height, self.rows.len(), |ui, range| {
+        area.show_rows_contained(ui, row_height, self.rows.len(), |ui, range| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             let columns = Columns {
                 meta_x: ui.max_rect().left() + name_width + ui.spacing().item_spacing.x,

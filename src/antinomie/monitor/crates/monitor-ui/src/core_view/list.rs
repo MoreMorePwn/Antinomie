@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The core list, its filters, and project export and import.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 impl CoreView {
     pub(super) fn list_toolbar(&mut self, ui: &mut egui::Ui) {
@@ -159,7 +160,7 @@ impl CoreView {
         egui::ScrollArea::vertical()
             .id_salt("core_capture_list")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if self.acquired.is_empty() && self.records.is_empty() && self.manual.is_empty() {
                     crate::theme::empty_state(ui, "No cores yet.");

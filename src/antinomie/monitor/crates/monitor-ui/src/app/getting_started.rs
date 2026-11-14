@@ -4,6 +4,7 @@
 //! `steps` for what a step shows.
 use super::*;
 use crate::getting_started::{self as walkthrough, Facts, Status, Step};
+use crate::scroll_contain::ScrollContained as _;
 use crate::widgets::{tabs, TabItem, Tone};
 use antinomie_monitor_core::{analysis_tools, dependencies::Dependency};
 
@@ -193,7 +194,7 @@ impl MonitorApp {
                     .max_height(height)
                     .min_scrolled_height(height)
                     .auto_shrink([false, false])
-                    .show(ui, |ui| self.getting_started_step(ui, &facts));
+                    .show_contained(ui, |ui| self.getting_started_step(ui, &facts));
                 dialog_footer(ui, |ui| {
                     let step = self.getting_started.step;
                     if ui.add_enabled(step != Step::Appearance, egui::Button::new("Back")).clicked() {

@@ -2,6 +2,7 @@
 //! The widget kit: tabs select and wrap, windows keep their title above the
 //! body and close on the button, tables paint their header.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use eframe::egui;
 
 const SIZE: egui::Vec2 = egui::vec2(800.0, 600.0);
@@ -695,7 +696,7 @@ fn a_window_never_takes_more_than_four_fifths_of_the_area_whatever_its_content()
                     .show(&ctx, |ui| {
                         // Long wrapped text above a long list in its own scroll area.
                         ui.add(egui::Label::new(long.as_str()).wrap());
-                        egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::ScrollArea::vertical().show_contained(ui, |ui| {
                             for line in 0..200 {
                                 ui.label(format!("line {line}"));
                             }

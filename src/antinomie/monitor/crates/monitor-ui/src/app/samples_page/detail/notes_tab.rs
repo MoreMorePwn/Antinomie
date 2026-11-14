@@ -174,7 +174,7 @@ fn show(ui: &mut egui::Ui, data: &Data) -> Option<Act> {
     egui::ScrollArea::vertical()
         .id_salt("sample_notes")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             for note in &data.notes {
                 note_card(ui, note, data, &mut act);
                 ui.add_space(6.0);

@@ -6,6 +6,7 @@
 //! the cells that are on screen, and kept in a bounded cache. A click opens
 //! the picture in a window that fits it whole or shows it at 1:1.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use crate::widgets;
 use chrono::TimeZone;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, TextureOptions, Vec2};
@@ -477,7 +478,7 @@ impl ScreenshotsPage {
         let columns = (((ui.available_width() + GAP) / (THUMB_W + GAP)) as usize).max(1);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 for vm in order {
                     let group: Vec<&Shot> = shots.iter().filter(|s| s.vm_id == vm).collect();
                     ui.add_space(6.0);
@@ -632,7 +633,7 @@ impl ScreenshotsPage {
                 if viewer.one_to_one {
                     egui::ScrollArea::both()
                         .auto_shrink([false, false])
-                        .show(ui, |ui| {
+                        .show_contained(ui, |ui| {
                             let (rect, _) = ui.allocate_exact_size(native, Sense::hover());
                             ui.painter().image(texture.id(), rect, uv, Color32::WHITE);
                         });

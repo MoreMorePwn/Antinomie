@@ -3,11 +3,12 @@
 //! from a texture that only changed rectangles update. A click on the screen
 //! captures the keyboard for the guest (Ctrl+Alt gives it back); while it is
 //! captured no app shortcut fires, the same rule as the terminal's. A
-//! captured screen says so: a banner over the picture, a frame around it and
-//! the toolbar's hint. The capture ends when the screen loses the focus, the
+//! captured screen says so in the toolbar, in yellow, with the way out; the
+//! picture has no frame or banner. The capture ends when the screen loses the focus, the
 //! window does, or the tab is not shown.
 mod keys;
 
+use crate::scroll_contain::ScrollContained as _;
 use crate::{activity::Level, theme, toasts};
 use antinomie_monitor_core::vnc::{PointerMode, ScreenClient, ScreenStatus};
 use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, Sense, TextureOptions, Vec2};
@@ -31,6 +32,9 @@ pub(crate) struct VmScreenView {
     grabbed: bool,
     /// The frame (`cumulative_frame_nr`) the tab was last drawn in.
     drawn_frame: Option<u64>,
+    /// Whether the window the tab was last drawn in had the focus: the
+    /// detached window's, not the main window's, when the tab is detached.
+    shown_focused: bool,
     /// Keys and modifiers sent as pressed, as (scancode, keysym).
     down: Vec<(u32, u32)>,
     buttons: u8,
@@ -47,7 +51,13 @@ impl VmScreenView {
     /// the running boot while the tab is open, none otherwise.
     pub(crate) fn sync(&mut self, ctx: &egui::Context, socket: Option<&Path>, open: bool) {
         self.seen = socket.map(Path::to_path_buf);
-        let window_focused = ctx.input(|input| input.focused);
+        // The main window is unfocused while a detached one has the focus, so
+        // the focus the tab saw when it was drawn decides, not this context's.
+        let window_focused = if self.drawn_frame.is_some() {
+            self.shown_focused
+        } else {
+            ctx.input(|input| input.focused)
+        };
         if self.grabbed && capture_ends(self.drawn_frame, ctx.cumulative_frame_nr(), window_focused)
         {
             self.release_all();
@@ -202,6 +212,7 @@ impl VmScreenView {
     ) -> Option<Request> {
         let ctx = ui.ctx().clone();
         self.drawn_frame = Some(ctx.cumulative_frame_nr());
+        self.shown_focused = ctx.input(|input| input.focused);
         self.refresh_texture(&ctx);
         let mut request = None;
         let status = self.client.as_ref().map(|(_, client)| client.status());
@@ -236,11 +247,7 @@ impl VmScreenView {
             }
             ui.separator();
             if self.grabbed {
-                ui.label(
-                    egui::RichText::new("Keyboard captured")
-                        .strong()
-                        .color(theme::warn()),
-                );
+                ui.label(egui::RichText::new(CAPTURED).strong().color(theme::warn()));
             } else {
                 ui.colored_label(theme::muted(), "Click the screen to type into the VM.");
             }
@@ -327,9 +334,6 @@ impl VmScreenView {
                 Color32::WHITE,
             );
             this.input(ui, &response, image, (fw, fh));
-            if this.grabbed {
-                paint_captured(ui.painter(), outer);
-            }
             if let Some((id, size, hotspot)) = cursor
                 && let Some(pos) = response.hover_pos()
             {
@@ -346,7 +350,7 @@ impl VmScreenView {
             egui::ScrollArea::both()
                 .auto_shrink(false)
                 .scroll(!self.grabbed)
-                .show(ui, |ui| {
+                .show_contained(ui, |ui| {
                     draw(ui, self, native, false);
                 });
         } else {
@@ -525,8 +529,7 @@ fn scroll(client: &ScreenClient, wheel: i32, buttons: u8, x: u16, y: u16) {
     }
 }
 
-/// The banner's text while the keyboard is captured (the toolbar says
-/// "Keyboard captured").
+/// The toolbar's text while the keyboard is captured, with how to release it.
 pub(crate) const CAPTURED: &str = "Keyboard captured. Press Ctrl+Alt to release it.";
 
 /// Whether a captured keyboard is given back now: the window lost the focus,
@@ -534,28 +537,4 @@ pub(crate) const CAPTURED: &str = "Keyboard captured. Press Ctrl+Alt to release 
 /// or the tab closed).
 fn capture_ends(drawn: Option<u64>, frame: u64, window_focused: bool) -> bool {
     !window_focused || drawn.is_none_or(|drawn| drawn + 1 < frame)
-}
-
-/// The sign that the keyboard goes to the guest: a frame round the screen and
-/// a banner at its top. Drawn over the picture; it takes no input.
-pub(crate) fn paint_captured(painter: &egui::Painter, screen: Rect) {
-    painter.rect_stroke(
-        screen.shrink(1.0),
-        0.0,
-        egui::Stroke::new(2.0, theme::warn()),
-        egui::StrokeKind::Inside,
-    );
-    let font = egui::FontId::proportional(14.0);
-    let galley = painter.layout_no_wrap(CAPTURED.to_owned(), font, Color32::BLACK);
-    let size = galley.size() + Vec2::new(24.0, 10.0);
-    let banner = Rect::from_center_size(
-        Pos2::new(screen.center().x, screen.top() + 8.0 + size.y / 2.0),
-        size,
-    );
-    painter.rect_filled(banner, 6.0, theme::warn());
-    painter.galley(
-        banner.center() - galley.size() / 2.0,
-        galley,
-        Color32::BLACK,
-    );
 }

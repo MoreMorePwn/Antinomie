@@ -9,6 +9,7 @@
 //! the changes the kernel was observed making in one run. Where a path is in
 //! both, each side links to the other and says which kind it is.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use antinomie_monitor_core::disks::{
     reader::{DiffEntry, DiffReason, DiffResults, DiffStatus, DiskEntry},
@@ -622,7 +623,7 @@ impl DiskView {
             area = area
                 .vertical_scroll_offset((position as f32 * ROW_HEIGHT - 2.0 * ROW_HEIGHT).max(0.0));
         }
-        area.show_rows(ui, ROW_HEIGHT, shown.len(), |ui, range| {
+        area.show_rows_contained(ui, ROW_HEIGHT, shown.len(), |ui, range| {
             for position in range {
                 let index = shown[position];
                 let entry = &results.entries[index];

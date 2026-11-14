@@ -2,6 +2,7 @@
 //! Captured data in common text forms (UTF-8, hexdump, C array, Base64, ...),
 //! the windows that show a field's whole capture, and the copy menus of
 //! numeric values.
+use crate::scroll_contain::ScrollContained as _;
 use crate::{theme, trace};
 use antinomie_monitor_core::{recording, FieldSummary};
 use eframe::egui::{self, RichText};
@@ -796,7 +797,7 @@ impl DataWindow {
                 egui::ScrollArea::both()
                     .id_salt("data-window-text")
                     .auto_shrink([false, false])
-                    .show_rows(ui, row_height, rendered.rows.len(), |ui, range| {
+                    .show_rows_contained(ui, row_height, rendered.rows.len(), |ui, range| {
                         for row in &rendered.rows[range] {
                             ui.add(
                                 egui::Label::new(display_row(&rendered.text[row.clone()], &font))

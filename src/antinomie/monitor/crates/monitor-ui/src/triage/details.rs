@@ -182,11 +182,11 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical()
             .id_salt("triage-shared-details")
             .auto_shrink([false, false])
-            .show(ui, |ui| view.ioc_details(ui, id));
+            .show_contained(ui, |ui| view.ioc_details(ui, id));
         return;
     }
     egui::ScrollArea::vertical().id_salt("triage-shared-details")
-        .auto_shrink([false, false]).show(ui, |ui| {
+        .auto_shrink([false, false]).show_contained(ui, |ui| {
         presentation::heading(ui, title(&selected.table), "");
         if selected.table == "triage-findings" {
             let values = selected.cells.first().map(|cell| cell.values.clone()).unwrap_or_default();

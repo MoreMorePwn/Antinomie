@@ -5,6 +5,7 @@
 //! the Strings and Regex sub-windows (`scan_pane`) search the whole source
 //! only when asked, and each hit jumps this view to its offset.
 use crate::hex_view::{self, Cell};
+use crate::scroll_contain::ScrollContained as _;
 use antinomie_monitor_core::content_scan::{self, ByteSource};
 use eframe::egui::{self, RichText};
 use std::{
@@ -479,7 +480,7 @@ impl ContentView {
         let mut measured = None;
         let (mut clicked, shift) = (None, ui.input(|i| i.modifiers.shift));
         let (selection, highlight) = (self.selection, self.highlight);
-        area.show_rows(ui, row_height, count, |ui, range| {
+        area.show_rows_contained(ui, row_height, count, |ui, range| {
             for index in range {
                 let (offset, len) = page.row(mode, index);
                 let text = match mode {

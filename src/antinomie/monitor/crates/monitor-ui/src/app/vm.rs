@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! VM configuration, launch and the VM settings dialog.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 mod dialog;
 
@@ -430,7 +431,7 @@ impl MonitorApp {
                 .id_salt("run-setup")
                 .max_height((ui.available_height() - footer).max(80.0))
                 .auto_shrink([false, false])
-                .show(ui, |ui| {
+                .show_contained(ui, |ui| {
                     // The time limit is one value, here and in Settings.
                     self.exec.analysis.time_limit_minutes =
                         self.settings.analysis_time_limit_minutes;

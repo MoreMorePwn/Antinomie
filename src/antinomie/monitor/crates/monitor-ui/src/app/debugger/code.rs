@@ -6,6 +6,7 @@
 //! function sidebar is not used: the debug engine reads memory windows, with
 //! no symbols, function bounds or load bias to name functions by.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use antinomie_monitor_core::debug::view::{BreakpointKind, WindowKind};
 
 /// Code bytes shown before an instruction's text; the rest is "…".
@@ -82,7 +83,7 @@ pub(super) fn show(
     egui::ScrollArea::both()
         .id_salt(("debugger-code", window.sequence, window.address))
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             for line in &lines {
                 let current = pc == Some(line.address);
                 let breakpoint = view

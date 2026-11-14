@@ -7,6 +7,7 @@
 //! the list, greyed, with the reason; Enter on it shows the reason and keeps
 //! the palette open. Escape (or Ctrl+K again) closes it.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 /// How many recent runs and library samples the palette lists.
 const RECENT_LIMIT: usize = 30;
@@ -375,7 +376,7 @@ impl MonitorApp {
                     .id_salt("command_palette_list")
                     .max_height(list_height)
                     .auto_shrink([false, true])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         for (position, item) in results.iter().enumerate() {
                             let selected = position == state.cursor;
                             let (rect, response) = ui.allocate_exact_size(

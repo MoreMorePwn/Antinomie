@@ -901,14 +901,7 @@ impl MonitorApp {
                 self.rules_ui.show_abusech();
                 self.open_library(LibraryPage::Rules);
             }
-            Action::ExplorerFolder => {
-                if let Err(error) = self.folder_picker.choose(FolderTarget {
-                    generation: self.explorer_browser.generation,
-                    kind: FolderKind::ExplorerRoot,
-                }) {
-                    self.report_error(format!("Explorer folder: {error}"));
-                }
-            }
+            Action::ExplorerFolder => self.open_folder_dialog(),
         }
     }
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Paired invocation presentation and inspectors for actually captured content.
+use crate::scroll_contain::ScrollContained as _;
 use crate::tree_lines::Prefix;
 use crate::{
     data_view::{self, OpenData},
@@ -198,7 +199,7 @@ impl Inspector {
                 egui::ScrollArea::both()
                     .id_salt("argument_tree_scroll")
                     .auto_shrink([false, false])
-                    .show(ui, |ui| self.tree(ui, invocation));
+                    .show_contained(ui, |ui| self.tree(ui, invocation));
             });
         let mut read = None;
         egui::CentralPanel::default()
@@ -212,7 +213,7 @@ impl Inspector {
                 egui::ScrollArea::both()
                     .id_salt("value_inspector")
                     .auto_shrink([false, false])
-                    .show(ui, |ui| read = self.value_pane(ui, invocation, can_read));
+                    .show_contained(ui, |ui| read = self.value_pane(ui, invocation, can_read));
             });
         read
     }

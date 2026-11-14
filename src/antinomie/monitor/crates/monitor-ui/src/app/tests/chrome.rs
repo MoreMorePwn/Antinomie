@@ -69,6 +69,7 @@ fn escape_closes_the_topmost_dialog_first() {
         let mut app = super::tests::app();
         match dialog {
             Dialog::Confirm => app.confirm = Some(Confirm::Delete("vm".into())),
+            Dialog::Folder => app.open_folder_dialog(),
             Dialog::Name => app.name_action = Some(("vm".into(), false, "VM".into())),
             Dialog::Transport => {
                 app.new_image();
@@ -379,7 +380,7 @@ fn sidebar_shows_each_vm_state_resources_and_latest_run() {
     assert!(
         details
             .iter()
-            .any(|text| text.as_str() == "Linux 6.12.94 · x86-64"),
+            .any(|text| text.as_str() == "Linux 6.12.94 · x86-64 · r22"),
         "{details:?}"
     );
     assert!(

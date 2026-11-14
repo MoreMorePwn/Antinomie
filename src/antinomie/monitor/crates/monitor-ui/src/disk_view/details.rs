@@ -2,6 +2,7 @@
 //! The shared Details dock for the Disks tab: the open view, or the selected
 //! file, directory or link, with Extract, Save, Open with and Static analysis.
 use super::{extraction::Intent, *};
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use antinomie_monitor_core::disks::{export::ExportFormat, reader::DiskEntry};
 
@@ -61,7 +62,7 @@ impl DiskView {
         egui::ScrollArea::vertical()
             .id_salt("disk_details")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 let selected = self
                     .selection
                     .as_ref()

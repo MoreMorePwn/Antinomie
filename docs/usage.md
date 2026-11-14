@@ -257,10 +257,12 @@ says the VM has no screen and how to change it. The guest sees the same devices
 in all three.
 
 On the VM screen tab, a click on the picture captures the keyboard for the
-guest. While it is captured the picture has an amber frame and a banner,
-"Keyboard captured. Press Ctrl+Alt to release it.", and the bar above reads
-"Keyboard captured". Ctrl+Alt gives the keyboard back; so does the window losing focus, or
+guest. While it is captured the bar above the picture says, in amber,
+"Keyboard captured. Press Ctrl+Alt to release it."; the picture itself has no frame.
+Ctrl+Alt gives the keyboard back; so does the window losing focus, or
 another tab coming to the front. No app shortcut fires while it is captured.
+This works the same on a detached VM screen window, and dragging the tab of a
+detached window that holds only that tab moves the window.
 
 **Timed screenshots (a run's picture series).** In **Run program**, the **Screen**
 section has **Take a screenshot every N s** (off by default; N from 1 to 999,
@@ -289,11 +291,25 @@ how many were left out).
 
 The **Overview** (the first tab of the work area) shows the selected VM: its name
 and state dot, the resource cards, the **Compute** card with the vCPU count and
-the RAM side by side, the configuration cards and the **Snapshots** box.
+the RAM side by side, the configuration cards and the **Snapshots** box. With no
+VM selected it shows the Antinomie logo with three buttons: **Manage base
+images**, **Create new VM** and **Manage samples**.
 
-The sidebar's **Explorer** title has a folder button that chooses the folder to
-browse; **File > Open folder…** does the same, and **File > Import sample…** opens
-the Samples page's **Add file** dialog.
+The sidebar's **Explorer** title has an **Open Folder** button (a folder icon);
+**File > Open folder…** does the same. Both open a small window with the path of
+the host folder to browse (Enter or **OK** accepts it) and a folder button that
+opens the filesystem explorer to choose it. Right-click a file in the Explorer for
+**Send and Run** (opens Upload file filled in), **Send to VM** (uploads it to
+`/tmp` in the running VM at once and does not run it) and **Add to Samples…**.
+**File > Import sample…** opens the Samples page's **Add file** dialog.
+
+The Base images table lists each installed base as "name · architecture ·
+revision" (for example "BusyBox · arm64 · r22") with a **Revision** column; the
+status column has a bounded width so the base and guest names get the room.
+The same name is used in the New VM and Settings base choices.
+
+A scroll area inside a scrollable window or panel keeps the mouse wheel while
+the pointer is over it, so reaching its top or bottom does not scroll the window.
 
 **Settings → Telemetry transport…** tunes how records leave the guest (bases
 for Antinomie 0.3.0 and newer):
@@ -337,7 +353,8 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    VM's disk (take one in **Snapshots**). **Start anyway** starts it; **Don't ask
    me again** turns the question off, and **Settings > Notifications > Start**
    turns it back on.
-2. **Upload file** copies a program from the host (**Host file**) to a path in
+2. **Upload file** copies a program from the host (**Host file**, with a folder
+   button beside the path that opens the file chooser) to a path in
    the guest (**Guest path**).
 3. **Run program** runs it. Set the **Executable**, **Arguments**,
    **Working directory** and **Environment**. **User** is Root, Normal user

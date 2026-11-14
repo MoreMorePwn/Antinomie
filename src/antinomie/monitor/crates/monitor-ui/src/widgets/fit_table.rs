@@ -37,6 +37,7 @@
 //!     .header(h, |mut header| { /* header.col(...) per column */ })
 //!     .body(|body| { /* rows */ });
 //! ```
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use eframe::egui::{self, vec2, Align, Layout, Pos2, Rect, RichText, Shape, Stroke, Ui};
 use egui_extras::{Column, TableBuilder};
@@ -321,7 +322,7 @@ pub fn show_keyed<R>(
         let shown = egui::ScrollArea::horizontal()
             .id_salt(id)
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.set_min_width(width);
                 add(ui, &plan)
             });
@@ -649,10 +650,12 @@ impl<'a> FitBuilder<'a> {
                 builder = builder.scroll_to_row(row, align);
             }
             let builder = plan.apply(builder);
-            match header {
+            let output = match header {
                 Some((height, add)) => builder.header(height, add).body(body),
                 None => builder.body(body),
-            }
+            };
+            crate::scroll_contain::contain(ui, &output);
+            output
         })
     }
 }

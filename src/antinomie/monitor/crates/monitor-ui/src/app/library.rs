@@ -11,6 +11,8 @@ use crate::{
 struct BaseRow {
     id: String,
     name: String,
+    /// The base's Antinomie revision ("r22"), empty when it is not recorded.
+    revision: Option<u32>,
     status: RevisionStatus,
     /// What to do about a base that is not current; empty when it is.
     hint: String,
@@ -161,11 +163,8 @@ impl MonitorApp {
                 };
                 BaseRow {
                     id: base.id.clone(),
-                    name: versioned_label(
-                        &base.label,
-                        base.revision,
-                        base.min_app_version.as_deref(),
-                    ),
+                    name: installed_base_name(base),
+                    revision: base.revision,
                     status,
                     hint,
                     size: base.size_bytes,
@@ -235,9 +234,10 @@ impl MonitorApp {
                 let (a, b) = (&rows[a], &rows[b]);
                 match column {
                     0 => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                    1 => a.hint.cmp(&b.hint),
-                    2 => a.size.cmp(&b.size),
-                    3 => a.vms.cmp(&b.vms),
+                    1 => a.revision.cmp(&b.revision),
+                    2 => a.hint.cmp(&b.hint),
+                    3 => a.size.cmp(&b.size),
+                    4 => a.vms.cmp(&b.vms),
                     _ => a.guest.to_lowercase().cmp(&b.guest.to_lowercase()),
                 }
             });
@@ -255,17 +255,23 @@ impl MonitorApp {
                 .sense(egui::Sense::click())
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .striped(true)
-                // The name and the status take what they need; the guest column
-                // takes the rest, so no column is squeezed by a long base name.
-                .column(Col::flex(320.0).at_least(180.0).resizable(true).clip(true))
-                .column(Col::rest(80.0).at_least(170.0).clip(true))
-                .column(Col::fixed(96.0))
-                .column(Col::fixed(84.0))
-                .column(Col::flex(130.0).at_least(90.0).resizable(true).clip(true))
+                // The status is bounded; the base and guest names get the room.
+                .column(Col::flex(360.0).at_least(180.0).resizable(true).clip(true))
+                .column(Col::fixed(76.0))
+                .column(
+                    Col::flex(170.0)
+                        .at_least(110.0)
+                        .range(110.0..=190.0)
+                        .resizable(true)
+                        .clip(true),
+                )
+                .column(Col::fixed(88.0))
+                .column(Col::fixed(60.0))
+                .column(Col::rest(130.0).clip(true))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
                 .header(fit_table::header_height(font), |mut header| {
-                    for (column, title) in ["Base", "Status", "Size", "VMs", "Guest"]
+                    for (column, title) in ["Base", "Revision", "Status", "Size", "VMs", "Guest"]
                         .into_iter()
                         .enumerate()
                     {
@@ -275,7 +281,7 @@ impl MonitorApp {
                                 "library_bases",
                                 column,
                                 title,
-                                fit_table::numeric_align(matches!(column, 2 | 3)),
+                                fit_table::numeric_align(matches!(column, 3 | 4)),
                             )
                         });
                     }
@@ -296,6 +302,10 @@ impl MonitorApp {
                             );
                             fit_table::cell_click(ui, fit_table::Cell::Text, &base.name)
                                 .on_hover_text(format!("{}\n{}", base.name, base.details));
+                        });
+                        row.col(|ui| {
+                            let revision = revision_text(base.revision);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &revision);
                         });
                         row.col(|ui| {
                             let (text, tone) = match base.status {

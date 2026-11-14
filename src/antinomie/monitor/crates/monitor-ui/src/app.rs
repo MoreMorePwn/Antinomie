@@ -543,6 +543,8 @@ pub struct MonitorApp {
     clipboard_request: Option<clipboard::Intent>,
     pending_kill: Option<u64>,
     name_action: Option<(String, bool, String)>,
+    /// The Open Folder window: the typed explorer folder path.
+    folder_dialog: Option<String>,
     status: String,
     filter: String,
     /// Last syscall filter that compiled. An invalid expression leaves this in place.
@@ -957,6 +959,7 @@ impl TraceColumn {
 enum Dialog {
     Confirm,
     Name,
+    Folder,
     Transport,
     Stealth,
     Vm,
@@ -978,9 +981,10 @@ enum Dialog {
 }
 
 impl Dialog {
-    const ALL: [Dialog; 20] = [
+    const ALL: [Dialog; 21] = [
         Dialog::Confirm,
         Dialog::Name,
+        Dialog::Folder,
         Dialog::Transport,
         Dialog::Stealth,
         Dialog::Vm,
@@ -1006,6 +1010,7 @@ impl Dialog {
         egui::Id::new(match self {
             Dialog::Confirm => "confirm_action",
             Dialog::Name => "name_action",
+            Dialog::Folder => "open_folder",
             Dialog::Transport => "vm_transport",
             Dialog::Stealth => "vm_stealth",
             Dialog::Vm => "vm_configuration",

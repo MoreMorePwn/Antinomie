@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Native per-VM operational dashboard. Host observations never imply guest utilization.
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use crate::widgets::Tone;
 pub(crate) mod configuration;
@@ -236,6 +237,40 @@ fn cpu_load_color(percent: f64, cpus: u16) -> Color32 {
         accent(0)
     }
 }
+/// What the Overview's welcome page (no VM selected) asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Welcome {
+    ManageBases,
+    NewVm,
+    ManageSamples,
+}
+
+/// The logo with the three first things to do, centred in `ui`.
+fn welcome(ui: &mut egui::Ui) -> Option<Welcome> {
+    let mut chosen = None;
+    ui.vertical_centered(|ui| {
+        ui.add_space((ui.available_height() * 0.2).clamp(8.0, 160.0));
+        crate::branding::show_wordmark(ui, 320.0);
+        ui.add_space(20.0);
+        for (label, action) in [
+            ("Manage base images", Welcome::ManageBases),
+            ("Create new VM", Welcome::NewVm),
+            ("Manage samples", Welcome::ManageSamples),
+        ] {
+            if ui
+                .add_sized(
+                    [220.0, ui.spacing().interact_size.y],
+                    egui::Button::new(label),
+                )
+                .clicked()
+            {
+                chosen = Some(action);
+            }
+        }
+    });
+    chosen
+}
+
 pub(crate) fn show(
     ui: &mut egui::Ui,
     snapshot: &Snapshot,
@@ -243,19 +278,17 @@ pub(crate) fn show(
     selected: Option<&str>,
     quota_gib: u32,
     history: &CpuHistory,
-) {
+) -> Option<Welcome> {
     let width = ui.available_width();
+    let mut chosen = None;
     egui::ScrollArea::vertical()
         .id_salt("vm-summary")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             ui.set_max_width(width);
             let Some(vm) = selected.and_then(|id| snapshot.vms.iter().find(|vm| vm.id == id))
             else {
-                ui.heading("Select a VM");
-                if snapshot.vms.is_empty() {
-                    ui.label("Create a VM from File → New VM, or add a base first.");
-                }
+                chosen = welcome(ui);
                 return;
             };
             let active = snapshot.active_vm.as_deref() == Some(vm.id.as_str())
@@ -496,6 +529,7 @@ pub(crate) fn show(
                 crate::activity::info(ui, error);
             }
         });
+    chosen
 }
 
 fn summary_resource(
@@ -1448,8 +1482,10 @@ mod tests {
             .iter()
             .map(|(text, _)| text.as_str())
             .collect();
-        assert!(text.contains("Select a VM"));
-        assert!(text.contains("Create a VM"));
+        for button in ["Manage base images", "Create new VM", "Manage samples"] {
+            assert!(text.contains(button), "{button}");
+        }
+        assert!(!text.contains("Select a VM"));
         let text: String = render(&fixture(), None, 520.0, 24.0)
             .iter()
             .map(|(text, _)| text.as_str())

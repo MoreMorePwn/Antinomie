@@ -438,7 +438,7 @@ impl Facts {
         egui::ScrollArea::vertical()
             .id_salt("triage-process-env-list")
             .max_height(280.0)
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 for row in &self.env {
                     let color = match row.line.change {
                         Change::Same => theme::muted(),

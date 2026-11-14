@@ -2,6 +2,7 @@
 //! The Keyboard shortcuts window (`?` or Help > Keyboard shortcuts): every
 //! shortcut by area, and the rule for who owns the keyboard.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 /// The command palette and the shortcut list.
 #[derive(Default)]
@@ -238,7 +239,7 @@ impl MonitorApp {
                 egui::ScrollArea::vertical()
                     .id_salt("keyboard_shortcuts_scroll")
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         let mut area = "";
                         for row in &rows {
                             if row.area != area {

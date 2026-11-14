@@ -6,6 +6,7 @@
 //! a disk job starts or ends, when an open view is kept, and on Refresh: never
 //! per frame. Whether an imported image moved is checked in the same scan.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use crate::{
     evidence,
     network_view::capture_row,
@@ -361,7 +362,7 @@ impl DiskView {
         egui::ScrollArea::vertical()
             .id_salt("disk_dump_list")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if let Some(job) = cx.job.filter(|job| {
                     matches!(

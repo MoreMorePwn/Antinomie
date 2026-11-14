@@ -4,6 +4,7 @@
 //! Analysis tools, Samples and Explorer. Ctrl+B, View > Sidebar, the palette
 //! and the sidebar button at the left end of the toolbar switch between them.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use crate::workspace::LibraryPage;
 
 /// One rail button: an icon in a square, an optional state dot at its
@@ -127,7 +128,7 @@ impl MonitorApp {
                     .show(|ui| {
                         ui.set_min_width(260.0);
                         ui.set_max_height(ui.ctx().content_rect().height() * 0.6);
-                        egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::ScrollArea::vertical().show_contained(ui, |ui| {
                             if vms == 0 && self.pending_vm_rows().is_empty() {
                                 ui.label(RichText::new("No saved VMs").color(theme::muted()));
                             }

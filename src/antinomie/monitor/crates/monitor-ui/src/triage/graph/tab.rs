@@ -66,7 +66,7 @@ impl TriageView {
             egui::ScrollArea::vertical()
                 .id_salt("graph-tab-scroll")
                 .auto_shrink([false, false])
-                .show(ui, |ui| self.draw_graph(ui, &mut state, false, height));
+                .show_contained(ui, |ui| self.draw_graph(ui, &mut state, false, height));
         } else {
             self.draw_graph(ui, &mut state, false, height);
         }

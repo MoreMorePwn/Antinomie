@@ -187,7 +187,10 @@ fn upload_file_picker_keeps_exact_path_and_rejects_stale_or_pending_choices() {
         render(&mut app, &ctx, size);
     }
     let visible = texts(&render(&mut app, &ctx, size));
-    assert!(visible.iter().any(|(text, _)| text == "Choose file…"));
+    assert!(!visible.iter().any(|(text, _)| text == "Choose file…"));
+    assert!(visible
+        .iter()
+        .any(|(text, _)| text == egui_phosphor::regular::FOLDER_OPEN));
     assert!(!visible.iter().any(|(text, _)| text == "nested samples"));
     assert!(!visible
         .iter()
@@ -354,4 +357,79 @@ fn opening_upload_hides_an_existing_run_dialog_and_never_submits() {
     let visible = texts(&render(&mut app, &ctx, size));
     assert!(visible.iter().any(|(text, _)| text == "Upload file"));
     assert!(!visible.iter().any(|(text, _)| text == "Run program"));
+}
+
+#[test]
+fn send_to_vm_uploads_without_running_and_needs_a_running_vm() {
+    let mut app = upload_app();
+    app.close_upload();
+    app.send_explorer_file_only(PathBuf::from("/cases/dropper.sh"));
+    assert!(matches!(&app.submitted[0], Command::Upload {
+        source, destination, overwrite: false, ..
+    } if source == std::path::Path::new("/cases/dropper.sh") && destination == "/tmp/dropper.sh"));
+    let pending = app.pending_upload.as_ref().expect("the upload is pending");
+    let id = pending.id;
+    app.complete_upload(id, true);
+    assert!(!app.launch_open, "no Run program window after a plain send");
+    // Nothing is sent while no VM runs.
+    let mut stopped = app_without_vm();
+    stopped.send_explorer_file_only(PathBuf::from("/cases/dropper.sh"));
+    assert!(stopped.submitted.is_empty() && stopped.pending_upload.is_none());
+}
+
+fn app_without_vm() -> MonitorApp {
+    app()
+}
+
+#[test]
+fn open_folder_asks_for_the_path_and_the_explorer_shows_it() {
+    let mut app = app();
+    let folder = std::env::temp_dir();
+    assert!(!app.dialog_open(Dialog::Folder));
+    app.open_folder_dialog();
+    assert!(app.dialog_open(Dialog::Folder));
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let size = egui::vec2(1280.0, 900.0);
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    let shown = texts(&render(&mut app, &ctx, size));
+    assert!(shown.iter().any(|(text, _)| text == "Open Folder"));
+    assert!(shown.iter().any(|(text, _)| text == "Cancel"));
+    assert!(shown
+        .iter()
+        .any(|(text, _)| text == egui_phosphor::regular::FOLDER_OPEN));
+    // Typing a folder path and pressing OK sets the explorer's root.
+    app.folder_dialog = Some(folder.to_string_lossy().into_owned());
+    click_label(&mut app, &ctx, size, "OK");
+    assert!(!app.dialog_open(Dialog::Folder));
+    assert_eq!(app.explorer_browser.root.as_deref(), Some(folder.as_path()));
+    assert_eq!(
+        app.settings.explorer_root.as_deref(),
+        Some(folder.as_path())
+    );
+    // Cancel leaves the explorer as it is.
+    app.open_folder_dialog();
+    app.folder_dialog = Some("/nonexistent-folder-for-test".into());
+    click_label(&mut app, &ctx, size, "Cancel");
+    assert!(!app.dialog_open(Dialog::Folder));
+    assert_eq!(app.explorer_browser.root.as_deref(), Some(folder.as_path()));
+}
+
+#[test]
+fn open_folder_refuses_a_path_that_is_not_a_folder() {
+    let mut app = app();
+    app.open_folder_dialog();
+    app.folder_dialog = Some("/nonexistent-folder-for-test".into());
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let size = egui::vec2(1280.0, 900.0);
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    let shown = texts(&render(&mut app, &ctx, size));
+    assert!(shown
+        .iter()
+        .any(|(text, _)| text == "This is not a folder that exists."));
 }

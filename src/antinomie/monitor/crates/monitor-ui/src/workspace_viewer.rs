@@ -6,6 +6,8 @@ pub(super) struct Viewer<'a> {
     pub(super) app: &'a mut MonitorApp,
     pub(super) layout: &'a mut WorkspaceLayout,
     pub(super) surface: SurfaceIndex,
+    /// How many tabs this surface holds.
+    pub(super) surface_tabs: usize,
     /// Tabs shown with short names because their bar is too narrow.
     pub(super) tight: Vec<Panel>,
     /// The work area's tabs in bar order (see `WorkspaceLayout::work_tabs`).
@@ -26,6 +28,12 @@ impl Viewer<'_> {
         } else {
             theme::tab_title(&self.app.panel_title(tab)).into()
         }
+    }
+
+    /// Dragging this surface's tab moves its native window: it is a detached
+    /// window with a single tab, so there is nothing to reorder inside it.
+    fn moves_window(&self, ctx: &egui::Context) -> bool {
+        !self.surface.is_main() && !ctx.embed_viewports() && self.surface_tabs == 1
     }
 }
 
@@ -93,7 +101,15 @@ impl TabViewer for Viewer<'_> {
             ));
         }
         if response.drag_started_by(egui::PointerButton::Primary) {
-            self.layout.drag = Some((tab.clone(), self.surface));
+            if self.moves_window(&response.ctx) {
+                // The only tab of a detached window: the drag moves the window
+                // itself, so it can leave the area of its own window.
+                response
+                    .ctx
+                    .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            } else {
+                self.layout.drag = Some((tab.clone(), self.surface));
+            }
         }
         if response.clicked() {
             self.app.details_follow.chose(tab);

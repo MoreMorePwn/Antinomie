@@ -3,6 +3,7 @@
 //! machine (state, size, age, terms), their switches and the manual update,
 //! and the list of known false positives. Updates run only from buttons.
 use super::{theme, Done, Model};
+use crate::scroll_contain::ScrollContained as _;
 use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::{self, fit_table, Tone};
 use antinomie_monitor_core::{
@@ -429,7 +430,7 @@ impl Model {
         egui::ScrollArea::vertical()
             .id_salt("ioc_fp_scroll")
             .max_height(180.0)
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 for entry in &self.ioc.fp {
                     ui.horizontal_wrapped(|ui| {
                         if ui.small_button("Remove").clicked() {

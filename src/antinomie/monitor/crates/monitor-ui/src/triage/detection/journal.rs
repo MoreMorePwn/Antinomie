@@ -534,7 +534,7 @@ impl Viewer {
             .id_salt("journal-detail")
             .max_height(220.0)
             .auto_shrink([false, true])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new(format!("Event #{} · {}", row.id, row.event.category))

@@ -10,7 +10,7 @@ pub(super) trait ChangeView {
 
 impl ChangeView for files::Change {
     fn show(&self, ui: &mut egui::Ui, clock: Option<antinomie_monitor_core::HostClockAnchor>) {
-        egui::ScrollArea::vertical().id_salt(("file-change-details", self.key)).max_height(ui.available_height().max(40.0)).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(("file-change-details", self.key)).max_height(ui.available_height().max(40.0)).show_contained(ui, |ui| {
         ui.separator();
         ui.label(
             RichText::new(format!("Original → final: {}", self.path))
@@ -82,7 +82,7 @@ impl ChangeView for files::Change {
                 ];
                 row[0].values = vec![("event.id", RowValue::Number(i128::from(op.call))), ("stream.id", RowValue::Number(i128::from(op.key.0))), ("process.cookie", RowValue::Number(i128::from(op.key.1)))]; row
             }).collect();
-            egui::ScrollArea::horizontal().id_salt("file-operation-timeline-columns").auto_shrink([false,true]).show(ui,|ui| {
+            egui::ScrollArea::horizontal().id_salt("file-operation-timeline-columns").auto_shrink([false,true]).show_contained(ui,|ui| {
                 table_rows(ui, "file-operation-timeline", &["Time", "Operation", "Process", "Result", "Evidence"], &rows);
             });
         });

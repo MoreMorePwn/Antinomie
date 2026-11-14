@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Choosing a Volatility plugin and its options, and the saved runs.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 /// Why the VM's memory cannot be analysed: Volatility 3 and MemNixFS read
 /// x86-64 guests only (an arm64 base carries no symbol table).
@@ -462,7 +463,7 @@ impl MemoryView {
         egui::ScrollArea::vertical()
             .id_salt("memory_run_list")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for run in shown {
                     let job = self.jobs.iter().find(|job| job.run.id == run.id);
@@ -620,7 +621,7 @@ impl MemoryView {
         egui::ScrollArea::vertical()
             .id_salt("memory_row_details")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 egui::Grid::new("memory_row_grid")
                     .num_columns(2)
                     .spacing([16.0, 4.0])

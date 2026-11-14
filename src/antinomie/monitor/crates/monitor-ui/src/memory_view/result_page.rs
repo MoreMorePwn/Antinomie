@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The parts of the plugin result page: the running job, the query bar, the header and the table.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 /// The page of a plugin that is still running.
 pub(super) fn running_job(ui: &mut egui::Ui, job: &RunHandle, dump: &MemoryDump) {
@@ -354,7 +355,7 @@ impl MemoryView {
                     egui::ScrollArea::both()
                         .id_salt("memory_log_text")
                         .auto_shrink([false, false])
-                        .show(ui, |ui| {
+                        .show_contained(ui, |ui| {
                             let text = if result.log.trim().is_empty() {
                                 "No messages"
                             } else {
@@ -432,7 +433,7 @@ impl MemoryView {
                 egui::ScrollArea::both()
                     .id_salt(("memory_result_text", &result.run.id))
                     .auto_shrink([false, false])
-                    .show_rows(ui, line_height, lines.len(), |ui, range| {
+                    .show_rows_contained(ui, line_height, lines.len(), |ui, range| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         for line in &lines[range] {
                             ui.add(

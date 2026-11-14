@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Sidebar VM list, health and activity log.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 impl MonitorApp {
     /// The sidebar row of one VM: its state, base, size and latest run.
@@ -42,6 +43,14 @@ impl MonitorApp {
                 theme::muted(),
             ),
         ]);
+        if let Some(revision) = selected_base(&self.snapshot, vm.base_identity.as_deref())
+            .and_then(|base| base.revision)
+        {
+            machine.extend([
+                (" · ".into(), theme::muted()),
+                (revision_text(Some(revision)), theme::muted()),
+            ]);
+        }
         // The q35 fallback and the network are in the tooltip.
         let (_, machine_note) = vm.stealth.machine.for_ram(u64::from(vm.ram_mib) << 20);
         let last = match self.settings.last_runs.get(&vm.id) {
@@ -257,7 +266,7 @@ impl MonitorApp {
                             .max(80.0),
                         )
                         .auto_shrink([false, true])
-                        .show(ui, |ui| {
+                        .show_contained(ui, |ui| {
                             if self.snapshot.vms.is_empty() && self.pending_vm_rows().is_empty() {
                                 ui.label(RichText::new("No saved VMs").color(theme::muted()));
                             }

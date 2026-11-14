@@ -5,6 +5,7 @@
 use super::dialogs::{form_grid, text_size_control};
 use super::widgets::hint_tip;
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use crate::widgets::{self, chip, Tone};
 
 /// The pages of the Settings window, in list order.
@@ -258,7 +259,7 @@ impl MonitorApp {
                                 .max_height(height)
                                 .max_width(content)
                                 .auto_shrink([false, false])
-                                .show(ui, |ui| {
+                                .show_contained(ui, |ui| {
                                     // Room at the right, so the scroll bar never lies on
                                     // a text; and roomier rows than in a dialog.
                                     ui.data_mut(|data| data.insert_temp(roomy_forms(), true));
@@ -373,7 +374,7 @@ impl MonitorApp {
                     let needle = filter.to_lowercase().replace(' ', "_");
                     egui::ScrollArea::vertical()
                         .max_height(320.0)
-                        .show(ui, |ui| {
+                        .show_contained(ui, |ui| {
                             let mut offer =
                                 vec![crate::tzone::AUTOMATIC.to_owned(), "UTC".to_owned()];
                             offer.extend(crate::tzone::choices());

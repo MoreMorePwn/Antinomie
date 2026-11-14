@@ -2,6 +2,7 @@
 //! "Build base" wizard: Debian-installer-style questions, then a
 //! build that runs natively or in the QEMU builder VM and installs itself.
 
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use antinomie_monitor_core::{
     build::{
@@ -836,7 +837,7 @@ impl BuildWizard {
                     .max_height(height)
                     .stick_to_bottom(true)
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         for line in &status.log {
                             ui.label(
                                 RichText::new(line)
@@ -902,7 +903,7 @@ fn pick_list<'a>(
         .id_salt(id)
         .max_height(360.0)
         .auto_shrink([false, true])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             for (value, label) in items {
                 if !needle.is_empty() && !label.to_lowercase().contains(&needle) {
                     continue;

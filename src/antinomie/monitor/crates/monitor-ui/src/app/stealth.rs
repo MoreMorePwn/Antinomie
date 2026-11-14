@@ -2,6 +2,7 @@
 //! VM configuration > Device profile: the hardware identity a VM shows its
 //! guest. A preset fills every entry; editing one makes the profile Custom.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 mod arm64;
 mod cloud;
 use antinomie_monitor_core::stealth::{
@@ -1006,7 +1007,7 @@ pub(super) fn window(
                 egui::ScrollArea::vertical()
                     .id_salt("vm_stealth_scroll")
                     .max_height((ctx.content_rect().height() - 330.0).max(120.0))
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         egui::CollapsingHeader::new("Hardware identity")
                             .default_open(true)
                             .show(ui, |ui| {

@@ -2,6 +2,7 @@
 //! The list of network captures of the selected VM.
 use super::*;
 use crate::evidence_delete::{CAPTURE_LIVE, CAPTURE_WRITING};
+use crate::scroll_contain::ScrollContained as _;
 
 impl NetworkView {
     /// The running capture first, then earlier ones; a click opens one.
@@ -67,7 +68,7 @@ impl NetworkView {
         egui::ScrollArea::vertical()
             .id_salt("network_capture_list")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if let Some(active) = cx
                     .active

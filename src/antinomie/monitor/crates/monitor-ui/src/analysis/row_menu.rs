@@ -4,6 +4,7 @@
 //! row, so it outlives the filter, sort and tab that showed the row.
 use super::records::{self, Column};
 use super::ReportAction;
+use crate::scroll_contain::ScrollContained as _;
 use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisKind, AnalysisRange, AnalysisReport, AnalysisSpecimenPage,
 };
@@ -298,7 +299,7 @@ pub(super) fn details(ui: &mut egui::Ui, specimen_len: Option<u64>, entry: &Anal
     egui::ScrollArea::both()
         .id_salt("analysis-item-detail")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             copy_value(ui, &entry.label, &entry.value);
             if let Some(record) = &entry.record {
                 ui.label(format!("Record {}", record.id));
@@ -432,7 +433,7 @@ fn bytes(
     egui::ScrollArea::both()
         .id_salt("analysis-item-bytes")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             // A dump row is one line however narrow the window.
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             match preview {

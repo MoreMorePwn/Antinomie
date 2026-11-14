@@ -2,6 +2,7 @@
 //! The Capa Matrix: capa's capabilities arranged by ATT&CK tactic or MBC
 //! objective, with the capabilities behind a selected technique below.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use std::collections::BTreeMap;
 
 /// Enterprise ATT&CK tactics in matrix order; others follow by name.
@@ -149,7 +150,7 @@ pub(super) fn show(ui: &mut egui::Ui, section: &AnalysisSection, state: &mut Cap
             .id_salt(("capa-matrix", state.mbc))
             .max_height(height)
             .auto_shrink([false, true])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     for (tactic, techniques) in &columns {
                         ui.allocate_ui_with_layout(
@@ -236,7 +237,7 @@ pub(super) fn show(ui: &mut egui::Ui, section: &AnalysisSection, state: &mut Cap
     egui::ScrollArea::vertical()
         .id_salt("capa-capabilities")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             egui::Grid::new("capa-capability-rows")
                 .striped(true)
                 .num_columns(2)

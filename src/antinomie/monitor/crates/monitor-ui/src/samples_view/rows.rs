@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The window's first-use dialog, warning, status line, source and search rows (moved out of `samples_view`).
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 impl SamplesView {
     /// Shown instead of the window until the user accepts it once.
@@ -24,7 +25,7 @@ impl SamplesView {
                 egui::ScrollArea::vertical()
                     .max_height(text_height)
                     .auto_shrink([false, true])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(egui_phosphor::regular::BIOHAZARD)

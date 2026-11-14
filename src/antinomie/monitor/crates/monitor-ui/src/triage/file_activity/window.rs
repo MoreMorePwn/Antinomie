@@ -5,6 +5,7 @@
 use super::graph::{self, Layout};
 use super::reconstruct;
 use super::{Activity, ByteRun, Event, FileActivity, NameChoice};
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use crate::triage::tone;
 use crate::triage::{details, Cell, RowValue};
@@ -342,7 +343,7 @@ impl Window {
         egui::ScrollArea::vertical()
             .id_salt("file-activity-files")
             .auto_shrink([false, false])
-            .show_rows(ui, row, shown.len(), |ui, range| {
+            .show_rows_contained(ui, row, shown.len(), |ui, range| {
                 for &index in &shown[range] {
                     let file = &activity.files[index];
                     let is_selected = selected == Some(file as *const FileActivity);
@@ -478,7 +479,7 @@ impl Window {
         egui::ScrollArea::vertical()
             .id_salt("file-activity-history")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 let (name, other) = file.names_by(self.name_choice);
                 // The title is the file and its SHA-256 (click to copy it);
                 // the button that opens the reconstruction sits at the top
@@ -616,7 +617,7 @@ impl Window {
         egui::ScrollArea::horizontal()
             .id_salt("file-activity-calls-columns")
             .auto_shrink([false, true])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
                     crate::triage::table::table_rows(ui, CALLS_TABLE, CALL_HEADERS, &rows);
                 });

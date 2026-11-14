@@ -9,6 +9,7 @@ mod stored_tests;
 mod tables;
 
 use crate::query::{self, FieldSpec, RowValue};
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme::{self, ValueKind};
 use crate::widgets::fit_table::{Col as FitCol, FitBuilder};
 use antinomie_monitor_core::{
@@ -761,7 +762,7 @@ impl SamplesView {
                 egui::ScrollArea::vertical()
                     .max_height(largest.y - 70.0)
                     .auto_shrink([false, true])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         self.warning(ui, cx);
                         ui.add_space(12.0);
                         self.source_row(ui, cx);

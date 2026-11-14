@@ -5,6 +5,7 @@
 //! controller and the rest of the tab is read-only; the pane starts gdb when
 //! it is opened and can restart it.
 use super::{pty::Launch, pty::PtyChild, *};
+use crate::scroll_contain::ScrollContained as _;
 use crate::{terminal::Terminal, widgets};
 use antinomie_monitor_core::analysis_tools::{self, ToolStatus};
 use serde::{Deserialize, Serialize};
@@ -424,7 +425,7 @@ fn missing(ui: &mut egui::Ui, reason: Unavailable, actions: &mut Vec<PanelAction
     egui::ScrollArea::vertical()
         .id_salt("debugger-console-missing")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(problem).color(theme::warn()));
                 if widgets::link(ui, "Install…")

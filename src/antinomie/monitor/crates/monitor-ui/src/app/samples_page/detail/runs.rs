@@ -673,7 +673,7 @@ fn environment(ui: &mut egui::Ui, run: &RunSummary) {
             };
             egui::ScrollArea::horizontal()
                 .id_salt("sample_run_environment_scroll")
-                .show(ui, |ui| {
+                .show_contained(ui, |ui| {
                     egui::Grid::new("sample_run_environment_grid")
                         .num_columns(2)
                         .spacing([12.0, 4.0])

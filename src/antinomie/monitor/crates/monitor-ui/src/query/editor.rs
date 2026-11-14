@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The filter bar: the edit box, its completions and its history.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 pub fn filter_edit(
     ui: &mut egui::Ui,
@@ -204,7 +205,7 @@ fn filter_edit_iter<'a>(
                 ui.set_max_width(popup_width);
                 let scroll = egui::ScrollArea::vertical()
                     .max_height(240.0)
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         for (index, item) in shown.iter().enumerate() {
                             let label = format!("{}  {}", item.insert.trim(), item.detail);
                             let response =

@@ -718,7 +718,7 @@ impl Picker {
             .id_salt("note_picker_rows")
             .max_height(height)
             .auto_shrink([false, true])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if !searching && self.category.is_none() {
                     let mut group = "";

@@ -8,6 +8,7 @@ use super::hierarchy::Click;
 use super::navigate::{self, and};
 use super::properties::Tone;
 use super::{duration_ns, int, time_text, Pick, TimeBase};
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use antinomie_monitor_core::api::HostClockAnchor;
 use antinomie_monitor_core::syscall_groups::SyscallGroup;
@@ -220,7 +221,7 @@ pub(super) fn show(ui: &mut egui::Ui, state: &mut State, input: &Inputs<'_>) -> 
     let mut pick = None;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             let banner = banner(accelerator(stats, input.facts));
             note(ui, &format!("{} {INCLUDES}", banner.text), banner.tone);
             if let Some(warning) = send_wait_warning(stats) {

@@ -3,6 +3,7 @@
 //! each tab shows. A tab maps onto one retained analysis category, except
 //! File Info and Content, which draw on several.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::analysis) enum Tab {
@@ -329,7 +330,7 @@ fn file_info(
     egui::ScrollArea::horizontal()
         .id_salt("file-info-views")
         .auto_shrink([false, true])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             crate::widgets::segmented(ui, items, &mut state.file_info);
         });
     ui.add_space(4.0);

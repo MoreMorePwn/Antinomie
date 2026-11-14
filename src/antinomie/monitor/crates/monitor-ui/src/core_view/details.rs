@@ -2,6 +2,7 @@
 //! What the shared Details panel shows for a core: the function, mapping,
 //! string or note chosen last in the Cores view.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 use antinomie_monitor_core::core_strings;
 
 /// One chosen row, as a title, where it came from and its fields.
@@ -108,7 +109,7 @@ impl CoreView {
         egui::ScrollArea::vertical()
             .id_salt("core-details")
             .auto_shrink([false, false])
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 egui::Grid::new("core-detail-fields")
                     .num_columns(2)
                     .striped(true)

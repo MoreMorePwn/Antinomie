@@ -776,7 +776,7 @@ impl View {
         egui::ScrollArea::vertical()
             .id_salt("detection-page")
             .auto_shrink([false, false])
-            .show(ui, |ui| self.show_page(ui, scan));
+            .show_contained(ui, |ui| self.show_page(ui, scan));
         // The Rescan button of a result shown above sets this; the result is
         // borrowed while it is drawn, so the scan starts here.
         if let Some(index) = self.rescan.take() {

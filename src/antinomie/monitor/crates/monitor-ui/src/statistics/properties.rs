@@ -3,6 +3,7 @@
 //! and how far it can be trusted. The rows are built by pure functions so the
 //! tab, the clipboard and the export read the same text.
 use super::TimeBase;
+use crate::scroll_contain::ScrollContained as _;
 use antinomie_monitor_core::api::HostClockAnchor;
 use antinomie_monitor_core::{CaptureSummary, RunSummary};
 use antinomie_triage::statistics::export::{Cell, Table};
@@ -517,7 +518,7 @@ pub(crate) fn table(blocks: &[Block]) -> Table {
 pub(super) fn show(ui: &mut egui::Ui, blocks: &[Block], scroll_to_quality: bool) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             for block in blocks {
                 ui.add_space(6.0);
                 let heading = crate::theme::section(ui, block.title);

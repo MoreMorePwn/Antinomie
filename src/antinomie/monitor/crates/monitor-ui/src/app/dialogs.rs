@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Modal dialogs and dialog layout helpers.
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 /// The "Don't ask me again" tick of the no-snapshot question, until it closes.
 const DONT_ASK_NO_SNAPSHOT: &str = "start_no_snapshot_dont_ask";
@@ -50,6 +51,7 @@ impl MonitorApp {
         self.uefi_layout_dialog(ctx);
         self.build_dialog(ctx);
         self.name_dialog(ctx);
+        self.folder_dialog(ctx);
         if self.create_open || self.config_open {
             self.vm_dialog(ctx);
         }
@@ -630,6 +632,7 @@ impl MonitorApp {
         match dialog {
             Dialog::Confirm => self.confirm.is_some(),
             Dialog::Name => self.name_action.is_some(),
+            Dialog::Folder => self.folder_dialog.is_some(),
             Dialog::Transport => self.transport_open && (self.create_open || self.config_open),
             Dialog::Stealth => self.stealth_open && (self.create_open || self.config_open),
             Dialog::Vm => self.create_open || self.config_open,
@@ -655,6 +658,7 @@ impl MonitorApp {
         match dialog {
             Dialog::Confirm => self.confirm = None,
             Dialog::Name => self.name_action = None,
+            Dialog::Folder => self.folder_dialog = None,
             Dialog::Transport => self.transport_open = false,
             Dialog::Stealth => self.stealth_open = false,
             Dialog::Vm => {
@@ -863,5 +867,5 @@ fn scroll_dialog(ui: &mut egui::Ui, ctx: &egui::Context, content: impl FnOnce(&m
     egui::ScrollArea::vertical()
         .max_height(height)
         .auto_shrink([false, true])
-        .show(ui, content);
+        .show_contained(ui, content);
 }

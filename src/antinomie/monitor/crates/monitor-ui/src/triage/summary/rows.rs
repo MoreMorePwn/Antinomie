@@ -2,6 +2,7 @@
 //! The small pieces the Summary's boxes are made of: a clickable item whose
 //! parts have their own colours, a figure (a strong number and a muted word)
 //! and the scrolling list that replaces the first few rows.
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use eframe::egui::{self, RichText};
 
@@ -124,6 +125,6 @@ pub(super) fn scroll_list(
             .min_scrolled_height(height)
             .auto_shrink([false, false])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-            .show(ui, |ui| (0..total).for_each(|at| row(ui, at)));
+            .show_contained(ui, |ui| (0..total).for_each(|at| row(ui, at)));
     });
 }

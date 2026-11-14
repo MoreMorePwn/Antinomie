@@ -2,6 +2,7 @@
 //! Run and capture history views.
 use super::history_columns::{executable_cell, HistoryColumns};
 use super::*;
+use crate::scroll_contain::ScrollContained as _;
 
 mod rows;
 use rows::RunClicks;
@@ -1010,7 +1011,7 @@ pub(super) fn launch_details(ui: &mut egui::Ui, run: &RunSummary) {
             // Vertical scrolling is the Details panel's; wide values scroll here.
             egui::ScrollArea::horizontal()
                 .id_salt("launch_metadata")
-                .show(ui, |ui| {
+                .show_contained(ui, |ui| {
                     egui::Grid::new("run_metadata")
                         .num_columns(2)
                         .show(ui, |ui| {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Branching VM checkpoint presentation. Core owns storage and VM operations.
 
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use antinomie_monitor_core::{
     Command, SnapshotProfile, SnapshotRequest, VmCheckpoint, VmSnapshotConsistency, VmSnapshotMode,
@@ -331,7 +332,7 @@ impl SnapshotManager {
                     );
                 });
             } else {
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::ScrollArea::vertical().show_contained(ui, |ui| {
                     self.view(ui, tree, (height * 0.6).clamp(160.0, 340.0));
                     ui.add_space(6.0);
                     card(ui, ui.available_width(), 0.0, |ui| {
@@ -368,7 +369,7 @@ impl SnapshotManager {
         egui::ScrollArea::both()
             .max_height(height)
             .id_salt("snapshot_tree")
-            .show(ui, |ui| {
+            .show_contained(ui, |ui| {
                 ui.label(RichText::new("Base image").strong().color(theme::text()));
                 let items = graph_layout(tree);
                 // The base image is the root; every checkpoint hangs below it.
@@ -583,7 +584,7 @@ impl SnapshotManager {
             .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 ui.set_width((ctx.content_rect().width() - 48.0).clamp(240.0, 440.0));
-                egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 180.0).max(100.0)).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 180.0).max(100.0)).show_contained(ui, |ui| {
                     match decision {
                         Decision::Create(draft) => {
                             draft_form(ui, draft, tree);
@@ -687,7 +688,7 @@ fn card(ui: &mut egui::Ui, width: f32, height: f32, content: impl FnOnce(&mut eg
                 egui::ScrollArea::vertical()
                     .max_height(inner)
                     .auto_shrink([false, false])
-                    .show(ui, content);
+                    .show_contained(ui, content);
             } else {
                 content(ui);
             }

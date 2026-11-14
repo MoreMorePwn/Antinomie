@@ -2,6 +2,7 @@
 //! The finished state of an export dialog: the files it wrote, shown against
 //! their common folder, in an area of bounded height. A long host path never
 //! widens the window: names are cut in the middle, the whole path is on hover.
+use crate::scroll_contain::ScrollContained as _;
 use eframe::egui::{self, RichText};
 use std::path::{Path, PathBuf};
 
@@ -80,7 +81,7 @@ pub fn written_files(ui: &mut egui::Ui, id: &str, files: &[(String, PathBuf)], r
         .id_salt(("written_files", id))
         .max_height(row_height * rows as f32 + 4.0)
         .auto_shrink([false, true])
-        .show(ui, |ui| {
+        .show_contained(ui, |ui| {
             ui.set_width(width - 12.0);
             for (label, path) in files {
                 ui.horizontal(|ui| {

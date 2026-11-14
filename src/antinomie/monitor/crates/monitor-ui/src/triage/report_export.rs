@@ -457,7 +457,7 @@ impl TriageView {
                 egui::ScrollArea::vertical()
                     .max_height(tall)
                     .auto_shrink([false, true])
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         if let Some(large) = &large {
                             ui.add(
                                 egui::Label::new(

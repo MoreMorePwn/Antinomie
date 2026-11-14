@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Startup runtime checks and Tools > App dependencies; package changes stay
 //! with the user, and a recheck updates which feature actions are available.
+use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use antinomie_monitor_core::{
     analysis_tools::{ToolInstall, ToolStatus},
@@ -208,7 +209,7 @@ impl DependenciesWindow {
                     .id_salt("app_dependencies_scroll")
                     .auto_shrink([false, true])
                     .max_height(scroll_height)
-                    .show(ui, |ui| {
+                    .show_contained(ui, |ui| {
                         if self.worker.is_some() {
                             crate::theme::loading(ui, "Checking this system…");
                         }

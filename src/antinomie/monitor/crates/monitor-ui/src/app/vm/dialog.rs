@@ -63,7 +63,7 @@ impl MonitorApp {
                 .id_salt("vm_dialog_form")
                 .max_height((height - footer).max(120.0))
                 .auto_shrink([false, true])
-                .show(ui, |ui| {
+                .show_contained(ui, |ui| {
                     ui.add_enabled_ui(editable, |ui| {
                         if wide {
                             crate::widgets::columns(ui, 2, |columns| {

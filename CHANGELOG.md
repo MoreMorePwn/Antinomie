@@ -15,6 +15,18 @@ x86 programs by their own table.
 
 ### Host
 
+- **Workspace UI round (ANT-T0550).** The Explorer's folder button is **Open
+  Folder** and opens a small window for the folder path (with a folder button for
+  the chooser); right-clicking an Explorer file offers **Send to VM**, which uploads
+  without running; Upload file has a folder button beside **Host file** instead of
+  **Choose file…**; the Base images table gets a **Revision** column and a bounded
+  Status column, and installed bases read "BusyBox · arm64 · r22" in the table, New
+  VM, Settings and the sidebar; the Overview with no VM selected shows the logo
+  with **Manage base images**, **Create new VM** and **Manage samples**; a captured
+  VM screen has no amber frame or banner, the bar says how to release it; a detached
+  VM screen captures the keyboard on a click, and its only tab can be dragged to
+  move the window; a list inside a scrollable window no longer scrolls the window
+  at its top or bottom.
 - **The right BusyBox and the right arm64 minimum after the r22 bases went
   public (ANT-T0485).** The catalog's optional `arch` field (`arm64`; absent
   means x86-64) is read. The nightly check boots the newest x86-64 BusyBox

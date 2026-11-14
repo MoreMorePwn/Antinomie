@@ -111,10 +111,7 @@ fn base_labels_name_outdated_newer_and_unrecorded_revisions() {
     let mut base = base_summary_for_revision(Some(APP_REVISION));
     assert_eq!(
         base_choice_label(&base),
-        format!(
-            "Debian · Antinomie {}",
-            antinomie_monitor_core::first_app_version(APP_REVISION).unwrap()
-        )
+        format!("Debian · x86-64 · r{APP_REVISION}")
     );
     base.revision = Some(APP_REVISION - 1);
     assert!(base_choice_label(&base).ends_with(", outdated"));
@@ -267,6 +264,57 @@ fn a_label_that_already_ends_in_the_version_shows_it_once() {
     let mut base = base_summary_for_revision(Some(APP_REVISION));
     base.label = "BusyBox \u{2014} Antinomie 0.8.0".into();
     let shown = base_choice_label(&base);
-    assert!(shown.starts_with("BusyBox \u{b7} Antinomie "), "{shown}");
-    assert_eq!(shown.matches("Antinomie").count(), 1, "{shown}");
+    assert!(
+        shown.starts_with("BusyBox \u{b7} x86-64 \u{b7} r"),
+        "{shown}"
+    );
+    assert_eq!(shown.matches("Antinomie").count(), 0, "{shown}");
+}
+
+#[test]
+fn an_installed_base_is_named_with_its_architecture_and_revision() {
+    let mut base = base_summary_for_revision(Some(22));
+    base.label = "BusyBox".into();
+    base.arch = antinomie_monitor_core::GuestArch::AARCH64;
+    assert_eq!(installed_base_name(&base), "BusyBox · arm64 · r22");
+    assert_eq!(revision_text(Some(22)), "r22");
+    assert_eq!(revision_text(None), "");
+    base.arch = Default::default();
+    base.revision = None;
+    base.min_app_version = Some("0.5.0".into());
+    assert_eq!(
+        installed_base_name(&base),
+        "BusyBox · x86-64 · Antinomie 0.5.0"
+    );
+}
+
+#[test]
+fn the_bases_table_has_a_revision_column_and_the_full_name() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let size = egui::vec2(1280.0, 820.0);
+    let mut app = app();
+    let mut base = test_base("one", true);
+    base.label = "BusyBox".into();
+    base.arch = antinomie_monitor_core::GuestArch::AARCH64;
+    base.revision = Some(22);
+    app.snapshot.bases = vec![base];
+    open_bases_page(&mut app);
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    let shown = texts(&render(&mut app, &ctx, size));
+    let find = |text: &str| {
+        shown
+            .iter()
+            .find(|(shown, _)| shown.starts_with(text))
+            .unwrap_or_else(|| panic!("no {text}: {shown:?}"))
+            .1
+    };
+    assert!(shown
+        .iter()
+        .any(|(text, _)| text == "BusyBox · arm64 · r22"));
+    assert!(shown.iter().any(|(text, _)| text == "r22"));
+    let (base, revision, status) = (find("Base"), find("Revision"), find("Status"));
+    assert!(base.left() < revision.left() && revision.left() < status.left());
 }
