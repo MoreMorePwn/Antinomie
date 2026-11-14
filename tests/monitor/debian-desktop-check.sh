@@ -73,6 +73,15 @@ pass "greeter session $session of $manager"
 if [ "$manager" = gdm3 ]; then
     wait_for "pgrep -x gnome-shell" || fail "no gnome-shell for the GDM greeter"
     pass "gnome-shell runs the greeter"
+    # The greeter is on the screen once gnome-shell has a framebuffer of its
+    # own (DRM's debugfs names the process that allocated each one); before
+    # that the display still shows the console, which under CPU emulation
+    # lasts minutes after gnome-shell starts.
+    mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug
+    wait_for "grep -qs 'allocated by = gnome-shell' /sys/kernel/debug/dri/*/framebuffer" ||
+        fail "gnome-shell has no framebuffer after $limit s"
+    printf 'greeter drawn after %s s of uptime\n' "$(cut -d' ' -f1 /proc/uptime)"
+    pass "gnome-shell draws the greeter"
 fi
 # The display: virtio_gpu is Debian's module, loaded by udev (no load list,
 # not built in), and drives a connected, enabled connector.

@@ -209,12 +209,15 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(run["screenshot"], str(out / "screens/desktop-greeter.png"))
         self.assertEqual(arm["runs"][0]["args"], [str(vm.DESKTOP_GREETER_WAIT * scale)])
         self.assertEqual(arm["runs"][0]["timeout"], run["timeout"] * scale)
+        self.assertEqual(arm["runs"][0]["screenshot_after"], run["screenshot_after"] * scale)
         for key in ("boot_timeout", "create_timeout"):
             self.assertEqual(arm[key], x86[key] * scale, key)
         # The check script fails by waiting, so the marker wait fails the check.
         script = Path(upload["source"]).read_text()
         self.assertIn("DESKTOP-CHECK-FAIL", script)
         self.assertIn("exec sleep", script)
+        # The greeter counts once gnome-shell has its own framebuffer on the display.
+        self.assertIn("allocated by = gnome-shell", script)
 
     def nic_plan(self, arch):
         with tempfile.TemporaryDirectory() as tmp:

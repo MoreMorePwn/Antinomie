@@ -33,7 +33,7 @@ x86 programs by their own table.
     build host's systemd-resolved stub file).
   - `scripts/vm-regress.py`'s quick tier gains `desktop` on a Debian desktop base: a VM with the
     in-app screen boots to its greeter, and `tests/monitor/debian-desktop-check.sh` checks the
-    greeter session, gnome-shell, `virtio_gpu` as Debian's module on a connected display, every
+    greeter session, gnome-shell drawing it (a framebuffer of its own), `virtio_gpu` as Debian's module on a connected display, every
     loaded module signed with taint 0, and the command line; then it saves a screenshot of the
     greeter. A console base or BusyBox skips it as not applicable. On an arm64 desktop base the
     tier also runs the in-app `screen` check.

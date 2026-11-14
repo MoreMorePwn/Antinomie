@@ -16,9 +16,10 @@ quick  the conformance trace suite's oracle groups (user, root, threads) and the
        DHCP lease from the gateway; on a Debian desktop base (GNOME) also
        desktop: a VM with the in-app screen boots to its display manager's
        greeter (tests/monitor/debian-desktop-check.sh as root: the greeter
-       session, gnome-shell, virtio_gpu as Debian's module on a connected
-       connector, every loaded module signed, taint 0, the serial console and
-       panic=-1 on the command line), then a screenshot of the greeter
+       session, gnome-shell with its own framebuffer, virtio_gpu as Debian's
+       module on a connected connector, every loaded module signed, taint 0,
+       the serial console and panic=-1 on the command line), then a
+       screenshot of the greeter
 full   quick, the debugger, audit, io_uring, tracer, stealth, cloud profiles, network routes, snapshot
        and dump trigger
        checks, the conformance stress groups and interop in both directions
@@ -888,7 +889,8 @@ def desktop_plan(ctx):
                          "destination": "/tmp/debian-desktop-check"}],
             "runs": [{"path": "/tmp/debian-desktop-check", "args": [str(wait)], "uid": 0, "gid": 0,
                       "done": "DESKTOP-CHECK-PASS", "timeout": wait + 300 * scale,
-                      "screenshot": str(screens / "desktop-greeter.png"), "screenshot_after": 5}]}
+                      "screenshot": str(screens / "desktop-greeter.png"),
+                      "screenshot_after": 10 * scale}]}
 
 
 def input_result(ctx, name):
