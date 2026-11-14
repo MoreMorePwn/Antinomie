@@ -104,6 +104,7 @@ impl MonitorApp {
             clipboard_request: None,
             pending_kill: None,
             name_action: None,
+            folder_dialog: None,
             status,
             filter: String::new(),
             applied_filter: String::new(),

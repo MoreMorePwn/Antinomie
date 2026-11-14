@@ -12,7 +12,7 @@ impl MonitorApp {
                 count: None,
                 tooltip: "Host files: click to fold",
                 glyph: egui_phosphor::regular::FOLDER_OPEN,
-                action: "Choose Explorer folder",
+                action: "Open Folder",
                 blocked: "Install Zenity first",
                 enabled: self.folder_picker.available(),
                 open: false,
@@ -76,13 +76,13 @@ impl MonitorApp {
                     upload_browser::Action::Select(_) => {}
                     upload_browser::Action::OpenDirectory(path) => open_directory(&path),
                     upload_browser::Action::SendRun(path) => self.send_explorer_file(path),
+                    upload_browser::Action::SendOnly(path) => self.send_explorer_file_only(path),
                     upload_browser::Action::AddToSamples(path) => self.add_explorer_file(path),
                 }
             }
         }
         if choose {
-            let ctx = ui.ctx().clone();
-            self.run_action(&ctx, Action::ExplorerFolder);
+            self.open_folder_dialog();
         }
     }
 
@@ -92,6 +92,121 @@ impl MonitorApp {
     pub(super) fn add_explorer_file(&mut self, path: PathBuf) {
         self.open_library(LibraryPage::Samples);
         self.samples_page.open_add(Some(&path));
+    }
+
+    /// Send to VM: the upload path of the Upload file window, started at once
+    /// with the same default destination; the file is not run.
+    pub(super) fn send_explorer_file_only(&mut self, path: PathBuf) {
+        if !self.running() || self.pending_upload.is_some() || self.closing {
+            self.report_info(
+                "Start the selected VM and wait for any pending upload before Send to VM".into(),
+            );
+            return;
+        }
+        let Some(source) = path.to_str() else {
+            self.report_error(
+                "The selected file was not sent: its path is not valid UTF-8; rename it or choose another file"
+                    .into(),
+            );
+            return;
+        };
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return;
+        };
+        self.source = source.into();
+        self.destination = format!("/tmp/{name}");
+        self.upload_browser.selected = Some(path);
+        self.request_upload(false);
+    }
+
+    /// Open Folder: a small window for the folder path, with the folder
+    /// browser one click away.
+    pub(super) fn open_folder_dialog(&mut self) {
+        let current = self
+            .explorer_browser
+            .root
+            .as_ref()
+            .map(|root| root.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.folder_dialog = Some(current);
+    }
+
+    pub(super) fn folder_dialog(&mut self, ctx: &egui::Context) {
+        let Some(path) = &mut self.folder_dialog else {
+            return;
+        };
+        let mut open = true;
+        let mut accept = false;
+        let mut cancel = false;
+        let mut browse = false;
+        let can_browse = self.folder_picker.available();
+        crate::widgets::window("Open Folder")
+            .id(Dialog::Folder.window_id())
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label("Folder on this computer");
+                ui.horizontal(|ui| {
+                    let edit = ui.add(
+                        text_field(path)
+                            .font(egui::TextStyle::Monospace)
+                            .hint_text(crate::theme::placeholder(ui, "Enter a folder path"))
+                            .desired_width(crate::theme::edit_width(360.0)),
+                    );
+                    if edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                        accept = true;
+                    }
+                    if icon(
+                        ui,
+                        egui_phosphor::regular::FOLDER_OPEN,
+                        if can_browse {
+                            "Choose a folder with the filesystem explorer"
+                        } else {
+                            "Install Zenity first"
+                        },
+                        can_browse,
+                    ) {
+                        browse = true;
+                    }
+                });
+                let valid = crate::folders::user_path(path).is_dir();
+                if !path.trim().is_empty() && !valid {
+                    ui.colored_label(theme::muted(), "This is not a folder that exists.");
+                }
+                dialog_footer(ui, |ui| {
+                    accept =
+                        ui.add_enabled(valid, primary_button("OK")).clicked() || (accept && valid);
+                    cancel = ui.button("Cancel").clicked();
+                });
+            });
+        if accept {
+            if let Some(path) = self.folder_dialog.take() {
+                self.accept_explorer_folder(crate::folders::user_path(&path));
+            }
+        } else if browse {
+            self.folder_dialog = None;
+            self.choose_explorer_folder();
+        } else if !open || cancel {
+            self.folder_dialog = None;
+        }
+    }
+
+    /// The filesystem explorer's folder chooser, for the explorer root.
+    pub(super) fn choose_explorer_folder(&mut self) {
+        if let Err(error) = self.folder_picker.choose(FolderTarget {
+            generation: self.explorer_browser.generation,
+            kind: FolderKind::ExplorerRoot,
+        }) {
+            self.report_error(format!("Explorer folder: {error}"));
+        }
+    }
+
+    /// The explorer shows `path` and keeps it for the next start.
+    pub(super) fn accept_explorer_folder(&mut self, path: PathBuf) {
+        self.settings.explorer_root = Some(path.clone());
+        self.settings.explorer_collapsed = false;
+        self.explorer_browser.reset(path);
     }
 
     pub(super) fn send_explorer_file(&mut self, path: PathBuf) {

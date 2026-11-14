@@ -88,8 +88,7 @@ fn the_explorer_has_a_folder_button_and_no_choose_folder_button() {
     }
     let tip = texts(&output);
     assert!(
-        tip.iter()
-            .any(|(text, _)| text.starts_with("Choose Explorer folder")),
+        tip.iter().any(|(text, _)| text.starts_with("Open Folder")),
         "{tip:?}"
     );
 }

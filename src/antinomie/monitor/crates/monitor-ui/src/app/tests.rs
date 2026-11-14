@@ -135,6 +135,7 @@ pub(crate) fn app() -> MonitorApp {
         show_older_bases: false,
         build_wizard: build_wizard::BuildWizard::default(),
         name_action: None,
+        folder_dialog: None,
         filter: String::new(),
         applied_filter: String::new(),
         trace_sort: None,

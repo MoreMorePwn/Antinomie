@@ -49,45 +49,48 @@ impl MonitorApp {
 
     pub(super) fn upload_form(&mut self, ui: &mut egui::Ui) {
         dialog_section(ui, "Host file");
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    self.folder_picker.available() && self.pending_upload.is_none(),
-                    egui::Button::new("Choose file…"),
-                )
-                .on_hover_text("Choose a file with the filesystem explorer")
-                .clicked()
-            {
-                if let Err(error) = self.folder_picker.choose(FolderTarget {
-                    generation: self.upload_browser.generation,
-                    kind: FolderKind::UploadFile,
-                }) {
-                    self.report_error(format!("Host file: {error}"));
-                }
-            }
-            if self.folder_picker.checking() {
-                theme::loading_weak(ui, "Checking file chooser…");
-            } else if !self.folder_picker.installed() {
-                ui.colored_label(
-                    theme::muted(),
-                    "File selection requires Zenity; you can type a file path below.",
-                );
-            }
-        });
+        if self.folder_picker.checking() {
+            theme::loading_weak(ui, "Checking file chooser…");
+        } else if !self.folder_picker.installed() {
+            ui.colored_label(
+                theme::muted(),
+                "File selection requires Zenity; you can type a file path below.",
+            );
+        }
         dialog_section(ui, "Upload destination");
         ui.add_enabled_ui(self.pending_upload.is_none(), |ui| {
             form_grid("upload", ui).show(ui, |ui| {
                 ui.label("Host file");
-                if ui
-                    .add(
-                        text_field(&mut self.source)
-                            .font(egui::TextStyle::Monospace)
-                            .hint_text(crate::theme::placeholder(ui, "Choose or enter a file path"))
-                            .desired_width(crate::theme::edit_width(400.0)),
-                    )
-                    .changed()
-                {
-                    self.upload_browser.selected = None;
+                let mut choose = false;
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            text_field(&mut self.source)
+                                .font(egui::TextStyle::Monospace)
+                                .hint_text(crate::theme::placeholder(
+                                    ui,
+                                    "Choose or enter a file path",
+                                ))
+                                .desired_width(crate::theme::edit_width(400.0)),
+                        )
+                        .changed()
+                    {
+                        self.upload_browser.selected = None;
+                    }
+                    choose = icon(
+                        ui,
+                        egui_phosphor::regular::FOLDER_OPEN,
+                        "Choose a file with the filesystem explorer",
+                        self.folder_picker.available() && self.pending_upload.is_none(),
+                    );
+                });
+                if choose {
+                    if let Err(error) = self.folder_picker.choose(FolderTarget {
+                        generation: self.upload_browser.generation,
+                        kind: FolderKind::UploadFile,
+                    }) {
+                        self.report_error(format!("Host file: {error}"));
+                    }
                 }
                 ui.end_row();
                 ui.label("Guest path");

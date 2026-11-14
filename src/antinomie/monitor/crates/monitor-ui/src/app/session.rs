@@ -308,9 +308,7 @@ impl MonitorApp {
                     FolderKind::ExplorerRoot
                         if target.generation == self.explorer_browser.generation =>
                     {
-                        self.settings.explorer_root = Some(path.clone());
-                        self.settings.explorer_collapsed = false;
-                        self.explorer_browser.reset(path);
+                        self.accept_explorer_folder(path)
                     }
                     _ => {}
                 },
