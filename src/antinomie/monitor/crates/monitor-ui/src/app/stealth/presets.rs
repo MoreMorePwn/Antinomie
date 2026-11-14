@@ -26,15 +26,11 @@ pub(super) fn preset_list(
     let mut preset = profile.preset;
     let presets = crate::widgets::list_help(
         "Presets",
+        // Each description names what it needs (the IoT device: arm64
+        // only); the list shows the unavailable one disabled with the reason.
         StealthPreset::ALL
             .iter()
-            .map(|option| match option.unavailable(arch) {
-                Some(reason) => (
-                    option.label(),
-                    format!("{} ({reason})", option.description()),
-                ),
-                None => (option.label(), option.description().to_owned()),
-            }),
+            .map(|option| (option.label(), option.description())),
     );
     // One row (the dialog draws it in a grid cell): the list and its help.
     ui.horizontal(|ui| {
