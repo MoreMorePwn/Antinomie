@@ -55,7 +55,7 @@ pub fn seal_retained_specimens(directory: &std::path::Path) -> Vec<String> {
 }
 pub(crate) use strings::{find_strings, find_strings_min};
 pub use unpack::{PackerVerdict, UnpackLayer, packer_verdict, unpack_layers};
-pub use worker::worker_main_if_requested;
+pub use worker::{unavailable_on, worker_main_if_requested};
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub mod fuzz {

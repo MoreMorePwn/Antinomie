@@ -230,6 +230,7 @@ impl ProgramRun {
             socket.to_path_buf(),
             self.summary.directory.clone(),
             every,
+            crate::timed_shots::Bounds::of(&self.summary.request),
             self.started_ms,
         ));
     }

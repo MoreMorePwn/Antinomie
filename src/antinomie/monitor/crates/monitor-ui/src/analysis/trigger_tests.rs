@@ -102,3 +102,56 @@ fn the_tier_is_a_minimum_tier_combo_of_low_medium_and_high() {
         TriggerTier::Low
     );
 }
+
+/// Item 29: the core and the memory dump each have a box with their own
+/// settings under it: the core its count and Read non-resident pages, the
+/// memory dump its count and RAM cap.
+#[test]
+fn the_core_and_the_memory_dump_each_have_their_own_count() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut request = ExecRequest {
+        dump_trigger: Some(DumpTrigger {
+            memory: true,
+            core: true,
+            max_cores: 2,
+            max_memory_dumps: 3,
+            ..DumpTrigger::default()
+        }),
+        ..Default::default()
+    };
+    let mut output = render(&ctx, &mut request, vec![]);
+    for _ in 0..3 {
+        output = render(&ctx, &mut request, vec![]);
+    }
+    let shown = labels(&output);
+    let find = |text: &str| {
+        shown
+            .iter()
+            .find(|(t, _)| t == text)
+            .unwrap_or_else(|| panic!("{text}: {shown:?}"))
+            .1
+    };
+    let core = find("Core of the process that triggered it");
+    let nonresident = find("Read non-resident pages");
+    let memory = find("Memory dump");
+    let cores = find("core(s) per run");
+    let dumps = find("memory dump(s) per run");
+    let cap = find("Only if the VM has at most");
+    // Each setting sits under its own box.
+    assert!(core.top() < cores.top() && cores.top() < memory.top());
+    assert!(core.top() < nonresident.top() && nonresident.top() < memory.top());
+    assert!(memory.top() < dumps.top() && dumps.top() < cap.top());
+    assert!(shown.iter().any(|(t, _)| t == "2"), "{shown:?}");
+    assert!(shown.iter().any(|(t, _)| t == "3"), "{shown:?}");
+    // The memory dump off: its settings go, the core's stay.
+    request.dump_trigger.as_mut().unwrap().memory = false;
+    for _ in 0..3 {
+        output = render(&ctx, &mut request, vec![]);
+    }
+    let shown = labels(&output);
+    assert!(!shown.iter().any(|(t, _)| t == "memory dump(s) per run"));
+    assert!(shown.iter().any(|(t, _)| t == "core(s) per run"));
+    let plan = request.dump_trigger.unwrap();
+    assert_eq!((plan.max_cores, plan.max_memory_dumps), (2, 3));
+}

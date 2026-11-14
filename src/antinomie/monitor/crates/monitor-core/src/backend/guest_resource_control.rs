@@ -80,6 +80,8 @@ impl Session {
             sample: None,
             preloaded: Vec::new(),
             screenshot_every_s: None,
+            screenshot_max_pictures: None,
+            screenshot_max_mib: None,
         };
         let reply = match self.request_typed(
             control::EXEC,

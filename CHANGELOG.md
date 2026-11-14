@@ -15,6 +15,20 @@ x86 programs by their own table.
 
 ### Host
 
+- **Run program window (0.9.0 UI round, ANT-T0550).** More room between the
+  Program and Analysis columns; Analysis, Dumps, Network, Timed Screenshot and
+  Debugging (renamed from Debugger) fold, and the window remembers which are
+  folded.
+- **Timed Screenshot limits.** The interval shows before the box is ticked, and
+  a run sets its own limits (10 to 5,000 pictures, 16 to 4,096 MiB; 500 and
+  256 MiB by default) in the window and with `run exec --screenshot-max-pictures`
+  and `--screenshot-max-mib`. Auto presets keep the defaults.
+- **capa and FLOSS on an arm64 VM** are listed greyed out and unticked in Run
+  program, with the analysis's reason on hover.
+- **Dump trigger: a count for each kind.** The core and the memory dump of
+  "Dump when suspicious activity is seen" are separate boxes, each with its own
+  settings and its own count (`max_cores`, `max_memory_dumps` in the run plan).
+  A plan saved with one `max_dumps` reads as that count for both.
 - **Saved hits per rule.** A detection scan saves up to 100 hit positions per
   rule (was 16), set in Settings > Detection rules (16 to 10,000,
   `triage_detection.evidence_limit`), and counts every hit it left out; the

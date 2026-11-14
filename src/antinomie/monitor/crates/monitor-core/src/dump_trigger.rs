@@ -17,9 +17,9 @@
 //! generation rule over many names, anything read from the network capture or
 //! from the file index after the run) fire only in the index, never here.
 //!
-//! The plan bounds what a trigger may do: at most `max_dumps` triggers take
-//! a dump per run, no two closer than `cooldown_secs`, and a failed dump is
-//! recorded and not retried.
+//! The plan bounds what a trigger may do: at most `max_cores` cores and
+//! `max_memory_dumps` memory dumps per run, no two triggers closer than
+//! `cooldown_secs`, and a failed dump is recorded and not retried.
 use crate::api::{EventSummary, InvocationSummary, pair_events};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -73,8 +73,13 @@ impl TriggerTier {
 
 /// What a run does when suspicious activity is seen. Part of the run plan
 /// (`ExecRequest`), so `run.json` records what was asked.
+///
+/// The core and the memory dump each have their own count. A plan saved
+/// before they were separate has one `max_dumps`, which reads as the count of
+/// both; a plan is still written with `max_dumps` (the larger count) so an
+/// older release reads a count it knows.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(from = "TriggerWire", into = "TriggerWire")]
 pub struct DumpTrigger {
     /// Triggers at this tier and above.
     pub min_tier: TriggerTier,
@@ -83,12 +88,76 @@ pub struct DumpTrigger {
     /// Take a core of the process that made the call. Its budget and
     /// deadline are the run's `core_max_size` and `core_timeout_ms`.
     pub core: bool,
-    /// Triggers that may take a dump during this run.
-    pub max_dumps: u32,
+    /// Cores the trigger may take during this run.
+    pub max_cores: u32,
+    /// Memory dumps the trigger may take during this run.
+    pub max_memory_dumps: u32,
     /// Quiet time after a trigger during which another is only counted.
     pub cooldown_secs: u32,
     /// A memory dump is skipped when the VM has more RAM than this, MiB.
     pub memory_max_mib: u32,
+}
+
+/// [`DumpTrigger`] as `run.json` holds it, old and new counts alike.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct TriggerWire {
+    min_tier: TriggerTier,
+    memory: bool,
+    core: bool,
+    /// The one count of a plan saved before the counts were separate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_dumps: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_cores: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_memory_dumps: Option<u32>,
+    cooldown_secs: u32,
+    memory_max_mib: u32,
+}
+
+impl Default for TriggerWire {
+    /// A field that is absent reads as the default plan's; the counts stay
+    /// unset so an old plan's `max_dumps` can stand for both.
+    fn default() -> Self {
+        Self {
+            max_dumps: None,
+            max_cores: None,
+            max_memory_dumps: None,
+            ..TriggerWire::from(DumpTrigger::default())
+        }
+    }
+}
+
+impl From<DumpTrigger> for TriggerWire {
+    fn from(plan: DumpTrigger) -> Self {
+        Self {
+            min_tier: plan.min_tier,
+            memory: plan.memory,
+            core: plan.core,
+            max_dumps: Some(plan.max_cores.max(plan.max_memory_dumps)),
+            max_cores: Some(plan.max_cores),
+            max_memory_dumps: Some(plan.max_memory_dumps),
+            cooldown_secs: plan.cooldown_secs,
+            memory_max_mib: plan.memory_max_mib,
+        }
+    }
+}
+
+impl From<TriggerWire> for DumpTrigger {
+    fn from(wire: TriggerWire) -> Self {
+        // An old plan's one count is the count of both.
+        let both = wire.max_dumps.unwrap_or(1);
+        Self {
+            min_tier: wire.min_tier,
+            memory: wire.memory,
+            core: wire.core,
+            max_cores: wire.max_cores.unwrap_or(both),
+            max_memory_dumps: wire.max_memory_dumps.unwrap_or(both),
+            cooldown_secs: wire.cooldown_secs,
+            memory_max_mib: wire.memory_max_mib,
+        }
+    }
 }
 
 impl Default for DumpTrigger {
@@ -97,7 +166,8 @@ impl Default for DumpTrigger {
             min_tier: TriggerTier::High,
             memory: false,
             core: true,
-            max_dumps: 1,
+            max_cores: 1,
+            max_memory_dumps: 1,
             cooldown_secs: 30,
             memory_max_mib: 4096,
         }
@@ -110,16 +180,34 @@ impl DumpTrigger {
         if !self.memory && !self.core {
             return Err("a dump trigger needs a memory dump, a core, or both".into());
         }
-        if !(1..=Self::MAX_DUMPS).contains(&self.max_dumps) {
-            return Err(format!(
-                "a dump trigger takes 1 to {} dumps per run",
-                Self::MAX_DUMPS
-            ));
+        for (what, count) in [
+            ("cores", self.max_cores),
+            ("memory dumps", self.max_memory_dumps),
+        ] {
+            if !(1..=Self::MAX_DUMPS).contains(&count) {
+                return Err(format!(
+                    "a dump trigger takes 1 to {} {what} per run",
+                    Self::MAX_DUMPS
+                ));
+            }
         }
         if self.cooldown_secs > 3600 {
             return Err("the dump trigger cooldown is at most one hour".into());
         }
         Ok(())
+    }
+
+    /// What the next match may still take, given what `log` holds: a core
+    /// while fewer than `max_cores` were taken, a memory dump while fewer
+    /// than `max_memory_dumps` were. `(core, memory)`.
+    pub fn room(&self, log: &TriggerLog) -> (bool, bool) {
+        let limit = |count: u32| count.min(RECORDS_MAX as u32) as usize;
+        let cores = log.records.iter().filter(|r| r.core.is_some()).count();
+        let memory = log.records.iter().filter(|r| r.memory.is_some()).count();
+        (
+            self.core && cores < limit(self.max_cores),
+            self.memory && memory < limit(self.max_memory_dumps),
+        )
     }
 }
 

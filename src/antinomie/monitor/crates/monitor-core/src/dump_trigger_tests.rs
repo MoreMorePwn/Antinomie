@@ -416,3 +416,77 @@ fn a_held_process_is_judged_at_once_and_let_go_only_without_a_match() {
     assert_eq!(watch.releases(Duration::ZERO), vec![0x77]);
     assert!(watch.held.is_empty());
 }
+
+/// Item 29 (2026-11-14): the core and the memory dump have a count each. A
+/// plan saved with one `max_dumps` reads as that count for both, and a new
+/// plan still carries `max_dumps` for an older release.
+#[test]
+fn an_old_plan_with_one_count_reads_as_that_count_for_both() {
+    let old: DumpTrigger =
+        serde_json::from_str(r#"{"min_tier":"medium","memory":true,"core":true,"max_dumps":3,"cooldown_secs":60,"memory_max_mib":2048}"#)
+            .unwrap();
+    assert_eq!((old.max_cores, old.max_memory_dumps), (3, 3));
+    assert_eq!(old.min_tier, TriggerTier::Medium);
+    // No count at all is the default of one each.
+    let bare: DumpTrigger = serde_json::from_str("{}").unwrap();
+    assert_eq!(bare, DumpTrigger::default());
+    let new = DumpTrigger {
+        max_cores: 2,
+        max_memory_dumps: 5,
+        ..DumpTrigger::default()
+    };
+    let saved = serde_json::to_value(&new).unwrap();
+    assert_eq!(saved["max_cores"], 2);
+    assert_eq!(saved["max_memory_dumps"], 5);
+    assert_eq!(saved["max_dumps"], 5);
+    assert_eq!(serde_json::from_value::<DumpTrigger>(saved).unwrap(), new);
+    // An old run.json's request loads whole.
+    let request: crate::ExecRequest = serde_json::from_str(
+        r#"{"path":"/bin/x","args":[],"cwd":"/","env":[],"uid":0,"gid":0,"dump_trigger":{"max_dumps":2,"memory":true}}"#,
+    )
+    .unwrap();
+    let plan = request.dump_trigger.unwrap();
+    assert_eq!((plan.max_cores, plan.max_memory_dumps), (2, 2));
+}
+
+#[test]
+fn each_dump_kind_counts_against_its_own_limit() {
+    let plan = DumpTrigger {
+        memory: true,
+        core: true,
+        max_cores: 2,
+        max_memory_dumps: 1,
+        ..DumpTrigger::default()
+    };
+    let finding = LiveFinding {
+        rule: "r".into(),
+        summary: String::new(),
+        tier: TriggerTier::High,
+        pid: 1,
+        tid: 1,
+        task_cookie: 1,
+        stream_id: 1,
+        call_id: 1,
+        guest_ns: 0,
+        syscall: String::new(),
+    };
+    let record = |memory: bool| TriggerRecord {
+        at_ms: 0,
+        finding: finding.clone(),
+        memory: memory.then(TriggerDump::default),
+        core: Some(TriggerDump::default()),
+    };
+    let mut log = TriggerLog::default();
+    assert_eq!(plan.room(&log), (true, true));
+    log.records.push(record(true));
+    // One memory dump is the limit; a second core is still allowed.
+    assert_eq!(plan.room(&log), (true, false));
+    log.records.push(record(false));
+    assert_eq!(plan.room(&log), (false, false));
+    let mut bad = plan.clone();
+    bad.max_memory_dumps = 0;
+    assert!(bad.validate().unwrap_err().contains("memory dumps"));
+    bad.max_memory_dumps = 1;
+    bad.max_cores = 9;
+    assert!(bad.validate().unwrap_err().contains("cores"));
+}
