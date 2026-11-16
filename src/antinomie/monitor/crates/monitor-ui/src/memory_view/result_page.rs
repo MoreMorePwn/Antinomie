@@ -202,7 +202,7 @@ impl MemoryView {
         // The controls keep their size; the title takes what is left.
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                crate::widgets::with_help(
+                crate::widgets::hover_help(
                     ui,
                     format!("{}'s messages for this run", result.run.analyzer.label()),
                     |ui| ui.toggle_value(&mut self.show_log, "Messages"),
@@ -222,7 +222,7 @@ impl MemoryView {
                 }
                 ui.separator();
                 if result.has_files
-                    && crate::widgets::with_help(ui, "Open the files this run wrote", |ui| {
+                    && crate::widgets::hover_help(ui, "Open the files this run wrote", |ui| {
                         ui.button(format!("{} Files", egui_phosphor::regular::FOLDER_OPEN))
                     })
                     .clicked()
@@ -232,7 +232,7 @@ impl MemoryView {
                     }
                 }
                 if let Ok(table) = &result.table {
-                    if crate::widgets::with_help(
+                    if crate::widgets::hover_help(
                         ui,
                         if self.text_view {
                             "Copy this page as plain text"
@@ -325,7 +325,7 @@ impl MemoryView {
                 ui.horizontal_wrapped(|ui| {
                     ui.colored_label(theme::muted(), "Run in Volatility 3:");
                     for (plugin, what) in antinomie_monitor_core::memory::memnixfs::ROOT_FALLBACKS {
-                        if crate::widgets::with_help(
+                        if crate::widgets::hover_help(
                             ui,
                             format!("Switch to Volatility 3 and run {plugin} on this dump"),
                             |ui| ui.button(format!("{what} ({plugin})")),

@@ -190,7 +190,7 @@ impl MonitorApp {
         let mut open_downloads = false;
         let stopped = self.snapshot.active_vm.is_none();
         ui.horizontal_wrapped(|ui| {
-            if crate::widgets::with_help_or(ui, "", "Stop the running VM first", |ui| {
+            if crate::widgets::hover_help_or(ui, "", "Stop the running VM first", |ui| {
                 ui.add_enabled(stopped, egui::Button::new("Import base…"))
             })
             .clicked()
@@ -356,7 +356,7 @@ impl MonitorApp {
                 if ui.button("Open directory").clicked() {
                     base_action = Some((id.clone(), BaseAction::OpenDirectory));
                 }
-                if crate::widgets::with_help_or(ui, "", "Stop the running VM first", |ui| {
+                if crate::widgets::hover_help_or(ui, "", "Stop the running VM first", |ui| {
                     ui.add_enabled(stopped, egui::Button::new("Delete base…"))
                 })
                 .clicked()

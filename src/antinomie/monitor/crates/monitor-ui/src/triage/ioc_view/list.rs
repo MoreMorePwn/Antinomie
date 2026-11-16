@@ -67,7 +67,7 @@ impl View {
                 .filter(|item| item.ty == ty && item.noise.is_some())
                 .count();
             if noisy > 0 || self.noise {
-                let chip = crate::widgets::with_help(ui, "The guest's own clock sync, DHCP and apt traffic. Not the sample's; listed here, not dropped.", |ui| ui
+                let chip = crate::widgets::hover_help(ui, "The guest's own clock sync, DHCP and apt traffic. Not the sample's; listed here, not dropped.", |ui| ui
                     .selectable_label(self.noise, format!("Base image noise {noisy}")));
                 if chip.clicked() {
                     self.noise = !self.noise;

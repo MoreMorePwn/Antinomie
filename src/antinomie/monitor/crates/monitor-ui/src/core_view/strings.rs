@@ -480,14 +480,14 @@ impl StringsState {
     /// The filter, what was searched and the way to search again.
     fn toolbar(&mut self, ui: &mut egui::Ui, record: &CoreRecord, extracted: &Arc<Extracted>) {
         ui.horizontal(|ui| {
-            if crate::widgets::with_help(ui, "Read the core's memory again", |ui| ui
-                .button("Search again"))
+            if ui
+                .button("Search again")
                 .clicked()
             {
                 self.reset();
                 self.start(&record.core);
             }
-            if crate::widgets::with_help(ui, "List the network, crypto, key, behaviour, attribution and encoded \
+            if crate::widgets::hover_help(ui, "List the network, crypto, key, behaviour, attribution and encoded \
                      matches in these strings, and the socket addresses in the core's memory", |ui| ui
                 .button("Regex matches…"))
                 .clicked()

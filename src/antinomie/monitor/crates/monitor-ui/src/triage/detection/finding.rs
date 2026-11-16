@@ -347,14 +347,14 @@ pub(super) fn evidence_list(
                         });
                         match &focus {
                             Some(Focus::Event(event)) => {
-                                let button = crate::widgets::with_help(ui, "Open this event in the normalized event journal", |ui| ui
-                                    .add(egui::Button::new(format!("Journal event #{event}"))));
+                                let button = ui
+                                    .add(egui::Button::new(format!("Journal event #{event}")));
                                 if button.clicked() {
                                     selected = Some(Pick::Journal(Focus::Event(*event)));
                                 }
                             }
                             Some(Focus::Source(source)) => {
-                                let button = crate::widgets::with_help(ui, "Saved before event numbers were kept: shows the first journal event recorded for this source", |ui| ui.small_button("In journal"));
+                                let button = crate::widgets::hover_help(ui, "Saved before event numbers were kept: shows the first journal event recorded for this source", |ui| ui.small_button("In journal"));
                                 if button.clicked() {
                                     selected = Some(Pick::Journal(Focus::Source(source.clone())));
                                 }
@@ -600,25 +600,15 @@ fn rule_text(ui: &mut egui::Ui, id: egui::Id, title: &str, text: &str) {
         if ui.button("Copy rule").clicked() {
             ui.ctx().copy_text(text.to_owned());
         }
-        if crate::widgets::with_help(
-            ui,
-            "Wrap long lines, or keep each on one line and scroll sideways",
-            |ui| ui.checkbox(&mut wrap, "Wrap lines"),
-        )
+        if ui.checkbox(&mut wrap, "Wrap lines")
         .changed()
         {
             ui.ctx().data_mut(|data| data.insert_temp(wrap_id, wrap));
         }
-        if crate::widgets::with_help(
-            ui,
-            "Show the whole rule in a large window of its own",
-            |ui| {
-                ui.button(format!(
+        if ui.button(format!(
                     "{} Open in a window",
                     egui_phosphor::regular::ARROWS_OUT
                 ))
-            },
-        )
         .clicked()
         {
             ui.ctx().data_mut(|data| {

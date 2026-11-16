@@ -170,7 +170,7 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                                             ui.close();
                                         }
                                         if available
-                                            && crate::widgets::with_help(
+                                            && crate::widgets::hover_help(
                                                 ui,
                                                 "Upload the file only; it is not run",
                                                 |ui| {

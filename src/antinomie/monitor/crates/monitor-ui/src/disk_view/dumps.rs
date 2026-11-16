@@ -475,7 +475,7 @@ impl DiskView {
         let busy = self.saving_image.is_some();
         let saveable = row.browsable() && !busy;
         for format in [ExportFormat::SparseRaw, ExportFormat::Qcow2] {
-            if crate::widgets::with_help_or(
+            if crate::widgets::hover_help_or(
                 ui,
                 "",
                 "Needs a finished dump, and no other save running",
@@ -492,7 +492,7 @@ impl DiskView {
                 ui.close();
             }
         }
-        if crate::widgets::with_help_or(
+        if crate::widgets::hover_help_or(
             ui,
             "",
             "Needs a finished dump, and no other check running",

@@ -249,7 +249,7 @@ pub(crate) fn tool_row_with(
                     });
                 }
             } else if (tool.system.is_none() || own_chosen)
-                && crate::widgets::with_help(
+                && crate::widgets::hover_help(
                     ui,
                     format!("{} · downloads from its upstream release", tool.version),
                     |ui| {
@@ -276,11 +276,8 @@ pub(crate) fn tool_row_with(
         });
     });
     if let (Some(own), Some(_)) = (own, &tool.system) {
-        crate::widgets::with_help(
-            ui,
-            "The program is the copy Antinomie installs under its data folder, even though \
-                 the system has one. Until it is installed the system's copy is used. Install all \
-                 still skips a tool the system has.",
+        crate::widgets::hover_help(
+            ui, "Installs Antinomie's own copy even though the system has one; until then the system's copy is used",
             |ui| ui.checkbox(own, "Use Antinomie's own copy instead"),
         );
     }

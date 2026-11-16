@@ -124,11 +124,7 @@ pub(crate) fn show(
                 boot_from_disk: true,
             });
         }
-        if crate::widgets::with_help(
-            ui,
-            "The full Snapshots window: graph, rename, delete",
-            |ui| ui.button("Open Snapshots…"),
-        )
+        if ui.button("Open Snapshots…")
         .clicked()
         {
             action = Some(Action::Open);

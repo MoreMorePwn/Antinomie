@@ -199,12 +199,12 @@ impl MonitorApp {
             ui.add(text_field(&mut app.draft.name).desired_width(crate::theme::edit_width(280.0)));
             ui.end_row();
             ui.label("CPU count");
-            crate::widgets::with_help(ui, "A real PC has 4 to 16 threads (checks flag 1)", |ui| {
+            crate::widgets::hover_help(ui, "A real PC has 4 to 16 threads (checks flag 1)", |ui| {
                 ui.add(egui::DragValue::new(&mut app.draft.cpus).range(1..=64))
             });
             ui.end_row();
             ui.label("RAM");
-            crate::widgets::with_help(
+            crate::widgets::hover_help(
                 ui,
                 format!(
                     "At least {min_ram} MiB for this base; a real PC has 8 to 32 GiB \
@@ -221,14 +221,8 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Disk");
             if creating {
-                crate::widgets::with_help(
-                    ui,
-                    format!(
-                        "At least {min_disk} GiB for this base; a real PC has 256 GiB \
-                         or more (checks flag under 60 GiB); a BusyBox base grows its \
-                         filesystem on the first boot (256 GiB: about 400 MiB of image, \
-                         two minutes)"
-                    ),
+                crate::widgets::hover_help(
+                    ui, format!("At least {min_disk} GiB for this base; a real PC has 256 GiB or more (checks flag under 60 GiB)"),
                     |ui| {
                         ui.add(
                             egui::DragValue::new(&mut app.draft.disk_gib)
@@ -387,11 +381,7 @@ impl MonitorApp {
             }
             ui.end_row();
             ui.label("Transport");
-            if crate::widgets::with_help(
-                ui,
-                "Guest buffers, never-drop mode and the host event table",
-                |ui| ui.button("Telemetry transport…"),
-            )
+            if ui.button("Telemetry transport…")
             .clicked()
             {
                 app.transport_open = !app.transport_open;
@@ -502,7 +492,7 @@ fn launch_options(
         });
     ui.end_row();
     ui.label("VM screen");
-    crate::widgets::with_help(ui, "Applies at the next start of this VM, not to a running one. No screen runs the VM without any display.", |ui| egui::ComboBox::from_id_salt("vm_screen")
+    crate::widgets::hover_help(ui, "Applies at the next start of this VM, not to a running one. No screen runs the VM without any display.", |ui| egui::ComboBox::from_id_salt("vm_screen")
         .selected_text(launch.screen.label())
         .width(260.0)
         .show_ui(ui, |ui| {
@@ -570,11 +560,8 @@ fn launch_options(
     ui.end_row();
     if arch == antinomie_monitor_core::GuestArch::AARCH64 {
         ui.label("Emulation");
-        crate::widgets::with_help(
-            ui,
-            "Boots the arm64 guest without kernel page-table isolation, which the \
-                 emulated CPU runs slowly. A program can notice: a real machine of this CPU \
-                 has it. Listed under Still visible in the VM's summary.",
+        crate::widgets::hover_help(
+            ui, "Boots the arm64 guest without kernel page-table isolation, which the emulated CPU runs slowly. A program can notice: a real machine of this CPU has it.",
             |ui| ui.checkbox(&mut launch.fast_emulation, "Faster emulation (KPTI off)"),
         );
         ui.end_row();
@@ -677,12 +664,8 @@ fn transport_options(
             );
             ui.end_row();
             ui.label("Capture All");
-            crate::widgets::with_help(
-                ui,
-                "Under Capture All, drop telemetry while the host falls behind \
-                 instead of slowing the guest. Keeps a desktop guest responsive; \
-                 the recording loses events. Off: never drop also holds under \
-                 Capture All, and the guest runs slower.",
+            crate::widgets::hover_help(
+                ui, "Under Capture All, drops telemetry while the host falls behind instead of slowing the guest; the recording loses events",
                 |ui| {
                     ui.add_enabled(
                         transport.lossless,

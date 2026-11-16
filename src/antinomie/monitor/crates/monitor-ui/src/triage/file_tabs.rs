@@ -2,6 +2,7 @@
 //! The File activity section: its tabs, filters and tables. The tab model and
 //! the rows' sink are in `antinomie_triage::file_tabs`.
 use super::file_category::EVENT_HEADERS;
+use crate::widgets::Tip as _;
 use super::*;
 
 pub(super) use antinomie_triage::file_tabs::*;
@@ -50,6 +51,10 @@ impl TriageView {
             visibility.hide_standard_io,
             None,
         )
+        .help_tip(format!(
+            "Hides stdin, stdout and stderr: {} rows in this table.",
+            count.stdio
+        ))
         .clicked()
         {
             visibility.hide_standard_io = !visibility.hide_standard_io;
@@ -61,6 +66,10 @@ impl TriageView {
             visibility.hide_libraries,
             None,
         )
+        .help_tip(format!(
+            "Hides shared libraries and the loader cache: {} rows in this table.",
+            count.library
+        ))
         .clicked()
         {
             visibility.hide_libraries = !visibility.hide_libraries;
@@ -89,20 +98,13 @@ impl TriageView {
         } else {
             "Failed attempts".to_owned()
         };
-        if toggle_chip(ui, &failed_label, visibility.show_failed, None).clicked() {
+        if toggle_chip(ui, &failed_label, visibility.show_failed, None)
+            .help_tip(&hover)
+            .clicked()
+        {
             visibility.show_failed = !visibility.show_failed;
             changed = true;
         }
-        // One help icon for the three chips.
-        crate::widgets::help(
-            ui,
-            format!(
-                "- **Hide stdio**: hide stdin, stdout, stderr. {} rows in this table are standard input/output.\n\
-                 - **Hide library**: hide shared libraries and the loader cache. {} rows in this table are libraries.\n\
-                 - **Failed attempts**: {hover}",
-                count.stdio, count.library
-            ),
-        );
         if counted && count.total > 0 {
             let group = antinomie_monitor_core::analysis::detection::group_digits;
             let (hide_stdio, hide_library) = (

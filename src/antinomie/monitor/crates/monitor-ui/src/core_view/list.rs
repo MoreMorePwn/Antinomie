@@ -94,7 +94,7 @@ impl CoreView {
             } else {
                 "Cancel process core".to_owned()
             };
-            if crate::widgets::with_help(
+            if crate::widgets::hover_help(
                 ui,
                 "Stop this capture and let the process continue",
                 |ui| ui.button(label),

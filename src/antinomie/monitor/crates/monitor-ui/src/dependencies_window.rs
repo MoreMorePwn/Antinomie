@@ -314,16 +314,14 @@ fn kvm_actions(
     );
     ui.horizontal_wrapped(|ui| {
         if let Some(vm) = vm
-            && crate::widgets::with_help(ui, "Sets this VM's acceleration to TCG", |ui| {
-                ui.button(format!("Use TCG for {vm}"))
-            })
+            && ui.button(format!("Use TCG for {vm}"))
             .clicked()
         {
             outcome.tcg_for_vm = true;
         }
         if options.start.kvm_fallback {
             ui.label("Use TCG when KVM is unavailable: on");
-        } else if crate::widgets::with_help(
+        } else if crate::widgets::hover_help(
             ui,
             "VMs set to KVM then run with TCG instead of refusing to start",
             |ui| ui.button("Use TCG when KVM is unavailable"),
@@ -358,9 +356,7 @@ fn route_programs(ui: &mut egui::Ui, routes: &RoutePrograms<'_>, outcome: &mut O
         }
     }
     ui.add_space(4.0);
-    if crate::widgets::with_help(ui, "Tools > Settings > Network routes", |ui| {
-        ui.button("Open Network routes settings")
-    })
+    if ui.button("Open Network routes settings")
     .clicked()
     {
         outcome.open_routes = true;
@@ -375,11 +371,7 @@ fn geoip_database(ui: &mut egui::Ui, routes: &RoutePrograms<'_>, outcome: &mut O
     ui.weak("TShark reads MaxMind-format (.mmdb) databases to fill Country and Organization.");
     crate::tools_page::geoip_status(ui, routes.geoip);
     ui.add_space(4.0);
-    if crate::widgets::with_help(
-        ui,
-        "Tools > Settings > Network lookup: install DB-IP Lite or choose a folder",
-        |ui| ui.button("Open Network lookup settings"),
-    )
+    if ui.button("Open Network lookup settings")
     .clicked()
     {
         outcome.open_lookup = true;

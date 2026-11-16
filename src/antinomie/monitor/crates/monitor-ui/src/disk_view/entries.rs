@@ -51,10 +51,8 @@ impl DiskView {
         }
         ui.add_space(4.0);
         self.dump_button(ui, cx, true);
-        if crate::widgets::with_help_or(
-            ui,
-            "Browse a raw ext4 image made elsewhere (the file stays where it is), or \
-                 convert a qcow2 image in the sandbox into a dump",
+        if crate::widgets::hover_help_or(
+            ui, "Browse a raw ext4 image made elsewhere, or convert a qcow2 image into a dump. The file stays where it is.",
             "Select a VM: imported images are kept with its recordings",
             |ui| {
                 ui.add_enabled(

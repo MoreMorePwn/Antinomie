@@ -580,7 +580,7 @@ fn artifact_buttons(
         || output.availability == Availability::WithVm && output.kind == Kind::Snapshot)
         && run_there;
     let reason = output.kind.open_unavailable().unwrap_or(why);
-    if crate::widgets::with_help_or(
+    if crate::widgets::hover_help_or(
         ui,
         "",
         if run_there {
@@ -600,7 +600,7 @@ fn artifact_buttons(
         *act = Some(Act::Open(output.number, output.kind));
     }
     if go_to_run
-        && crate::widgets::with_help_or(ui, "", "The run's folder was deleted", |ui| {
+        && crate::widgets::hover_help_or(ui, "", "The run's folder was deleted", |ui| {
             ui.add_enabled(run_there, egui::Button::new("Go to run").small())
         })
         .clicked()
@@ -611,7 +611,7 @@ fn artifact_buttons(
         output.availability,
         Availability::InRun | Availability::Kept(..)
     ) && !output.path.as_os_str().is_empty();
-    if crate::widgets::with_help_or(ui, "", why, |ui| {
+    if crate::widgets::hover_help_or(ui, "", why, |ui| {
         ui.add_enabled(folder, egui::Button::new("Open folder").small())
     })
     .clicked()
@@ -631,7 +631,7 @@ fn artifact_menu(
         Availability::Deleted => "The file was deleted",
         _ => "The file is missing",
     };
-    if crate::widgets::with_help_or(ui, "", why, |ui| {
+    if crate::widgets::hover_help_or(ui, "", why, |ui| {
         ui.add_enabled(here, egui::Button::new(output.kind.open_label()))
     })
     .clicked()
@@ -643,7 +643,7 @@ fn artifact_menu(
         *act = Some(Act::GoToRun(output.number));
         ui.close();
     }
-    if crate::widgets::with_help_or(ui, "", why, |ui| {
+    if crate::widgets::hover_help_or(ui, "", why, |ui| {
         ui.add_enabled(here, egui::Button::new("Open folder"))
     })
     .clicked()
@@ -653,7 +653,7 @@ fn artifact_menu(
     }
     ui.separator();
     let is_file = here && crate::stat_cache::is_file(&output.path);
-    if crate::widgets::with_help_or(
+    if crate::widgets::hover_help_or(
         ui,
         "",
         if here {

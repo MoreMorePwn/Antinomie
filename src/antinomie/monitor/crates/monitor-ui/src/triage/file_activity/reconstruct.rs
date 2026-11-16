@@ -75,22 +75,14 @@ pub(in crate::triage) fn menu(
     values: &[(&str, crate::triage::RowValue)],
 ) {
     if let Some(path) = row_path(table, values) {
-        if crate::widgets::with_help(
-            ui,
-            "Show this file's calls as a graph in the Per-file history",
-            |ui| ui.button("Open file history"),
-        )
+        if ui.button("Open file history")
         .clicked()
         {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new(HISTORY_REQUEST), path.clone()));
             ui.close();
         }
-        if crate::widgets::with_help(
-            ui,
-            "Open this file's reconstruction in the Per-file history",
-            |ui| ui.button("Reconstruct contents…"),
-        )
+        if ui.button("Reconstruct contents…")
         .clicked()
         {
             ui.ctx()
@@ -555,16 +547,12 @@ impl Open {
                 let before = self.view;
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut self.view, View::Hex, "Hex");
-                    ui.selectable_value(&mut self.view, View::Utf8, "Text");
-                    ui.selectable_value(&mut self.view, View::Utf16, "UTF-16LE");
-                    ui.selectable_value(&mut self.view, View::Diff, "Text diff");
-                    crate::widgets::help(
-                        ui,
-                        "- **Hex**: sixteen bytes a row as hex and as characters.\n\
-                         - **Text**: the bytes as UTF-8; an invalid byte shows as `\\xNN`. `?? ## ~~` mark bytes with no value.\n\
-                         - **UTF-16LE**: two bytes a character; a pair with an unknown byte shows as `?? ## ~~`.\n\
-                         - **Text diff**: lines changed since the start of the run, for text files whose every byte is known.",
+                    ui.selectable_value(&mut self.view, View::Utf8, "Text").help_tip(
+                        "The bytes as UTF-8; an invalid byte shows as `\\xNN`. `?? ## ~~` mark bytes with no value.",
                     );
+                    ui.selectable_value(&mut self.view, View::Utf16, "UTF-16LE");
+                    ui.selectable_value(&mut self.view, View::Diff, "Text diff")
+                        .help_tip("Lines changed since the start of the run, for text files whose every byte is known");
                 });
                 if self.view != before {
                     text_mode::remember(ui.ctx(), self.view);
@@ -622,14 +610,20 @@ impl Open {
     fn actions(&mut self, ui: &mut egui::Ui, file: &FileActivity, directory: Option<&Path>) {
         ui.horizontal_wrapped(|ui| {
             let can = directory.is_some() && self.saving.is_none();
-            let response = ui.add_enabled(can, egui::Button::new("Save reconstruction"));
+            let response = ui
+                .add_enabled(can, egui::Button::new("Save reconstruction"))
+                .help_tip("Unknown bytes save as `00`; a `.mask` file next to it marks them (`00` known, `01` unknown, `02` not captured, `03` mapping).");
             if let (true, true, Some(directory)) = (can, response.clicked(), directory) {
                 let target = directory.join("reconstructed");
                 let name = save_name(&file.path, file.first_ns);
                 let (ctx, map) = (ui.ctx().clone(), self.map.clone());
                 self.saving = Some(Pending::spawn(&ctx, move || save(&map, &target, &name)));
             }
-            if ui.button("Copy hex").clicked() {
+            if ui
+                .button("Copy hex")
+                .help_tip("The byte map as hex, the first 256 KiB")
+                .clicked()
+            {
                 let text = hex_dump(&self.map, COPY_LIMIT);
                 ui.ctx().copy_text(text);
             }
@@ -651,12 +645,6 @@ impl Open {
                     );
                 }
             }
-            crate::widgets::help(
-                ui,
-                "- **Save reconstruction**: unknown bytes save as `00`; a `.mask` file next to it marks them (`00` known, `01` unknown, `02` not captured, `03` mapping).\n\
-                 - **Copy hex**: the byte map as hex, the first 256 KiB.\n\
-                 - **Show call in Trace**: open the original syscall of the chosen call.",
-            );
         });
         if directory.is_none() {
             ui.weak("Saving needs a recording on disk.");

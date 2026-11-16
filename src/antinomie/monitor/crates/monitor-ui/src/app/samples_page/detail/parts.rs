@@ -263,9 +263,7 @@ pub(super) fn fitted_up_to(
 /// analysis. True when clicked.
 pub(super) fn open_all(ui: &mut egui::Ui, text: &str) -> bool {
     ui.add_space(4.0);
-    crate::widgets::with_help(ui, "Open the whole list in Static analysis", |ui| {
-        ui.button(text)
-    })
+    ui.button(text)
     .clicked()
 }
 

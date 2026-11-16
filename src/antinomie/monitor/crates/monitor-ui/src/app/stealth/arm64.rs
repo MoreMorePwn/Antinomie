@@ -45,7 +45,7 @@ pub(super) fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile, uefi: bo
                 .width(260.0)
                 .truncate()
                 .show_ui(ui, |ui| {
-                    if crate::widgets::with_help(
+                    if crate::widgets::hover_help(
                         ui,
                         "A machine of the preset's kind, the same one for the VM's life",
                         |ui| {
@@ -107,7 +107,7 @@ pub(super) fn hardware(ui: &mut egui::Ui, profile: &mut StealthProfile, uefi: bo
                      from the catalog and the VM's UUID; the PC fields do not apply to arm64."
                 },
             );
-            if crate::widgets::with_help(
+            if crate::widgets::hover_help(
                 ui,
                 "New serials, UUID and MAC address (an automatic pick may change)",
                 |ui| ui.button("Randomize serials"),

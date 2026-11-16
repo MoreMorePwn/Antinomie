@@ -55,11 +55,7 @@ pub(super) fn banner(ui: &mut egui::Ui, check: &ChainCheck, verifying: bool) -> 
                         }
                     }
                 }
-                if crate::widgets::with_help(
-                    ui,
-                    "Recompute every hash and compare with the library index",
-                    |ui| ui.add_enabled(!verifying, egui::Button::new("Verify")),
-                )
+                if ui.add_enabled(!verifying, egui::Button::new("Verify"))
                 .clicked()
                 {
                     verify = true;

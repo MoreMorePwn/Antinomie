@@ -213,7 +213,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
         if selected.table == "triage-changed" {
             disk_diff_link(ui, &selected);
             if let Some(change) = view.scan.as_ref().and_then(|scan| scan.file_changes.iter().find(|change| change.evidence_key() == selected.key)) {
-                if crate::widgets::with_help(ui, "Open this file in the Per-file history tab", |ui| ui.button("Per-file history")).clicked() {
+                if ui.button("Per-file history").clicked() {
                     view.file_history.open_on(&change.path);
                     view.history_tab = true;
 view.by_file = false;
@@ -366,7 +366,7 @@ pub(super) fn evidence_link(ui: &mut egui::Ui, values: &[(&'static str, RowValue
         return;
     }
     let label = format!("Show the {} calls in Syscall Trace", calls.len());
-    if crate::widgets::with_help(
+    if crate::widgets::hover_help(
         ui,
         "Open Syscall Trace filtered to the calls these lines cite",
         |ui| ui.button(label),

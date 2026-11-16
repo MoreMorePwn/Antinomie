@@ -252,9 +252,7 @@ pub(in crate::triage) fn show(
         .map(|text| text_width(text, &button_font) + button_pad)
         .sum::<f32>()
         + percent_width
-        // The help icon at the left end.
-        + text_width(egui_phosphor::regular::QUESTION, &egui::TextStyle::Body.resolve(ui.style()))
-        + 5.0 * gap;
+        + 4.0 * gap;
     let bar_size = egui::vec2(
         (inner + 2.0 * BAR_PAD).min(rect.width() - 2.0 * BAR_MARGIN),
         BAR_HEIGHT,
@@ -553,11 +551,6 @@ pub(in crate::triage) fn show(
     {
         view.zoom_about(viewport / 2.0, 1.0 / 1.2);
     }
-    // Right to left: the help icon is the bar's left end.
-    crate::widgets::help(
-        &mut zoom_ui,
-        "Zoom\n\n- **Fit all**: show every box, however small.\n- **Fit**: show the top of the graph, as wide as the box.\n- **+** and **−**: zoom in and out.",
-    );
     Outcome { clicked, folded }
 }
 
@@ -951,12 +944,11 @@ mod tests {
                 .map(|(_, r)| *r)
                 .unwrap_or_else(|| panic!("{wanted:?} in the bar"))
         };
-        let _ = text("\u{2212}");
-        let (first, last) = (text(egui_phosphor::regular::QUESTION), text("Fit all"));
-        // The help icon is a bare glyph, "Fit all" a button with its padding.
+        let (first, last) = (text("\u{2212}"), text("Fit all"));
+        // Both ends are buttons with their padding.
         let padding = ctx.global_style().spacing.button_padding.x;
         let (left, right) = (
-            first.left() - bar.left(),
+            first.left() - bar.left() - padding,
             bar.right() - last.right() - padding,
         );
         assert!((left - right).abs() < 2.0, "left {left}, right {right}");

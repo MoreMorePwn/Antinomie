@@ -79,11 +79,7 @@ pub(super) fn key_findings(
                 } else {
                     format!("Show more ({rest})")
                 };
-                if crate::widgets::with_help(
-                    ui,
-                    "List every finding in the same space, with a scroll bar",
-                    |ui| ui.button(label),
-                )
+                if ui.button(label)
                 .clicked()
                 {
                     *open = !*open;
@@ -346,13 +342,9 @@ pub(super) fn indicators(
                     acts.push(Act::Go(Destination::Ioc));
                 }
             }
-            copy = crate::widgets::with_help(
-                ui,
-                "Copy every indicator as plain text, one per line, grouped",
-                |ui| ui.add_enabled(!found.is_empty(), egui::Button::new("Copy all")),
-            )
+            copy = ui.add_enabled(!found.is_empty(), egui::Button::new("Copy all"))
             .clicked();
-            export = crate::widgets::with_help(
+            export = crate::widgets::hover_help(
                 ui,
                 "Write the indicators as JSON beside the run's other files",
                 |ui| ui.add_enabled(!found.is_empty(), egui::Button::new("Export")),

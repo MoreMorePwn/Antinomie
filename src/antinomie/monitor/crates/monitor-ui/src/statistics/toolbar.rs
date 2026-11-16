@@ -250,14 +250,14 @@ impl StatisticsWindow {
         ui.separator();
         ui.horizontal(|ui| {
             for tab in Tab::ALL {
-                if ui.selectable_label(self.tab == tab, tab.label()).clicked() {
+                if ui
+                    .selectable_label(self.tab == tab, tab.label())
+                    .help_tip(tab.hint())
+                    .clicked()
+                {
                     self.tab = tab;
                 }
             }
-            crate::widgets::help(
-                ui,
-                crate::widgets::list_help("", Tab::ALL.iter().map(|tab| (tab.label(), tab.hint()))),
-            );
         });
         ui.separator();
         let footer = 52.0;
@@ -317,9 +317,7 @@ impl StatisticsWindow {
                     antinomie_monitor_core::byte_size::short_size(size),
                 );
             }
-            if crate::widgets::with_help(ui, "Open Run History to choose another run", |ui| {
-                ui.button("Change…")
-            })
+            if ui.button("Change…")
             .clicked()
             {
                 navigate.push(Navigate::RunHistory);
@@ -337,14 +335,19 @@ impl StatisticsWindow {
                 "syscall.name == openat",
                 width,
                 crate::query::FilterScope::Syscall,
-            );
+            )
+            .help_tip(crate::query::filter_help());
             if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
                 apply = true;
             }
             if ui.button("Apply").clicked() {
                 apply = true;
             }
-            if ui.button("Use Trace filter").clicked() {
+            if ui
+                .button("Use Trace filter")
+                .help_tip("Copies the Syscall Trace's applied filter into this box, once. Statistics ignores the Trace's hidden categories and selected process.")
+                .clicked()
+            {
                 self.filter = view.trace_filter.to_owned();
                 apply = true;
             }
@@ -358,19 +361,9 @@ impl StatisticsWindow {
                     for base in TimeBase::ALL {
                         ui.selectable_value(&mut self.time_base, base, base.label());
                     }
-                });
-            // One icon for the row: the filter, its buttons and the times.
-            crate::widgets::help(
-                ui,
-                format!(
-                    "{}\n\nStatistics ignores the Trace's hidden categories and selected process.\n\n\
-                     - **Apply**: count the calls this filter keeps (`Enter`).\n\
-                     - **Use Trace filter**: copy the Syscall Trace's applied filter into this box, once.\n\
-                     - **Clear**: empty the filter.\n\
-                     - The time list: how times are written. Host time is an estimate through the run's clock anchor.",
-                    crate::query::filter_help()
-                ),
-            );
+                })
+                .response
+                .help_tip("How times are written. Host time is an estimate through the run's clock anchor.");
         });
         if apply {
             self.apply();
@@ -453,7 +446,7 @@ impl StatisticsWindow {
                 Phase::Running(_) => {
                     ui.spinner();
                     ui.label(&text);
-                    if crate::widgets::with_help(
+                    if crate::widgets::hover_help(
                         ui,
                         "Stop reading; the numbers keep the calls read so far",
                         |ui| ui.button("Stop"),
@@ -594,7 +587,7 @@ impl StatisticsWindow {
     ) {
         ui.horizontal(|ui| {
             let ready = stats.is_some();
-            if crate::widgets::with_help(
+            if crate::widgets::hover_help(
                 ui,
                 "Copy this table as tab-separated text, with a header row",
                 |ui| ui.add_enabled(ready, egui::Button::new("Copy")),
@@ -623,18 +616,12 @@ impl StatisticsWindow {
             if let (Some(kind), Some(stats)) = (asked, stats) {
                 self.export(ui.ctx(), view, target, stats, kind);
             }
-            let (label, hint) = if self.popped {
-                (
-                    "Back into the main window",
-                    "Return the window to the main window",
-                )
+            let label = if self.popped {
+                "Back into the main window"
             } else {
-                (
-                    "Pop out",
-                    "Move the window into its own operating-system window",
-                )
+                "Pop out"
             };
-            if crate::widgets::with_help(ui, hint, |ui| ui.button(label)).clicked() {
+            if ui.button(label).clicked() {
                 let popped = !self.popped;
                 self.set_popped(popped);
             }

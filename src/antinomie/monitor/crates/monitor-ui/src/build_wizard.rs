@@ -238,9 +238,7 @@ impl BuildWizard {
                 }
                 Kind::DebianXfce => "Debian 13 with the desktop you choose, as from the installer",
             };
-            crate::widgets::with_help(ui, detail, |ui| {
-                ui.radio_value(&mut self.profile, index, profile.label)
-            });
+            ui.radio_value(&mut self.profile, index, profile.label);
             ui.small(format!("    {detail}"));
         }
         ui.add_space(6.0);
@@ -382,7 +380,7 @@ impl BuildWizard {
                 antinomie_monitor_core::byte_size::short_size(size),
                 dir.display()
             ));
-            if crate::widgets::with_help(
+            if crate::widgets::hover_help(
                 ui,
                 "The next native Debian Minimal build downloads and unpacks it again.",
                 |ui| ui.small_button("Delete"),
@@ -599,9 +597,8 @@ impl BuildWizard {
         );
         ui.add_space(4.0);
         ui.label("HTTP proxy (leave empty for none)");
-        crate::widgets::with_help(
-            ui,
-            "The proxy is used while building and is not kept in the image.",
+        crate::widgets::hover_help(
+            ui, "Used while building; not kept in the image",
             |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut options.proxy)
@@ -630,7 +627,7 @@ impl BuildWizard {
         let automatic = build::automatic_base_name(kind, &self.options[self.profile].desktop);
         ui.horizontal(|ui| {
             ui.label("Base name");
-            crate::widgets::with_help(
+            crate::widgets::hover_help(
                 ui,
                 "Shown in the base list; leave empty for the automatic name.",
                 |ui| {

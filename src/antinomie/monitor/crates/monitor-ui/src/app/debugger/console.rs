@@ -394,7 +394,7 @@ fn header(
         );
         if plan.is_ok() {
             if console.running() {
-                if crate::widgets::with_help(ui, "Quit gdb; the process keeps running", |ui| {
+                if crate::widgets::hover_help(ui, "Quit gdb; the process keeps running", |ui| {
                     ui.small_button("Stop")
                 })
                 .clicked()
@@ -402,9 +402,7 @@ fn header(
                     console.quit();
                 }
             }
-            if crate::widgets::with_help(ui, "Start gdb again and reconnect it", |ui| {
-                ui.small_button("Restart")
-            })
+            if ui.small_button("Restart")
             .clicked()
             {
                 console.restart();

@@ -77,8 +77,8 @@ pub(super) fn function_panel(
         }))
         .show(ui, |ui| {
             crate::code_listing::heading(ui, names.len(), names.len());
-            if crate::widgets::with_help(ui, "Save this listing as a text file. Export category… in the report menu offers more formats.", |ui| ui
-                .button("Export text"))
+            if ui
+                .button("Export text")
                 .clicked()
             {
                 *action = Some(ReportAction::Export {

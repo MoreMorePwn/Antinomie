@@ -330,8 +330,8 @@ impl MonitorApp {
                 self.select_process(selection);
             }
             self.trace_archive_pager(ui);
-            if crate::widgets::with_help(ui, "Open the Statistics window on the filter now applied (Ctrl+Shift+T opens it without one)", |ui| ui
-                .button("Statistics of these calls"))
+            if ui
+                .button("Statistics of these calls")
                 .clicked()
             {
                 let filter = self.applied_filter.clone();
@@ -341,7 +341,7 @@ impl MonitorApp {
         // The filter box has a row of its own below the toolbar, as before
         // egui 0.36, at every window and text size.
         ui.horizontal(|ui| {
-            crate::widgets::with_help(ui, crate::query::filter_help(), |ui| {
+            crate::widgets::hover_help(ui, crate::query::filter_help(), |ui| {
                 let filter_width = ui.available_width().max(180.0);
                 crate::query::filter_edit(
                     ui,
@@ -1131,7 +1131,7 @@ fn trace_row_menu(
             );
         }
         Some(_) => {
-            crate::widgets::with_help_or(
+            crate::widgets::hover_help_or(
                 ui,
                 "",
                 "This run did not start a sample of the library",
@@ -1139,7 +1139,7 @@ fn trace_row_menu(
             );
         }
         None => {
-            crate::widgets::with_help_or(ui, "", "Select a run to note one of its calls", |ui| {
+            crate::widgets::hover_help_or(ui, "", "Select a run to note one of its calls", |ui| {
                 ui.add_enabled(false, egui::Button::new("Add note…"))
             });
         }

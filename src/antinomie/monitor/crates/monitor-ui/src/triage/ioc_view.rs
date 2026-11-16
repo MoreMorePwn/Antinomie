@@ -672,7 +672,7 @@ impl View {
             };
             ui.separator();
             let mut on = self.online_on && key.is_some();
-            let response = crate::widgets::with_help(ui, if key.is_some() {
+            let response = crate::widgets::hover_help(ui, if key.is_some() {
                     "Send public indicators that have no offline match to abuse.ch. Files are never sent."
                 } else {
                     "Needs an Auth-Key"
@@ -685,8 +685,8 @@ impl View {
                 self.open_datasets = true;
             }
             let label = if ioc.scan.loaded.is_empty() { "Download" } else { "Update" };
-            if crate::widgets::with_help(ui, "Opens the datasets in the Rule manager", |ui| ui
-                .button(label))
+            if ui
+                .button(label)
                 .clicked()
             {
                 self.open_datasets = true;

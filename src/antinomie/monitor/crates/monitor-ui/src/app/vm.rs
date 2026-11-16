@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! VM configuration, launch and the VM settings dialog.
 use super::*;
+use crate::widgets::Tip as _;
 use crate::scroll_contain::ScrollContained as _;
 
 mod dialog;
@@ -551,54 +552,49 @@ impl MonitorApp {
                 });
             },
             |ui| {
-                // Right to left: the main action lands rightmost; one help
-                // icon at the left end explains the buttons, and why one is
-                // greyed.
+                // Right to left: the main action lands rightmost; a greyed
+                // button says why on its hover.
                 let can_run = if uploading {
                     ready && program_ready && valid && self.pending_upload.is_none()
                 } else {
                     ready && program_ready && valid
                 };
-                let run = ui.add_enabled(
-                    can_run,
-                    primary_button(&if uploading {
-                        format!("{} Upload", egui_phosphor::regular::UPLOAD_SIMPLE)
-                    } else {
-                        format!("{} Run", egui_phosphor::regular::PLAY)
-                    }),
-                );
+                let run = ui
+                    .add_enabled(
+                        can_run,
+                        primary_button(&if uploading {
+                            format!("{} Upload", egui_phosphor::regular::UPLOAD_SIMPLE)
+                        } else {
+                            format!("{} Run", egui_phosphor::regular::PLAY)
+                        }),
+                    )
+                    .help_tip_or(
+                        if uploading {
+                            "Uploads the file as an executable and sets the program to its guest path here, ready to Run"
+                        } else {
+                            ""
+                        },
+                        if uploading {
+                            "Choose the host file and the guest path"
+                        } else {
+                            "Enter the executable to run"
+                        },
+                    );
                 start = run.clicked();
                 let can_analyze =
                     ready && !uploading && self.exec.analysis.enabled && program_ready && valid;
-                let analyze = ui.add_enabled(can_analyze, egui::Button::new("Analyze only"));
+                let analyze = ui
+                    .add_enabled(can_analyze, egui::Button::new("Analyze only"))
+                    .help_tip_or(
+                        "Gets the file and runs static analysis without launching it",
+                        if uploading {
+                            "Upload the file first"
+                        } else {
+                            "Needs Static analysis and an executable"
+                        },
+                    );
                 analyze_clicked = analyze.clicked();
                 cancel = ui.button("Cancel").clicked();
-                let mut text = String::new();
-                if !can_run {
-                    text.push_str(if uploading {
-                        "Upload: choose the host file and the guest path.\n\n"
-                    } else {
-                        "Run: enter the executable to run.\n\n"
-                    });
-                }
-                if !can_analyze {
-                    text.push_str(if uploading {
-                        "Analyze only: upload the file first.\n\n"
-                    } else {
-                        "Analyze only: needs Static analysis and an executable.\n\n"
-                    });
-                }
-                if uploading {
-                    text.push_str(
-                        "- **Upload**: upload as executable. The program is then set to its guest path in this window, ready to Run.\n",
-                    );
-                } else {
-                    text.push_str("- **Run**: start the program in the VM and record it.\n");
-                }
-                text.push_str(
-                    "- **Analyze only**: acquire the file and run static analysis without launching it.",
-                );
-                crate::widgets::help(ui, text);
                 run_rects = Some((run.rect, analyze.rect));
             },
         );

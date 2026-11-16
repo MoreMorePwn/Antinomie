@@ -2,6 +2,7 @@
 //! The panel's top: process and thread, the stop status line, run-control
 //! buttons and the endpoint an external debugger connects to.
 use super::*;
+use crate::widgets::Tip as _;
 use crate::widgets::{fg_or_muted, Tone};
 use antinomie_monitor_core::debug::view::{Controller, Pending, RunState};
 
@@ -91,16 +92,22 @@ pub(super) fn show(
         let idle = view.is_some_and(|view| !panel.waiting(view) && !view.loading);
         let can = live && idle;
         let tid = view.and_then(|view| view.selected_tid);
-        // One help icon ends the row: each button's meaning, and why the
-        // greyed ones are off.
-        let button = |ui: &mut egui::Ui, enabled: bool, label: String, _tip: &str| {
-            ui.add_enabled(enabled, egui::Button::new(label)).clicked()
+        // Why the greyed buttons are off is on their hover.
+        let reason = if can {
+            ""
+        } else {
+            disabled_reason(view, stopped)
+        };
+        let button = |ui: &mut egui::Ui, enabled: bool, label: String, tip: &str| {
+            ui.add_enabled(enabled, egui::Button::new(label))
+                .help_tip_or(tip, reason)
+                .clicked()
         };
         if button(
             ui,
             can && stopped,
             format!("{} Continue", egui_phosphor::regular::PLAY),
-            "Resume every thread",
+            "",
         ) {
             actions.push(PanelAction::Debug(DebugAction::Continue));
         }
@@ -108,7 +115,7 @@ pub(super) fn show(
             ui,
             can && stopped && tid.is_some() && view.is_some_and(|view| view.caps.single_step),
             format!("{} Step", egui_phosphor::regular::ARROW_BEND_DOWN_RIGHT),
-            "Run one instruction of the selected thread; the other threads stay stopped",
+            "The other threads stay stopped",
         );
         if let (true, Some(tid)) = (step, tid) {
             actions.push(PanelAction::Debug(DebugAction::Step { tid }));
@@ -117,7 +124,7 @@ pub(super) fn show(
             ui,
             live && running && view.is_some_and(|view| !panel.waiting(view)),
             format!("{} Stop", egui_phosphor::regular::STOP),
-            "Stop every thread of the process",
+            "",
         ) {
             actions.push(PanelAction::Debug(DebugAction::Stop));
         }
@@ -125,30 +132,25 @@ pub(super) fn show(
             ui,
             can && stopped,
             format!("{} Refresh", egui_phosphor::regular::ARROWS_CLOCKWISE),
-            "Read the registers and memory again",
+            "",
         ) {
             actions.push(PanelAction::Debug(DebugAction::Refresh));
         }
         ui.separator();
-        if ui.button("Detach").clicked() {
+        if ui
+            .button("Detach")
+            .help_tip("Removes breakpoints; the process keeps running")
+            .clicked()
+        {
             actions.push(PanelAction::Detach { kill: false });
         }
-        if ui.button("Detach and kill").clicked() {
+        if ui
+            .button("Detach and kill")
+            .help_tip("Ends the process now with SIGKILL, without letting it save or clean up")
+            .clicked()
+        {
             actions.push(PanelAction::Detach { kill: true });
         }
-        let mut text = String::from(
-            "Debugger controls\n\n\
-             - **Continue**: resume every thread.\n\
-             - **Step**: run one instruction of the selected thread; the other threads stay stopped.\n\
-             - **Stop**: stop every thread of the process.\n\
-             - **Refresh**: read the registers and memory again.\n\
-             - **Detach**: remove breakpoints; the process keeps running.\n\
-             - **Detach and kill**: end the process now with `SIGKILL`, without letting it save or clean up.",
-        );
-        if !can {
-            text = format!("{}\n\n{text}", disabled_reason(view, stopped));
-        }
-        crate::widgets::help(ui, text);
     });
     endpoint(ui, info);
 }

@@ -218,7 +218,7 @@ impl Promote {
                     ("The guest", "Reading a file out of a VM is not offered here"),
                     ("A rule-saved copy", "No rule saved a copy of this file"),
                 ] {
-                    crate::widgets::with_help_or(ui, "", why, |ui| ui.add_enabled(false, egui::RadioButton::new(false, name)));
+                    crate::widgets::hover_help_or(ui, "", why, |ui| ui.add_enabled(false, egui::RadioButton::new(false, name)));
                 }
                 ui.add_space(6.0);
                 match &self.state {

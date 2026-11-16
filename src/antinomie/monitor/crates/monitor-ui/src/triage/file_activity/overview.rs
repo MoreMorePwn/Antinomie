@@ -287,7 +287,7 @@ impl Window {
                     "Only files a call created, wrote, resized, renamed, linked, deleted or changed the attributes of",
                 ),
             ] {
-                if crate::widgets::with_help(ui, hover, |ui| widgets::toggle_chip(ui, label, *flag, None))
+                if crate::widgets::hover_help(ui, hover, |ui| widgets::toggle_chip(ui, label, *flag, None))
                     .clicked()
                 {
                     *flag = !*flag;

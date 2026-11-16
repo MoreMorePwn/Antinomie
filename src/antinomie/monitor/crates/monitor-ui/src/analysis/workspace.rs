@@ -827,7 +827,7 @@ pub(super) fn paired_card<R>(
 
 /// The small Run button of a category; true when it was pressed.
 fn run_button(ui: &mut egui::Ui, enabled: bool, hover: &str) -> bool {
-    crate::widgets::with_help_or(ui, hover, "Wait for the analysis to finish", |ui| {
+    crate::widgets::hover_help_or(ui, hover, "Wait for the analysis to finish", |ui| {
         ui.add_enabled(enabled, egui::Button::new("Run").small())
     })
     .clicked()

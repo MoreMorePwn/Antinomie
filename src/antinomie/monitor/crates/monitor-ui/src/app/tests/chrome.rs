@@ -445,6 +445,7 @@ fn button_frame(
                         icon: egui_phosphor::regular::PLAY,
                         label: "Start",
                         tooltip: "Start the selected VM",
+                        help: "",
                         enabled,
                         tone: theme::good(),
                         strong: true,

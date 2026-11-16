@@ -330,9 +330,8 @@ impl MemoryView {
                 .jobs
                 .iter()
                 .any(|job| job.run.dump_id == dump.id && job.run.plugin == current.name);
-            if crate::widgets::with_help_or(
-                ui,
-                "Run the plugin on this dump; the result is saved with it",
+            if crate::widgets::hover_help_or(
+                ui, "",
                 "This plugin is already running on this dump",
                 |ui| {
                     ui.add_enabled(
@@ -529,7 +528,7 @@ impl MemoryView {
                             }
                             return;
                         }
-                        if crate::widgets::with_help(
+                        if crate::widgets::hover_help(
                             ui,
                             "Choose this plugin with these options",
                             |ui| ui.button("Set up again"),
@@ -940,7 +939,7 @@ fn community_menu(
             });
         }
         ui.separator();
-        if crate::widgets::with_help(
+        if crate::widgets::hover_help(
             ui,
             "Download community plugins checked for this Volatility",
             |ui| {
@@ -960,7 +959,7 @@ fn community_menu(
             crate::folders::show_created_detached(dir);
             ui.close();
         }
-        if crate::widgets::with_help(ui, "After adding, changing or removing plugins", |ui| {
+        if crate::widgets::hover_help(ui, "After adding, changing or removing plugins", |ui| {
             ui.button("Reload plugin list")
         })
         .clicked()
@@ -992,7 +991,7 @@ fn plugin_options(ui: &mut egui::Ui, current: &PluginInfo, values: &mut Vec<(Str
             match option.kind {
                 OptionKind::Bool => {
                     let mut on = value == "true";
-                    if crate::widgets::with_help(ui, help, |ui| {
+                    if crate::widgets::hover_help(ui, help, |ui| {
                         ui.checkbox(&mut on, option.name.replace('_', " "))
                     })
                     .changed()
@@ -1025,7 +1024,7 @@ fn plugin_options(ui: &mut egui::Ui, current: &PluginInfo, values: &mut Vec<(Str
                             .map(|value| value.to_string())
                             .unwrap_or_default(),
                     };
-                    crate::widgets::with_help(ui, help, |ui| {
+                    crate::widgets::hover_help(ui, help, |ui| {
                         ui.add(
                             egui::TextEdit::singleline(value)
                                 .hint_text(crate::theme::placeholder(ui, hint))

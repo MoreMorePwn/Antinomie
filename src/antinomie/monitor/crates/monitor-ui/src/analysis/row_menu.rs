@@ -135,7 +135,7 @@ fn note_item(
             crate::app::note_menu_item(ui, Some(sha256), note_ref(report, kind, entry));
         }
         None => {
-            crate::widgets::with_help_or(
+            crate::widgets::hover_help_or(
                 ui,
                 "",
                 "This report did not record its specimen's SHA-256",
@@ -181,9 +181,7 @@ pub(super) fn menu(
         }
     }
     if let Some(offset) = records::file_offset(entry, specimen_len).filter(|_| content) {
-        if crate::widgets::with_help(ui, format!("Open the file content at 0x{offset:x}"), |ui| {
-            ui.button("Show in Content")
-        })
+        if ui.button("Show in Content")
         .clicked()
         {
             command = Some(RowCommand::ShowInContent(offset));

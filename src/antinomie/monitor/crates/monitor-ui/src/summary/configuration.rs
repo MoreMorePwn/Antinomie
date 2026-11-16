@@ -16,7 +16,7 @@ pub(super) fn show(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
     ui.horizontal(|ui| {
         ui.strong("VM configuration");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let button = crate::widgets::with_help_or(
+            let button = crate::widgets::hover_help_or(
                 ui,
                 "",
                 "Stop the VM to change its configuration",

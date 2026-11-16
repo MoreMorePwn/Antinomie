@@ -177,8 +177,8 @@ impl ExportDialog {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 30.0;
                         let before = self.format;
-                        crate::widgets::with_help(ui, "The entries and hashes, with verify-custody.py written beside it", |ui| ui.radio_value(&mut self.format, ExportFormat::Json, "JSON"));
-                        crate::widgets::with_help(ui, "A readable record with the JSON embedded", |ui| ui.radio_value(&mut self.format, ExportFormat::Html, "HTML"));
+                        crate::widgets::hover_help(ui, "The entries and hashes, with verify-custody.py written beside it", |ui| ui.radio_value(&mut self.format, ExportFormat::Json, "JSON"));
+                        ui.radio_value(&mut self.format, ExportFormat::Html, "HTML");
                         if before != self.format {
                             self.follow_format();
                         }
@@ -187,11 +187,8 @@ impl ExportDialog {
                     ui.label(RichText::new("Signature").color(theme::muted()));
                     let before = self.sign;
                     ui.radio_value(&mut self.sign, Sign::None, "Do not sign");
-                    crate::widgets::with_help(ui, "Runs minisign -S with the key file below", |ui| ui.radio_value(&mut self.sign, Sign::Minisign, "Sign with your minisign key"));
-                    crate::widgets::with_help(ui, format!(
-                            "Runs ssh-keygen -Y sign, namespace {}",
-                            antinomie_monitor_core::samples::SSH_NAMESPACE
-                        ), |ui| ui.radio_value(&mut self.sign, Sign::Ssh, "Sign with an SSH key"));
+                    ui.radio_value(&mut self.sign, Sign::Minisign, "Sign with your minisign key");
+                    ui.radio_value(&mut self.sign, Sign::Ssh, "Sign with an SSH key");
                     if before != self.sign {
                         self.key = default_key(self.sign);
                     }
@@ -214,10 +211,7 @@ impl ExportDialog {
                         );
                     }
                     ui.add_space(4.0);
-                    crate::widgets::with_help(ui, "Off: an entry that names a file on this computer (an import, a deleted \
-                             original) gives only its name and is marked withheld; the verifier \
-                             still checks every link. On: the paths stay and every entry can be \
-                             checked on its own. For internal use.", |ui| ui.checkbox(&mut self.keep_host_paths, "Keep paths on this computer"));
+                    crate::widgets::hover_help(ui, "Off: entries naming a file on this computer are marked withheld. On: the paths stay, for internal use.", |ui| ui.checkbox(&mut self.keep_host_paths, "Keep paths on this computer"));
                     ui.add_space(4.0);
                     ui.label(RichText::new("Save as").color(theme::muted()));
                     if ui

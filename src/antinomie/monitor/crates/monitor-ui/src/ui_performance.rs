@@ -200,7 +200,7 @@ impl Performance {
                 if software_renderer(&self.renderer) {
                     crate::activity::warning(ui, "Software rendering uses the CPU and can slow the whole window.");
                 }
-                if crate::widgets::with_help(ui, "For WSLg with a compatible GPU driver. Close Antinomie normally before using the command. It applies only to that launch.", |ui| ui.button("Copy WSL D3D12 launch command")).clicked() {
+                if crate::widgets::hover_help(ui, "For WSLg with a compatible GPU driver; it applies only to that launch", |ui| ui.button("Copy WSL D3D12 launch command")).clicked() {
                     // After a rebuild the running image is " (deleted)"; the
                     // command should start the new build at the same path.
                     let exe = std::env::current_exe().map(|exe| {

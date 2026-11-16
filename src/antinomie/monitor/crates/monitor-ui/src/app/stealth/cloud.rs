@@ -1,17 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Cloud-profile launch advice without changing a saved network policy.
 use crate::theme;
+use crate::widgets::Tip as _;
 use antinomie_monitor_core::{stealth::MACHINES, VmConfig, VmNetwork};
 use eframe::egui;
 
-/// What the Routed button does and why (its help icon).
-pub(in crate::app) const ROUTED_HELP: &str = "Cloud metadata needs a Routed network\n\n\
-     A real cloud instance can ask its provider's metadata service (169.254.169.254 and the \
-     like) for its identity and credentials, and malware may check that it answers. Cloud \
-     VPS answers it with fake data and canary credentials from Antinomie's route gateway, \
-     which only a Routed network has.\n\nThis button sets the VM's Network to Routed, as \
-     choosing it under Network does; it applies when you create or save the VM. Each run \
-     then picks its route.";
+/// What the Routed button does and why (its hover).
+pub(in crate::app) const ROUTED_HELP: &str = "Cloud VPS answers a cloud metadata check with fake data and canary credentials from Antinomie's route gateway, which only a Routed network has. This sets the VM's Network to Routed; it applies when you create or save the VM.";
 
 pub(in crate::app) fn launch_advice(ui: &mut egui::Ui, vm: &mut VmConfig) {
     let (_, note) = vm.stealth.machine.for_ram(u64::from(vm.ram_mib) << 20);
@@ -48,9 +43,9 @@ pub(in crate::app) fn launch_advice(ui: &mut egui::Ui, vm: &mut VmConfig) {
         );
         let clicked = ui
             .horizontal(|ui| {
-                let clicked = ui.button("Use Routed for cloud metadata").clicked();
-                super::help(ui, ROUTED_HELP);
-                clicked
+                ui.button("Use Routed for cloud metadata")
+                    .help_tip(ROUTED_HELP)
+                    .clicked()
             })
             .inner;
         if clicked {

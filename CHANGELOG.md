@@ -15,7 +15,7 @@ x86 programs by their own table.
 
 ### Host
 
-- **Help icons instead of hover text on controls (ANT-T0550, item 9).** Explanations that showed when hovering a button, checkbox, list or field are on a **?** help icon beside it, one shared widget across the app: it shows on hover and on a click (pinned until a click elsewhere or Esc, also from the keyboard), works on a disabled control, and formats the text (a bold title, a blank line between paragraphs, bullets, keys in code font, at most 360 px wide). An icon-only button keeps a short name on hover; a list or a row of tabs has one icon that lists its choices; the toolbar has one icon that explains every button. A guard (`scripts/check-control-hover.py`, run in CI) keeps long hover text off controls.
+- **Hover help on the control itself, and far fewer explanations (ANT-T0555).** A control explains itself when you hover it (one helper for the whole app, also on a disabled control, where the hover says why it is disabled), not on a separate **?** icon beside it. Only what the control's word cannot say is kept (a term, a consequence, a unit or range, a risk), in a sentence or two; hover text that repeated the label is gone. A **?** stays only where a section or concept needs a paragraph of its own (the Triage tiers and categories, the terminal's keys, the Device profile's fallbacks). An icon-only button keeps its name on hover. A guard (`scripts/check-control-hover.py`, run in CI) keeps long hover text off controls.
 - **Workspace UI round (ANT-T0550).** The Explorer's folder button is **Open
   Folder** and opens a small window for the folder path (with a folder button for
   the chooser); right-clicking an Explorer file offers **Send to VM**, which uploads

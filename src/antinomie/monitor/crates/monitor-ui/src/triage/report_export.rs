@@ -539,7 +539,7 @@ impl TriageView {
                                     ..Choices::default()
                                 };
                                 if *choices != defaults
-                                    && crate::widgets::with_help(
+                                    && crate::widgets::hover_help(
                                         ui,
                                         "Every section, HTML and PDF, Defang on, no bundle. \
                                              The folder stays.",
@@ -552,11 +552,8 @@ impl TriageView {
                                 }
                             });
                             if !simple {
-                                edited |= crate::widgets::with_help(
-                                    ui,
-                                    "The packet captures, the files the run dropped in an inner \
-                                         AES-256 zip (password: infected), the sample's custody \
-                                         export and a SHA-256 manifest.",
+                                edited |= crate::widgets::hover_help(
+                                    ui, "The packet captures, the dropped files in an AES-256 zip (password: infected), the custody export and a SHA-256 manifest",
                                     |ui| {
                                         ui.checkbox(
                                             &mut choices.bundle,
@@ -566,7 +563,7 @@ impl TriageView {
                                 )
                                 .changed();
                             }
-                            edited |= crate::widgets::with_help(
+                            edited |= crate::widgets::hover_help(
                                 ui,
                                 "On by default: hxxp://example[.]com. JSON, MISP and STIX \
                                      keep the raw values.",
@@ -632,7 +629,7 @@ impl TriageView {
                                 cancel_run = true;
                             }
                         } else {
-                            if crate::widgets::with_help_or(
+                            if crate::widgets::hover_help_or(
                                 ui,
                                 "",
                                 if self.report.exported {

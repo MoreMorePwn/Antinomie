@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""The control hover guard (0.9.0 UI round, item 9).
+"""The control hover guard (0.9.0 UI round 2, part help).
 
 A control of the desktop app (button, checkbox, radio, combo box, text field,
-slider, drag value, selectable label, toggle chip) keeps no long hover text:
-its explanation lives on a help icon beside it (`widgets::help`,
-`widgets::with_help`). This check reads the non-test Rust code of
-`monitor-ui` and fails on a hover call (`on_hover_text`,
-`on_disabled_hover_text`, `on_hover_ui`, ...) whose receiver is a control
-unless its text is a string literal of at most four words and 40 characters
-(a name).
+slider, drag value, selectable label, toggle chip) explains itself on its own
+hover, through one helper: `widgets::hover_help(ui, text, add)` /
+`widgets::hover_help_or(..)` or the `Tip` methods `.help_tip(text)` /
+`.help_tip_or(text, reason)`. The text is for what the control's word cannot
+say, and is short: one sentence, two at most (checked here for a string
+literal: at most two sentences, no blank line, at most 300 characters; a
+computed text is not measured).
 
-What may stay on a control goes through the `widgets::Tip` helpers, which
-this check accepts by name: `.name_tip(..)` (an icon-only control's name; a
-literal there must still be a name), `.value_tip(..)` (a value shown cut
-short, whole) and `.reason_tip(..)` (a disabled control's short reason
-where there is no room for an icon). A line may also carry the marker
-`// hover: <why>` (on the call's line or the line above) for a case none of
-them fits.
+This check also reads the non-test Rust code of `monitor-ui` and fails on a
+raw hover call (`on_hover_text`, `on_disabled_hover_text`, `on_hover_ui`, ...)
+whose receiver is a control unless its text is a string literal of at most
+four words and 40 characters (a name).
+
+What may stay raw on a control goes through the other `widgets::Tip` helpers,
+which this check accepts by name: `.name_tip(..)` (an icon-only control's
+name; a literal there must still be a name), `.value_tip(..)` (a value shown
+cut short, whole) and `.reason_tip(..)` (a disabled control's short reason).
+A line may also carry the marker `// hover: <why>` (on the call's line or the
+line above) for a case none of them fits.
 
 The receiver is the method chain before the call; a bare variable is looked
 up in its `let` above. Test code is skipped: `tests/` directories,
@@ -34,6 +38,9 @@ import sys
 UI_SRC = "src/antinomie/monitor/crates/monitor-ui/src"
 NAME_WORDS = 4
 NAME_CHARS = 40
+HELP_SENTENCES = 2
+HELP_CHARS = 300
+HELP_CALL = re.compile(r"\bhover_help(?:_or)?\s*\(|\.\s*help_tip(?:_or)?\s*\(")
 
 HOVER = re.compile(
     r"\.\s*(on_hover_text|on_disabled_hover_text|on_hover_ui|on_disabled_hover_ui|"
@@ -218,11 +225,62 @@ def is_name(argument):
     return len(text.split()) <= NAME_WORDS and len(text) <= NAME_CHARS
 
 
+def split_arguments(masked, raw, open_pos):
+    """The raw text of each top-level argument of the call opened at `open_pos`."""
+    end = call_end(masked, open_pos) - 1
+    parts, depth, begin = [], 0, open_pos
+    for j in range(open_pos, end):
+        c = masked[j]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append(raw[begin:j])
+            begin = j + 1
+    parts.append(raw[begin:end])
+    return [part.strip() for part in parts]
+
+
+def long_help(argument):
+    """Is this string literal more than two sentences, a blank line, or too long?"""
+    if not re.fullmatch(r'"(?:[^"\\]|\\.)*"', argument, re.S):
+        return False
+    text = re.sub(r"\\\n\s*", " ", argument[1:-1])
+    if "\\n\\n" in text or "\n\n" in text or len(text) > HELP_CHARS:
+        return True
+    sentences = re.findall(r"[.!?](?:\s+|$)(?=[A-Z`*(]|$)", text.strip() + " ")
+    return len(sentences) > HELP_SENTENCES
+
+
+def check_help(masked, raw):
+    """(line, method, verdict, text) of every help call with a long literal."""
+    found = []
+    for m in HELP_CALL.finditer(masked):
+        arguments = split_arguments(masked, raw, m.end())
+        index = 1 if m.group(0).lstrip().startswith("hover_help") else 0
+        if index >= len(arguments) or not long_help(arguments[index]):
+            continue
+        line = raw.count("\n", 0, m.start()) + 1
+        found.append((line, m.group(0).strip(" .("), arguments[index]))
+    return found
+
+
 def check_file(path, rel):
     raw = path.read_text(encoding="utf-8")
     masked = strip_cfg_test(mask(raw))
     lines = raw.split("\n")
     verdicts = []
+    for line, method, argument in check_help(masked, raw):
+        marked = any(
+            MARKER.search(lines[index])
+            for index in (line - 1, line - 2)
+            if 0 <= index < len(lines)
+        )
+        verdicts.append(
+            (rel, line, method, "marked" if marked else "FAIL help text of more than two sentences",
+             " ".join(argument.split())[:80])
+        )
     for m in HOVER.finditer(masked):
         method = m.group(1)
         line = raw.count("\n", 0, m.start()) + 1
@@ -278,13 +336,13 @@ def main():
         print(f"{rel}:{line}: {verdict[5:]}: {method}({argument})", file=sys.stderr)
     if failures:
         print(
-            f"{len(failures)} hover text(s) on controls: move the explanation to a help "
-            "icon (widgets::with_help) or keep a name of at most "
-            f"{NAME_WORDS} words (see widgets/help.rs)",
+            f"{len(failures)} hover text(s) on controls: explain through widgets::hover_help "
+            f"in one or two sentences, or keep a raw hover to a name of at most {NAME_WORDS} "
+            "words (see widgets/help.rs)",
             file=sys.stderr,
         )
         return 1
-    print(f"control hover guard: {len(verdicts)} hover call(s) on controls, all names or marked")
+    print(f"control hover guard: {len(verdicts)} hover call(s) on controls, all names, short help or marked")
     return 0
 
 

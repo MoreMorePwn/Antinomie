@@ -217,7 +217,7 @@ impl MonitorApp {
             ui.add(egui::DragValue::new(&mut draft.cpus).range(1..=64));
             ui.end_row();
             ui.label("RAM");
-            crate::widgets::with_help(ui, format!("At least {min_ram} MiB for this base"), |ui| {
+            crate::widgets::hover_help(ui, format!("At least {min_ram} MiB for this base"), |ui| {
                 ui.add(
                     egui::DragValue::new(&mut draft.ram_mib)
                         .range(min_ram..=antinomie_monitor_core::storage::MAX_RAM_MIB)
@@ -226,7 +226,7 @@ impl MonitorApp {
             });
             ui.end_row();
             ui.label("Disk");
-            crate::widgets::with_help(ui, format!("At least {min_disk} GiB for this base"), |ui| {
+            crate::widgets::hover_help(ui, format!("At least {min_disk} GiB for this base"), |ui| {
                 ui.add(
                     egui::DragValue::new(&mut draft.disk_gib)
                         .range(min_disk..=2048)
@@ -280,11 +280,7 @@ impl MonitorApp {
             theme::loading(ui, "Creating the VM…");
         }
         let enabled = !pending && !self.closing;
-        let create = crate::widgets::with_help(
-            ui,
-            "Uses the New VM checks; File › New VM… has every option",
-            |ui| ui.add_enabled(enabled, primary_button("Create VM")),
-        )
+        let create = ui.add_enabled(enabled, primary_button("Create VM"))
         .clicked();
         self.getting_started.draft = Some(draft);
         if create {

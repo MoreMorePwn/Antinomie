@@ -117,9 +117,7 @@ pub(super) fn list_height(ui: &egui::Ui) -> f32 {
 pub(super) fn sort_picker(ui: &mut egui::Ui, sort: &mut MatchSort) {
     {
         ui.label(RichText::new("Sort by").color(theme::muted()));
-        crate::widgets::with_help(ui, "Risk puts the highest severity first. MITRE technique sorts by the first technique id. \
-                 First hit sorts by where the first hit was recorded (journal event, call or packet order); \
-                 matches without a position come last.", |ui| egui::ComboBox::from_id_salt("detection-match-sort")
+        crate::widgets::hover_help(ui, "Risk puts the highest severity first; MITRE technique sorts by the first technique id; First hit sorts by where it was recorded.", |ui| egui::ComboBox::from_id_salt("detection-match-sort")
             .selected_text(sort.label())
             .show_ui(ui, |ui| {
                 for option in MatchSort::ALL {

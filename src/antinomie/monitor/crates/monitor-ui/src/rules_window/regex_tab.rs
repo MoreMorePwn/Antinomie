@@ -181,7 +181,7 @@ impl Model {
             // Add is laid out first, at the width its own text needs; the
             // expression field then fills what is left.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                add = crate::widgets::with_help(
+                add = crate::widgets::hover_help(
                     ui,
                     "Rust regex syntax, matched against every string",
                     |ui| ui.add_enabled(ready, egui::Button::new("Add")),

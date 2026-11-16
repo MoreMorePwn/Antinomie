@@ -63,19 +63,13 @@ impl MonitorApp {
                     }
                     self.catalog_feedback.show_updated(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        crate::widgets::with_help(
-                            ui,
-                            "Bases built for earlier Antinomie versions",
-                            |ui| {
-                                ui.add_enabled(
+                        ui.add_enabled(
                                     !older.is_empty(),
                                     egui::Checkbox::new(
                                         show_older,
                                         format!("Show older bases ({})", older.len()),
                                     ),
-                                )
-                            },
-                        );
+                                );
                     });
                 });
                 if let Some(error) = &self.snapshot.remote_error {
@@ -297,7 +291,7 @@ pub(super) fn download_row(
                 });
                 crate::theme::spinner(ui);
             } else if status == RevisionStatus::NeedsNewerApp {
-                crate::widgets::with_help_or(
+                crate::widgets::hover_help_or(
                     ui,
                     "",
                     antinomie_monitor_core::base_refusal(

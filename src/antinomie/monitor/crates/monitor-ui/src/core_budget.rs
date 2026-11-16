@@ -3,6 +3,7 @@
 //! Dump core dialog. The guest says what it accepts; the choices above that are
 //! shown but disabled, with the reason as their hover text.
 use antinomie_monitor_core::{CoreLimits, CORE_DEFAULT_BUDGET_MIB, CORE_MAX_SUPPORTED};
+use crate::widgets::Tip as _;
 use eframe::egui;
 
 const MIB: u64 = 1024 * 1024;
@@ -117,7 +118,7 @@ pub(crate) fn show(
                 .show_ui(ui, |ui| {
                     for entry in entries(limits) {
                         let enabled = entry.disabled.is_none();
-                        let response = crate::widgets::with_help_or(ui, "", entry.disabled.clone().unwrap_or_default(), |ui| ui
+                        let response = crate::widgets::hover_help_or(ui, "", entry.disabled.clone().unwrap_or_default(), |ui| ui
                             .add_enabled(
                                 enabled,
                                 egui::Button::selectable(
@@ -138,22 +139,22 @@ pub(crate) fn show(
         ui.label("Deadline");
         let max_s = limits.map_or(5.0, |limits| f64::from(limits.max_timeout_ms) / 1000.0);
         let mut seconds = f64::from(*timeout_ms) / 1000.0;
-        let response = ui.add_enabled(
-            limits.is_some_and(|limits| limits.advertised),
-            egui::DragValue::new(&mut seconds)
-                .range(1.0..=max_s)
-                .speed(0.1)
-                .fixed_decimals(1)
-                .suffix(" s"),
-        );
+        let response = ui
+            .add_enabled(
+                limits.is_some_and(|limits| limits.advertised),
+                egui::DragValue::new(&mut seconds)
+                    .range(1.0..=max_s)
+                    .speed(0.1)
+                    .fixed_decimals(1)
+                    .suffix(" s"),
+            )
+            .help_tip(
+                "The guest checks the deadline page by page; page faults and thread rendezvous can still delay the pause.",
+            );
         if response.changed() {
             *timeout_ms = (seconds * 1000.0).round() as u32;
             edited = true;
         }
-        crate::widgets::help(
-            ui,
-            "Serialization deadline\n\nThe guest checks it page by page; page faults and thread rendezvous can still delay the pause.",
-        );
     });
     ui.data_mut(|data| data.insert_temp(edited_id, edited));
     picked

@@ -69,9 +69,9 @@ pub(super) fn capture_selection(
         // below its options.
         trigger_selection(ui, request, capabilities);
         ui.add_space(6.0);
-        crate::widgets::with_help(ui, "Dump VM RAM after the process tree exits. This is post-exit VM memory, not a process core.", |ui| ui.checkbox(&mut request.memory_dump_on_exit, "Memory Dump on Exit"));
+        crate::widgets::hover_help(ui, "VM memory after the process tree exits, not a process core", |ui| ui.checkbox(&mut request.memory_dump_on_exit, "Memory Dump on Exit"));
         let core_enabled = core_supported && request.run_in == RunIn::AppTerminal;
-        crate::widgets::with_help_or(ui, "Capture the launched root process before exit\n\nThread registers and selected memory, for:\n- native programs on x86-64 and arm64 guests;\n- 32-bit ARM programs on an arm64 guest.\n\nAn ia32 or x32 program on an x86-64 guest gets no core. Memory is filtered and bounded by the budget below, so captures may be partial. Some fatal exits, including `SIGKILL`, may leave register context unavailable. Thread synchronization and page faults may delay exit.", core_unavailable_reason(core_supported), |ui| ui.add_enabled(
+        crate::widgets::hover_help_or(ui, "Thread registers and selected memory of the root process before it exits: native programs on x86-64 and arm64 guests, 32-bit ARM programs on arm64. The budget below bounds it, so a core may be partial.", core_unavailable_reason(core_supported), |ui| ui.add_enabled(
             core_enabled,
             egui::Checkbox::new(&mut request.core_dump_on_exit, "Core Dump on Exit"),
         ));
@@ -92,18 +92,14 @@ pub(super) fn capture_selection(
         // A VM without a network card has nothing to capture: the box is off
         // and says what to change, rather than a run that cannot start.
         let card = capabilities.route.network != antinomie_monitor_core::VmNetwork::Disconnected;
-        crate::widgets::with_help_or(ui, "Record VM network packets during this run. Packets are VM-wide, not attributed to this process.", NO_NETWORK_CARD, |ui| ui.add_enabled(
+        crate::widgets::hover_help_or(ui, "Packets are VM-wide, not attributed to this process", NO_NETWORK_CARD, |ui| ui.add_enabled(
             card,
             egui::Checkbox::new(&mut request.capture_network, "Capture network from start until tree exits"),
         ));
         if !card {
             ui.horizontal_wrapped(|ui| {
                 ui.add(egui::Label::new(egui::RichText::new(NO_NETWORK_CARD).weak()).wrap());
-                outcome.open_vm_settings = crate::widgets::with_help(
-                    ui,
-                    "Open this VM's settings (its network changes while it is stopped)",
-                    |ui| ui.button("VM settings…"),
-                )
+                outcome.open_vm_settings = ui.button("VM settings…")
                 .clicked();
             });
         }
@@ -176,7 +172,7 @@ pub(super) fn trigger_selection(
 ) {
     use antinomie_monitor_core::dump_trigger::{DumpTrigger, TriggerTier};
     let mut on = request.dump_trigger.is_some();
-    crate::widgets::with_help(ui, "Dump on suspicious activity\n\nWhile the program runs, the Triage rules judge each call as it arrives. The first match at or above the chosen tier takes the dumps you pick below, each within its own count.\n\nThe program is not stopped; a memory dump pauses the VM while QEMU writes it.", |ui| ui.checkbox(&mut on, "Dump when suspicious activity is seen"));
+    crate::widgets::hover_help(ui, "The first Triage match at or above the tier takes the dumps picked below. A memory dump pauses the VM while it is written.", |ui| ui.checkbox(&mut on, "Dump when suspicious activity is seen"));
     if !on {
         request.dump_trigger = None;
         request.core_nonresident = false;
@@ -200,7 +196,7 @@ pub(super) fn trigger_selection(
             .get_or_insert_with(DumpTrigger::default);
         ui.horizontal_wrapped(|ui| {
             ui.label("Minimum tier");
-            crate::widgets::with_help(ui, "The lowest Triage tier that takes a dump: this tier and every tier above it. Triage tiers are Low, Medium and High; there is nothing above High.", |ui| egui::ComboBox::from_id_salt("dump-trigger-tier")
+            crate::widgets::hover_help(ui, "This tier and every tier above it take a dump", |ui| egui::ComboBox::from_id_salt("dump-trigger-tier")
                 .selected_text(plan.min_tier.label())
                 .show_ui(ui, |ui| {
                     for tier in TriggerTier::ALL {
@@ -218,14 +214,14 @@ pub(super) fn trigger_selection(
             );
             ui.label("between two dumps");
         });
-        crate::widgets::with_help_or(ui, "A core of the process whose call matched, taken while it runs\n\nNative programs on x86-64 and arm64 guests, and 32-bit ARM programs on an arm64 guest (not ia32 or x32 on an x86-64 guest); bounded by the budget.\n\nThe guest copies only pages that are in memory when it reads them (not swapped-out or untouched ones) unless **Read non-resident pages** is ticked; a core that lacks only those pages is complete, and its note says how many were left out.\n\nOn a revision-22 base a process that ends is held at its exit for up to 50 ms, so one that exits right after the match still has its core taken; on an older base it can be gone first, and the run says so.", core_unavailable_reason(core_ok), |ui| ui.add_enabled(
+        crate::widgets::hover_help_or(ui, "A core of the process whose call matched, taken while it runs; bounded by the budget", core_unavailable_reason(core_ok), |ui| ui.add_enabled(
             core_ok,
             egui::Checkbox::new(&mut plan.core, "Core of the process that triggered it"),
         ));
         if plan.core {
             ui.indent("dump-trigger-core", |ui| {
                 count(ui, &mut plan.max_cores, "core(s)");
-                crate::widgets::with_help_or(ui, "Also read the pages of the process that are not in memory (swapped out, or file pages the kernel dropped) into the core, as an exit core does.\n\nReading from swap or disk takes longer and is bounded by the budget and the deadline; pages the process never touched hold nothing and stay out.", "Needs a base of guest contract revision 22: this guest copies only the pages that are in memory.", |ui| ui.add_enabled(
+                crate::widgets::hover_help_or(ui, "Also reads swapped-out and dropped file pages, which takes longer; bounded by the budget and the deadline", "Needs a base of guest contract revision 22: this guest copies only the pages that are in memory.", |ui| ui.add_enabled(
                     nonresident,
                     egui::Checkbox::new(&mut request.core_nonresident, "Read non-resident pages"),
                 ));
@@ -236,7 +232,7 @@ pub(super) fn trigger_selection(
         let plan = request
             .dump_trigger
             .get_or_insert_with(DumpTrigger::default);
-        crate::widgets::with_help(ui, "Dump the VM's RAM. Skipped when the VM has more RAM than the cap below or the disk is too full.", |ui| ui.checkbox(&mut plan.memory, "Memory dump"));
+        crate::widgets::hover_help(ui, "Skipped when the VM has more RAM than the cap below or the disk is too full", |ui| ui.checkbox(&mut plan.memory, "Memory dump"));
         if plan.memory {
             ui.indent("dump-trigger-memory", |ui| {
                 count(ui, &mut plan.max_memory_dumps, "memory dump(s)");
@@ -284,10 +280,10 @@ pub(super) fn screenshot_selection(ui: &mut egui::Ui, request: &mut ExecRequest,
         });
         let mut on = request.screenshot_every_s.is_some();
         ui.horizontal(|ui| {
-            crate::widgets::with_help_or(ui, "Save the VM screen as a picture at this interval while the run goes, with the run-relative time in its name, in the run's own folder. A screen that has not changed since the last picture is skipped.", NO_SCREEN, |ui| ui.add_enabled(available, egui::Checkbox::new(&mut on, "Take screenshots")));
+            crate::widgets::hover_help_or(ui, "A screen that has not changed since the last picture is skipped", NO_SCREEN, |ui| ui.add_enabled(available, egui::Checkbox::new(&mut on, "Take screenshots")));
             ui.add_enabled_ui(available && on, |ui| {
                 ui.label("every");
-                crate::widgets::with_help(ui, format!(
+                crate::widgets::hover_help(ui, format!(
                     "{} to {} seconds",
                     shots::MIN_INTERVAL_S,
                     shots::MAX_INTERVAL_S
@@ -311,7 +307,7 @@ pub(super) fn screenshot_selection(ui: &mut egui::Ui, request: &mut ExecRequest,
             ui.add_enabled_ui(available && on, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label("At most");
-                    crate::widgets::with_help(
+                    crate::widgets::hover_help(
                         ui,
                         format!(
                             "{} to {} pictures; the series ends with a note when it is reached",
@@ -323,7 +319,7 @@ pub(super) fn screenshot_selection(ui: &mut egui::Ui, request: &mut ExecRequest,
                         },
                     );
                     ui.label("pictures and");
-                    crate::widgets::with_help(
+                    crate::widgets::hover_help(
                         ui,
                         format!(
                             "{} to {} MiB of pictures",
@@ -367,7 +363,7 @@ pub(super) fn debugger_selection(ui: &mut egui::Ui, request: &mut ExecRequest, s
         "Debug on start requires a base built for Antinomie 0.7.0."
     };
     folding_section(ui, "Debugging", |ui| {
-        crate::widgets::with_help_or(ui, "Stop the program before its first instruction (the loader's, for a dynamic program) and open the debugger on it.\n\nThe run shows the gdb command to attach with; the program waits until a debugger continues it. Nothing runs in the guest for this.", reason, |ui| ui.add_enabled(
+        crate::widgets::hover_help_or(ui, "Stops the program before its first instruction and opens the debugger on it", reason, |ui| ui.add_enabled(
             enabled,
             egui::Checkbox::new(&mut request.debug_on_start, "Debug on start"),
         ));

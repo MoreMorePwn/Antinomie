@@ -180,7 +180,7 @@ fn memory(
         );
         let entered =
             response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-        let read = crate::widgets::with_help(
+        let read = crate::widgets::hover_help(
             ui,
             format!("Read {MEMORY_READ_SIZE} bytes (at most {MAX_READ_SIZE})"),
             |ui| ui.add_enabled(editable, egui::Button::new("Read")),

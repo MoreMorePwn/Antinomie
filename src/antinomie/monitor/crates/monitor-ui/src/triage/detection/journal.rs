@@ -219,7 +219,7 @@ impl Viewer {
 
     fn header(&mut self, ui: &mut egui::Ui, path: &Path) {
         ui.horizontal_wrapped(|ui| {
-            if crate::widgets::with_help(ui, "Open the raw JSONL in your default application. This app only reads the file and never writes it.", |ui| ui
+            if crate::widgets::hover_help(ui, "Open the raw JSONL in your default application. This app only reads the file and never writes it.", |ui| ui
                 .button("Open file"))
                 .clicked()
             {
@@ -569,7 +569,7 @@ impl Viewer {
                 ui.weak("A field that was not captured for this event is absent, not empty.");
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Source").color(theme::muted()));
-                    if crate::widgets::with_help(
+                    if crate::widgets::hover_help(
                         ui,
                         "Open the recorded call in Syscall Trace, or the packet in Network",
                         |ui| {

@@ -604,7 +604,7 @@ impl Inspector {
                 _ => "async",
             };
             ui.colored_label(theme::muted(), phase);
-            open_data = crate::widgets::with_help(
+            open_data = crate::widgets::hover_help(
                 ui,
                 "Show all captured bytes as text, hexdump, C array, Base64 and more",
                 |ui| {

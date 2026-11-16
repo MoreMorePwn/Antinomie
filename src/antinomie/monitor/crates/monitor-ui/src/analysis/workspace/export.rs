@@ -22,23 +22,18 @@ pub(super) fn export_controls(
         }
         if kind.is_none() || kind == Some(AnalysisKind::Decompilation) {
             let retained = report.sections.iter().any(|s| s.summary.contains("native Ghidra project retained"));
-            if crate::widgets::with_help_or(ui, "", "A native project is available after a successful Ghidra analysis with project retention. Older and radare2 reports export as text.", |ui| ui.add_enabled(retained, egui::Button::new("Native Ghidra project (.gpr + .rep)"))).clicked() {
+            if crate::widgets::hover_help_or(ui, "", "A native project is available after a successful Ghidra analysis with project retention. Older and radare2 reports export as text.", |ui| ui.add_enabled(retained, egui::Button::new("Native Ghidra project (.gpr + .rep)"))).clicked() {
                 action = Some(ReportAction::Export { report_id: report.id.clone(), kind: Some(AnalysisKind::Decompilation), format: AnalysisExportFormat::GhidraProject });
                 ui.close();
             }
-            if crate::widgets::with_help_or(ui, "", "No native Ghidra project retained for this report", |ui| ui.add_enabled(retained, egui::Button::new("Open in Ghidra"))).clicked() {
+            if crate::widgets::hover_help_or(ui, "", "No native Ghidra project retained for this report", |ui| ui.add_enabled(retained, egui::Button::new("Open in Ghidra"))).clicked() {
                 action = Some(ReportAction::OpenGhidra { report_id: report.id.clone() });
                 ui.close();
             }
         }
     });
-    crate::widgets::help(ui, "Exports include all retained rows");
     if directory
-        && crate::widgets::with_help(
-            ui,
-            "Show retained report, specimen, complete listings and any native artifacts",
-            |ui| ui.button("Open result directory"),
-        )
+        && ui.button("Open result directory")
         .clicked()
     {
         action = Some(ReportAction::ShowDirectory {

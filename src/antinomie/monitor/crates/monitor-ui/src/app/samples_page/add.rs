@@ -210,7 +210,7 @@ impl AddDialog {
                             {
                                 self.start_probe(ctx, data_dir);
                             }
-                            if crate::widgets::with_help_or(
+                            if crate::widgets::hover_help_or(
                                 ui,
                                 "",
                                 if busy {
@@ -337,10 +337,8 @@ impl AddDialog {
                         });
                 }
                 ui.add_space(6.0);
-                crate::widgets::with_help(
-                    ui,
-                    "The archive is read back and its hash checked first. The file is deleted \
-                     with a plain delete and its path is logged.",
+                crate::widgets::hover_help(
+                    ui, "Read back and hash-checked first; then a plain delete, with the path logged",
                     |ui| {
                         ui.add_enabled(
                             !busy,

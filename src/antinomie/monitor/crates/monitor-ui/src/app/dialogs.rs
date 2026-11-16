@@ -501,13 +501,13 @@ impl MonitorApp {
                     if matches!(confirm, Confirm::StartWithoutSnapshot(_)) {
                         let id = egui::Id::new(DONT_ASK_NO_SNAPSHOT);
                         let mut dont_ask = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
-                        crate::widgets::with_help(ui, "Start will not ask again for any VM. Settings > Notifications turns the question back on.", |ui| ui.checkbox(&mut dont_ask, "Don't ask me again"));
+                        crate::widgets::hover_help(ui, "Settings > Notifications turns the question back on", |ui| ui.checkbox(&mut dont_ask, "Don't ask me again"));
                         ui.data_mut(|data| data.insert_temp(id, dont_ask));
                     }
                     if matches!(confirm, Confirm::ClearActivity) {
                         let id = egui::Id::new(DONT_ASK_CLEAR_ACTIVITY);
                         let mut dont_ask = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
-                        crate::widgets::with_help(ui, "Clear will not ask again. Settings > Notifications turns the question back on.", |ui| ui.checkbox(&mut dont_ask, "Don't ask me again"));
+                        crate::widgets::hover_help(ui, "Settings > Notifications turns the question back on", |ui| ui.checkbox(&mut dont_ask, "Don't ask me again"));
                         ui.data_mut(|data| data.insert_temp(id, dont_ask));
                     }
                     if matches!(confirm, Confirm::Quit) {

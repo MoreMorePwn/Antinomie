@@ -203,7 +203,7 @@ impl DiskView {
         let qemu_img = self.qemu_img.clone();
         ui.horizontal_wrapped(|ui| {
             for format in [ExportFormat::SparseRaw, ExportFormat::Qcow2] {
-                if crate::widgets::with_help_or(
+                if crate::widgets::hover_help_or(
                     ui,
                     match format {
                         ExportFormat::SparseRaw => "Write a sparse raw ext4 copy: holes stay holes",
@@ -227,9 +227,8 @@ impl DiskView {
                     self.start_save_image(ui.ctx(), dump, &qemu_img, format);
                 }
             }
-            if crate::widgets::with_help_or(
-                ui,
-                "Hash the image again and compare it with the recorded digest",
+            if crate::widgets::hover_help_or(
+                ui, "",
                 "Needs a finished dump, and no other check running",
                 |ui| {
                     ui.add_enabled(
@@ -245,7 +244,7 @@ impl DiskView {
             if ui.button("Open directory").clicked() {
                 self.action = Some(DiskAction::OpenWith(dump.dir.clone()));
             }
-            let delete = crate::widgets::with_help_or(
+            let delete = crate::widgets::hover_help_or(
                 ui,
                 "Permanently delete this dump from the recording folder",
                 blocked.as_deref().unwrap_or_default(),
@@ -433,7 +432,7 @@ impl DiskView {
         ui.horizontal_wrapped(|ui| {
             let viewable =
                 extractable && (size <= VIEW_CAP || entry.kind == DiskEntryKind::Symlink);
-            if crate::widgets::with_help_or(
+            if crate::widgets::hover_help_or(
                 ui,
                 "Copy the file to the host and show its bytes (UTF-8, hex, hexdump…)",
                 if extractable {
@@ -447,25 +446,17 @@ impl DiskView {
             {
                 self.request_extract(path.to_owned(), size, Intent::View);
             }
-            if crate::widgets::with_help(
-                ui,
-                "Extract the file and save a copy where you choose",
-                |ui| ui.add_enabled(extractable && !busy, egui::Button::new("Save to host…")),
-            )
+            if ui.add_enabled(extractable && !busy, egui::Button::new("Save to host…"))
             .clicked()
             {
                 self.request_extract(path.to_owned(), size, Intent::Save);
             }
-            if crate::widgets::with_help(
-                ui,
-                "Extract the file and open it with the desktop's application",
-                |ui| ui.add_enabled(extractable && !busy, egui::Button::new("Open with…")),
-            )
+            if ui.add_enabled(extractable && !busy, egui::Button::new("Open with…"))
             .clicked()
             {
                 self.request_extract(path.to_owned(), size, Intent::OpenWith);
             }
-            if crate::widgets::with_help_or(
+            if crate::widgets::hover_help_or(
                 ui,
                 "Extract the file and analyze it offline, in the isolated worker",
                 "Only ELF files are handed over",
@@ -480,7 +471,7 @@ impl DiskView {
             {
                 self.request_extract(path.to_owned(), size, Intent::Analyze);
             }
-            let hash = crate::widgets::with_help_or(
+            let hash = crate::widgets::hover_help_or(
                 ui,
                 "",
                 format!(

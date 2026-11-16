@@ -254,9 +254,8 @@ impl ApiKeysWindow {
             {
                 self.save(data_dir, key);
             }
-            if crate::widgets::with_help_or(
-                ui,
-                "Asks the service whether it accepts the saved key",
+            if crate::widgets::hover_help_or(
+                ui, "",
                 if state.masked.is_none() {
                     "Save a key first"
                 } else {
