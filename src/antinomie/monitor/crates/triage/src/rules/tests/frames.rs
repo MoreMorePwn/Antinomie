@@ -512,11 +512,26 @@ pub fn a_hard_coded_address_the_run_looked_up_is_no_beacon() {
 #[test]
 pub fn tls_with_no_server_name_to_a_bare_address_is_low() {
     // A33: the Sliver implant's TLS session to 129.151.184.17:443, no SNI.
+    // The implant's own connect ties the packet to it; seen only on the
+    // network, the row is one tier lower (info).
     let hello = session(1, 1, "TLSv1.3", "client hello", "", "");
-    let mut capture = Capture::new();
+    let mut capture = Capture::new().calls(vec![
+        socket(1, 2, 1, 3),
+        with_entry(
+            sys(1, 42, "connect", [3, 0x1000, 16, 0, 0, 0], 0),
+            "arg1.address",
+            &address(2, [129, 151, 184, 17], 443),
+        ),
+    ]);
     capture.frame(FrameKind::Session, &hello, "129.151.184.17", "443");
     let out = capture.finish();
     assert_eq!(tier(&out, "network.tls_ip_literal").as_deref(), Some("low"));
+    let mut wide = Capture::new();
+    wide.frame(FrameKind::Session, &hello, "129.151.184.17", "443");
+    assert_eq!(
+        tier(&wide.finish(), "network.tls_ip_literal").as_deref(),
+        Some("info")
+    );
     // A named server, or an address a lookup gave, is not.
     let mut named = Capture::new();
     named.frame(
@@ -551,7 +566,14 @@ pub fn http_requests_carrying_a_download_command_are_exploits() {
         "{:?}",
         super::super::frames::exploit_payload(nas)
     );
-    let mut capture = Capture::new();
+    let mut capture = Capture::new().calls(vec![
+        socket(1, 2, 1, 3),
+        with_entry(
+            sys(1, 42, "connect", [3, 0x1000, 16, 0, 0, 0], 0),
+            "arg1.address",
+            &address(2, [22, 0, 108, 58], 8080),
+        ),
+    ]);
     for (frame, uri) in [(1, xwiki), (2, nas), (3, xwiki)] {
         capture.frame(
             FrameKind::Http,
