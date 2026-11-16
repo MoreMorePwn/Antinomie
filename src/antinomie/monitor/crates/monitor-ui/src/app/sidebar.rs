@@ -2,6 +2,7 @@
 //! Sidebar VM list, health and activity log.
 use super::*;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::HeldPanel as _;
 
 impl MonitorApp {
     /// The sidebar row of one VM: its state, base, size and latest run.
@@ -231,7 +232,7 @@ impl MonitorApp {
                     .fill(theme::panel())
                     .inner_margin(egui::Margin::same(8)),
             )
-            .show(root, |ui| {
+            .show_held(root, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let stopped = self.snapshot.active_vm.is_none();
                 if section_header(

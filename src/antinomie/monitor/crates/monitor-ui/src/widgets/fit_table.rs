@@ -9,14 +9,17 @@
 //! - fixed columns keep their width only while the whole table fits;
 //! - otherwise every shrinkable column gives way in proportion to how much it
 //!   can give (down to its own minimum, no global floor);
-//! - one `remainder()` column takes what is left;
+//! - one `remainder()` column takes what is left; a table without one has its
+//!   last column take it, so every table spans its box;
 //! - only when even the minimums do not fit, the table sits in a horizontal
 //!   `ScrollArea` of its own, at the sum of the minimums;
-//! - a column the person drags wider keeps that width for the session: the
-//!   remainder column gives way first, and when the others would have to shrink
-//!   below their fitted width the table scrolls sideways instead (header and
-//!   body together). A double click on a column divider, or "Fit columns" in
-//!   its menu, returns the table to fitting its box;
+//! - every column but the remainder can be dragged wider or narrower by the
+//!   divider at the right edge of its header cell, and keeps that width for
+//!   the session (down to its own minimum): the remainder column gives way
+//!   first, and when the others would have to shrink below their fitted
+//!   width the table scrolls sideways instead (header and body together). A
+//!   double click on a column divider, or "Fit columns" in its menu, returns
+//!   the table to fitting its box. No table reorders its columns;
 //! - every cell is clipped (use the `cell*` helpers below);
 //! - the background is painted from the table's final rect.
 //!
@@ -41,6 +44,10 @@ use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use eframe::egui::{self, vec2, Align, Layout, Pos2, Rect, RichText, Shape, Stroke, Ui};
 use egui_extras::{Column, TableBuilder};
+
+#[cfg(test)]
+#[path = "fit_table_tests.rs"]
+mod tests;
 
 /// Narrowest a fixed column gets squeezed to when its table is too tight.
 const FIXED_FLOOR: f32 = 40.0;
@@ -74,7 +81,7 @@ impl Col {
             width,
             min: FIXED_FLOOR.min(width),
             max: f32::INFINITY,
-            resizable: false,
+            resizable: true,
         }
     }
 
@@ -86,7 +93,7 @@ impl Col {
             width,
             min: FLEX_FLOOR.min(width),
             max: f32::INFINITY,
-            resizable: false,
+            resizable: true,
         }
     }
 
@@ -98,7 +105,7 @@ impl Col {
             width: min,
             min,
             max: f32::INFINITY,
-            resizable: false,
+            resizable: true,
         }
     }
 
@@ -125,7 +132,8 @@ impl Col {
         self
     }
 
-    /// The column can be dragged by its right edge (kept inside the box).
+    /// The column can be dragged by its right edge (every column can by
+    /// default; the remainder column takes what the others leave).
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
         self
@@ -200,7 +208,12 @@ pub fn plan_with(available: f32, spacing: f32, cols: &[Col], user: &[Option<f32>
 /// The widths of `cols` for a container, without dragged widths.
 fn fit(available: f32, spacing: f32, cols: &[Col]) -> Plan {
     let mut cols = cols.to_vec();
-    let rest = cols.iter().position(|col| col.kind == Kind::Rest);
+    // The first remainder column, else the last column: a table spans its
+    // box instead of leaving a gap after its last column.
+    let rest = cols
+        .iter()
+        .position(|col| col.kind == Kind::Rest)
+        .or_else(|| cols.len().checked_sub(1));
     for (index, col) in cols.iter_mut().enumerate() {
         if col.kind == Kind::Rest && Some(index) != rest {
             col.kind = Kind::Flex;
@@ -505,7 +518,7 @@ impl<'a> FitBuilder<'a> {
             id_salt: None,
             striped: None,
             cell_layout: None,
-            resizable: false,
+            resizable: true,
             vscroll: None,
             max_scroll_height: None,
             min_scrolled_height: None,
@@ -536,7 +549,8 @@ impl<'a> FitBuilder<'a> {
         self
     }
 
-    /// Every column that is not the remainder can be dragged.
+    /// Every column that is not the remainder can be dragged (the default;
+    /// `false` leaves it to each [`Col`]).
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
         self

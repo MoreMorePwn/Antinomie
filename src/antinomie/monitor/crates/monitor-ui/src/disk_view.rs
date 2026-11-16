@@ -11,6 +11,7 @@
 //! current disk, a saved checkpoint's layer or the installed base, and for a
 //! partitioned disk one partition. Any open entry can be compared with a
 //! reference ([`diff`]) and searched by content ([`find`]).
+use crate::widgets::HeldPanel as _;
 use antinomie_monitor_core::{
     disks::{
         dump::DiskDump,
@@ -734,7 +735,7 @@ impl DiskView {
                 right: 8,
                 ..Default::default()
             }))
-            .show(ui, |ui| self.entries(ui, &cx));
+            .show_held(ui, |ui| self.entries(ui, &cx));
         egui::CentralPanel::default()
             .frame(egui::Frame::new().inner_margin(egui::Margin {
                 left: 10,

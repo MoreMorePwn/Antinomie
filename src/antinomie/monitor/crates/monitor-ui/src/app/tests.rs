@@ -52,6 +52,7 @@ mod settings_lookup;
 mod settings_tools;
 mod settings_window;
 mod shortcuts;
+mod split_shots;
 mod start_error;
 mod start_warning;
 mod startup;

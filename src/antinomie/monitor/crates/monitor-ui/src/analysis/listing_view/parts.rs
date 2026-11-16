@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The parts of a listing page: the filter bar, the function list, the columns and the row menu.
 use super::*;
+use crate::widgets::HeldPanel as _;
 
 /// The search box of a listing and what its filter does to the selection.
 pub(super) fn filter_bar(ui: &mut egui::Ui, state: &mut ListingState, kind: AnalysisKind) {
@@ -75,7 +76,7 @@ pub(super) fn function_panel(
             right: 8,
             ..Default::default()
         }))
-        .show(ui, |ui| {
+        .show_held(ui, |ui| {
             crate::code_listing::heading(ui, names.len(), names.len());
             if crate::widgets::with_help(ui, "Save this listing as a text file. Export category… in the report menu offers more formats.", |ui| ui
                 .button("Export text"))

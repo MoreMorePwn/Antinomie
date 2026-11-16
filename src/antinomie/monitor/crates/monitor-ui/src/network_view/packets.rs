@@ -495,7 +495,7 @@ impl NetworkView {
                 right: 6,
                 ..Default::default()
             }))
-            .show(ui, |ui| {
+            .show_held(ui, |ui| {
                 if let Some(error) = &tshark_error {
                     tshark_missing_notice(ui, error, "Protocol details need TShark.");
                     return;

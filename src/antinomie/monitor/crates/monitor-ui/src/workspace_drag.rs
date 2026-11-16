@@ -17,6 +17,9 @@ pub(super) struct DropTarget {
     pub(super) node: NodeIndex,
     pub(super) action: DropAction,
     pub(super) highlight: Rect,
+    /// The drop would have split the pane, but a part would be smaller than
+    /// its windows' least size: the tabs join instead.
+    pub(super) refused: bool,
 }
 
 impl WorkspaceLayout {
@@ -34,6 +37,7 @@ impl WorkspaceLayout {
                 node,
                 action: DropAction::Empty,
                 highlight: rect,
+                refused: false,
             });
         }
         let own = location.surface == surface && location.node == node;
@@ -87,6 +91,7 @@ impl WorkspaceLayout {
                     node,
                     action,
                     highlight,
+                    refused: false,
                 });
             }
             return Some(DropTarget {
@@ -98,6 +103,7 @@ impl WorkspaceLayout {
                     DropAction::Append
                 },
                 highlight: header,
+                refused: false,
             });
         }
         if own && self.dock[surface][node].tabs_count() == 1 {
@@ -106,6 +112,7 @@ impl WorkspaceLayout {
                 node,
                 action: DropAction::Stay,
                 highlight: rect,
+                refused: false,
             });
         }
         let rel = (position - rect.min) / rect.size();
@@ -139,12 +146,56 @@ impl WorkspaceLayout {
         } else {
             (DropAction::Append, body)
         };
+        // A split that leaves a window less than its least size joins the
+        // tabs instead: the content would not fit beside the other part.
+        let refused = match action {
+            DropAction::Split(split) => !self.split_fits(panel, surface, node, split),
+            _ => false,
+        };
+        let (action, highlight) = if refused {
+            (DropAction::Append, body)
+        } else {
+            (action, highlight)
+        };
         Some(DropTarget {
             surface,
             node,
             action,
             highlight,
+            refused,
         })
+    }
+
+    /// Whether splitting the pane `node` of `surface` with `panel` leaves
+    /// every window of that surface at least its least size.
+    pub(super) fn split_fits(
+        &self,
+        panel: &Panel,
+        surface: SurfaceIndex,
+        node: NodeIndex,
+        split: egui_dock::Split,
+    ) -> bool {
+        let Some(room) = self.min_room else {
+            return true;
+        };
+        let Some(area) = self.dock[surface][NodeIndex::root()].rect() else {
+            return true;
+        };
+        if !area.is_positive() {
+            return true;
+        }
+        workspace_min::split_fits(
+            &self.dock,
+            panel,
+            surface,
+            node,
+            split,
+            area.size(),
+            workspace_min::Room {
+                folded_bottom: surface.is_main() && self.bottom_folded,
+                ..room
+            },
+        )
     }
 
     pub(super) fn show_drag_preview(
@@ -188,10 +239,14 @@ impl WorkspaceLayout {
         ui.ctx()
             .graphics_mut(|graphics| *graphics.entry(layer) = Default::default());
         let painter = ui.ctx().layer_painter(layer);
-        let caption = match target.as_ref().map(|target| target.action) {
-            Some(DropAction::Stay) => "Keep position",
-            Some(DropAction::Empty | DropAction::Append) => "Join tabs",
-            Some(DropAction::Insert(_)) => {
+        let caption = match target
+            .as_ref()
+            .map(|target| (target.action, target.refused))
+        {
+            Some((DropAction::Append, true)) => "Too small to split: join tabs",
+            Some((DropAction::Stay, _)) => "Keep position",
+            Some((DropAction::Empty | DropAction::Append, _)) => "Join tabs",
+            Some((DropAction::Insert(_), _)) => {
                 if self.dock.find_tab(panel).is_some_and(|path| {
                     let (s, n) = (path.surface, path.node);
                     target
@@ -203,10 +258,10 @@ impl WorkspaceLayout {
                     "Join tabs"
                 }
             }
-            Some(DropAction::Split(egui_dock::Split::Left)) => "Dock left",
-            Some(DropAction::Split(egui_dock::Split::Right)) => "Dock right",
-            Some(DropAction::Split(egui_dock::Split::Above)) => "Dock above",
-            Some(DropAction::Split(egui_dock::Split::Below)) => "Dock below",
+            Some((DropAction::Split(egui_dock::Split::Left), _)) => "Dock left",
+            Some((DropAction::Split(egui_dock::Split::Right), _)) => "Dock right",
+            Some((DropAction::Split(egui_dock::Split::Above), _)) => "Dock above",
+            Some((DropAction::Split(egui_dock::Split::Below), _)) => "Dock below",
             None if folds => "Fold to the tab strip",
             None => "Detach window",
         };
@@ -273,4 +328,16 @@ impl WorkspaceLayout {
             theme::blue(),
         );
     }
+}
+
+pub(super) fn primary_release(input: &egui::InputState) -> Option<egui::Pos2> {
+    input.events.iter().rev().find_map(|event| match event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            ..
+        } => Some(*pos),
+        _ => None,
+    })
 }

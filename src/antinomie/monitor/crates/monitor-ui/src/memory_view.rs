@@ -5,6 +5,7 @@
 //! with its dump and listed beside it, so an earlier result opens again
 //! without running the plugin again.
 use crate::widgets::fit_table::{Col, FitBuilder};
+use crate::widgets::HeldPanel as _;
 use crate::{
     network_view::capture_row,
     theme::{self, ValueKind},
@@ -598,7 +599,9 @@ impl MemoryView {
         let mut action = None;
         self.list_toolbar(ui);
         if !self.hide_list {
-            egui::Panel::left("memory_dumps")
+            // Renamed from "memory_dumps": the width saved under that name had grown to
+            // the maximum by itself (see `dump_list`), so the list starts afresh.
+            egui::Panel::left("memory_dump_list")
                 .resizable(true)
                 .default_size(240.0)
                 .size_range(180.0..=480.0)
@@ -606,7 +609,7 @@ impl MemoryView {
                     right: 8,
                     ..Default::default()
                 }))
-                .show(ui, |ui| {
+                .show_held(ui, |ui| {
                     action = self.dump_list(ui, &cx);
                 });
         }

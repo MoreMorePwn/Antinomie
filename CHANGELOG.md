@@ -28,6 +28,22 @@ x86 programs by their own table.
   VM screen captures the keyboard on a click, and its only tab can be dragged to
   move the window; a list inside a scrollable window no longer scrolls the window
   at its top or bottom.
+- **Side lists keep their width (ANT-T0555, item 6).** The Memory dump list
+  no longer widens by itself up to its maximum (its buttons were one help icon
+  wider than the list); it keeps the width it has or the one you drag it to.
+  Every list beside a view (Core dumps, Network captures, Disks, the function
+  lists, the VM sidebar and the others) is held the same way.
+- **Every table column can be resized (ANT-T0555, item 8).** Every column of
+  every table, except the one that takes the rest of the width, has a divider
+  in its header to drag it wider or narrower; a table's last column fills the
+  width left. The Statistics latency histogram table is one of them now.
+- **Split windows keep a least size (ANT-T0555, item 9).** Dropping a tab at
+  a pane's edge no longer splits it into parts too small for their windows (it
+  joins the tabs instead, "Too small to split: join tabs"), and a separator
+  stops where the window beside it reaches its least size, so a split no longer
+  squeezes a window to a strip with its content cut off.
+- **Pop out is an icon (ANT-T0555, item 17).** The Statistics window's
+  **Pop out** button is an icon just left of its close button.
 - **Triage polish (ANT-T0550).** The Summary's MITRE ATT&CK, Processes of
   interest, Files and Network rows each have their own text colour; its notes
   are bullets and the run's last screenshot is gone from them; **Timed

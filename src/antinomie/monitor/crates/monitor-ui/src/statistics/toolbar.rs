@@ -623,20 +623,15 @@ impl StatisticsWindow {
             if let (Some(kind), Some(stats)) = (asked, stats) {
                 self.export(ui.ctx(), view, target, stats, kind);
             }
-            let (label, hint) = if self.popped {
-                (
-                    "Back into the main window",
-                    "Return the window to the main window",
-                )
-            } else {
-                (
-                    "Pop out",
-                    "Move the window into its own operating-system window",
-                )
-            };
-            if crate::widgets::with_help(ui, hint, |ui| ui.button(label)).clicked() {
-                let popped = !self.popped;
-                self.set_popped(popped);
+            // Popping out is the icon left of the window's close button; the
+            // popped-out window has no such title row, so the way back is here.
+            if self.popped
+                && crate::widgets::with_help(ui, "Return the window to the main window", |ui| {
+                    ui.button("Back into the main window")
+                })
+                .clicked()
+            {
+                self.set_popped(false);
             }
             if let Some(note) = &self.note {
                 ui.add(
