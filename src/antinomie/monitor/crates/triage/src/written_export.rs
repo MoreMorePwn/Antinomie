@@ -5,7 +5,7 @@
 //! every byte is known is kept, under the name of its SHA-256, and one that
 //! could not be rebuilt whole is listed with the reason. See
 //! `antinomie_monitor_core::analysis::detection::written`.
-use crate::file_activity::{start_of, Activity, FileActivity};
+use crate::file_activity::{start_of, Activity, FileActivity, Kind};
 use antinomie_monitor_core::{
     analysis::detection::written::{
         self, Entry, Index, Skip, MAX_FILES, MAX_FILE_SIZE, MAX_TOTAL_SIZE,
@@ -22,8 +22,13 @@ const SKIPPED: usize = 64;
 /// Rebuild the written ELF files of `activity` and save them under `run`'s
 /// [`written::FOLDER`]. Returns the index it saved (also when nothing was
 /// kept, so a scan can tell "none" from "not read yet").
-pub fn export(run: &Path, activity: &Activity, partial: bool) -> Result<Index, String> {
-    let index = build(activity, partial, |sha256, bytes| {
+pub fn export(
+    run: &Path,
+    activity: &Activity,
+    partial: bool,
+    sample: Option<&str>,
+) -> Result<Index, String> {
+    let index = build(activity, partial, sample, |sha256, bytes| {
         let folder = run.join(written::FOLDER);
         std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
         let target = folder.join(sha256);
@@ -47,9 +52,13 @@ pub fn export(run: &Path, activity: &Activity, partial: bool) -> Result<Index, S
 }
 
 /// The index for `activity`, handing each kept file to `keep(sha256, bytes)`.
+/// Kept: ELF files, scripts with a `#!` line and any file the run executed
+/// later. `sample` is the SHA-256 of the launched program: a copy of it is
+/// listed as such, its bytes being the sample's.
 pub fn build(
     activity: &Activity,
     partial: bool,
+    sample: Option<&str>,
     mut keep: impl FnMut(&str, &[u8]) -> Result<(), String>,
 ) -> Result<Index, String> {
     let mut index = Index::default();
@@ -75,11 +84,42 @@ pub fn build(
         }
         let mut map = Reconstruction::new(start_of(file), &file.timeline);
         map.goto(file.timeline.steps().len());
-        let Ok(head) = map.bytes(0, 20) else {
+        // The guest's hash of the file as its last writer left it.
+        let guest = file
+            .hashes
+            .iter()
+            .rev()
+            .find_map(|note| note.sha256.as_deref().filter(|_| !note.changed));
+        let executed = ran(file);
+        if map.size() == 0 {
             continue;
-        };
-        let Some(kind) = written::elf_kind(&head) else {
-            continue;
+        }
+        let head = map.bytes(0, map.size().min(20));
+        let kind = match &head {
+            Ok(head) => match program_kind(head, executed) {
+                Some(kind) => kind,
+                None => continue,
+            },
+            // Bytes the recording does not hold (a `cp` through sendfile, a
+            // write that was not captured): say why a program is not kept.
+            Err(_)
+                if executed
+                    || made_executable(file)
+                    || guest.is_some_and(|g| Some(g) == sample) =>
+            {
+                let reason = match guest {
+                    Some(sha) if Some(sha) == sample => format!(
+                        "a copy of the sample (SHA-256 {sha}), whose bytes are the sample's in the library"
+                    ),
+                    Some(sha) => format!(
+                        "its bytes were not captured (a kernel copy such as sendfile, or writes the guest did not record); the guest's SHA-256 is {sha}"
+                    ),
+                    None => why_no_hash(file),
+                };
+                skip(&mut index, &file.path, reason);
+                continue;
+            }
+            Err(_) => continue,
         };
         if index.files.len() >= MAX_FILES {
             skip(
@@ -126,11 +166,6 @@ pub fn build(
         let sha256 = antinomie_monitor_core::file_reconstruct::sha256_hex(&bytes);
         // The guest hashed the file when it closed it: a rebuild that differs
         // is not the file the guest had, so it is not scanned as that file.
-        let guest = file
-            .hashes
-            .iter()
-            .rev()
-            .find_map(|note| note.sha256.as_deref().filter(|_| !note.changed));
         // A run index that is partial (calls lost) may have missed a later
         // write; only the guest's own hash can vouch for the rebuilt bytes.
         if partial && guest.is_none() {
@@ -165,14 +200,43 @@ pub fn build(
     Ok(index)
 }
 
+/// What a written file is, from its first bytes: an ELF file by its type, a
+/// script by its `#!` line, else a file the run executed.
+fn program_kind(head: &[u8], executed: bool) -> Option<&'static str> {
+    if let Some(kind) = written::elf_kind(head) {
+        return Some(kind);
+    }
+    if head.starts_with(b"#!") {
+        return Some("script");
+    }
+    executed.then_some("executed")
+}
+
+/// The run executed the file (an exec that succeeded).
+fn ran(file: &FileActivity) -> bool {
+    file.events
+        .iter()
+        .any(|event| event.kind == Kind::Exec && event.success != Some(false))
+}
+
+/// A chmod of the run set an execute bit.
+fn made_executable(file: &FileActivity) -> bool {
+    file.events.iter().any(|event| {
+        event.kind == Kind::Attributes && event.success != Some(false) && event.note.contains("+x")
+    })
+}
+
+/// Why the guest's hash of a written file is missing, from its notes.
+fn why_no_hash(file: &FileActivity) -> String {
+    match file.hashes.iter().rev().find_map(|note| note.skipped.clone()) {
+        Some(why) => format!("its bytes were not captured, and the guest took no usable hash: {why}"),
+        None => "its bytes were not captured, and the guest sent no hash: it was still open for writing when the run ended".into(),
+    }
+}
+
 /// A file the run changed under a real path.
 fn candidate(file: &FileActivity) -> bool {
-    file.path_known
-        && file.path.starts_with('/')
-        && !file.standard_io
-        && !file.failed_only
-        && !file.timeline.is_empty()
-        && (file.created || file.changed())
+    file.counted() && file.path.starts_with('/') && !file.timeline.is_empty()
 }
 
 #[cfg(test)]
@@ -236,7 +300,7 @@ mod tests {
 
     #[test]
     fn an_activity_with_no_files_gives_an_empty_index() {
-        let index = build(&Activity::default(), false, |_, _| unreachable!()).unwrap();
+        let index = build(&Activity::default(), false, None, |_, _| unreachable!()).unwrap();
         assert!(index.files.is_empty() && index.skipped.is_empty());
     }
 
@@ -263,7 +327,7 @@ mod tests {
             ..Activity::default()
         };
         let mut kept_files = Vec::new();
-        let index = build(&activity, false, |sha, bytes| {
+        let index = build(&activity, false, None, |sha, bytes| {
             kept_files.push((sha.to_owned(), bytes.to_vec()));
             Ok(())
         })
@@ -314,7 +378,7 @@ mod tests {
             ],
             ..Activity::default()
         };
-        let index = build(&activity, true, |_, _| Ok(())).unwrap();
+        let index = build(&activity, true, None, |_, _| Ok(())).unwrap();
         let kept_paths: Vec<_> = index
             .files
             .iter()
@@ -333,9 +397,95 @@ mod tests {
             .any(|skip| skip.path == "/tmp/altered.so" && skip.reason.contains("differ")));
         // A whole index needs no vouching.
         assert_eq!(
-            build(&activity, false, |_, _| Ok(())).unwrap().files.len(),
+            build(&activity, false, None, |_, _| Ok(()))
+                .unwrap()
+                .files
+                .len(),
             2
         );
+    }
+
+    fn event(kind: crate::file_activity::Kind, note: &str) -> crate::file_activity::Event {
+        crate::file_activity::Event {
+            time: 3,
+            key: (0, 0, 0),
+            process: 0,
+            kind,
+            operation: String::new(),
+            success: Some(true),
+            result: String::new(),
+            offset: None,
+            len: None,
+            content: Vec::new(),
+            content_gap: false,
+            extends: false,
+            via: None,
+            other_path: None,
+            note: note.into(),
+        }
+    }
+
+    fn not_captured(len: u64) -> Action {
+        Action::Write(vec![Extent {
+            offset: 0,
+            len,
+            piece: Piece::NotCaptured(Gap::NotRecorded),
+        }])
+    }
+
+    #[test]
+    fn scripts_executed_files_and_copies_of_the_sample_are_kept_or_said() {
+        use crate::file_activity::{HashNote, Kind};
+        let sample = "1bcae1cc9e696bf47265291c7a94519b011d988e35289c39023a9b58b5f31b5a";
+        let script = written(
+            "/etc/init.d/net-srv",
+            vec![kept(b"#!/bin/sh\n/bin/.klogd &\n")],
+        );
+        let mut ran_blob = written("/tmp/.bin", vec![kept(b"not elf, not a script")]);
+        ran_blob.events.push(event(Kind::Exec, ""));
+        // cp sample /bin/.klogd && chmod 755 /bin/.klogd: sendfile, no bytes.
+        let mut copy = written("/bin/.klogd", vec![not_captured(729_288)]);
+        copy.events.push(event(Kind::Attributes, "+x"));
+        copy.hashes.push(HashNote {
+            time: 2,
+            moment: "closed after write",
+            sha256: Some(sample.into()),
+            changed: false,
+            skipped: None,
+        });
+        // A program still open for writing at the end: no bytes, no hash.
+        let mut open = written("/tmp/.sysupd", vec![not_captured(4096)]);
+        open.events.push(event(Kind::Exec, ""));
+        // Text the run wrote and never ran is not a program.
+        let notes = written("/tmp/notes.txt", vec![kept(b"plain words")]);
+        let activity = Activity {
+            files: vec![script, ran_blob, copy, open, notes],
+            ..Activity::default()
+        };
+        let index = build(&activity, false, Some(sample), |_, _| Ok(())).unwrap();
+        let kinds: Vec<(&str, &str)> = index
+            .files
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.kind.as_str()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [("/etc/init.d/net-srv", "script"), ("/tmp/.bin", "executed")]
+        );
+        let reason = |path: &str| {
+            index
+                .skipped
+                .iter()
+                .find(|skip| skip.path == path)
+                .map(|skip| skip.reason.clone())
+                .unwrap_or_else(|| panic!("{path} not listed: {index:?}"))
+        };
+        assert!(reason("/bin/.klogd").contains("a copy of the sample"));
+        assert!(reason("/tmp/.sysupd").contains("still open for writing"));
+        assert!(index
+            .skipped
+            .iter()
+            .all(|skip| skip.path != "/tmp/notes.txt"));
     }
 
     #[test]
@@ -354,14 +504,14 @@ mod tests {
             files: vec![written("/tmp/dropper", vec![kept(&program)])],
             ..Activity::default()
         };
-        let index = export(&directory, &activity, false).unwrap();
+        let index = export(&directory, &activity, false, None).unwrap();
         assert_eq!(index.files.len(), 1);
         let read = written::read(&directory).unwrap();
         assert_eq!(read, index);
         let blob = directory.join("written").join(&read.files[0].file);
         assert_eq!(std::fs::read(blob).unwrap(), program);
         // Writing again changes nothing.
-        assert_eq!(export(&directory, &activity, false).unwrap(), index);
+        assert_eq!(export(&directory, &activity, false, None).unwrap(), index);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -420,6 +420,7 @@ pub fn detect_saved(
             &saved.run.directory,
             &finished.file_activity,
             finished.partial,
+            finished.launch_image.as_ref().map(|(_, sha)| sha.as_str()),
         );
     }
     let mut outcomes = Vec::new();

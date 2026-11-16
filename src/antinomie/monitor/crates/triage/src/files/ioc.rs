@@ -55,12 +55,7 @@ impl Change {
             roles.push("changed");
         }
         let (sha256, why) = match &self.hash {
-            Some(hash) => {
-                // A hash the guest could not take, or took of a script's
-                // interpreter or a file that changed meanwhile, is not this file's.
-                let why = hash.skipped();
-                (why.is_none().then(|| hash.sha256_hex()).flatten(), why)
-            }
+            Some(_) => self.guest_hash(),
             // The guest hashes a file when its last writer closes it (or just
             // before it is deleted). A written file with no record was still
             // open for writing when the run ended; an empty one has no digest.

@@ -213,7 +213,7 @@ impl FileIndex {
                 .get(&file.key)
                 .and_then(|group| self.changes.get_mut(group))
             {
-                change.record_hash(hash);
+                change.record_hash(hash, event.timestamp_ns);
             }
         }
         let Some(hash) = kernel_records::file_hash(call, HashKind::Delete) else {
@@ -230,7 +230,7 @@ impl FileIndex {
             .and_then(|id| self.by_identity.get(&id.key).cloned())
             .unwrap_or_else(|| displayed_path(call, event, files));
         if let Some(change) = self.changes.get_mut(&group) {
-            change.record_hash(hash);
+            change.record_hash(hash, event.timestamp_ns);
         }
     }
 
@@ -633,6 +633,7 @@ impl FileIndex {
     pub fn finish_all(mut self) -> (Vec<Change>, file_activity::Activity) {
         let mut existing: Vec<(Option<FileKey>, String)> = Vec::new();
         for change in self.changes.values_mut() {
+            change.settle_hash();
             if change.existed.is_some() {
                 change.settle();
                 existing.push((change.identity, change.path.clone()));
@@ -648,13 +649,39 @@ impl FileIndex {
             .values()
             .filter_map(|change| change.identity.map(|key| (key, change)))
             .collect();
-        let activity = self.activity.finish(|file| {
+        let change_of = |file: &file_activity::FileActivity| {
             file.identity
                 .and_then(|key| by_identity.get(&key))
                 .or_else(|| by_path.get(file.path.as_str()))
-                .map(|change| change.contents())
+                .copied()
+        };
+        let mut settled: Vec<(String, Option<FileKey>, String)> = Vec::new();
+        let activity = self.activity.finish(|file| {
+            let change = change_of(file)?;
+            if change.hash_settled
+                && let Some(sha) = change.hash.as_ref().and_then(FileHash::sha256_hex)
+            {
+                settled.push((file.path.clone(), file.identity, sha));
+            }
+            Some(change.contents())
         });
         let mut activity = activity;
+        // The same decision for the file activity's own notes of the hash.
+        for file in &mut activity.files {
+            let Some((.., sha)) = settled.iter().find(|(path, key, _)| {
+                key.is_some() && *key == file.identity || *path == file.path
+            }) else {
+                continue;
+            };
+            for note in file
+                .hashes
+                .iter_mut()
+                .filter(|note| note.sha256.as_deref() == Some(sha.as_str()))
+            {
+                note.changed = false;
+                note.skipped = None;
+            }
+        }
         for file in &mut activity.files {
             let proved = existing
                 .iter()
@@ -1326,6 +1353,82 @@ pub mod tests {
             index.observe_hashes(&files, call, event);
         }
         index
+    }
+
+    fn timed(mut call: InvocationSummary, ns: u64) -> InvocationSummary {
+        for event in call
+            .entry
+            .iter_mut()
+            .chain(call.exit.iter_mut())
+            .chain(call.kernel_notes.iter_mut())
+        {
+            event.timestamp_ns = ns;
+        }
+        call
+    }
+
+    /// A write hash the guest marked "changed while it was read", read 50 ms
+    /// after the close.
+    fn changed_write_hash(call: InvocationSummary, inode: u64) -> InvocationSummary {
+        let mut call = with_write_hash(call, inode, 0);
+        let field = &mut call.kernel_notes[0].fields[0];
+        field.preview[3] |= 2;
+        field.preview[64..68].copy_from_slice(&50_000u32.to_le_bytes());
+        call
+    }
+
+    #[test]
+    fn a_chmod_while_the_guest_hashed_the_file_keeps_its_hash() {
+        const MS: u64 = 1_000_000;
+        let run = |after: InvocationSummary| {
+            let calls = [
+                timed(create(2, "/bin/.klogd", 40, 1), MS),
+                timed(
+                    operation(3, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"hello"),
+                    2 * MS,
+                ),
+                timed(
+                    changed_write_hash(operation(4, 3, "close", 0, [3, 0, 0, 0, 0, 0], b""), 40),
+                    3 * MS,
+                ),
+                after,
+            ];
+            let (changes, activity) = index_with_hashes(&calls, &[]).finish_all();
+            let change = changes
+                .into_iter()
+                .find(|c| c.path == "/bin/.klogd")
+                .unwrap();
+            let note_changed = activity
+                .files
+                .iter()
+                .find(|f| f.path == "/bin/.klogd")
+                .unwrap()
+                .hashes[0]
+                .changed;
+            (change.guest_hash(), note_changed)
+        };
+        let chmod = |ns: u64| {
+            timed(
+                named(5, 90, "chmod", 0, [0, 0o755, 0, 0, 0, 0], &["/bin/.klogd"]),
+                ns,
+            )
+        };
+        // cp … && chmod 755 …: the chmod lands while the worker reads.
+        let ((sha, why), changed) = run(chmod(17 * MS));
+        assert_eq!(sha.as_deref(), Some("cd".repeat(32).as_str()));
+        assert_eq!(why, None);
+        assert!(!changed);
+        // An open for writing in the same window may have changed the bytes.
+        let ((sha, why), changed) = run(timed(reopen(5, "/bin/.klogd", 40, 1), 17 * MS));
+        assert_eq!(sha, None);
+        assert_eq!(
+            why.as_deref(),
+            Some("the file changed while it was being read")
+        );
+        assert!(changed);
+        // A chmod long after the worker finished explains nothing.
+        let ((sha, _), _) = run(chmod(500 * MS));
+        assert_eq!(sha, None);
     }
 
     #[test]

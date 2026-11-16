@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The executables and libraries a run wrote, kept beside the run for the
+//! The executables, libraries and scripts a run wrote, kept beside the run for the
 //! YARA scan. Triage rebuilds each file from the run's recorded writes where
 //! it already writes into the run's folder (the digest the window saves, `detect
 //! --save`, the Auto lane) and keeps the whole ones here with an index; the scan
@@ -30,7 +30,8 @@ pub struct Entry {
     pub file: String,
     pub sha256: String,
     pub size: u64,
-    /// `executable` or `library`, from the bytes.
+    /// `executable` or `library` (ELF, from the bytes), `script` (a `#!`
+    /// line) or `executed` (any other file the run executed).
     pub kind: String,
 }
 
