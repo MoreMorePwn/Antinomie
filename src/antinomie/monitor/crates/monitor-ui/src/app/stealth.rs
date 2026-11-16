@@ -76,21 +76,19 @@ impl MonitorApp {
     pub(super) fn profile_details_window(&mut self, ctx: &egui::Context, draft: &mut VmConfig) {
         let selected = selected_base(&self.snapshot, draft.base_identity.as_deref());
         let mut fit = Fit::new(&draft.stealth, draft, &self.snapshot.bases, selected);
+        let size = VmSize::of(draft);
         window(
             ctx,
             &mut self.getting_started.profile_open,
             &mut draft.stealth,
             &mut fit,
-            &antinomie_monitor_core::stealth::resource_hints(
-                draft.cpus,
-                draft.ram_mib,
-                draft.disk_gib,
-            ),
+            size,
             true,
             true,
         );
         if let Some(base) = fit.switch.take() {
-            draft.base_identity = Some(base);
+            let old = draft.base_identity.replace(base);
+            super::vm::follow_base_arch(&self.snapshot, draft, old.as_deref());
         }
     }
 
@@ -210,18 +208,23 @@ impl<'a> Fit<'a> {
 
     /// The Still visible section: what the profile, as this VM starts it,
     /// leaves visible, then what it cannot apply and the VM's size.
-    fn still_visible(&self, ui: &mut egui::Ui, profile: &StealthProfile, size_hints: &[&str]) {
-        let (fitted, notes) = profile
-            .for_arch(self.view.arch)
-            .fitted(&self.base, self.host);
+    fn still_visible(&self, ui: &mut egui::Ui, profile: &StealthProfile, size: VmSize) {
+        let started = profile.for_arch(self.view.arch);
+        let (fitted, notes) = started.fitted(&self.base, self.host);
         for giveaway in fitted.still_visible(&self.view) {
             ui.label(format!("• {giveaway}"));
         }
         for note in notes {
             ui.colored_label(theme::warn(), format!("• {note}"));
         }
-        // The VM's own settings, which pafish-style checks read.
-        for hint in size_hints {
+        // The VM's own settings, which pafish-style checks read, against the
+        // machines the profile makes it look like.
+        for hint in antinomie_monitor_core::stealth::resource_hints(
+            &started,
+            size.cpus,
+            size.ram_mib,
+            size.disk_gib,
+        ) {
             ui.colored_label(theme::warn(), format!("• The VM's size: {hint}"));
         }
     }
@@ -1026,13 +1029,31 @@ pub(super) fn settle_preset(before: &StealthProfile, profile: &mut StealthProfil
     }
 }
 
+/// The VM's size, which the Still visible list reads against the profile.
+#[derive(Clone, Copy)]
+pub(super) struct VmSize {
+    pub cpus: u16,
+    pub ram_mib: u32,
+    pub disk_gib: u32,
+}
+
+impl VmSize {
+    pub(super) fn of(vm: &VmConfig) -> Self {
+        Self {
+            cpus: vm.cpus,
+            ram_mib: vm.ram_mib,
+            disk_gib: vm.disk_gib,
+        }
+    }
+}
+
 /// The Device profile window beside the VM dialog.
 pub(super) fn window(
     ctx: &egui::Context,
     open: &mut bool,
     profile: &mut StealthProfile,
     fit: &mut Fit,
-    size_hints: &[&str],
+    size: VmSize,
     editable: bool,
     creating: bool,
 ) {
@@ -1102,7 +1123,7 @@ pub(super) fn window(
                         section(ui, &mut |ui| clock(ui, profile, fit));
                     });
                     egui::CollapsingHeader::new("Still visible")
-                        .show(ui, |ui| fit.still_visible(ui, profile, size_hints));
+                        .show(ui, |ui| fit.still_visible(ui, profile, size));
                 });
             settle_preset(&before, profile);
             if let Err(error) = profile.validate() {

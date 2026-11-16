@@ -15,7 +15,10 @@
 use crate::storage::unique_id;
 pub use arm64::arm_machine;
 pub use catalog::arm64::{ARM_MACHINES, ArmKind, ArmMachine, ArmPlan, BoardTree};
-pub use catalog::{MACHINES, MachineProfile, NicFit, Variant};
+pub use catalog::{
+    CLOUD_SIZE, IOT_SIZE, MACHINES, MachineProfile, NicFit, PC_SIZE, SERVER_SIZE, TypicalSize,
+    Variant,
+};
 use catalog::{SerialStyle, SmbiosFields, Subsystem};
 pub use clock::ClockModel;
 pub use cloud::{CLOUDS, CloudProvider, MachineType, MetadataStyle, Owner, Plan, StateFile};
@@ -117,6 +120,17 @@ impl StealthPreset {
     /// Raspberry Pi, which only an arm64 VM can present.
     pub fn unavailable(self, arch: crate::api::GuestArch) -> Option<&'static str> {
         (self == Self::Iot && arch != crate::api::GuestArch::AARCH64).then_some(IOT_ARM64_ONLY)
+    }
+
+    /// The preset a new VM of `arch` starts with: an arm64 base is a board,
+    /// so the IoT device (a Raspberry Pi); an x86-64 base an ordinary
+    /// desktop PC. The user can pick another one.
+    pub fn default_for(arch: crate::api::GuestArch) -> Self {
+        if arch == crate::api::GuestArch::AARCH64 {
+            Self::Iot
+        } else {
+            Self::RealisticDesktop
+        }
     }
 
     /// One line on what the profile makes the guest look like.
@@ -1397,6 +1411,13 @@ impl StealthProfile {
         self
     }
 
+    /// The profile a new VM of `arch` starts with: the arch's default preset
+    /// ([`StealthPreset::default_for`]) on a host CPU of `cpu_vendor`, drawn
+    /// for the arch.
+    pub fn new_vm(arch: crate::api::GuestArch, cpu_vendor: &str) -> Self {
+        Self::realistic(StealthPreset::default_for(arch), cpu_vendor).drawn_for(arch)
+    }
+
     /// A new instance of `provider`: its firmware strings, chipset, MAC
     /// prefix and DHCP network, with the hypervisor left visible (a hidden
     /// flag on a cloud's DMI strings would itself be odd).
@@ -2092,17 +2113,143 @@ pub fn nat_unavailable(base: &BaseSupport) -> Option<&'static str> {
     (!base.dhcp).then_some(NAT_STATIC)
 }
 
-/// What pafish-style checks flag in the VM's size, with a real machine's.
-pub fn resource_hints(cpus: u16, ram_mib: u32, disk_gib: u32) -> Vec<&'static str> {
+impl TypicalSize {
+    /// The size real machines of `profile`'s kind have: a cloud instance, a
+    /// Raspberry Pi, a server (the preset, or a Custom profile on a server
+    /// of the catalog), else a PC. Read it on the profile as the VM starts
+    /// it ([`StealthProfile::for_arch`]): the IoT device on x86-64 is Normal
+    /// QEMU, a PC.
+    pub fn of(profile: &StealthProfile) -> &'static Self {
+        if profile.preset == StealthPreset::CloudVps || profile.cloud_provider().is_some() {
+            &CLOUD_SIZE
+        } else if profile.preset == StealthPreset::Iot {
+            &IOT_SIZE
+        } else if BootAge::of(profile) == BootAge::Server {
+            &SERVER_SIZE
+        } else {
+            &PC_SIZE
+        }
+    }
+
+    /// "Raspberry Pis have 1 to 8 GiB".
+    fn have(&self, what: &str) -> String {
+        format!("{} have {what}", self.machines)
+    }
+
+    /// Where a value is flagged, for a hint: "checks flag under 4 GiB",
+    /// "flagged under 1 GiB or over 8 GiB"; empty when nothing is.
+    fn flagged(&self, low: Option<String>, high: Option<String>) -> String {
+        let verb = if self.checks {
+            "checks flag"
+        } else {
+            "flagged"
+        };
+        match (low, high) {
+            (Some(low), Some(high)) => format!(" ({verb} under {low} or over {high})"),
+            (Some(low), None) => format!(" ({verb} under {low})"),
+            (None, Some(high)) => format!(" ({verb} over {high})"),
+            (None, None) => String::new(),
+        }
+    }
+
+    /// The VM dialog's hint on its CPU count.
+    pub fn cpu_help(&self) -> String {
+        let low = (self.min_cpus > 1).then(|| self.min_cpus.to_string());
+        format!("{}{}", self.have(self.cpus), self.flagged(low, None))
+    }
+
+    /// The VM dialog's hint on its RAM.
+    pub fn ram_help(&self) -> String {
+        format!(
+            "{}{}",
+            self.have(self.ram),
+            self.flagged(
+                Some(size_text(self.min_ram_mib)),
+                self.max_ram_mib.map(size_text)
+            )
+        )
+    }
+
+    /// The VM dialog's hint on its disk.
+    pub fn disk_help(&self) -> String {
+        let mut help = format!(
+            "{}{}",
+            self.have(self.disk),
+            self.flagged(
+                Some(format!("{} GiB", self.min_disk_gib)),
+                self.max_disk_gib.map(|gib| format!("{gib} GiB"))
+            )
+        );
+        if !self.disk_note.is_empty() {
+            help.push_str("; ");
+            help.push_str(self.disk_note);
+        }
+        help
+    }
+}
+
+/// A size in MiB as the hints say it: whole GiB when it is one.
+fn size_text(mib: u32) -> String {
+    if mib.is_multiple_of(1024) {
+        format!("{} GiB", mib / 1024)
+    } else {
+        format!("{mib} MiB")
+    }
+}
+
+/// What looks unlike a real machine of `profile`'s kind in the VM's size
+/// ([`TypicalSize::of`]), each line naming the machines: on a PC what
+/// pafish-style checks flag, on a Raspberry Pi, a server or a cloud instance
+/// what such a machine does not have.
+pub fn resource_hints(
+    profile: &StealthProfile,
+    cpus: u16,
+    ram_mib: u32,
+    disk_gib: u32,
+) -> Vec<String> {
+    let size = TypicalSize::of(profile);
+    let flag = if size.checks { "checks flag it; " } else { "" };
     let mut hints = Vec::new();
-    if cpus < 2 {
-        hints.push("1 CPU: checks flag fewer than 2; PCs have 4 to 16 threads");
+    if cpus < size.min_cpus {
+        let checks = if size.checks {
+            format!("checks flag fewer than {}; ", size.min_cpus)
+        } else {
+            String::new()
+        };
+        let plural = if cpus == 1 { "" } else { "s" };
+        hints.push(format!(
+            "{cpus} CPU{plural}: {checks}{}",
+            size.have(size.cpus)
+        ));
     }
-    if ram_mib < 4096 {
-        hints.push("under 4 GiB RAM: checks flag it; PCs have 8 to 32 GiB");
+    if ram_mib < size.min_ram_mib {
+        hints.push(format!(
+            "under {} RAM: {flag}{}",
+            size_text(size.min_ram_mib),
+            size.have(size.ram)
+        ));
     }
-    if disk_gib < 64 {
-        hints.push("a disk under 60 GiB: checks flag it; PCs have 256 GiB or more (a BusyBox base grows its filesystem on the first boot: for 256 GiB about 400 MiB of image and two minutes)");
+    if let Some(max) = size.max_ram_mib.filter(|max| ram_mib > *max) {
+        hints.push(format!(
+            "over {} RAM: {}",
+            size_text(max),
+            size.have(size.ram)
+        ));
+    }
+    if disk_gib < size.min_disk_gib {
+        let note = if size.disk_note.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", size.disk_note)
+        };
+        hints.push(format!(
+            "a disk under {} GiB: {flag}{}{note}",
+            size.min_disk_gib,
+            size.have(size.disk)
+        ));
+    }
+    if let Some(max) = size.max_disk_gib.filter(|max| disk_gib > *max) {
+        hints.push(format!("a disk over {max} GiB: {}", size.have(size.disk)));
     }
     hints
 }

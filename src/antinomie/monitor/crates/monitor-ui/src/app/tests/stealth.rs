@@ -620,7 +620,9 @@ fn an_arm64_vm_presents_an_arm64_machine_and_lists_its_own_giveaways() {
             .any(|text| text.contains("the x86 CPU settings do not apply")),
         "{lines:?}"
     );
-    assert_eq!(app.draft.stealth.preset, StealthPreset::RealisticDesktop);
+    // A new VM on the arm64 base starts as the IoT device (ANT-T0555 item 3)
+    // and the window leaves it so.
+    assert_eq!(app.draft.stealth.preset, StealthPreset::Iot);
 }
 
 #[test]
@@ -695,4 +697,39 @@ fn the_clock_model_combo_shows_what_auto_resolves_to() {
         lines.iter().any(|text| text == "Auto (Always running)"),
         "{lines:?}"
     );
+}
+
+#[test]
+fn an_arm64_base_starts_a_new_vm_as_the_iot_device() {
+    // ANT-T0555 item 3: an arm64 base defaults the profile to the IoT
+    // device; x86-64 keeps the desktop; a preset the user picked stays.
+    use antinomie_monitor_core::GuestArch;
+    let mut app = app();
+    let mut arm = test_base("arm", true);
+    arm.arch = GuestArch::AARCH64;
+    app.snapshot.bases = vec![test_base("x86", true), arm.clone()];
+    app.new_image_from("x86".into());
+    assert_eq!(app.draft.stealth.preset, StealthPreset::RealisticDesktop);
+    app.new_image_from("arm".into());
+    assert_eq!(app.draft.stealth.preset, StealthPreset::Iot);
+    assert_eq!(app.draft.stealth.boot_age_s, 0, "arm64 draws no uptime");
+    // Another base in the dialog: back to x86-64 is a desktop again.
+    let old = app.draft.base_identity.replace("x86".into());
+    crate::app::vm::follow_base_arch(&app.snapshot, &mut app.draft, old.as_deref());
+    assert_eq!(app.draft.stealth.preset, StealthPreset::RealisticDesktop);
+    // The user's own pick is kept across a base change.
+    app.draft.stealth = StealthProfile::realistic(StealthPreset::RealisticServer, "GenuineIntel");
+    let old = app.draft.base_identity.replace("arm".into());
+    crate::app::vm::follow_base_arch(&app.snapshot, &mut app.draft, old.as_deref());
+    assert_eq!(app.draft.stealth.preset, StealthPreset::RealisticServer);
+    // The same base again changes nothing.
+    app.draft.stealth = StealthProfile::new_vm(GuestArch::AARCH64, "GenuineIntel");
+    crate::app::vm::follow_base_arch(&app.snapshot, &mut app.draft, Some("arm"));
+    assert_eq!(app.draft.stealth.preset, StealthPreset::Iot);
+    // With only an arm64 base installed, New VM and Getting started start
+    // on the IoT device.
+    app.snapshot.bases = vec![arm];
+    let draft = app.fresh_draft();
+    assert_eq!(draft.base_identity.as_deref(), Some("arm"));
+    assert_eq!(draft.stealth.preset, StealthPreset::Iot);
 }

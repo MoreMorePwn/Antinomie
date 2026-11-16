@@ -5,6 +5,22 @@ use crate::scroll_contain::ScrollContained as _;
 
 mod dialog;
 
+/// After `vm`'s base changed from `old`: a device profile still at the old
+/// architecture's default preset takes the new one's (an arm64 base starts
+/// as the IoT device, an x86-64 base as a desktop PC). A preset the user
+/// picked stays.
+pub(super) fn follow_base_arch(snapshot: &Snapshot, vm: &mut VmConfig, old: Option<&str>) {
+    use antinomie_monitor_core::stealth::{StealthPreset, StealthProfile};
+    let (from, to) = (
+        base_arch(snapshot, old),
+        base_arch(snapshot, vm.base_identity.as_deref()),
+    );
+    if from != to && vm.stealth.preset == StealthPreset::default_for(from) {
+        vm.stealth =
+            StealthProfile::new_vm(to, &antinomie_monitor_core::stealth::host_cpu_vendor());
+    }
+}
+
 impl MonitorApp {
     /// The selected VM's base has a graphical desktop a program can join.
     fn selected_vm_graphical(&self) -> bool {
@@ -32,13 +48,13 @@ impl MonitorApp {
         let base = preferred_new_base(&self.snapshot, &self.settings.bundle);
         VmConfig {
             name: "New VM".into(),
-            // New VMs look like an ordinary PC; saved ones keep what they had.
-            // On an arm64 base without an uptime (its guest ignores one).
-            stealth: antinomie_monitor_core::stealth::StealthProfile::realistic(
-                antinomie_monitor_core::stealth::StealthPreset::RealisticDesktop,
+            // New VMs look like an ordinary PC on x86-64 and like a Raspberry
+            // Pi on arm64; saved ones keep what they had. On an arm64 base
+            // without an uptime (its guest ignores one).
+            stealth: antinomie_monitor_core::stealth::StealthProfile::new_vm(
+                base.map_or(antinomie_monitor_core::GuestArch::X86_64, |base| base.arch),
                 &antinomie_monitor_core::stealth::host_cpu_vendor(),
-            )
-            .drawn_for(base.map_or(antinomie_monitor_core::GuestArch::X86_64, |base| base.arch)),
+            ),
             base_identity: base.map(|base| base.id.clone()),
             ..VmConfig::default()
         }
@@ -54,7 +70,8 @@ impl MonitorApp {
     /// Start a new VM pinned to a specific installed base.
     pub(super) fn new_image_from(&mut self, base_identity: String) {
         self.new_image();
-        self.draft.base_identity = Some(base_identity);
+        let old = self.draft.base_identity.replace(base_identity);
+        follow_base_arch(&self.snapshot, &mut self.draft, old.as_deref());
     }
 
     pub(super) fn create_vm(&mut self) -> Result<(), String> {

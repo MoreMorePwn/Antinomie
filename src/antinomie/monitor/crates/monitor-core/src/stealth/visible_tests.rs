@@ -382,3 +382,129 @@ fn a_preset_picked_for_an_arm64_vm_draws_no_uptime_but_a_held_one_stays() {
         StealthPreset::Transparent
     );
 }
+
+#[test]
+fn a_new_vm_on_an_arm64_base_starts_as_the_iot_device() {
+    // ANT-T0555 item 3.
+    assert_eq!(
+        StealthPreset::default_for(GuestArch::AARCH64),
+        StealthPreset::Iot
+    );
+    assert_eq!(
+        StealthPreset::default_for(GuestArch::X86_64),
+        StealthPreset::RealisticDesktop
+    );
+    let arm = StealthProfile::new_vm(GuestArch::AARCH64, "GenuineIntel");
+    assert_eq!(arm.preset, StealthPreset::Iot);
+    assert_eq!(arm.boot_age_s, 0, "an arm64 guest takes no uptime");
+    assert!(arm.arch_fallbacks(GuestArch::AARCH64).is_empty());
+    let x86 = StealthProfile::new_vm(GuestArch::X86_64, "GenuineIntel");
+    assert_eq!(x86.preset, StealthPreset::RealisticDesktop);
+}
+
+/// The size lines of `profile` for a VM of that size.
+fn hints(profile: &StealthProfile, cpus: u16, ram_gib: u32, disk_gib: u32) -> Vec<String> {
+    resource_hints(profile, cpus, ram_gib * 1024, disk_gib)
+}
+
+#[test]
+fn the_size_lines_follow_the_profile_and_name_its_machines() {
+    // ANT-T0555 item 4: each profile's own normal range.
+    let desktop = StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
+    let laptop = StealthProfile::realistic(StealthPreset::RealisticLaptop, "GenuineIntel");
+    let server = StealthProfile::realistic(StealthPreset::RealisticServer, "GenuineIntel");
+    let cloud = StealthProfile::realistic(StealthPreset::CloudVps, "GenuineIntel");
+    let iot = StealthProfile::iot();
+    assert_eq!(TypicalSize::of(&desktop), &PC_SIZE);
+    assert_eq!(TypicalSize::of(&laptop), &PC_SIZE);
+    assert_eq!(TypicalSize::of(&StealthProfile::transparent()), &PC_SIZE);
+    assert_eq!(TypicalSize::of(&server), &SERVER_SIZE);
+    assert_eq!(TypicalSize::of(&cloud), &CLOUD_SIZE);
+    assert_eq!(TypicalSize::of(&iot), &IOT_SIZE);
+    // The IoT device on x86-64 starts as Normal QEMU: a PC's lines.
+    assert_eq!(TypicalSize::of(&iot.for_arch(GuestArch::X86_64)), &PC_SIZE);
+    // A Custom profile on a catalog server keeps the server's.
+    let mut custom = server.clone();
+    custom.preset = StealthPreset::Custom;
+    assert_eq!(TypicalSize::of(&custom), &SERVER_SIZE);
+
+    // Desktop and laptop: as before (checks flag 1 CPU, under 4 GiB, under
+    // 60 GiB).
+    for pc in [&desktop, &laptop] {
+        assert_eq!(
+            hints(pc, 1, 2, 20),
+            [
+                "1 CPU: checks flag fewer than 2; PCs have 4 to 16 threads",
+                "under 4 GiB RAM: checks flag it; PCs have 8 to 32 GiB",
+                "a disk under 60 GiB: checks flag it; PCs have 256 GiB or more (a BusyBox \
+                 base grows its filesystem on the first boot: for 256 GiB about 400 MiB of \
+                 image and two minutes)",
+            ]
+        );
+        assert!(hints(pc, 2, 4, 60).is_empty());
+        assert!(hints(pc, 64, 512, 2048).is_empty(), "no upper bound");
+    }
+
+    // Raspberry Pi: 1 to 8 GiB of RAM, flagged outside; a disk under 8 GiB.
+    assert!(hints(&iot, 4, 1, 8).is_empty());
+    assert!(hints(&iot, 4, 4, 32).is_empty());
+    assert!(hints(&iot, 4, 8, 128).is_empty());
+    assert!(hints(&iot, 4, 8, 1024).is_empty(), "a USB SSD is fine");
+    assert_eq!(
+        resource_hints(&iot, 4, 512, 4),
+        [
+            "under 1 GiB RAM: Raspberry Pis have 1 to 8 GiB",
+            "a disk under 8 GiB: Raspberry Pis have 16 to 128 GiB (a microSD card, or a USB \
+             SSD up to 500 GB)",
+        ]
+    );
+    assert_eq!(
+        hints(&iot, 4, 16, 32),
+        ["over 8 GiB RAM: Raspberry Pis have 1 to 8 GiB"]
+    );
+    assert_eq!(hints(&iot, 1, 2, 32), ["1 CPU: Raspberry Pis have 4 cores"]);
+
+    // Cloud VPS: 1 vCPU is an ordinary plan; 1 to 64 GiB, 20 to 200 GiB.
+    assert!(hints(&cloud, 1, 1, 20).is_empty());
+    assert!(hints(&cloud, 8, 64, 200).is_empty());
+    assert_eq!(
+        resource_hints(&cloud, 1, 512, 10),
+        [
+            "under 1 GiB RAM: cloud VPS instances have 1 to 64 GiB",
+            "a disk under 20 GiB: cloud VPS instances have 20 to 200 GiB",
+        ]
+    );
+    assert_eq!(
+        hints(&cloud, 2, 128, 500),
+        [
+            "over 64 GiB RAM: cloud VPS instances have 1 to 64 GiB",
+            "a disk over 200 GiB: cloud VPS instances have 20 to 200 GiB",
+        ]
+    );
+
+    // Server: 8 GiB, 240 GiB and 4 CPUs at least.
+    assert!(hints(&server, 4, 8, 240).is_empty());
+    let lines = hints(&server, 2, 4, 100);
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert_eq!(lines[0], "2 CPUs: servers have 8 to 64 threads");
+    assert_eq!(lines[1], "under 8 GiB RAM: servers have 16 to 256 GiB");
+    assert!(
+        lines[2].starts_with("a disk under 240 GiB: servers have 480 GiB or more"),
+        "{lines:?}"
+    );
+
+    // The VM dialog's hints say the same ranges.
+    assert_eq!(
+        IOT_SIZE.ram_help(),
+        "Raspberry Pis have 1 to 8 GiB (flagged under 1 GiB or over 8 GiB)"
+    );
+    assert_eq!(
+        PC_SIZE.ram_help(),
+        "PCs have 8 to 32 GiB (checks flag under 4 GiB)"
+    );
+    assert_eq!(
+        CLOUD_SIZE.cpu_help(),
+        "cloud VPS instances have 1 to 16 vCPUs"
+    );
+    assert!(PC_SIZE.disk_help().ends_with("two minutes"));
+}

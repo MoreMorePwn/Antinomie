@@ -183,7 +183,11 @@ impl MonitorApp {
             .iter()
             .any(|base| Some(&base.id) == draft.base_identity.as_ref())
         {
-            draft.base_identity = selected_base(&self.snapshot, None).map(|base| base.id.clone());
+            let old = std::mem::replace(
+                &mut draft.base_identity,
+                selected_base(&self.snapshot, None).map(|base| base.id.clone()),
+            );
+            crate::app::vm::follow_base_arch(&self.snapshot, &mut draft, old.as_deref());
         }
         let base = self
             .snapshot
@@ -268,6 +272,7 @@ impl MonitorApp {
         });
         if old_base != draft.base_identity {
             self.credentials.reset();
+            crate::app::vm::follow_base_arch(&self.snapshot, &mut draft, old_base.as_deref());
         }
         if self.getting_started.profile_open && !self.stealth_open {
             self.profile_details_window(ui.ctx(), &mut draft);

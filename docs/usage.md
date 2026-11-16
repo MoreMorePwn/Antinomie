@@ -233,6 +233,19 @@ metadata entry goes away on a Routed network. A cloud profile's **Use Routed for
 cloud metadata** button (VM dialog) has a **?** that explains it: the fake
 metadata service runs on the route gateway, so the button sets the VM's Network to
 Routed.
+A new VM on an arm64 base starts with the **IoT device (Raspberry Pi)** preset; on
+an x86-64 base it starts as a Desktop. Picking another base in New VM or Getting
+started switches between the two while the profile is still the old base's
+default; a preset you picked stays. The **Still visible** list's size lines
+("The VM's size: …") and the VM dialog's CPU, RAM and disk hints follow the
+profile and name its machines: a Desktop or Laptop (and Normal QEMU or Custom) as
+a PC (checks flag 1 CPU, under 4 GiB of RAM and a disk under 60 GiB; PCs have 8
+to 32 GiB and 256 GiB or more); a Server under 4 CPUs, 8 GiB or 240 GiB (servers
+have 16 to 256 GiB and 480 GiB or more); a Cloud VPS under 1 GiB or over 64 GiB of
+RAM and a disk under 20 GiB or over 200 GiB (one vCPU is an ordinary plan); an
+IoT device under 1 GiB or over 8 GiB of RAM ("Raspberry Pis have 1 to 8 GiB") and a
+disk under 8 GiB (a microSD card or a USB SSD: 16 to 128 GiB is usual). The ranges
+and their sources are in the catalog's `SOURCES.md` ("Typical sizes").
 The model catalog is in `src/antinomie/monitor/crates/monitor-core/src/stealth/catalog/`;
 the names belong to their owners and imply no affiliation or endorsement (see
 [Trademarks](../README.md#trademarks)).

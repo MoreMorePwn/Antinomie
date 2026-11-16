@@ -271,3 +271,93 @@ pub(super) fn pick_machine(
     }
     (pool[0], fits)
 }
+
+/// The size real machines of a kind have, and where a VM's starts to look
+/// unlike one: the Still visible list's size lines and the VM dialog's hints.
+/// Sources: `catalog/SOURCES.md`, "Typical sizes".
+#[derive(Debug, PartialEq, Eq)]
+pub struct TypicalSize {
+    /// The machines, as the lines name them: "PCs", "Raspberry Pis".
+    pub machines: &'static str,
+    /// What they have, as the lines say it.
+    pub cpus: &'static str,
+    pub ram: &'static str,
+    pub disk: &'static str,
+    /// Fewer CPUs than this is flagged.
+    pub min_cpus: u16,
+    /// RAM under the first or over the second (MiB) is flagged.
+    pub min_ram_mib: u32,
+    pub max_ram_mib: Option<u32>,
+    /// A disk under the first or over the second (GiB) is flagged.
+    pub min_disk_gib: u32,
+    pub max_disk_gib: Option<u32>,
+    /// pafish-style checks flag under the same lower bounds (the PC's), so
+    /// the lines say so.
+    pub checks: bool,
+    /// A note on the disk line, or empty.
+    pub disk_note: &'static str,
+}
+
+/// A BusyBox base's first boot on a large disk.
+const BUSYBOX_GROWS: &str = "a BusyBox base grows its filesystem on the first boot: for 256 GiB \
+     about 400 MiB of image and two minutes";
+
+/// Desktops and laptops (and Normal QEMU and Custom, which look like one).
+pub const PC_SIZE: TypicalSize = TypicalSize {
+    machines: "PCs",
+    cpus: "4 to 16 threads",
+    ram: "8 to 32 GiB",
+    disk: "256 GiB or more",
+    min_cpus: 2,
+    min_ram_mib: 4 * 1024,
+    max_ram_mib: None,
+    min_disk_gib: 60,
+    max_disk_gib: None,
+    checks: true,
+    disk_note: BUSYBOX_GROWS,
+};
+
+/// Small rack and tower servers, as the catalog's.
+pub const SERVER_SIZE: TypicalSize = TypicalSize {
+    machines: "servers",
+    cpus: "8 to 64 threads",
+    ram: "16 to 256 GiB",
+    disk: "480 GiB or more",
+    min_cpus: 4,
+    min_ram_mib: 8 * 1024,
+    max_ram_mib: None,
+    min_disk_gib: 240,
+    max_disk_gib: None,
+    checks: false,
+    disk_note: BUSYBOX_GROWS,
+};
+
+/// A cloud provider's instance: one vCPU and 1 GiB is an ordinary plan.
+pub const CLOUD_SIZE: TypicalSize = TypicalSize {
+    machines: "cloud VPS instances",
+    cpus: "1 to 16 vCPUs",
+    ram: "1 to 64 GiB",
+    disk: "20 to 200 GiB",
+    min_cpus: 1,
+    min_ram_mib: 1024,
+    max_ram_mib: Some(64 * 1024),
+    min_disk_gib: 20,
+    max_disk_gib: Some(200),
+    checks: false,
+    disk_note: "",
+};
+
+/// A Raspberry Pi 3, 4 or 5 on a microSD card or a USB SSD.
+pub const IOT_SIZE: TypicalSize = TypicalSize {
+    machines: "Raspberry Pis",
+    cpus: "4 cores",
+    ram: "1 to 8 GiB",
+    disk: "16 to 128 GiB (a microSD card, or a USB SSD up to 500 GB)",
+    min_cpus: 2,
+    min_ram_mib: 1024,
+    max_ram_mib: Some(8 * 1024),
+    min_disk_gib: 8,
+    max_disk_gib: None,
+    checks: false,
+    disk_note: "",
+};

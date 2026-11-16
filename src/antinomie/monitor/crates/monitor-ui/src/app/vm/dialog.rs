@@ -179,6 +179,7 @@ impl MonitorApp {
             ui.end_row();
             if old_base != app.draft.base_identity {
                 app.credentials.reset();
+                super::follow_base_arch(&app.snapshot, &mut app.draft, old_base.as_deref());
             }
             let base = app
                 .snapshot
@@ -192,6 +193,11 @@ impl MonitorApp {
                     .and_then(|base| base.guest.as_ref())
                     .is_some_and(|guest| guest.requires_credentials);
             app.draft.ram_mib = app.draft.ram_mib.max(min_ram);
+            // What a real machine of the profile's kind has (a PC, a server,
+            // a cloud instance or a Raspberry Pi).
+            let arch = base.map_or_else(Default::default, |base| base.arch);
+            let typical =
+                antinomie_monitor_core::stealth::TypicalSize::of(&app.draft.stealth.for_arch(arch));
             if creating {
                 app.draft.disk_gib = app.draft.disk_gib.max(min_disk);
             }
@@ -199,7 +205,7 @@ impl MonitorApp {
             ui.add(text_field(&mut app.draft.name).desired_width(crate::theme::edit_width(280.0)));
             ui.end_row();
             ui.label("CPU count");
-            crate::widgets::with_help(ui, "A real PC has 4 to 16 threads (checks flag 1)", |ui| {
+            crate::widgets::with_help(ui, typical.cpu_help(), |ui| {
                 ui.add(egui::DragValue::new(&mut app.draft.cpus).range(1..=64))
             });
             ui.end_row();
@@ -207,8 +213,8 @@ impl MonitorApp {
             crate::widgets::with_help(
                 ui,
                 format!(
-                    "At least {min_ram} MiB for this base; a real PC has 8 to 32 GiB \
-                     (checks flag under 4 GiB)"
+                    "At least {min_ram} MiB for this base; {}",
+                    typical.ram_help()
                 ),
                 |ui| {
                     ui.add(
@@ -224,10 +230,8 @@ impl MonitorApp {
                 crate::widgets::with_help(
                     ui,
                     format!(
-                        "At least {min_disk} GiB for this base; a real PC has 256 GiB \
-                         or more (checks flag under 60 GiB); a BusyBox base grows its \
-                         filesystem on the first boot (256 GiB: about 400 MiB of image, \
-                         two minutes)"
+                        "At least {min_disk} GiB for this base; {}",
+                        typical.disk_help()
                     ),
                     |ui| {
                         ui.add(
@@ -454,21 +458,19 @@ impl MonitorApp {
             &self.snapshot.bases,
             selected,
         );
+        let size = super::stealth::VmSize::of(&self.draft);
         super::stealth::window(
             ctx,
             &mut self.stealth_open,
             &mut self.draft.stealth,
             &mut fit,
-            &antinomie_monitor_core::stealth::resource_hints(
-                self.draft.cpus,
-                self.draft.ram_mib,
-                self.draft.disk_gib,
-            ),
+            size,
             editable,
             creating,
         );
         if let Some(base) = fit.switch.take() {
-            self.draft.base_identity = Some(base);
+            let old = self.draft.base_identity.replace(base);
+            super::follow_base_arch(&self.snapshot, &mut self.draft, old.as_deref());
         }
     }
 }
