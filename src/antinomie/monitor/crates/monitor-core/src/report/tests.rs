@@ -54,6 +54,8 @@ pub(super) fn fixture() -> Report {
         key_findings_text: Vec::new(),
         key_findings_total: 0,
         other_families: Vec::new(),
+        family_evidence: Vec::new(),
+        tags: Vec::new(),
         key_behaviours: vec![Behaviour {
             rule: "exec-from-tmp".into(),
             tier: "high".into(),

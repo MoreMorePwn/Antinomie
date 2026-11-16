@@ -180,6 +180,7 @@ fn summary(
     behaviour: &digest_types::Behaviour,
     indicators: &[(report::Indicator, bool)],
     candidates: &[super::super::family::Candidate],
+    tags: Vec<String>,
     techniques: usize,
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) -> Summary {
@@ -309,6 +310,8 @@ fn summary(
         families,
         family_sources,
         other_families,
+        family_evidence: super::super::family::observed_families(candidates),
+        tags,
         tiers: {
             // The app's tier chips count every finding, INFO included; the
             // index lists INFO rows only when asked for them.
@@ -724,8 +727,16 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
             .and_then(|(sample, dir)| {
                 antinomie_monitor_core::samples::recorded_info(dir, &sample.sha256)
             });
-        let candidates = super::super::family::family_candidates(
-            digest_detections.as_deref().unwrap_or_default(),
+        // What the run did that names a family (Prometei's `uplugplay`
+        // service): the indicators' values, paths and URLs.
+        let observed: Vec<&str> = indicator_rows
+            .iter()
+            .flat_map(|(i, _)| [i.value.as_str(), i.path.as_str(), i.url.as_str()])
+            .filter(|text| !text.is_empty())
+            .collect();
+        let hits = digest_detections.as_deref().unwrap_or_default();
+        let candidates = super::super::family::family_candidates_seen(
+            hits,
             bazaar
                 .as_ref()
                 .map(|info| super::super::family::Bazaar {
@@ -734,12 +745,14 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
                     looked_up: info.looked_up,
                 })
                 .unwrap_or_default(),
+            &observed,
         );
         report.summary = Some(summary(
             scan,
             &behaviour,
             &indicator_rows,
             &candidates,
+            super::super::family::detection_tags(hits),
             techniques.len(),
             clock,
         ));

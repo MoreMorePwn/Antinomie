@@ -214,6 +214,16 @@ pub struct TierCounts {
     pub info_not_listed: u64,
 }
 
+/// A family the run's own evidence names (see [`Summary::family_evidence`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FamilyEvidence {
+    pub name: String,
+    /// A strong rule (an Elastic family rule scored 70 or more, a `family`
+    /// meta, a Malpedia rule) or a behaviour signature named it.
+    pub strong: bool,
+}
+
 /// What the run showed, in a sentence and the numbers behind it. This is an
 /// observation summary, not a verdict on the sample.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +244,16 @@ pub struct Summary {
     /// Gafgyt ones): said, but not the report's family, MISP tag or STIX
     /// malware name.
     pub other_families: Vec<String>,
+    /// Families this run's own evidence names (a detection rule of the run
+    /// or a behaviour signature, not only the sample's MalwareBazaar
+    /// record), with whether a strong rule or the behaviour named it. The
+    /// default label reads these (ANT-T0556, A50).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub family_evidence: Vec<FamilyEvidence>,
+    /// What the run's technique and generic YARA rules detect
+    /// ("persistence", "staging", "Go binary", "Torii-like"): never a family.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     /// HIGH and MEDIUM rules that matched, worst first.
     pub key_behaviours: Vec<Behaviour>,
     /// Behaviour rules that fired, by tier.

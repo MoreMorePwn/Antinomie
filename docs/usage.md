@@ -1039,7 +1039,19 @@ The network capture is the guest's own view on every route.
   MassHunt, IoT or Unique, and a rule pack's vendor or author in a rule name such as
   `SEKOIA_` or `ESET_`, are never a family; a family is the one family word of the
   rule, so `SEKOIA_Backdoor_Lin_Bpfdoor` and `MIRAI_OHSHIT_payload` name BPFDoor and
-  Mirai; a family named only by a layer Static analysis unpacked from a packed
+  Mirai; only a rule that names a family gives one: a `family` or Malpedia meta, an
+  Elastic family rule, a known Linux family's name in a curated or community rule, or
+  a curated vendor rule that says it is malware (`DITEKSHEN_MALWARE_Linux_<Family>`),
+  so `Suspicious_Golang_Binary` is no "Binary" and `botnet_Yakuza` no family; a rule
+  that detects a technique or a generic trait (its name says persistence, staging,
+  dropper, packer, fileless, exploit, downloader, suspicious, hunt or "<family>like",
+  as `ELF_Toriilike_persist` and `NSVPS_Mirai_Busybox_Staging` do) names no family
+  even when its meta does and gives behaviour tags ("Torii-like", "persistence",
+  "staging", "Go binary") instead; Malpedia's aliases name one family (Bashlite,
+  Lizkebab and Torlus are Gafgyt; Elastic's Bishopsliver is Sliver); what the run did
+  can name a family too (Prometei's `uplugplay` service and `/cgi-bin/p.cgi` calls),
+  and that outweighs one or two rules naming another family, which are then listed
+  as also named; a family named only by a layer Static analysis unpacked from a packed
   sample says "in the unpacked payload", and a signature fetched for a file you
   imported says "looked up by hash"); and behaviour tags), **Key findings** (the six worst by tier and
   then first time, each with its description on a line below, cut to its first sentence

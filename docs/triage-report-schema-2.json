@@ -413,6 +413,32 @@
             "type": "string"
           }
         },
+        "family_evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "strong"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "strong": {
+                "type": "boolean"
+              }
+            }
+          },
+          "description": "Families this run's own evidence names (a detection rule of the run or a behaviour signature, not only the MalwareBazaar record), strong when a strong rule or the behaviour named it: what the default label counts."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What the run's technique and generic YARA rules detect (persistence, staging, Go binary, Torii-like): never a family."
+        },
         "tiers": {
           "type": "object",
           "properties": {

@@ -1321,6 +1321,15 @@ x86 programs by their own table.
   "nothing leaves the lab" preset) asked WHOIS and reverse DNS about up to 24
   sample destinations per run. Only the two dig-and-whois choices look up now,
   and never for the documentation ranges (the InetSim stand-in 198.51.100.1).
+- **Families come only from rules that name one (ANT-T0556, A48, A53, A49).**
+  "Binary" (Suspicious_Golang_Binary), "Fileless" and "Yakuza" were families, and
+  technique rules (`ELF_Toriilike_persist`, `NSVPS_Mirai_Busybox_Staging`) named
+  Torii and Mirai for Gafgyt samples. A community rule's name now gives a family
+  only when it carries a known one; technique and generic rules give report tags
+  (`summary.tags`), even when their meta names a family; Malpedia aliases are one
+  family (Bashlite is Gafgyt, Elastic's Bishopsliver is Sliver); and Prometei's
+  `uplugplay` service and `/cgi-bin/p.cgi` calls name Prometei over a Mirai rule,
+  which is then "also named".
 - **A flood of one rule no longer hides the rest (ANT-T0556, A28).** The digest
   and the report took the behaviour from the findings table's first 2,000 rows, so
   two rules that fired on 1,000 processes each left out persistence, the sandbox
