@@ -1811,7 +1811,8 @@ mod tests {
                 "abuse-ch-yarahub/x",
                 "Torii"
             ),
-            Strength::Strong
+            // A technique rule, whatever its meta says (A48).
+            Strength::Weak
         );
         assert_eq!(
             s("ELF_Mirai", "indicator", "abuse-ch-yarahub/x", ""),
@@ -1854,7 +1855,8 @@ mod tests {
                 "yara-forge-core",
                 ""
             ),
-            Strength::Strong
+            // A dropper rule detects a technique (A48).
+            Strength::Weak
         );
     }
 }
