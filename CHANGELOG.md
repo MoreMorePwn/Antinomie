@@ -37,6 +37,7 @@ x86 programs by their own table.
 - **Screenshot counts beside the title (ANT-T0555, item 11).** Triage's **Screenshots (N)** has the series' line ("every 2 s: 3 saved, 0 skipped") beside its title instead of among the notes.
 - **Triggered dumps only in the trigger log (ANT-T0555, item 12).** "Dump triggered by …: core requested." is no longer a run note; the trigger log lists the match and now says when the process was held at its exit.
 - **Mermaid on the Show threads row (ANT-T0555, item 13).** In Triage › Process tree the **Mermaid** button sits on the row of **Show threads**, centred with it.
+- **Statistics menu and tables (ANT-T0555, items 14 to 16).** The Statistics menu's entries are **Statistics**, **Properties**, **Hierarchy**… without the "Statistics:" prefix; Properties is a sortable, resizable table per block; Hierarchy lists every call on its own row unless **Group by category** (off by default) is ticked.
 - **Triage polish (ANT-T0550).** The Summary's MITRE ATT&CK, Processes of
   interest, Files and Network rows each have their own text colour; its notes
   are bullets and the run's last screenshot is gone from them; **Timed

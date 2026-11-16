@@ -1518,7 +1518,8 @@ using it. The default `--graphics-driver system` keeps the existing environment.
 ### Statistics (0.9.0)
 
 **Statistics** in the menu bar (or **Ctrl+Shift+T**, changeable in Settings >
-Keyboard) opens the Statistics window on the run or Capture all recording you have
+Keyboard) opens a menu with **Statistics** (the window on the tab it showed last)
+and one entry per tab (**Properties**, **Hierarchy**, …); each opens the Statistics window on the run or Capture all recording you have
 selected; the **Statistics of these calls** button on the Syscall Trace opens it
 with the Trace's filter. The window floats over the main window; **Pop out** moves
 it into its own window (and remembers that), **Back into the main window** returns
@@ -1565,10 +1566,14 @@ busiest second, processes and threads) and the transport policy, and the
 **Quality** block with every loss figure shown apart, never summed: telemetry lost,
 dropped by the transport, the recording writer and the UI, the reduced-recording
 switch, host read gaps and full-ring spells, guest send waits. Figures an old run
-did not record read "not recorded".
+did not record read "not recorded". Each block is a table of the app's usual kind
+(**Field** and **Value**): click a header to sort, drag a divider to resize; a long
+value is cut with "…" and its hover has it whole.
 
-**Hierarchy.** Calls by group, then call, then result (`returned`, `ENOENT`, ...), with
-the share of the view and of the parent and a bar. **Failed only** keeps the calls
+**Hierarchy.** Every call on a row of its own, busiest first, then its results
+(`returned`, `ENOENT`, ...), with the share of the view and a bar. **Group by
+category** (off by default, kept while the window is open) puts the calls under
+their groups (file, network, process...) with the share of the parent. **Failed only** keeps the calls
 that returned an error number (harmless ones such as `EAGAIN` count too) and
 **By error** puts the result first. The Failed column opens the failed calls of a
 row. After a reduced recording a **Not saved** column shows how many calls were not

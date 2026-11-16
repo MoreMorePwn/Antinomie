@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The Hierarchy tab (design 2.3): group, call, result, with counts and shares.
-//! "Failed only" and "By error" are cuts of the same counts (no new walk). The
-//! rows are built by [`rows`], a pure function, and drawn by [`show`].
+//! The Hierarchy tab (design 2.3): call and result, with counts and shares;
+//! "Group by category" puts the calls under their categories. "Failed only"
+//! and "By error" are cuts of the same counts (no new walk). The rows are
+//! built by [`rows`], a pure function, and drawn by [`show`].
 use super::navigate::{self, and};
 use crate::tree_lines::Prefix;
 use antinomie_monitor_core::syscall_groups::SyscallGroup;
@@ -15,6 +16,9 @@ use std::collections::HashSet;
 pub(super) struct State {
     pub failed_only: bool,
     pub by_error: bool,
+    /// Calls under their categories (file, network…). Off (the default),
+    /// every call is a row of its own.
+    pub by_category: bool,
     /// Rows whose open state differs from the default (groups and results open, calls closed).
     pub toggled: HashSet<String>,
 }
@@ -91,13 +95,45 @@ impl Builder<'_> {
         self.order(&mut calls, |c| (c.calls, c.failed, c.name.as_str()));
         let last = calls.len().saturating_sub(1);
         for (i, call) in calls.into_iter().enumerate() {
-            let prefix = group_prefix.child(i == last);
+            let of_group = Some(share(call.calls, group.calls));
+            self.call(group, call, group_prefix.child(i == last), 1, of_group);
+        }
+    }
+
+    /// Every call of every category, each a top row: the busiest first
+    /// unless a header click sorts them.
+    fn flat(&mut self, hierarchy: &[GroupRow]) {
+        let mut calls: Vec<(&GroupRow, &CallRow)> = hierarchy
+            .iter()
+            .flat_map(|group| group.calls_by_name.iter().map(move |call| (group, call)))
+            .collect();
+        calls.sort_by(|a, b| {
+            b.1.calls
+                .cmp(&a.1.calls)
+                .then_with(|| a.1.name.cmp(&b.1.name))
+        });
+        self.order(&mut calls, |(_, c)| (c.calls, c.failed, c.name.as_str()));
+        for (group, call) in calls {
+            self.call(group, call, Prefix::default(), 0, None);
+        }
+    }
+
+    /// A call's row at `depth`, and its results under it when it is open.
+    fn call(
+        &mut self,
+        group: &GroupRow,
+        call: &CallRow,
+        prefix: Prefix,
+        depth: usize,
+        of_parent: Option<f64>,
+    ) {
+        {
             let key = format!("{}/{}", group.group, call.name);
             let open = self.open(&key, false);
             let call_clause = navigate::call_clause(&call.name);
             let syscall_group = group.syscall_group();
             self.rows.push(Row {
-                depth: 1,
+                depth,
                 prefix: prefix.clone(),
                 key: key.clone(),
                 label: call.name.clone(),
@@ -105,7 +141,7 @@ impl Builder<'_> {
                 open,
                 calls: call.calls,
                 of_view: share(call.calls, self.total),
-                of_parent: Some(share(call.calls, group.calls)),
+                of_parent,
                 failed: call.failed,
                 not_saved: self.dropped.and_then(|d| d.get(&call.name).copied()),
                 clause: Some(call_clause.clone()),
@@ -115,7 +151,7 @@ impl Builder<'_> {
                 no_result: false,
             });
             if !open {
-                continue;
+                return;
             }
             let mut results: Vec<&(ResultKey, u64)> = call.results.iter().collect();
             self.order(&mut results, |r| {
@@ -126,7 +162,7 @@ impl Builder<'_> {
             for (j, (result, n)) in results.into_iter().map(|r| (&r.0, r.1)).enumerate() {
                 let clause = and(&call_clause, &navigate::result_part(*result));
                 self.rows.push(Row {
-                    depth: 2,
+                    depth: depth + 1,
                     prefix: prefix.child(j == last_result && !extra),
                     key: format!("{key}/{}", result.label()),
                     label: result.label(),
@@ -146,7 +182,7 @@ impl Builder<'_> {
             }
             if extra {
                 self.rows.push(Row {
-                    depth: 2,
+                    depth: depth + 1,
                     prefix: prefix.child(true),
                     key: format!("{key}/other"),
                     label: "other results".into(),
@@ -194,6 +230,10 @@ pub(super) fn rows(stats: &RunStatistics, state: &State, sort: Option<(usize, bo
         dropped,
         sort,
     };
+    if !state.by_category {
+        builder.flat(hierarchy);
+        return builder.rows;
+    }
     let mut groups: Vec<&GroupRow> = hierarchy.iter().collect();
     builder.order(&mut groups, |g| (g.calls, g.failed, g.group.as_str()));
     for group in groups {
@@ -345,6 +385,9 @@ pub(super) fn show(
         crate::widgets::with_help(ui, "Keep only calls that returned an error number. Percentages are then of the failed calls. \
              Harmless errors such as EAGAIN and EINPROGRESS count too.", |ui| ui.checkbox(&mut state.failed_only, "Failed only"));
         crate::widgets::with_help(ui, "Result first, then the calls that returned it: ENOENT, then openat, newfstatat.", |ui| ui.checkbox(&mut state.by_error, "By error"));
+        ui.add_enabled_ui(!state.by_error, |ui| {
+            crate::widgets::with_help(ui, "Put the calls under their categories (file, network, process…). Off, every call is a row of its own.", |ui| ui.checkbox(&mut state.by_category, "Group by category"));
+        });
     });
     let sort =
         crate::triage::sort_current(ui.ctx(), TABLE).map(|spec| (spec.column, spec.descending));

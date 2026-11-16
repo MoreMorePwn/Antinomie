@@ -257,3 +257,44 @@ fn c1_the_strip_names_loss_reduction_gaps_waits_and_a_live_run() {
     assert_eq!(texts[0], "Complete");
     assert!(texts.contains(&"Partial".to_owned()));
 }
+
+#[test]
+fn each_block_is_a_sortable_field_and_value_table() {
+    // ANT-T0555 item 15: the app's usual table, not a bare grid.
+    let row = |label: &str, value: &str| Row {
+        label: label.into(),
+        value: value.into(),
+        hint: String::new(),
+        tone: Tone::Plain,
+    };
+    let block = Block {
+        title: "Run",
+        rows: vec![
+            row("Program", "/tmp/b"),
+            row("Base", "BusyBox"),
+            row("State", "Finished"),
+        ],
+    };
+    let blocks = [block];
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut show = |ui: &mut egui::Ui| {
+        crate::statistics::properties::show(ui, &blocks, false);
+    };
+    crate::table_sort::testing::frame(&ctx, vec![], &mut show);
+    let first = crate::table_sort::testing::frame(&ctx, vec![], &mut show);
+    for header in ["Field", "Value"] {
+        assert!(first.iter().any(|(text, _)| text == header), "{first:?}");
+    }
+    let fields = ["Program", "Base", "State"];
+    assert_eq!(
+        crate::table_sort::testing::column_order(&first, &fields),
+        fields
+    );
+    // A click on Field sorts the rows by it.
+    let sorted = crate::table_sort::testing::click(&ctx, "Field", &mut show);
+    assert_eq!(
+        crate::table_sort::testing::column_order(&sorted, &fields),
+        ["Base", "Program", "State"]
+    );
+}

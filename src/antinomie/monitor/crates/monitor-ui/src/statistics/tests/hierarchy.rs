@@ -9,9 +9,17 @@ use antinomie_triage::statistics::aggregate::ResultKey;
 use serde_json::json;
 use std::sync::atomic::AtomicBool;
 
+/// Grouped by category, as the tree was before ANT-T0555 made flat the default.
+fn grouped() -> State {
+    State {
+        by_category: true,
+        ..State::default()
+    }
+}
+
 /// Every call row open, so the result rows show too.
 fn all_open(stats: &antinomie_triage::statistics::RunStatistics) -> State {
-    let mut state = State::default();
+    let mut state = grouped();
     for group in &stats.hierarchy {
         for call in &group.calls_by_name {
             state
@@ -74,10 +82,10 @@ fn c2_the_tree_has_group_call_and_result_rows_with_shares_and_sorts() {
         Some("syscall.name == openat && syscall.errno == 2")
     );
     // Closed calls hide their results.
-    let closed = rows(&stats, &State::default(), None);
+    let closed = rows(&stats, &grouped(), None);
     assert!(closed.iter().all(|r| r.depth <= 1));
     // Sorting by calls descending puts the busiest call first inside its group.
-    let sorted = rows(&stats, &State::default(), Some((1, true)));
+    let sorted = rows(&stats, &grouped(), Some((1, true)));
     let file_calls: Vec<&Row> = sorted
         .iter()
         .skip_while(|r| r.label != groups[0].label)
@@ -89,13 +97,50 @@ fn c2_the_tree_has_group_call_and_result_rows_with_shares_and_sorts() {
         "{file_calls:?}"
     );
     // By name, ascending.
-    let named = rows(&stats, &State::default(), Some((0, false)));
+    let named = rows(&stats, &grouped(), Some((0, false)));
     let names: Vec<&str> = named
         .iter()
         .filter(|r| r.depth == 1)
         .map(|r| r.label.as_str())
         .collect();
     assert!(!names.is_empty());
+}
+
+#[test]
+fn every_call_is_its_own_row_until_group_by_category_is_ticked() {
+    // ANT-T0555 item 16: off by default, the calls are not grouped.
+    let fixture = Fixture::new(&calls());
+    let stats = stats_of(&fixture, "");
+    assert!(!State::default().by_category);
+    let flat = rows(&stats, &State::default(), None);
+    let names: Vec<&str> = flat.iter().map(|r| r.label.as_str()).collect();
+    assert!(flat.iter().all(|r| r.depth == 0), "{names:?}");
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, ["connect", "newfstatat", "openat", "read", "write"]);
+    assert_eq!(flat.iter().map(|r| r.calls).sum::<u64>(), 15);
+    assert!(
+        flat.windows(2).all(|w| w[0].calls >= w[1].calls),
+        "busiest first"
+    );
+    assert!(flat.iter().all(|r| r.of_parent.is_none()));
+    // An open call shows its results under it.
+    let mut open = all_open(&stats);
+    open.by_category = false;
+    let with_results = rows(&stats, &open, None);
+    let openat = with_results
+        .iter()
+        .position(|r| r.label == "openat")
+        .unwrap();
+    assert_eq!(with_results[openat + 1].depth, 1);
+    // By name, ascending, through the header.
+    let named = rows(&stats, &State::default(), Some((0, false)));
+    let names: Vec<&str> = named.iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(names, ["connect", "newfstatat", "openat", "read", "write"]);
+    // Ticked: today's tree, categories on top.
+    let tree = rows(&stats, &grouped(), None);
+    assert!(tree.iter().any(|r| r.depth == 1 && r.label == "openat"));
+    assert!(tree.iter().filter(|r| r.depth == 0).all(|r| r.expandable));
 }
 
 #[test]
@@ -302,7 +347,7 @@ fn c6_a_reduced_recording_shows_not_saved_apart_from_the_exact_counts() {
     );
     let stats = stats_of(&fixture, "");
     assert_eq!(stats.calls, 15, "the saved counts stay exact");
-    let all = rows(&stats, &State::default(), None);
+    let all = rows(&stats, &grouped(), None);
     assert_eq!(row(&all, "openat").not_saved, Some(4));
     assert_eq!(row(&all, "read").not_saved, Some(1));
     assert_eq!(row(&all, "write").not_saved, None);

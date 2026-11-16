@@ -375,6 +375,15 @@ impl Action {
         })
     }
 
+    /// The words of the entry in its menu: the Statistics menu's tabs leave
+    /// out the menu's own name ("Properties", not "Statistics: Properties").
+    pub(super) fn menu_label(&self, app: &MonitorApp) -> String {
+        match self {
+            Self::Statistics(Some(tab)) => tab.label().into(),
+            _ => self.label(app),
+        }
+    }
+
     /// The words of the menu item, without icon or shortcut.
     pub(super) fn label(&self, app: &MonitorApp) -> String {
         match self {
@@ -462,7 +471,7 @@ impl Action {
             Self::ExportReport => "Export report…".into(),
             Self::RuleDetails => "Rule details".into(),
             Self::AbusechPacks => "IDS rules: abuse.ch packs".into(),
-            Self::Statistics(None) => "Statistics window".into(),
+            Self::Statistics(None) => "Statistics".into(),
             Self::Statistics(Some(tab)) => format!("Statistics: {}", tab.label()),
         }
     }
@@ -908,7 +917,7 @@ impl MonitorApp {
     /// One menu item: label, shortcut, disabled with the reason as its
     /// tooltip. `icon` is a phosphor glyph some menus put before the label.
     pub(super) fn menu_item(&mut self, ui: &mut egui::Ui, action: Action, icon: Option<&str>) {
-        let label = action.label(self);
+        let label = action.menu_label(self);
         let text = match icon {
             Some(icon) => format!("{icon} {label}"),
             None => label,

@@ -100,14 +100,23 @@ fn the_statistics_menu_opens_the_window_on_a_tab() {
     let mut app = app();
     click_label(&mut app, &ctx, SIZE, "Statistics");
     let visible = shown(&mut app, &ctx);
-    for item in [
-        "Statistics window",
-        "Statistics: Properties",
-        "Statistics: Hierarchy",
-    ] {
+    // ANT-T0555 item 14: no "Statistics:" prefix in its own menu, and the
+    // first entry is "Statistics" (the menu's title and its first item).
+    for item in ["Properties", "Hierarchy"] {
         assert!(has(&visible, item), "{item}: {visible:?}");
     }
-    click_label(&mut app, &ctx, SIZE, "Statistics: Hierarchy");
+    assert!(
+        visible
+            .iter()
+            .filter(|(text, _)| text == "Statistics")
+            .count()
+            >= 2,
+        "{visible:?}"
+    );
+    assert!(!visible
+        .iter()
+        .any(|(text, _)| text.starts_with("Statistics:") || text == "Statistics window"));
+    click_label(&mut app, &ctx, SIZE, "Hierarchy");
     assert!(app.statistics.open);
     assert_eq!(app.statistics.tab(), Tab::Hierarchy);
 }

@@ -519,7 +519,13 @@ pub(crate) fn table(blocks: &[Block]) -> Table {
     }
 }
 
-/// Draw the blocks, each a two-column table that copies as a whole.
+/// The id of a block's table: its sort and column widths are its own.
+pub(super) fn table_id(block: &Block) -> String {
+    format!("statistics-properties-{}", block.title)
+}
+
+/// Draw the blocks, each a Field / Value table of the app's usual kind:
+/// sortable headers, resizable columns, striped rows (ANT-T0555 item 15).
 /// `scroll_to_quality`: bring the Quality block into view (a quality chip was clicked).
 pub(super) fn show(ui: &mut egui::Ui, blocks: &[Block], scroll_to_quality: bool) {
     egui::ScrollArea::vertical()
@@ -531,46 +537,80 @@ pub(super) fn show(ui: &mut egui::Ui, blocks: &[Block], scroll_to_quality: bool)
                 if scroll_to_quality && block.title == "Quality" {
                     heading.scroll_to_me(Some(egui::Align::TOP));
                 }
-                egui::Grid::new(("statistics-properties", block.title))
-                    .num_columns(2)
-                    .spacing([16.0, 4.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        for row in &block.rows {
-                            let label = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&row.label).color(crate::theme::muted()),
-                                )
-                                .selectable(true),
-                            );
-                            if !row.hint.is_empty() {
-                                label.on_hover_text(&row.hint);
-                            }
-                            let color = match row.tone {
-                                Tone::Plain => crate::theme::text(),
-                                Tone::Warn => crate::theme::warn(),
-                                Tone::Bad => crate::theme::error(),
-                            };
-                            let text = match row.tone {
-                                Tone::Plain => row.value.clone(),
-                                Tone::Warn => {
-                                    format!("{}  {}", egui_phosphor::regular::WARNING, row.value)
-                                }
-                                Tone::Bad => format!(
-                                    "{}  {}",
-                                    egui_phosphor::regular::WARNING_OCTAGON,
-                                    row.value
-                                ),
-                            };
-                            let value = ui.add(
-                                egui::Label::new(egui::RichText::new(text).color(color)).wrap(),
-                            );
-                            if !row.hint.is_empty() {
-                                value.on_hover_text(&row.hint);
-                            }
-                            ui.end_row();
-                        }
-                    });
+                block_table(ui, block);
             }
         });
+}
+
+/// One block's rows as a table.
+fn block_table(ui: &mut egui::Ui, block: &Block) {
+    use crate::widgets::fit_table::{Col, FitBuilder};
+    let id = table_id(block);
+    let order = crate::table_sort::order(ui.ctx(), &id, block.rows.len(), |column, a, b| {
+        let (a, b) = (&block.rows[a], &block.rows[b]);
+        match column {
+            0 => a.label.to_lowercase().cmp(&b.label.to_lowercase()),
+            _ => a.value.to_lowercase().cmp(&b.value.to_lowercase()),
+        }
+    });
+    let height = crate::theme::row_height(ui.text_style_height(&egui::TextStyle::Body) + 2.0);
+    ui.push_id(&id, |ui| {
+        FitBuilder::new(ui)
+            .id_salt(&id)
+            .striped(true)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Col::flex(220.0).at_least(120.0).resizable(true))
+            .column(Col::rest(200.0))
+            .vscroll(false)
+            .auto_shrink([false, true])
+            .header(26.0, |mut header| {
+                for (column, title) in ["Field", "Value"].into_iter().enumerate() {
+                    header.col(|ui| crate::table_sort::header(ui, &id, column, title));
+                }
+            })
+            .body(|body| {
+                body.rows(height, order.len(), |mut table_row| {
+                    let row = &block.rows[order[table_row.index()]];
+                    table_row.col(|ui| {
+                        let label = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&row.label).color(crate::theme::muted()),
+                            )
+                            .selectable(false)
+                            .truncate(),
+                        );
+                        if !row.hint.is_empty() {
+                            label.on_hover_text(&row.hint);
+                        }
+                    });
+                    table_row.col(|ui| {
+                        let color = match row.tone {
+                            Tone::Plain => crate::theme::text(),
+                            Tone::Warn => crate::theme::warn(),
+                            Tone::Bad => crate::theme::error(),
+                        };
+                        let text = match row.tone {
+                            Tone::Plain => row.value.clone(),
+                            Tone::Warn => {
+                                format!("{}  {}", egui_phosphor::regular::WARNING, row.value)
+                            }
+                            Tone::Bad => format!(
+                                "{}  {}",
+                                egui_phosphor::regular::WARNING_OCTAGON,
+                                row.value
+                            ),
+                        };
+                        // Cut short with "…"; the hover has the whole value.
+                        let value = ui.add(
+                            egui::Label::new(egui::RichText::new(text).color(color))
+                                .selectable(false)
+                                .truncate(),
+                        );
+                        if !row.hint.is_empty() {
+                            value.on_hover_text(&row.hint);
+                        }
+                    });
+                });
+            });
+    });
 }
