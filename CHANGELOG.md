@@ -1357,6 +1357,9 @@ x86 programs by their own table.
 - **Domain indicators are host names (ANT-T0556, A42, A14).** An HTTP Host `x`,
   a single label (`debian`) or an obfuscated string is no domain indicator, and an
   address as HTTP Host is no domain in `counts.domains`.
+- **MISP `to_ids` of the sample hash follows the evidence (ANT-T0556, A32):** a
+  dataset match, medium or high behaviour, a family a rule or the behaviour named,
+  or a strong YARA match, whatever label a service gives the run.
 - **A number in a run request reads back as the same number.** A very long number
   in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
   integer) was read as a floating-point value that, written again by the service,

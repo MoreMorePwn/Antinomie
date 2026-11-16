@@ -187,8 +187,12 @@ and links (`*_ref`, `*_refs`), and each one names an id of the same file.
   each read, not what was read.
 - **JSON** is the versioned machine-readable form, described below.
 - **MISP** is one event in MISP's core format (`{"Event": {...}}`): the sample
-  as a `file` object (`sha256`, `filename`, `size-in-bytes`; `to_ids` only when
-  a dataset matched or a rule named a family), an `antinomie:family="..."` tag
+  as a `file` object (`sha256`, `filename`, `size-in-bytes`; `to_ids` when the
+  report holds evidence against the sample: a dataset matched, the behaviour
+  reached tier medium or high, a rule or the behaviour named a family, or a strong
+  YARA rule matched, also in a run that crashed before its first call; weak and
+  generic matches alone are not evidence, and the label a service gives the run
+  does not change it), an `antinomie:family="..."` tag
   for each family the report names (the strongest; a family fewer or weaker
   rules named is only said in the document and the JSON's
   `summary.other_families`), each indicator as an attribute (`ip-dst|port`,

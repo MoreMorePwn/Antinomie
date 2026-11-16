@@ -552,6 +552,48 @@ fn pdf_defangs_and_shows_non_latin_text_as_question_marks() {
 }
 
 #[test]
+fn the_sample_hash_is_for_blocking_when_the_report_holds_evidence_against_it() {
+    // A32: run 3b22d6b1 crashed before its first call with YARA hits; the
+    // hash's `to_ids` follows the evidence, not the label.
+    let sample_ids = |report: &Report| -> bool {
+        let value: serde_json::Value =
+            serde_json::from_str(&misp::render(report).unwrap()).unwrap();
+        value["Event"]["Object"][0]["Attribute"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["type"] == "sha256" && a["to_ids"] == true)
+    };
+    let mut report = fixture();
+    let summary = report.summary.as_mut().unwrap();
+    summary.assessment = "no_behaviour".into();
+    summary.families.clear();
+    summary.family_evidence.clear();
+    let yara = |strength: &str| Detection {
+        engine: "YARA".into(),
+        rule_id: "s1::Rule".into(),
+        strength: strength.into(),
+        ..Detection::default()
+    };
+    report.detections = Some(vec![yara("weak")]);
+    assert!(
+        !sample_ids(&report),
+        "a weak or generic match alone is no evidence"
+    );
+    report.detections = Some(vec![yara("weak"), yara("strong")]);
+    assert!(sample_ids(&report), "a strong YARA match is");
+    report.detections = Some(Vec::new());
+    report.summary.as_mut().unwrap().family_evidence = vec![FamilyEvidence {
+        name: "Mirai".into(),
+        strong: false,
+    }];
+    assert!(sample_ids(&report), "a family a rule of the run named is");
+    report.summary.as_mut().unwrap().family_evidence.clear();
+    report.summary.as_mut().unwrap().assessment = "suspicious_behaviour".into();
+    assert!(sample_ids(&report), "medium or high behaviour is");
+}
+
+#[test]
 fn a_scan_is_one_comment_in_misp_and_one_note_in_stix() {
     // A36: the scan's targets are not indicators; the exports say it once.
     let mut report = fixture();
