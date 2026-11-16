@@ -1321,6 +1321,9 @@ x86 programs by their own table.
   "nothing leaves the lab" preset) asked WHOIS and reverse DNS about up to 24
   sample destinations per run. Only the two dig-and-whois choices look up now,
   and never for the documentation ranges (the InetSim stand-in 198.51.100.1).
+- **Domain indicators are host names (ANT-T0556, A42, A14).** An HTTP Host `x`,
+  a single label (`debian`) or an obfuscated string is no domain indicator, and an
+  address as HTTP Host is no domain in `counts.domains`.
 - **A number in a run request reads back as the same number.** A very long number
   in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
   integer) was read as a floating-point value that, written again by the service,

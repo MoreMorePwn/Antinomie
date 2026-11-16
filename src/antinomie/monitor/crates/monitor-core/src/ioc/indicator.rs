@@ -443,7 +443,9 @@ impl Collector {
         seen: Seen,
     ) {
         let name = domain_key(name);
-        if name.is_empty() || name.len() > 253 || name.parse::<IpAddr>().is_ok() {
+        // Only a host name is a domain (A42): not an address, not an HTTP
+        // Host `x`, not a single label, not an obfuscated string.
+        if name.parse::<IpAddr>().is_ok() || !kind::host_name(&name) {
             return;
         }
         let key = name.clone();
@@ -1092,6 +1094,39 @@ mod tests {
         all.iter()
             .find(|i| i.ty == ty && i.key == key)
             .unwrap_or_else(|| panic!("no {key}"))
+    }
+
+    #[test]
+    fn strings_that_are_no_host_name_never_become_domains() {
+        // A42: runs 7872199f, a18aacc9 (HTTP Host `x`), be7cddb3 (`debian`)
+        // and 4ec8555c (an obfuscated string).
+        let mut c = Collector::default();
+        for name in ["x", "debian", "~~~'khfc|g~hb", "185.34.144.137"] {
+            c.domain(name, Via::HttpHost, &[], Source::Pcap, packet(1, 10));
+        }
+        c.domain("c2.example.net", Via::Dns, &[], Source::Pcap, packet(2, 20));
+        c.url(
+            "GET",
+            "x",
+            "/botstart",
+            "HTTP/1.1",
+            None,
+            Some((ip("185.34.144.138"), 8888)),
+            Source::Pcap,
+            packet(3, 30),
+        );
+        let all = c.finish();
+        let domains: Vec<&str> = all
+            .iter()
+            .filter(|i| i.ty == Type::Domain)
+            .map(|i| i.value.as_str())
+            .collect();
+        assert_eq!(domains, ["c2.example.net"]);
+        // The raw Host stays in the URL row.
+        assert!(
+            all.iter()
+                .any(|i| i.ty == Type::Url && i.value == "GET x/botstart")
+        );
     }
 
     #[test]
