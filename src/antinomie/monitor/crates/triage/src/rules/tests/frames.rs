@@ -481,3 +481,58 @@ pub fn a_packet_row_opens_its_frame_and_never_a_call() {
     assert_eq!(row.key, (0, 0, 42));
     assert_eq!(row.cells[3].text, "VM-wide (capture)");
 }
+
+#[test]
+pub fn a_hard_coded_address_the_run_looked_up_is_no_beacon() {
+    // The same calls as a bot's beacon, but a DNS answer gave the address.
+    let mut calls = vec![socket(1, 2, 1, 3)];
+    for n in 0..4u64 {
+        calls.push(at(
+            with_entry(
+                sys(1, 42, "connect", [3, 0x1000, 16, 0, 0, 0], 0),
+                "arg1.address",
+                &address(2, [198, 51, 100, 1], 54128),
+            ),
+            (n + 1) * 30 * SECOND,
+        ));
+    }
+    let beacon = Capture::new().calls(calls.clone()).finish();
+    assert!(rules_of(&beacon).contains(&"network.c2_ip_literal".to_owned()));
+    let mut looked_up = Capture::new().calls(calls);
+    looked_up.frame(
+        FrameKind::Dns,
+        &dns(1, 1, "gays.shieldbytes.net", 0, &["198.51.100.1"], "A"),
+        "10.0.2.3",
+        "53",
+    );
+    let out = looked_up.finish();
+    assert!(!rules_of(&out).contains(&"network.c2_ip_literal".to_owned()));
+}
+
+#[test]
+pub fn tls_with_no_server_name_to_a_bare_address_is_low() {
+    // A33: the Sliver implant's TLS session to 129.151.184.17:443, no SNI.
+    let hello = session(1, 1, "TLSv1.3", "client hello", "", "");
+    let mut capture = Capture::new();
+    capture.frame(FrameKind::Session, &hello, "129.151.184.17", "443");
+    let out = capture.finish();
+    assert_eq!(tier(&out, "network.tls_ip_literal").as_deref(), Some("low"));
+    // A named server, or an address a lookup gave, is not.
+    let mut named = Capture::new();
+    named.frame(
+        FrameKind::Session,
+        &session(1, 1, "TLSv1.3", "client hello", "api.example.com", ""),
+        "129.151.184.17",
+        "443",
+    );
+    assert!(!has(&named.finish(), "network.tls_ip_literal"));
+    let mut resolved = Capture::new();
+    resolved.frame(
+        FrameKind::Dns,
+        &dns(1, 1, "c2.example.net", 0, &["129.151.184.17"], "A"),
+        "10.0.2.3",
+        "53",
+    );
+    resolved.frame(FrameKind::Session, &hello, "129.151.184.17", "443");
+    assert!(!has(&resolved.finish(), "network.tls_ip_literal"));
+}

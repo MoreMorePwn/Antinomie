@@ -160,6 +160,7 @@ pub fn connect(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         return;
     }
     dead_server(cx, st, (ip, port), &target, out);
+    hardcoded(cx, st, (ip, port), out);
     let task = st.task(cx);
     task.connects.push(time, LOGINS.0, (ip, port));
     if !task.scan_done {
@@ -224,6 +225,135 @@ pub fn connect(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
             format!("connect to {target} after reading known hosts or keys"),
         ));
     }
+}
+
+/// Connects to one public address that no DNS answer of the run gave
+/// before it counts as C2-like: at least this many ...
+pub const HARDCODED_MIN: u32 = 3;
+/// ... spread over at least this long (a quick retry burst is
+/// `network.dead_c2`'s, not a beacon).
+pub const HARDCODED_SPAN: u64 = 10 * NS;
+/// Ports a program reaches every day; any other is said in the row.
+const COMMON_PORTS: &[u16] = &[80, 443, 8080, 8443, 53, 853, 22, 21, 25, 587, 993, 995];
+
+/// What the run's connects to one public address add up to.
+#[derive(Default)]
+pub struct Hardcoded {
+    pub count: u32,
+    pub first_ns: u64,
+    pub ports: std::collections::BTreeSet<u16>,
+    /// A row was made for it.
+    pub reported: bool,
+}
+
+/// Addresses at most that get a `network.c2_ip_literal` row: a bot has a
+/// few command servers, a scanner thousands of targets.
+pub const HARDCODED_ROWS: usize = 8;
+
+/// `network.c2_ip_literal` (A33/A34): repeated connects, whether they
+/// succeed or not, to one public address over [`HARDCODED_SPAN`] or more: a
+/// bot or implant calling home to an address built into it. The row is
+/// dropped at the end of the run when a DNS answer of the run gave the
+/// address ([`drop_resolved`]): then it is a named server, not a hard-coded
+/// one. Local, DNS and housekeeping traffic and the base image's own
+/// programs are never counted.
+fn hardcoded(cx: &Ctx, st: &mut State, (ip, port): (IpAddr, u16), out: &mut Vec<Hit>) {
+    if private(ip) || port == 53 || HOUSEKEEPING_PORTS.contains(&port) {
+        return;
+    }
+    if st.hardcoded.len() >= 4096 && !st.hardcoded.contains_key(&ip) {
+        return;
+    }
+    let base = antinomie_monitor_core::ioc::indicator::Process {
+        pid: cx.event.pid,
+        cookie: cx.call.task_cookie,
+        name: cx.image_name().to_owned(),
+    };
+    if antinomie_monitor_core::ioc::baseline::base_program(&base) {
+        return;
+    }
+    // A scanning or brute-forcing task retries its targets on the attacked
+    // ports; those targets are no command server.
+    let task = st.task(cx);
+    if (task.scan_done || task.login_done || task.exploit_done)
+        && (LOGIN_PORTS.contains(&port) || EXPLOIT_PORTS.contains(&port))
+    {
+        return;
+    }
+    let reported = st.hardcoded.values().filter(|seen| seen.reported).count();
+    let time = cx.time();
+    let seen = st.hardcoded.entry(ip).or_default();
+    if !seen.reported && reported >= HARDCODED_ROWS {
+        return;
+    }
+    if seen.count == 0 {
+        seen.first_ns = time;
+    }
+    seen.count = seen.count.saturating_add(1);
+    if seen.ports.len() < 16 {
+        seen.ports.insert(port);
+    }
+    if seen.count < HARDCODED_MIN || time.saturating_sub(seen.first_ns) < HARDCODED_SPAN {
+        return;
+    }
+    seen.reported = true;
+    let ports: Vec<String> = seen.ports.iter().map(u16::to_string).collect();
+    let unusual: Vec<&String> = seen
+        .ports
+        .iter()
+        .zip(&ports)
+        .filter(|(port, _)| !COMMON_PORTS.contains(*port))
+        .map(|(_, text)| text)
+        .collect();
+    let mut hit = Hit::new(
+        "network.c2_ip_literal",
+        ip.to_string(),
+        format!(
+            "{} connects to {ip} (port {}) over {} s, an address no lookup gave",
+            seen.count,
+            ports.join(", "),
+            time.saturating_sub(seen.first_ns) / NS
+        ),
+    )
+    .detail(
+        "The program reached the same public address again and again although no DNS answer of the run named it: an address built into the program, as a bot's or an implant's command server is.",
+    );
+    if !unusual.is_empty() {
+        hit = hit.detail(format!(
+            "Unusual ports: {}.",
+            unusual
+                .iter()
+                .map(|port| port.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    out.push(hit);
+}
+
+/// Drop the C2-like rows for addresses a DNS answer of the run gave: a
+/// program that looked a name up and connects to its address is not calling
+/// a hard-coded one.
+pub fn drop_resolved(aggs: &mut Vec<super::noise::Agg>, st: &State) {
+    let resolved = &st.frames.resolved;
+    if resolved.is_empty() {
+        return;
+    }
+    aggs.retain(|agg| {
+        !(matches!(agg.rule, "network.c2_ip_literal" | "network.tls_ip_literal")
+            && agg
+                .object
+                .rsplit_once(':')
+                .map_or(agg.object.as_str(), |(ip, port)| {
+                    if port.chars().all(|c| c.is_ascii_digit()) && ip.parse::<IpAddr>().is_ok() {
+                        ip
+                    } else {
+                        agg.object.as_str()
+                    }
+                })
+                .parse::<IpAddr>()
+                .is_ok_and(|ip| resolved.contains(&ip)))
+    });
 }
 
 /// Failed connects to one public address and port that never succeeded: the

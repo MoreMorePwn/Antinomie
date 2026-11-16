@@ -296,6 +296,9 @@ pub struct State {
     pub probes: Probes,
     /// Program and perf event descriptors, to tie an attach to its load.
     pub bpf: super::super::BpfFds,
+    /// Connections to public addresses no DNS answer gave, by address
+    /// (`network.c2_ip_literal`, A33/A34).
+    pub hardcoded: BTreeMap<std::net::IpAddr, super::network::Hardcoded>,
 }
 
 impl State {

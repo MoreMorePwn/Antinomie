@@ -469,3 +469,82 @@ pub fn a_retry_loop_across_forked_processes_is_still_one_dead_server() {
     let out = run(calls);
     assert!(has(&out, "network.dead_c2"));
 }
+
+/// Connects to `ip` on each port in turn, `apart` nanoseconds apart.
+fn calls_home(ip: [u8; 4], ports: &[u16], apart: u64, result: i64) -> Calls {
+    let mut calls = vec![socket(1, 2, 1, 3)];
+    calls.extend(
+        ports
+            .iter()
+            .enumerate()
+            .map(|(n, port)| at(connect_result(1, ip, *port, result), (n as u64 + 1) * apart)),
+    );
+    calls
+}
+
+#[test]
+pub fn a_bot_calling_home_to_a_hard_coded_address_is_medium() {
+    // A34, runs 7872199f, a18aacc9: one connect to :8888, four to :443 over
+    // two minutes, no lookup, no other finding. A33: the Sliver implant's
+    // HTTP and TLS calls to 129.151.184.17.
+    let out = run(calls_home(
+        [185, 34, 144, 138],
+        &[8888, 443, 443, 443, 443],
+        25 * SECOND,
+        0,
+    ));
+    let row = rows(&out, "network.c2_ip_literal");
+    assert_eq!(row.len(), 1, "{:?}", rules_of(&out));
+    assert_eq!(text(row[0], "finding.tier"), "medium");
+    assert_eq!(text(row[0], "finding.object"), "185.34.144.138");
+    let summary = text(row[0], "finding.summary");
+    assert!(
+        summary.contains("3 connects") && summary.contains("443, 8888"),
+        "{summary}"
+    );
+    assert!(list(row[0], "finding.detail")
+        .iter()
+        .any(|line| line == "Unusual ports: 8888."));
+    // Failed connects to a dead server count as well (8632f4bb).
+    assert!(has(
+        &run(calls_home([5, 231, 28, 128], &[8443; 4], 30 * SECOND, -111)),
+        "network.c2_ip_literal"
+    ));
+}
+
+#[test]
+pub fn a_quick_retry_two_connects_or_local_traffic_are_no_beacon() {
+    for (calls, why) in [
+        (
+            calls_home([185, 34, 144, 138], &[443, 443], 60 * SECOND, 0),
+            "two connects",
+        ),
+        (
+            calls_home([185, 34, 144, 138], &[443; 6], SECOND, 0),
+            "within 6 s",
+        ),
+        (
+            calls_home([192, 168, 1, 10], &[443; 6], 30 * SECOND, 0),
+            "a private address",
+        ),
+        (
+            calls_home([185, 34, 144, 138], &[53; 6], 30 * SECOND, 0),
+            "DNS",
+        ),
+    ] {
+        assert!(!has(&run(calls), "network.c2_ip_literal"), "{why}");
+    }
+    // A scanner's targets are not command servers, and at most a few
+    // addresses get a row.
+    let mut many = vec![socket(1, 2, 1, 3)];
+    for n in 0..40u8 {
+        for k in 0..3u64 {
+            many.push(at(
+                connect_result(1, [203, 0, 113, n], 9000, 0),
+                (u64::from(n) * 3 + k + 1) * 20 * SECOND,
+            ));
+        }
+    }
+    let out = run(many);
+    assert_eq!(rows(&out, "network.c2_ip_literal").len(), 8);
+}

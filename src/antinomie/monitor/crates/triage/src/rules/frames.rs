@@ -84,6 +84,9 @@ pub struct Frames {
     pub beat_done: std::collections::BTreeSet<String>,
     /// Frames the suppression list skipped.
     pub suppressed: u64,
+    /// Every address a DNS answer of the run gave: a connect to one of
+    /// these is to a named server, not a hard-coded one.
+    pub resolved: std::collections::BTreeSet<IpAddr>,
 }
 
 /// Names the base looks up by itself: time sync, package mirrors and connectivity checks.
@@ -209,6 +212,15 @@ pub fn rules(st: &mut super::state::State, frame: &Frame) -> Vec<Hit> {
             let rcode = frame.number("dns.rcode");
             if rcode == Some(0) && !frame.list("dns.answers").is_empty() {
                 state.resolver_answers = true;
+            }
+            for answer in frame.list("dns.answers") {
+                for word in answer.split(|c: char| c.is_whitespace() || c == ',') {
+                    if let Ok(ip) = word.parse::<IpAddr>() {
+                        if state.resolved.len() < 65_536 {
+                            state.resolved.insert(ip);
+                        }
+                    }
+                }
             }
             let first = name.split('.').next().unwrap_or("");
             if rcode == Some(3) && random_looking(first) {
@@ -362,6 +374,24 @@ pub fn rules(st: &mut super::state::State, frame: &Frame) -> Vec<Hit> {
                     ));
                 }
                 beat(state, &name, time, &mut hits);
+            }
+            // A TLS hello with no server name to a public address no lookup
+            // gave: an implant calling a hard-coded server (A33).
+            if kind == "client hello" && name.is_empty() && protocol.contains("TLS") {
+                if let Ok(ip) = frame.destination.parse::<IpAddr>() {
+                    if !super::network::private(ip) && !state.resolved.contains(&ip) {
+                        hits.push(Hit::new(
+                            "network.tls_ip_literal",
+                            ip.to_string(),
+                            format!(
+                                "TLS session to the address {ip}{} with no server name",
+                                frame
+                                    .port()
+                                    .map_or_else(String::new, |port| format!(":{port}"))
+                            ),
+                        ));
+                    }
+                }
             }
             if let Some(port) = frame.port() {
                 let ssh = protocol.eq_ignore_ascii_case("ssh")

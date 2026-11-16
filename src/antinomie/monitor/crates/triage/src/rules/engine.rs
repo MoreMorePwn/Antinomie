@@ -426,6 +426,7 @@ impl Engine {
                     && traced.contains(&agg.cookie))
             })
             .collect();
+        super::network::drop_resolved(&mut aggs, &self.state);
         aggs.extend(probes::rows(&self.state, files));
         if self.options.capture_all {
             scope(&mut aggs, &self.state, files);
