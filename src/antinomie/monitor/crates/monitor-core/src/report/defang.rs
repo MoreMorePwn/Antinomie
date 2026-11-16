@@ -34,13 +34,30 @@ pub fn url(text: &str) -> String {
     format!("{}://{}{tail}", scheme(name).unwrap_or(name), dots(host))
 }
 
-/// An IPv4 address or `host:port` endpoint: dots to `[.]`; an IPv6 address
-/// has its colons put in brackets instead.
+/// An IPv4 address or `host:port` endpoint: dots to `[.]`. An IPv6 address
+/// has its colons put in brackets instead, and an IPv6 endpoint
+/// (`[2001:db8::1]:443`) names its port in words, `2001[:]db8[:][:]1 port
+/// 443`: the brackets that hold the address next to the port would read as
+/// one more defanged colon (`[2001[:]db8[:][:]1][:]443`).
 pub fn endpoint(text: &str) -> String {
-    if text.matches(':').count() >= 2 && !text.contains('.') {
-        return text.replace(':', "[:]");
+    if let Some((address, port)) = text
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once("]:"))
+        .filter(|(address, port)| {
+            address.contains(':') && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+        })
+    {
+        return format!("{} port {port}", ipv6(address));
+    }
+    if text.matches(':').count() >= 2 && !text.contains('[') {
+        return ipv6(text);
     }
     dots(text)
+}
+
+/// An IPv6 address: colons to `[:]`, and the dots of an embedded IPv4 one.
+fn ipv6(address: &str) -> String {
+    dots(&address.replace(':', "[:]"))
 }
 
 /// A domain name.
@@ -151,6 +168,14 @@ mod tests {
         assert_eq!(url("evil.example/x.php"), "evil[.]example/x.php");
         assert_eq!(endpoint("203.0.113.5:443"), "203[.]0[.]113[.]5:443");
         assert_eq!(endpoint("2001:db8::1"), "2001[:]db8[:][:]1");
+        assert_eq!(
+            endpoint("[2a0c:4ac1:4:1eb::a]:8443"),
+            "2a0c[:]4ac1[:]4[:]1eb[:][:]a port 8443"
+        );
+        assert_eq!(
+            endpoint("[::ffff:203.0.113.5]:80"),
+            "[:][:]ffff[:]203[.]0[.]113[.]5 port 80"
+        );
         assert_eq!(domain("a.b.example"), "a[.]b[.]example");
         assert_eq!(
             indicator(IndicatorKind::Tls, "ab:cd:ef"),

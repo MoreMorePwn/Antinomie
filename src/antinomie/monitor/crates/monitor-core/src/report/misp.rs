@@ -441,4 +441,25 @@ mod tests {
         );
         assert_eq!(split_endpoint("example.com:80"), None);
     }
+
+    #[test]
+    fn an_ipv6_endpoint_is_in_misp_and_stix() {
+        let indicator = Indicator {
+            kind: "endpoint".into(),
+            value: "[2a0c:4ac1:4:1eb::a]:8443".into(),
+            ..Indicator::default()
+        };
+        assert!(indicator.shared());
+        let misp = attributes(&indicator, "seed", 0);
+        assert_eq!(misp.len(), 1);
+        assert_eq!(misp[0]["type"], "ip-dst|port");
+        assert_eq!(misp[0]["value"], "2a0c:4ac1:4:1eb::a|8443");
+        assert_eq!(
+            super::super::stix::pattern(&indicator).as_deref(),
+            Some(
+                "[network-traffic:dst_ref.type = 'ipv6-addr' AND network-traffic:dst_ref.value = \
+                 '2a0c:4ac1:4:1eb::a' AND network-traffic:dst_port = 8443]"
+            )
+        );
+    }
 }
