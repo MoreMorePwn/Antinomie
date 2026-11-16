@@ -468,6 +468,9 @@ pub struct Report {
     pub findings: Option<Table>,
     pub files: Option<FilesSection>,
     pub file_activity: Option<Vec<FileRecord>>,
+    /// Directories the run made (`mkdir`): not files it wrote.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub directories_created: Vec<String>,
     pub network: Option<Vec<NamedTable>>,
     pub detections: Option<Vec<Detection>>,
     pub evidence: Option<Vec<EvidenceRef>>,

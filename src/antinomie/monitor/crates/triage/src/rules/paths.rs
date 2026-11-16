@@ -585,7 +585,8 @@ pub fn changed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) -> b
             matched = true;
         }
     }
-    if touch.op == Op::Created {
+    // A note the kernel refused to create is not a note.
+    if touch.op == Op::Created && cx.ok {
         st.created(cx, path, out);
     }
     if let Some(hit) = hidden_file(cx, touch) {

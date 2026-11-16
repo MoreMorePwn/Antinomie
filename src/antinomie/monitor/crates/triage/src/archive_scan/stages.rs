@@ -511,9 +511,17 @@ impl Scan {
             .iter()
             .filter_map(files::Change::ioc_file)
             .collect();
-        counts.changed = all_changes.iter().filter(|change| change.real()).count() as u64;
+        counts.changed = all_changes.iter().filter(|change| change.counted()).count() as u64;
+        // The Changed files tab lists the files `counted` means, the refused
+        // attempts at such files when failures are shown, and standard I/O
+        // when it is not hidden; devices, `/proc`, `/sys`, directories and
+        // unnamed descriptors are not files the run changed.
         let file_changes: Vec<_> = all_changes
             .into_iter()
+            .filter(|change| {
+                change.standard_io
+                    || files::counted_file(&change.path, change.path_known, false, change.directory)
+            })
             .filter(|change| {
                 let row = change.row(clock_anchor);
                 counts.visibility[file_visibility::visibility_slot(FileTab::Changed)]

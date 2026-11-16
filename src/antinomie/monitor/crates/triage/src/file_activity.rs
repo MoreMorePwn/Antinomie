@@ -214,6 +214,28 @@ impl FileActivity {
         file_visibility::library_path(&self.path)
     }
 
+    /// A directory: a `mkdir` of this name succeeded.
+    pub fn directory(&self) -> bool {
+        self.events.iter().any(|event| {
+            event.success != Some(false)
+                && matches!(event.operation.split(' ').next(), Some("mkdir" | "mkdirat"))
+        })
+    }
+
+    /// A file the run changed, as every list and count of changed files means
+    /// it: created or changed by a call that succeeded, at a name that can be
+    /// a changed file ([`crate::files::counted_file`]).
+    pub fn counted(&self) -> bool {
+        !self.failed_only
+            && (self.created || self.changed())
+            && crate::files::counted_file(
+                &self.path,
+                self.path_known,
+                self.standard_io,
+                self.directory(),
+            )
+    }
+
     /// Whether any call changed the file or its name and succeeded.
     pub fn changed(&self) -> bool {
         self.events

@@ -343,6 +343,47 @@ fn summary(
 
 use antinomie_monitor_core::run_digest as digest_types;
 
+/// Files the run changed: the rows of the Written or changed table.
+pub(crate) fn changed_files(scan: &ArchiveScan) -> u64 {
+    scan.file_activity
+        .files
+        .iter()
+        .filter(|file| file.counted())
+        .count() as u64
+}
+
+/// The directories the run made, by the name it made them under.
+pub(crate) fn directories_created(scan: &ArchiveScan) -> Vec<String> {
+    let mut out: Vec<String> = scan
+        .file_activity
+        .files
+        .iter()
+        .filter(|file| file.path_known && file.created && file.directory())
+        .map(|file| file.path.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out.truncate(2000);
+    out
+}
+
+/// Files the run reached by a call that succeeded, at a name that can be a
+/// changed file: every changed file is one of them.
+pub(crate) fn opened_files(scan: &ArchiveScan) -> u64 {
+    scan.file_activity
+        .files
+        .iter()
+        .filter(|file| {
+            crate::files::counted_file(
+                &file.path,
+                file.path_known,
+                file.standard_io,
+                file.directory(),
+            ) && (file.counted() || file.events.iter().any(|event| event.success != Some(false)))
+        })
+        .count() as u64
+}
+
 /// Rows of the report's Key findings table.
 const KEY_FINDINGS: usize = 10;
 
@@ -633,7 +674,7 @@ fn file_activity(
     let mut skipped = Vec::new();
     let mut total = 0u64;
     for (index, file) in activity.files.iter().enumerate() {
-        if file.standard_io || file.failed_only || !(file.created || file.changed()) {
+        if !file.counted() {
             continue;
         }
         let mut map = Reconstruction::new(start_of(file), &file.timeline);
@@ -800,6 +841,7 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
         }
         if choices.has(Part::FileActivity) {
             report.file_activity = Some(records);
+            report.directories_created = directories_created(scan);
         }
     }
     if choices.has(Part::Network) {

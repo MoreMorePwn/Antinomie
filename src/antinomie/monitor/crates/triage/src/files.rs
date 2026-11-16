@@ -19,6 +19,7 @@ pub mod order;
 pub mod shape;
 pub mod view;
 
+pub use change::{counted_file, pseudo_file};
 pub use ioc::IocFile;
 
 pub const READ_NAMES: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
@@ -81,6 +82,14 @@ pub struct Change {
     pub existed: Option<u64>,
     /// Change attempts the kernel refused. They are not changes.
     pub failed: u32,
+    /// The name is a directory: `mkdir` made it, or the guest said so.
+    pub directory: bool,
+    /// Guest time of the call [`Self::hash`] came with.
+    pub hash_ns: u64,
+    /// The guest marked [`Self::hash`] as taken of a file that changed while
+    /// it was read, and only the file's metadata changed then (`cp x y &&
+    /// chmod 755 y`): the digest is the bytes.
+    pub hash_settled: bool,
     /// Last mode a successful chmod set, to tell a new `+x` from a repeat.
     pub mode: Option<u64>,
     pub locations: Vec<Location>,
@@ -1435,6 +1444,90 @@ pub mod tests {
                     activity.files.iter().map(|f| &f.path).collect::<Vec<_>>()
                 )
             })
+    }
+
+    /// One run's files of every sort: a refused chmod, writes to /proc and
+    /// /dev, a directory and one real file.
+    fn mixed_run() -> Vec<InvocationSummary> {
+        vec![
+            named(1, 90, "chmod", -2, [0, 0, 0, 0, 0, 0], &["/sbin/reboot"]),
+            named(
+                2,
+                2,
+                "open",
+                3,
+                [0, 0x241, 0, 0, 0, 0],
+                &["/proc/self/loginuid"],
+            ),
+            operation(3, 1, "write", 10, [3, 0, 10, 0, 0, 0], b"4294967295"),
+            named(4, 2, "open", 4, [0, 0x1, 0, 0, 0, 0], &["/dev/null"]),
+            operation(5, 1, "write", 2, [4, 0, 2, 0, 0, 0], b"hi"),
+            named(6, 83, "mkdir", 0, [0, 0o755, 0, 0, 0, 0], &["/tmp/spoof"]),
+            named(7, 2, "open", 5, [0, 0x41, 0, 0, 0, 0], &["/tmp/.x"]),
+            operation(8, 1, "write", 3, [5, 0, 3, 0, 0, 0], b"abc"),
+            named(9, 2, "open", 6, [0, 0x41, 0, 0, 0, 0], &["/dev/shm/.y"]),
+            operation(10, 1, "write", 1, [6, 0, 1, 0, 0, 0], b"y"),
+        ]
+    }
+
+    #[test]
+    fn only_files_a_call_really_changed_are_changed_files_or_indicators() {
+        let changes = build(&mixed_run()).0.finish();
+        let change = |path: &str| changes.iter().find(|change| change.path == path);
+        let counted: Vec<&str> = changes
+            .iter()
+            .filter(|change| change.counted())
+            .map(|change| change.path.as_str())
+            .collect();
+        assert_eq!(counted, ["/dev/shm/.y", "/tmp/.x"], "{counted:?}");
+        let iocs: Vec<String> = changes
+            .iter()
+            .filter_map(Change::ioc_file)
+            .map(|file| file.path)
+            .collect();
+        assert_eq!(iocs, ["/dev/shm/.y", "/tmp/.x"]);
+        // The refused chmod is an attempt only.
+        let reboot = change("/sbin/reboot").unwrap();
+        assert!(!reboot.counted() && reboot.failed == 1);
+        assert!(reboot.written_file().is_none());
+        // The directory is a directory created, never a written file's hash.
+        let spoof = change("/tmp/spoof").unwrap();
+        assert!(spoof.directory && !spoof.counted());
+        assert_eq!(
+            spoof.written_file().map(|file| file.state).as_deref(),
+            Some(ioc::DIRECTORY_CREATED)
+        );
+        for pseudo in ["/proc/self/loginuid", "/dev/null"] {
+            assert!(change(pseudo).is_none_or(|c| !c.counted()), "{pseudo}");
+            assert!(change(pseudo).and_then(Change::written_file).is_none());
+        }
+        // The file activity the report lists agrees.
+        let activity = activity_of(&mixed_run());
+        let listed: Vec<&str> = activity
+            .files
+            .iter()
+            .filter(|file| file.counted())
+            .map(|file| file.path.as_str())
+            .collect();
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert!(listed.contains(&"/tmp/.x") && listed.contains(&"/dev/shm/.y"));
+        assert!(file(&activity, "/tmp/spoof").directory());
+    }
+
+    #[test]
+    fn devices_proc_and_sys_are_not_files_a_run_leaves() {
+        for path in [
+            "/dev/null",
+            "/dev/tty1",
+            "/proc/self/oom_score_adj",
+            "/proc",
+            "/sys/kernel/x",
+        ] {
+            assert!(pseudo_file(path), "{path}");
+        }
+        for path in ["/dev/shm/.x", "/tmp/x", "/device", "/proceed", "/system/x"] {
+            assert!(!pseudo_file(path), "{path}");
+        }
     }
 
     fn kinds(file: &FileActivity) -> Vec<Kind> {

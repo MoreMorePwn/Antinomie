@@ -108,6 +108,7 @@ impl Change {
     /// identity, how many links it has left and a new name for it.
     pub fn note_identity(&mut self, id: FileId, name: Option<&str>) {
         self.identity.get_or_insert(id.key);
+        self.directory |= id.directory;
         if !matches!(id.kind, FileIdKind::Issue | FileIdKind::Exec) {
             self.links = Some(id.nlink);
         }
@@ -228,3 +229,50 @@ impl Change {
         evidence_key(&self.row(None))
     }
 }
+
+/// What can be a changed file: a regular file or memfd the run reached by a
+/// known name. Not standard input or output, not a directory (those are
+/// "directories created"), and not a device, `/proc` or `/sys` entry (a
+/// write to `/proc/self/oom_score_adj` is behaviour the rules read from the
+/// calls, never a file the run left). `/dev/shm` is a RAM disk for files.
+pub fn counted_file(path: &str, path_known: bool, standard_io: bool, directory: bool) -> bool {
+    path_known && !standard_io && !directory && !pseudo_file(path)
+}
+
+/// A device node, or a `/proc` or `/sys` entry.
+pub fn pseudo_file(path: &str) -> bool {
+    let under = |root: &str| {
+        path == root
+            || path
+                .strip_prefix(root)
+                .is_some_and(|rest| rest.starts_with('/'))
+    };
+    (under("/dev") && !under("/dev/shm")) || under("/proc") || under("/sys")
+}
+
+/// Calls that change a file's metadata or names, never its bytes.
+pub const METADATA_NAMES: &[&str] = &[
+    "chmod",
+    "fchmod",
+    "fchmodat",
+    "fchmodat2",
+    "chown",
+    "fchown",
+    "lchown",
+    "fchownat",
+    "utime",
+    "utimes",
+    "utimensat",
+    "futimesat",
+    "setxattr",
+    "lsetxattr",
+    "fsetxattr",
+    "removexattr",
+    "lremovexattr",
+    "fremovexattr",
+    "rename",
+    "renameat",
+    "renameat2",
+    "link",
+    "linkat",
+];

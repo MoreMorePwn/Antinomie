@@ -4,6 +4,9 @@
 //! before it was deleted.
 use super::*;
 
+/// The state of a directory the run made, in the digest's written files.
+pub const DIRECTORY_CREATED: &str = "directory created";
+
 /// What the IOC window needs of one changed file.
 pub struct IocFile {
     pub path: String,
@@ -23,7 +26,9 @@ pub struct IocFile {
 impl Change {
     /// The file for the IOC window, or `None` for one with no usable path.
     pub fn ioc_file(&self) -> Option<IocFile> {
-        if !self.path_known || !self.path.starts_with('/') || self.standard_io {
+        // Only a change the kernel accepted, of a file (see `counted`), is an
+        // indicator: a refused chmod of /sbin/reboot changed nothing.
+        if !self.counted() || !self.path.starts_with('/') {
             return None;
         }
         let mut roles = Vec::new();
@@ -88,7 +93,14 @@ impl Change {
     /// The file as the Samples window lists the files a sample wrote, or
     /// `None` for one the run did not change or with no usable path.
     pub fn written_file(&self) -> Option<antinomie_monitor_core::run_digest::WrittenFile> {
-        if !self.changes || !self.path_known || !self.path.starts_with('/') || self.standard_io {
+        if self.directory && self.changes && self.path_known && self.path.starts_with('/') {
+            return Some(antinomie_monitor_core::run_digest::WrittenFile {
+                path: self.path.clone(),
+                state: DIRECTORY_CREATED.into(),
+                ..Default::default()
+            });
+        }
+        if !self.counted() || !self.path.starts_with('/') {
             return None;
         }
         let created = self
