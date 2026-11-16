@@ -298,6 +298,30 @@ LIBRARY_DIRS = {"x86_64": ("usr/lib/x86_64-linux-gnu", "lib/x86_64-linux-gnu"),
                 "arm64": ("usr/lib/aarch64-linux-gnu", "lib/aarch64-linux-gnu")}
 # Per guest architecture: the serial console the kernel and getty use.
 CONSOLES = {"x86_64": "ttyS0", "arm64": "ttyAMA0"}
+# glibc's runtime in a BusyBox base (ANT-T0556 A51), from the pinned libc6 (the
+# Debian bases' version): the loader at the path glibc programs name in their
+# PT_INTERP, and the libraries a program links against. Since glibc 2.34
+# libpthread, libdl, librt, libutil and libanl are stubs (their symbols are in
+# libc.so.6) that older programs still name; libnss_files and libnss_dns are
+# built in, their stubs are kept for programs that load them. Left out: the
+# debugging and profiling libraries, libmvec, libnsl, libBrokenLocale and the
+# gconv modules.
+GLIBC_LOADERS = {"x86_64": "/lib64/ld-linux-x86-64.so.2", "arm64": "/lib/ld-linux-aarch64.so.1"}
+GLIBC_LIBRARIES = ("libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2", "librt.so.1",
+                   "libutil.so.1", "libanl.so.1", "libresolv.so.2", "libnss_files.so.2",
+                   "libnss_dns.so.2")
+# Name services as a glibc system lists them; BusyBox's own tools read the files.
+NSSWITCH = """passwd:         files
+group:          files
+shadow:         files
+hosts:          files dns
+networks:       files
+protocols:      files
+services:       files
+"""
+# Applets a sample disables with chmod 0000 (Mirai's killer: reboot, halt,
+# poweroff, netstat; ANT-T0556 A26). They share one BusyBox copy of their own.
+DISABLED_APPLETS = ("reboot", "halt", "poweroff", "netstat")
 
 
 class Userland:
@@ -311,6 +335,7 @@ class Userland:
         self.packages = list(packages)
         self.owners = dict(owners)
         self.installed = {}
+        self.arch = arch
         self.library_dirs = LIBRARY_DIRS[arch]
 
     def busybox(self):
@@ -498,6 +523,68 @@ def install_binary(source, root, destination, userland):
             pending.append(found)
 
 
+def install_file(source, root, destination, userland):
+    """Copy one file of the pinned packages to destination in root, noted in
+    userland.installed with its package."""
+    target = root / destination.lstrip("/")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    userland.installed[str(target.relative_to(root))] = userland.owner(source)
+    return target
+
+
+def install_glibc_runtime(root, userland):
+    """glibc's loader and libraries in /lib, as an embedded glibc system lays
+    them out (Buildroot: no multiarch folder, /lib64 a link to lib); the loader
+    searches /lib without an ld.so.cache. Returns the program interpreter
+    paths that reach the loader (its PT_INTERP path, and /lib's when that is
+    another), for bundle.json."""
+    loader = GLIBC_LOADERS[userland.arch]
+    (root / "lib").mkdir(parents=True, exist_ok=True)
+    if Path(loader).parent != Path("/lib"):
+        (root / loader.lstrip("/")).parent.symlink_to("lib")
+    names = set(GLIBC_LIBRARIES) | {Path(loader).name}
+    for name in sorted(names):
+        found = next((library for directory in userland.library_dirs
+                      if (library := tree_file(userland.tree, f"{directory}/{name}"))), None)
+        if found is None:
+            raise RuntimeError(f"{name} (glibc's runtime) is not in the pinned packages")
+        needed, _ = elf_needs(found)
+        if missing := sorted(set(needed) - names):
+            raise RuntimeError(f"{name} needs {', '.join(missing)}, which glibc's runtime "
+                               "in a BusyBox base leaves out")
+        install_file(found, root, f"/lib/{name}", userland)
+    write_file(root, "/etc/nsswitch.conf", NSSWITCH)
+    return list(dict.fromkeys([loader, f"/lib/{Path(loader).name}"]))
+
+
+def busybox_applet_links(root, applets, userland):
+    """Each applet a symbolic link to /bin/busybox (busybox --install -s),
+    except the shell and the applets samples disable. chmod follows a link, so
+    chmod 0000 /bin/reboot made /bin/busybox itself unrunnable and with it
+    /bin/sh, so every later `sh -c` failed (ANT-T0556 A26). /bin/sh is its
+    own copy, and DISABLED_APPLETS share another (hard links, as BusyBox's
+    hard-link install makes them). The shell runs its applets from its own
+    image (/proc/self/exe), so it keeps working when /bin/busybox is chmodded."""
+    busybox = root / "bin/busybox"
+    owner = userland.installed.get("bin/busybox")
+    disabled = [name for name in DISABLED_APPLETS if name in applets]
+    for applet in applets:
+        if applet == "busybox" or applet in disabled:
+            continue
+        if applet == "sh":
+            shutil.copy2(busybox, root / "bin/sh")
+            userland.installed["bin/sh"] = owner
+        else:
+            (root / "bin" / applet).symlink_to("busybox")
+    for index, name in enumerate(disabled):
+        if index == 0:
+            shutil.copy2(busybox, root / "bin" / name)
+        else:
+            os.link(root / "bin" / disabled[0], root / "bin" / name)
+        userland.installed[f"bin/{name}"] = owner
+
+
 def write_file(root, path, content, mode=0o644):
     target = root / path.lstrip("/")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -516,18 +603,19 @@ def valid_hostname(name):
 
 
 def base_tree(root, hostname="debian", userland=None, console="ttyS0"):
+    """The BusyBox base's root tree; returns the program interpreters it
+    serves (bundle.json's program_interpreters)."""
     require_userland(userland)
-    for directory in ("bin", "sbin", "usr/bin", "usr/sbin", "etc", "dev", "proc", "sys", "run", "tmp", "root", "home/user", "var/log"):
+    for directory in ("bin", "sbin", "lib", "usr/bin", "usr/sbin", "etc", "dev", "proc", "sys", "run", "tmp", "root", "home/user", "var/log"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     # As on Debian: utmp lives in /run, reached through /var/run.
     (root / "var/run").symlink_to("../run")
     (root / "tmp").chmod(0o1777)
     (root / "home/user").chmod(0o700)
     install_binary(userland.busybox(), root, "/bin/busybox", userland)
-    for applet in userland.applets():
-        if applet != "busybox":
-            (root / "bin" / applet).symlink_to("busybox")
+    busybox_applet_links(root, userland.applets(), userland)
     (root / "sbin/init").symlink_to("../bin/busybox")
+    interpreters = install_glibc_runtime(root, userland)
     write_file(root, "/etc/passwd", "root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:user,,,:/home/user:/bin/sh\n")
     write_file(root, "/etc/group", "root:x:0:\nuser:x:1000:\n")
     write_file(root, "/etc/hostname", hostname + "\n")
@@ -592,6 +680,7 @@ if ip link show eth0 >/dev/null 2>&1; then
 fi
 echo 'BusyBox guest ready'
 """, 0o755)
+    return interpreters
 
 
 def module_loading(modules):
@@ -798,7 +887,7 @@ def main():
         staging = Path(temporary)
         root = staging / "root"
         root.mkdir()
-        base_tree(root, args.hostname, userland, CONSOLES[args.arch])
+        interpreters = base_tree(root, args.hostname, userland, CONSOLES[args.arch])
         raw = staging / "base.raw"
         with raw.open("wb") as image:
             image.truncate(args.base_size_mib << 20)
@@ -840,6 +929,9 @@ def main():
         userland.packages, key=lambda item: item["package"])
     if args.arch != "x86_64":
         manifest["arch"] = args.arch
+    # The dynamic loaders a program may name in its PT_INTERP: Auto mode
+    # refuses one whose loader the lane's base lacks before the VM starts.
+    manifest["program_interpreters"] = interpreters
     if name:
         manifest["name"] = name
     manifest["stealth_support"] = stealth_support(args.kernel_config, args.output / "kernel")
