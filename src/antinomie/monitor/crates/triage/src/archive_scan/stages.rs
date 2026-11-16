@@ -734,7 +734,8 @@ impl Scan {
                 // The identification of the file says why it died so early.
                 Some(note) => format!("{signal}, and the static analysis of the file says: {note}"),
                 None => signal,
-            });
+            })
+            .map(|signal| crate::archive_scan::no_call_clause(directory, &signal));
         if let Some(text) = &root_crash {
             engine.root_crash(text, clock_anchor);
         }

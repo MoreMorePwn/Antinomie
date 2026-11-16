@@ -1321,6 +1321,17 @@ x86 programs by their own table.
   "nothing leaves the lab" preset) asked WHOIS and reverse DNS about up to 24
   sample destinations per run. Only the two dig-and-whois choices look up now,
   and never for the documentation ranges (the InetSim stand-in 198.51.100.1).
+- **The Auto-mode label reads the family evidence (ANT-T0556, A50, A11).** Runs
+  with a strong family rule (MIRAI_OHSHIT_payload, Gafgyt rules) were
+  `clean_observed`, and one rule's own "high" severity made a low-tier run
+  `malicious`. The default mapping now reads the behaviour tier and the family
+  evidence of the run's own detections and behaviour (`summary.family_evidence`):
+  a strong family rule with medium or high behaviour is `malicious`, any family
+  rule `suspicious`, a rule's severity alone at most `suspicious`. A run whose
+  program made no system call (a crash while loading, or a time-limit stop before
+  the first call) is `inconclusive`, "No behaviour was recorded", with the reason;
+  a program stopped before its first call is "No call before the stop", not a crash.
+  The table is in docs/auto-mode.md.
 - **Families come only from rules that name one (ANT-T0556, A48, A53, A49).**
   "Binary" (Suspicious_Golang_Binary), "Fileless" and "Yakuza" were families, and
   technique rules (`ELF_Toriilike_persist`, `NSVPS_Mirai_Busybox_Staging`) named

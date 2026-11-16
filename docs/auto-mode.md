@@ -346,7 +346,28 @@ the recording is saved without it and the run succeeds; `run.pending` lists
   (`malicious`, `suspicious`, `clean_observed`, `inconclusive`), an optional score
   and the `basis` sentence that says why. `clean_observed` means nothing was seen
   in this run, not that the sample is clean. `[verdict] mapping = "default"` is the
-  built-in mapping; `[[verdict.rule]]` entries replace it.
+  built-in mapping; `[[verdict.rule]]` entries replace it. The default mapping reads
+  the behaviour tier **and** the family evidence of the run's own detections and
+  behaviour (`summary.family_evidence` of the report); the first row that holds wins:
+
+  | # | When | Label |
+  |---|---|---|
+  | 1 | Triage did not run, or the run did not complete (guest lost, a safety stop) | `inconclusive` |
+  | 2 | an indicator matched a stored dataset | `malicious` |
+  | 3 | a strong family rule names a family (an Elastic family rule scored 70 or more, a rule's `family` meta, a Malpedia rule) or a behaviour signature does, and the behaviour reached tier medium or high | `malicious` |
+  | 4 | any detection rule of the run names a family | `suspicious` |
+  | 5 | the program made no system call the recording kept (it crashed while loading, or the time limit stopped it before its first call) | `inconclusive`, "No behaviour was recorded" with the reason |
+  | 6 | the behaviour reached tier high or medium | `suspicious` |
+  | 7 | a YARA rule of severity high or critical matched | `suspicious` |
+  | 8 | only low or informational findings, or none | `clean_observed` |
+
+  A family named only by the sample's MalwareBazaar record is no evidence of the
+  run, and a rule's own severity never makes a run `malicious` by itself. A rule
+  that detects a technique or a generic trait (`ELF_Toriilike_persist`,
+  `NSVPS_Mirai_Busybox_Staging`, `Suspicious_Golang_Binary`) names no family, even
+  when its meta does: it gives the report's `summary.tags`. `[[verdict.rule]]`
+  can read the same evidence as `family_evidence` (every family) and
+  `family_evidence.strong`.
 
 Check the files without starting anything: `antinomie-cli --data-dir ~/auto
 config validate`. It prints `file:line:column: error: message` for each problem

@@ -229,8 +229,9 @@ pub struct FamilyEvidence {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Summary {
-    /// `matched_indicators`, `suspicious_behaviour`, `observed_only` or
-    /// `no_findings`.
+    /// `matched_indicators`, `suspicious_behaviour`, `observed_only`,
+    /// `no_findings`, or `no_behaviour` when the program made no system call
+    /// the recording kept (the statement says why).
     pub assessment: String,
     /// The assessment in words, with its basis.
     pub statement: String,

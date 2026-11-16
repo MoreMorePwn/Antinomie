@@ -151,6 +151,7 @@ pub const SPECS: &[Spec] = &[
     // Execution
     rule("process.exec", 2, T::Info, C::Execution, &[]),
     rule("process.crashed_at_start", 1, T::Low, C::Execution, &[]),
+    rule("process.no_calls_before_stop", 1, T::Low, C::Execution, &[]),
     rule(
         "process.interpreter",
         2,

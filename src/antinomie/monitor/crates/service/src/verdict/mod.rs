@@ -17,7 +17,7 @@ use crate::{
     },
     config::preset::{VerdictMapping, VerdictSettings},
 };
-use antinomie_monitor_core::report::{Detection, Technique};
+use antinomie_monitor_core::report::{Detection, FamilyEvidence, Technique};
 pub use expr::{Expr, ExprError};
 
 /// The facts a mapping reads: the Triage summary, the detections, the run's
@@ -29,6 +29,10 @@ pub struct Facts {
     pub counts: Counts,
     pub detections: Vec<DetectionHit>,
     pub families: Vec<String>,
+    /// The families the run's own detections or behaviour name, with
+    /// whether a strong rule or the behaviour named them (the report's
+    /// `summary.family_evidence`).
+    pub family_evidence: Vec<FamilyEvidence>,
     pub techniques: Vec<String>,
     pub end_reason: Option<EndReason>,
     /// The Triage scan ran and the summary was built.
@@ -56,6 +60,7 @@ impl Facts {
             counts: Counts::default(),
             detections: Vec::new(),
             families: Vec::new(),
+            family_evidence: Vec::new(),
             techniques: Vec::new(),
             end_reason,
             triage_ran: false,
@@ -85,6 +90,7 @@ impl Facts {
             "suspicious_behaviour" => AssessmentKind::SuspiciousBehaviour,
             "observed_only" => AssessmentKind::ObservedOnly,
             "no_findings" => AssessmentKind::NoFindings,
+            // `no_behaviour`: the program made no call the recording kept.
             _ => AssessmentKind::Inconclusive,
         };
         let counts = &summary.counts;
@@ -113,6 +119,7 @@ impl Facts {
                 })
                 .collect(),
             families: summary.families.clone(),
+            family_evidence: summary.family_evidence.clone(),
             techniques: attack.iter().map(|t| t.id.clone()).collect(),
             end_reason,
             triage_ran: true,
@@ -163,6 +170,19 @@ impl Facts {
                 Value::Strs(self.detections.iter().map(|d| d.severity.clone()).collect())
             }
             "families" => Value::Strs(self.families.clone()),
+            "family_evidence" => Value::Strs(
+                self.family_evidence
+                    .iter()
+                    .map(|f| f.name.clone())
+                    .collect(),
+            ),
+            "family_evidence.strong" => Value::Strs(
+                self.family_evidence
+                    .iter()
+                    .filter(|f| f.strong)
+                    .map(|f| f.name.clone())
+                    .collect(),
+            ),
             "techniques" => Value::Strs(self.techniques.clone()),
             "run.end_reason" => Value::Strs(self.end_reason.iter().map(name_of).collect()),
             _ => Value::Strs(Vec::new()),
@@ -301,7 +321,23 @@ fn severe(severity: &str) -> bool {
     matches!(severity.to_ascii_lowercase().as_str(), "critical" | "high")
 }
 
-/// The default mapping of design 4.9.2; the first condition that holds wins.
+/// The default mapping (design 4.9.2, revised by ANT-T0556 A50/A11); the
+/// first row that holds wins. It reads the behaviour tier **and** the family
+/// evidence of the run's own detections and behaviour:
+///
+/// | # | When | Label |
+/// |---|---|---|
+/// | 1 | Triage did not run, or the run did not complete | `inconclusive` |
+/// | 2 | an indicator matched a stored dataset | `malicious` |
+/// | 3 | a strong family rule (or a behaviour signature) names a family and the behaviour reached tier medium or high | `malicious` |
+/// | 4 | a rule of the run names a family | `suspicious` |
+/// | 5 | the program made no system call the recording kept | `inconclusive` |
+/// | 6 | the behaviour reached tier high, or medium (`suspicious_behaviour`) | `suspicious` |
+/// | 7 | a YARA rule of severity high or critical matched | `suspicious` |
+/// | 8 | only low or informational findings, or none | `clean_observed` |
+///
+/// A family named only by the sample's MalwareBazaar record is no evidence
+/// of this run. A rule's own severity alone never makes a run `malicious`.
 pub fn default_label(facts: &Facts) -> Verdict {
     let say = |label, text: String| Verdict {
         label,
@@ -338,19 +374,6 @@ pub fn default_label(facts: &Facts) -> Verdict {
             ),
         );
     }
-    if let Some(hit) = facts
-        .detections
-        .iter()
-        .find(|d| d.engine.eq_ignore_ascii_case("yara") && severe(&d.severity))
-    {
-        return say(
-            Label::Malicious,
-            format!(
-                "The {} rule `{}` matched with severity {}.",
-                hit.engine, hit.rule_id, hit.severity
-            ),
-        );
-    }
     if matched {
         return say(
             Label::Malicious,
@@ -360,16 +383,85 @@ pub fn default_label(facts: &Facts) -> Verdict {
             ),
         );
     }
-    if facts.highest_tier == Tier::High || facts.assessment == AssessmentKind::SuspiciousBehaviour {
+    let tier = name_of(&facts.highest_tier);
+    let behaved = matches!(facts.highest_tier, Tier::High | Tier::Medium)
+        || facts.assessment == AssessmentKind::SuspiciousBehaviour;
+    let strong: Vec<&str> = facts
+        .family_evidence
+        .iter()
+        .filter(|f| f.strong)
+        .map(|f| f.name.as_str())
+        .collect();
+    if !strong.is_empty() && behaved {
         return say(
-            Label::Suspicious,
+            Label::Malicious,
             format!(
-                "The run shows suspicious behaviour (highest tier {}). {}",
-                name_of(&facts.highest_tier),
+                "A strong family rule of this run names {} and its behaviour reached tier {tier}. {}",
+                strong.join(", "),
                 facts.statement
             )
             .trim_end()
             .to_owned(),
+        );
+    }
+    let no_behaviour = facts.assessment == AssessmentKind::Inconclusive;
+    if !facts.family_evidence.is_empty() {
+        let names: Vec<&str> = facts
+            .family_evidence
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        let how = if no_behaviour {
+            "no behaviour was recorded".to_owned()
+        } else if behaved {
+            format!("its behaviour reached tier {tier}, but no strong family rule names it")
+        } else {
+            format!("its behaviour stayed at tier {tier}")
+        };
+        return say(
+            Label::Suspicious,
+            format!(
+                "A detection rule of this run names {}; {how}. {}",
+                names.join(", "),
+                facts.statement
+            )
+            .trim_end()
+            .to_owned(),
+        );
+    }
+    if no_behaviour {
+        return say(
+            Label::Inconclusive,
+            format!(
+                "No behaviour was recorded, so the run could not be judged. {}",
+                facts.statement
+            )
+            .trim_end()
+            .to_owned(),
+        );
+    }
+    if behaved {
+        return say(
+            Label::Suspicious,
+            format!(
+                "The run shows suspicious behaviour (highest tier {tier}). {}",
+                facts.statement
+            )
+            .trim_end()
+            .to_owned(),
+        );
+    }
+    if let Some(hit) = facts
+        .detections
+        .iter()
+        .find(|d| d.engine.eq_ignore_ascii_case("yara") && severe(&d.severity))
+    {
+        return say(
+            Label::Suspicious,
+            format!(
+                "The {} rule `{}` matched with severity {}; no family rule names a family and the behaviour stayed at tier {tier}.",
+                hit.engine, hit.rule_id, hit.severity
+            ),
         );
     }
     match facts.assessment {

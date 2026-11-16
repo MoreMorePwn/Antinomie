@@ -313,7 +313,8 @@
             "matched_indicators",
             "suspicious_behaviour",
             "observed_only",
-            "no_findings"
+            "no_findings",
+            "no_behaviour"
           ]
         },
         "statement": {

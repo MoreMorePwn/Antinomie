@@ -300,8 +300,12 @@ retry inside itself, or poll `[results] dir`. Webhooks are not part of 0.9.0.
 ## Verdict keys
 
 `[verdict] mapping` is `default` (the mapping of the design: `malicious`,
-`suspicious`, `clean_observed`, `inconclusive`); `[[verdict.rule]]` entries (`when`,
-`label`, `score`) replace it with rules over a small field set. `[verdict]
+`suspicious`, `clean_observed`, `inconclusive`, from the behaviour tier and the
+family evidence of the run; the table is in [Auto mode](auto-mode.md), "The
+label"); `[[verdict.rule]]` entries (`when`, `label`, `score`) replace it with
+rules over a small field set (`assessment`, `highest_tier`, `counts.*`,
+`detections.engine`, `detections.severity`, `families`, `family_evidence`,
+`family_evidence.strong`, `techniques`, `run.end_reason`). `[verdict]
 tag_library = true` (default false) tags the library sample with
 `auto:label=<label>` and `auto:preset=<name>` when a run of the preset ends
 (a Custom run: the preset it was based on), under the custody actor

@@ -7,6 +7,7 @@
 pub const TEXTS: &[(&str, &str, &str)] = &[
     ("process.exec", "Program started", "A program was started with exec. This is neutral context: the command line says what ran, and the other rules judge what it then did."),
     ("process.crashed_at_start", "Crashed before first call", "The sample's program died of a signal before its first system call was recorded, so there was nothing to judge. It failed while loading or in its first instructions."),
+    ("process.no_calls_before_stop", "No call before the stop", "The sample's program made no recorded system call before the time limit or a Stop ended it, so there was nothing to judge. It did not crash: it looped or waited before its first call, or its calls were not recorded."),
     ("process.interpreter", "Interpreter or shell started", "A shell, Python, Node, Lua, Perl, Ruby, PHP, awk or similar interpreter was started, also when a script's #! line or busybox names it. Common in normal software; what it was told to run is what matters."),
     ("execution.download_cradle", "Running downloaded code directly", "A shell command line fetches data (curl, wget, /dev/tcp, Python urlopen) and pipes it into an interpreter, substitutes it into a command, or makes it executable and starts it. Droppers use this to run a payload without a visible file."),
     ("execution.dropped_exec", "Dropped file executed", "A program that the run itself wrote earlier was executed, matched by file identity or by path. Malware that unpacks and starts a second stage looks like this."),

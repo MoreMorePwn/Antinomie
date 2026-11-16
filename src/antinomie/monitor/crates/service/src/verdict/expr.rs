@@ -34,6 +34,8 @@ pub const FIELDS: &[&str] = &[
     "detections.engine",
     "detections.severity",
     "families",
+    "family_evidence",
+    "family_evidence.strong",
     "techniques",
     "run.end_reason",
 ];

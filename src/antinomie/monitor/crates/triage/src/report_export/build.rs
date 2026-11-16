@@ -256,7 +256,14 @@ fn summary(
             .then(a.rule.cmp(&b.rule))
     });
     key.truncate(25);
-    let (assessment, basis) = if matched > 0 {
+    let (assessment, basis) = if let Some(why) = &scan.root_crash {
+        // A11: nothing the program did was recorded, so nothing can be
+        // judged from its behaviour; the reason is the statement.
+        (
+            "no_behaviour",
+            format!("no behaviour was recorded: the program {why}"),
+        )
+    } else if matched > 0 {
         (
             "matched_indicators",
             format!("{matched} indicator(s) matched a stored dataset"),
@@ -773,7 +780,7 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     }
     if let Some(crash) = &scan.root_crash {
         report.notes.push(format!(
-            "The sample crashed before its first system call: {crash}. No calls of its program were recorded, so the process table, files and findings below are empty because there was nothing to record, not because it did nothing."
+            "The sample {crash}. No calls of its program were recorded, so the process table, files and findings below are empty because there was nothing to record, not because it did nothing."
         ));
     }
     if (choices.has(Part::Summary) || choices.has(Part::Detections)) && digest_detections.is_none()
