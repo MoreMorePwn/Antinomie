@@ -186,9 +186,25 @@ pub(crate) struct Dynamic {
     pub pie: bool,
 }
 
-/// A size as the notes say it: "30.3 MB" (decimal, one place).
+/// A size as the notes say it: "30.3 MB" (decimal, one place) from a
+/// megabyte up, the exact count below ("20208 bytes"), so a small file never
+/// reads "0.0 MB".
 fn megabytes(bytes: u64) -> String {
-    format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+    if bytes >= 1_000_000 {
+        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+    } else {
+        format!("{bytes} byte{}", if bytes == 1 { "" } else { "s" })
+    }
+}
+
+/// "need N, the file has M (G missing)": the two sizes and the real gap.
+fn shortfall(need: u64, have: u64) -> String {
+    format!(
+        "{}, the file has {} ({} missing)",
+        megabytes(need),
+        megabytes(have),
+        megabytes(need.saturating_sub(have))
+    )
 }
 
 impl Elf {
@@ -283,18 +299,16 @@ impl Elf {
         let need = self.segments_need();
         if need > self.len {
             return Some(format!(
-                "This ELF is truncated: its segments need {}, the file has {}. A partial upload or download; get a full copy.",
-                megabytes(need),
-                megabytes(self.len)
+                "This ELF is truncated: its segments need {}. A partial upload or download; get a full copy.",
+                shortfall(need, self.len)
             ));
         }
         if let Some((_, end)) = self.section_table
             && end > self.len
         {
             return Some(format!(
-                "This ELF is truncated: its section headers need {}, the file has {}. A partial upload or download; get a full copy.",
-                megabytes(end),
-                megabytes(self.len)
+                "This ELF is truncated: its section headers need {}. A partial upload or download; get a full copy.",
+                shortfall(end, self.len)
             ));
         }
         None
@@ -779,7 +793,26 @@ mod tests {
         assert_eq!(
             elf.truncation_note().as_deref(),
             Some(
-                "This ELF is truncated: its segments need 30.3 MB, the file has 2.0 MB. A partial upload or download; get a full copy."
+                "This ELF is truncated: its segments need 30.3 MB, the file has 2.0 MB (28.3 MB missing). A partial upload or download; get a full copy."
+            )
+        );
+        // A small file is said in bytes, never "0.0 MB" (A52: a 20,208-byte
+        // program whose segments reach 20,480 bytes).
+        let mut small = elf64(0x400, 0x400, 0x100, false);
+        small.truncate(0x400);
+        let mut elf = parse(&small).unwrap();
+        elf.len = 20_208;
+        elf.segments
+            .iter_mut()
+            .filter(|s| s.kind == PT_LOAD)
+            .for_each(|s| {
+                s.offset = 0;
+                s.filesz = 20_480;
+            });
+        assert_eq!(
+            elf.truncation_note().as_deref(),
+            Some(
+                "This ELF is truncated: its segments need 20480 bytes, the file has 20208 bytes (272 bytes missing). A partial upload or download; get a full copy."
             )
         );
         // A whole file says nothing.

@@ -1314,6 +1314,10 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **A truncated ELF's size in bytes (ANT-T0556, A52).** "This ELF is truncated"
+  said "segments need 0.0 MB, the file has 0.0 MB" for a 20 KB program: sizes
+  under a megabyte are now exact byte counts, and the note gives the gap
+  ("its segments need 20480 bytes, the file has 20208 bytes (272 bytes missing)").
 - **A number in a run request reads back as the same number.** A very long number
   in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
   integer) was read as a floating-point value that, written again by the service,
