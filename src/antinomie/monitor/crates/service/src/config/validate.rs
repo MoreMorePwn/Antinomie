@@ -210,7 +210,7 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     if cap != 0 && cap < super::service::MIN_TRACE_CAP_MIB {
         sink.error(
             "resources.trace_cap_mib",
-            &format!(
+            format!(
                 "must be 0 (no cap) or at least {}",
                 super::service::MIN_TRACE_CAP_MIB
             ),
