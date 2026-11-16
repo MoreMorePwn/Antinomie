@@ -314,7 +314,7 @@ impl Viewer {
                     self.offset,
                     &data[self.offset as usize..end as usize],
                 );
-                if crate::widgets::with_help(
+                if crate::widgets::hover_help(
                     ui,
                     format!("Copy this page as {}", format.label()),
                     |ui| ui.button(format!("{} Copy page", egui_phosphor::regular::COPY)),

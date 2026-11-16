@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Tests of scripts/check-control-hover.py (item 9 of the 0.9.0 UI round):
 the real tree passes; a long or computed hover text on a control fails in
-the usual spellings; a name, the `Tip` helpers, the marker, labels, test
+the usual spellings, as does a help text of more than two sentences; a name, the `Tip` helpers, the marker, labels, test
 code, comments and strings pass."""
 import pathlib
 import subprocess
@@ -51,6 +51,18 @@ class Gate(unittest.TestCase):
                 self.assertEqual(r.returncode, 1, r.stdout)
                 self.assertIn("x.rs:", r.stderr)
 
+    def test_a_long_help_text_fails(self):
+        for body in [
+            'fn f(ui: &mut Ui) { hover_help(ui, "One. Two. Three sentences.", |ui| ui.button("Go")); }',
+            'fn f(ui: &mut Ui) { ui.button("Go").help_tip("A b.\\n\\nA second paragraph."); }',
+            'fn f(ui: &mut Ui) { ui.button("Go").help_tip_or("Fine. Fine. Too many.", "why"); }',
+            'fn f(ui: &mut Ui) { ui.button("Go").help_tip("' + "word " * 70 + '"); }',
+        ]:
+            with self.subTest(body=body):
+                r = run(body)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("more than two sentences", r.stderr)
+
     def test_names_helpers_markers_and_non_controls_pass(self):
         for body in [
             'fn f(ui: &mut Ui) { ui.button(egui_phosphor::regular::COPY).on_hover_text("Copy"); }',
@@ -59,7 +71,9 @@ class Gate(unittest.TestCase):
             'fn f(ui: &mut Ui) { ui.add_enabled(ok, egui::Button::new("Run")).reason_tip(why); }',
             'fn f(ui: &mut Ui) {\n // hover: the whole command line\n ui.button(cmd).on_hover_text(full); }',
             'fn f(ui: &mut Ui) { ui.label("PID").on_hover_text("The process id the kernel gave it, at start"); }',
-            'fn f(ui: &mut Ui) { crate::widgets::with_help(ui, "A long explanation here, as long as it likes", |ui| ui.button("Go")); }',
+            'fn f(ui: &mut Ui) { crate::widgets::hover_help(ui, "One sentence. And a second one.", |ui| ui.button("Go")); }',
+            'fn f(ui: &mut Ui) { ui.button("Go").help_tip("Opens the run. It stays open."); }',
+            'fn f(ui: &mut Ui) { ui.button("Go").help_tip(format!("Opens {run}. Then two more. And more.")); }',
             '// ui.button("Go").on_hover_text("Open this run in Triage now")\nfn f() {}',
             'fn f() { let s = "ui.button(\\"Go\\").on_hover_text(\\"Open this run in Triage now\\")"; }',
             '#[cfg(test)]\nmod tests { fn f(ui: &mut Ui) { ui.button("Go").on_hover_text("Open this run in Triage now"); } }',

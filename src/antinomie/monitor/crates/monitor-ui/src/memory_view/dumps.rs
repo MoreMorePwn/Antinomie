@@ -163,14 +163,13 @@ impl MemoryView {
         } else {
             None
         };
-        // Each button takes the width its row leaves beside the help icon,
-        // measured inside the row: the list's whole width plus the icon was
-        // wider than the panel and widened it every frame up to its maximum.
+        // Each button takes the width its row leaves, measured inside the
+        // row: the list's whole width was wider than the panel and widened it
+        // every frame up to its maximum.
         let full = |ui: &egui::Ui| egui::vec2(ui.available_width(), 0.0);
-        if crate::widgets::with_help_or(
+        if crate::widgets::hover_help_or(
             ui,
-            "Write the VM's RAM to a dump for analysis. The VM pauses while it is \
-                 written (seconds to minutes, by RAM size and disk speed) and then continues.",
+            "Writes the VM's RAM to a dump. The VM pauses while it is written.",
             why.unwrap_or("Waiting for the VM"),
             |ui| {
                 ui.add_enabled(
@@ -184,10 +183,9 @@ impl MemoryView {
         {
             action = Some(MemoryAction::Dump);
         }
-        if crate::widgets::with_help_or(
+        if crate::widgets::hover_help_or(
             ui,
-            "Analyse a dump made elsewhere (raw, LiME, ELF core, crash dump, VMware or \
-                 VirtualBox memory, hibernation file). The file stays where it is.",
+            "Analyse a dump made elsewhere. The file stays where it is.",
             "Select a VM: imported dumps are kept with its recordings",
             |ui| {
                 ui.add_enabled(
@@ -248,7 +246,7 @@ impl MemoryView {
             &tags,
         );
         let filter_id = ui.id().with(("table-filter", "memory-dump-history"));
-        crate::widgets::with_help(ui, match &self.triage_run {
+        crate::widgets::hover_help(ui, match &self.triage_run {
                 Some(run) => format!(
                     "Only the dumps of the run selected in Triage ({}). A by-hand dump counts for the runs that were live while it was written. It follows that selection.",
                     crate::run_link::short(run)

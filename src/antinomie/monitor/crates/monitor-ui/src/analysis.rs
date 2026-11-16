@@ -216,7 +216,7 @@ fn identity_fields(ui: &mut egui::Ui, request: &mut ExecRequest) {
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 for (label, id) in [("Root", 0), ("Normal user", 1000), ("Nobody", 65534)] {
-                    if crate::widgets::with_help(ui, format!("UID {id}, GID {id}"), |ui| {
+                    if crate::widgets::hover_help(ui, format!("UID {id}, GID {id}"), |ui| {
                         ui.selectable_label(request.uid == id && request.gid == id, label)
                     })
                     .clicked()
@@ -276,15 +276,6 @@ fn run_in(ui: &mut egui::Ui, choice: &mut RunIn, uid: u32) {
             })
             .response
             .labelled_by(label.id);
-        crate::widgets::help(
-            ui,
-            crate::widgets::list_help(
-                "Run in",
-                RunIn::ALL
-                    .iter()
-                    .map(|option| (option.label(), option.description())),
-            ),
-        );
     });
     let mut extra = String::new();
     if choice.guest_desktop() {
@@ -321,7 +312,7 @@ pub(crate) fn selection(
     );
     let master = tree_lines::row(ui, &root, char_width, |ui| {
         tree_lines::caret(ui, &mut state);
-        crate::widgets::with_help(ui, "Analyze the initial executable only", |ui| {
+        crate::widgets::hover_help(ui, "Analyze the initial executable only", |ui| {
             ui.checkbox(&mut selection.enabled, "Static analysis")
         })
     });
@@ -458,7 +449,7 @@ fn check(
 ) {
     if let Some(reason) = unavailable {
         selection.checks.retain(|check| *check != kind);
-        crate::widgets::with_help_or(ui, "", reason, |ui| {
+        crate::widgets::hover_help_or(ui, "", reason, |ui| {
             ui.add_enabled(false, egui::Checkbox::new(&mut false, kind.label()))
         });
         return;

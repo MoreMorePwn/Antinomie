@@ -188,9 +188,7 @@ impl TriageView {
         );
         let wide = ui.available_width() >= DETAILS_FROM;
         ui.horizontal(|ui| {
-            crate::widgets::with_help(ui, "The selected finding, as in the Details panel", |ui| {
-                ui.checkbox(&mut self.graph_window.details, "Details beside the graph")
-            });
+            ui.checkbox(&mut self.graph_window.details, "Details beside the graph");
             super::legend::button(ui);
             if unplaced > 0 {
                 ui.colored_label(

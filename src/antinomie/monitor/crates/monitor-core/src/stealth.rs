@@ -2172,19 +2172,14 @@ impl TypicalSize {
 
     /// The VM dialog's hint on its disk.
     pub fn disk_help(&self) -> String {
-        let mut help = format!(
+        format!(
             "{}{}",
             self.have(self.disk),
             self.flagged(
                 Some(format!("{} GiB", self.min_disk_gib)),
                 self.max_disk_gib.map(|gib| format!("{gib} GiB"))
             )
-        );
-        if !self.disk_note.is_empty() {
-            help.push_str("; ");
-            help.push_str(self.disk_note);
-        }
-        help
+        )
     }
 }
 

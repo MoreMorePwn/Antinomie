@@ -57,14 +57,6 @@ fn header(ui: &mut egui::Ui, mode: &mut Mode, built: &Built, pop_out: bool) -> A
             asked.all = Some(All::Collapse);
         }
     }
-    // One help icon for the row.
-    crate::widgets::help(
-        ui,
-        "- **Compact**: the best 15 processes, files and endpoints, with what joins them.\n\
-         - **Full**: every process as a tree you open: the arrow on a box opens or closes what is under it. It starts with the paths to the findings open.\n\
-         - **Expand all** (Full): open every node, up to about 800 boxes; the rest stays closed and is counted.\n\
-         - **Collapse all** (Full): back to how Full starts: the root, the paths to the findings and what is under them.",
-    );
     if let Some(rendered) = built.rendered(*mode) {
         crate::mermaid::button(ui, || chart::mermaid(&rendered.graph, &rendered.shown));
     }

@@ -110,7 +110,7 @@ impl Open {
         }
         ui.horizontal(|ui| {
             let busy = self.hashing.is_some();
-            let button = crate::widgets::with_help_or(
+            let button = crate::widgets::hover_help_or(
                 ui,
                 "SHA-256, MD5 and SHA-1 of the file as reconstructed at the chosen call",
                 blocker.as_deref().unwrap_or_default(),
@@ -132,7 +132,7 @@ impl Open {
             }
             let last = file.hashes.iter().rev().find(|note| note.sha256.is_some());
             if let Some(note) = last {
-                if crate::widgets::with_help(ui, "Show the file as it stood when the guest took its last hash", |ui| ui
+                if crate::widgets::hover_help(ui, "Show the file as it stood when the guest took its last hash", |ui| ui
                     .button("Go to the last hash"))
                     .clicked()
                 {

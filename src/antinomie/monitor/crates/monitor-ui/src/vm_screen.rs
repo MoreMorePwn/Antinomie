@@ -248,13 +248,6 @@ impl VmScreenView {
             } else {
                 ui.colored_label(theme::muted(), "Click the screen to type into the VM.");
             }
-            // After the status, which must stay whole.
-            crate::widgets::help(
-                ui,
-                "- **Ctrl+Alt+Del**: send `Ctrl+Alt+Delete` to the guest.\n\
-                 - **Screenshot**: save the screen as a PNG in the VM's recording folder.\n\
-                 - **Type clipboard**: type the host clipboard into the VM, as key presses.",
-            );
             if let Some((w, h)) = size {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.colored_label(theme::muted(), format!("{w} x {h}"));

@@ -107,14 +107,7 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
             for (column, title) in ["PID", "Parent", "State"].into_iter().enumerate() {
                 header.col(|ui| table_sort::header(ui, TABLE, column, title));
             }
-            // The last column's buttons are explained once, in its header.
-            header.col(|ui| {
-                crate::widgets::help(
-                    ui,
-                    "- **Show**: show this process's registers, memory and breakpoints.\n\
-                     - **Let go**: stop debugging this process; it then runs free.",
-                );
-            });
+            header.col(|_| {});
         })
         .body(|body| {
             body.rows(row_height, order.len(), |mut row| {
@@ -184,7 +177,7 @@ fn policy(ui: &mut egui::Ui, view: &DebugView, enabled: bool, actions: &mut Vec<
     let mut next: Option<ForkPolicy> = None;
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("At a fork").color(theme::muted()));
-        crate::widgets::with_help_or(
+        crate::widgets::hover_help_or(
             ui,
             "",
             if view.caps.follow {

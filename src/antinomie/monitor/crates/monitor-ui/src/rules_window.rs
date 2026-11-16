@@ -353,10 +353,8 @@ impl Model {
                             probe.identity()
                         ),
                     );
-                    if crate::widgets::with_help(
-                        ui,
-                        "Tools > Analysis tools installs pySigma and its SQLite backend into \
-                         Antinomie's own environment; scans then use it automatically.",
+                    if crate::widgets::hover_help(
+                        ui, "Installs pySigma in Antinomie's own environment (Tools > Analysis tools); scans then use it",
                         |ui| ui.button("Install the Sigma tool…"),
                     )
                     .clicked()

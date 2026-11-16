@@ -275,7 +275,7 @@ fn header(
         let run = state.linked_run().map(str::to_owned);
         let mut open_run = None;
         if let Some(run_id) = run {
-            if crate::widgets::with_help(ui, format!("Open run {run_id} in Run History"), |ui| {
+            if crate::widgets::hover_help(ui, format!("Open run {run_id} in Run History"), |ui| {
                 ui.button(format!("{} Run", egui_phosphor::regular::PLAY_CIRCLE))
             })
             .clicked()
@@ -284,17 +284,12 @@ fn header(
             }
         }
         if let Some(offset) = selected_offset(report, state) {
-            if crate::widgets::with_help(
-                ui,
-                "Open the file content at the selected row's offset",
-                |ui| {
-                    ui.button(format!(
-                        "{} Show 0x{offset:x} in Content",
-                        egui_phosphor::regular::FILE_MAGNIFYING_GLASS
-                    ))
-                },
-            )
-            .clicked()
+            if ui
+                .button(format!(
+                    "{} Show 0x{offset:x} in Content",
+                    egui_phosphor::regular::FILE_MAGNIFYING_GLASS
+                ))
+                .clicked()
             {
                 state.content.go_to(offset);
                 state.tab = Tab::Content;

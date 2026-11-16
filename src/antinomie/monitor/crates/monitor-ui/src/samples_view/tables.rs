@@ -71,7 +71,7 @@ impl SamplesView {
                 &families,
             );
             let ticked = &mut self.filters.tags;
-            crate::widgets::with_help(ui, "Samples with any of the ticked tags", |ui| {
+            crate::widgets::hover_help(ui, "Samples with any of the ticked tags", |ui| {
                 egui::ComboBox::from_id_salt("samples_tags")
                     .selected_text(match ticked.len() {
                         0 => "Tags: all".to_string(),
@@ -600,7 +600,7 @@ impl SamplesView {
                             }
                             let can = cx.running && !pending;
                             let destination = guest_path(info, sample.pushes.len());
-                            if crate::widgets::with_help_or(ui, format!(
+                            if crate::widgets::hover_help_or(ui, format!(
                                     "Send to {destination}, then open Run program with it to choose how it runs"
                                 ), if runs_here {
                                     "Start the VM first"
@@ -633,7 +633,7 @@ impl SamplesView {
                                     }),
                                 });
                             }
-                            if crate::widgets::with_help(ui, format!(
+                            if crate::widgets::hover_help(ui, format!(
                                     "Send to {destination} without running it (executable)"
                                 ), |ui| ui
                                 .add_enabled(can, egui::Button::new("Send to VM")).on_disabled_hover_text("Start the VM first"))

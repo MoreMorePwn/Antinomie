@@ -166,7 +166,7 @@ pub(super) fn show(
     match preview {
         Some(Ok(page)) if preview_matches(page, report, state.offset, data_len) => {
             let text = render(state.format, page.offset, &page.data);
-            if crate::widgets::with_help(
+            if crate::widgets::hover_help(
                 ui,
                 format!(
                     "Copy these {} as {}",

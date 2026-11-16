@@ -376,7 +376,7 @@ fn elide(value: &str) -> String {
 pub(crate) fn copy_items(ui: &mut egui::Ui, items: &[(String, String)]) {
     ui.label(RichText::new("Copy").color(theme::muted()));
     for (label, value) in items {
-        if crate::widgets::with_help(ui, format!("Copy {}", label.to_lowercase()), |ui| {
+        if crate::widgets::hover_help(ui, format!("Copy {}", label.to_lowercase()), |ui| {
             ui.add(egui::Button::new(label.as_str()).shortcut_text(elide(value)))
         })
         .clicked()
@@ -724,7 +724,7 @@ impl DataWindow {
                     .iter()
                     .map(|format| (format.label(), format.hint())),
             );
-            crate::widgets::with_help(ui, formats, |ui| {
+            crate::widgets::hover_help(ui, formats, |ui| {
                 egui::ComboBox::from_id_salt(("data-format", &self.key))
                     .selected_text(self.format.label())
                     .show_ui(ui, |ui| {
@@ -736,7 +736,7 @@ impl DataWindow {
                     .labelled_by(label.id)
             });
             let copying = copy_format(self.format, &self.segments);
-            if crate::widgets::with_help(
+            if crate::widgets::hover_help(
                 ui,
                 if copying == self.format {
                     format!("Copy as {}", self.format.label())
@@ -761,7 +761,7 @@ impl DataWindow {
             ui.menu_button("Copy as", |ui| {
                 for format in DataFormat::ALL {
                     let exact = copy_is_exact(format, &self.segments);
-                    if crate::widgets::with_help_or(
+                    if crate::widgets::hover_help_or(
                         ui,
                         format.hint(),
                         "These bytes are not text in this form: copying them would \

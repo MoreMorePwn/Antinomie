@@ -249,7 +249,7 @@ impl ScanPane {
                             .desired_width(crate::theme::plain_edit_width(280.0))
                             .id(egui::Id::new((salt, "content-pattern"))),
                     );
-                    crate::widgets::with_help(ui, "Matches octets, not characters: \\xNN names one octet and . is any octet but a newline", |ui| ui.checkbox(&mut self.case_insensitive, "Ignore case"));
+                    crate::widgets::hover_help(ui, "Matches octets, not characters: \\xNN names one octet and . is any octet but a newline", |ui| ui.checkbox(&mut self.case_insensitive, "Ignore case"));
                 }
             });
             ui.horizontal_wrapped(|ui| {

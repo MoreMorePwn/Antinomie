@@ -369,7 +369,7 @@ pub(super) fn section(ui: &mut egui::Ui, state: &mut State, data: &Data) -> Opti
             (graph.hidden_system, graph.max_parents, graph.max_children)
         };
         ui.horizontal_wrapped(|ui| {
-            crate::widgets::with_help(ui, "Programs of the base image (a system path, a known hash, never written by a run) are left out; what they did is shown under the program that ran them", |ui| ui.checkbox(&mut state.hide_system, "Hide system binaries"));
+            crate::widgets::hover_help(ui, "Programs of the base image are left out; what they did shows under the program that ran them", |ui| ui.checkbox(&mut state.hide_system, "Hide system binaries"));
             if state.hide_system && hidden > 0 {
                 ui.label(RichText::new(format!("{hidden} hidden")).small().color(theme::muted()));
             }
@@ -561,12 +561,7 @@ fn details(ui: &mut egui::Ui, state: &mut State, data: &Data, out: &mut Option<O
                 }
             }
             NodeKind::Captured | NodeKind::Lost if !node.path.is_empty() => {
-                let ask = crate::widgets::with_help(
-                    ui,
-                    "Read the file from a run's saved disk and add it",
-                    |ui| ui.button("Add to Samples…"),
-                )
-                .clicked();
+                let ask = ui.button("Add to Samples…").clicked();
                 if ask {
                     *out = Some(promote_out(&cached.graph, node));
                 }

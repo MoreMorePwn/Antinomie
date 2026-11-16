@@ -172,29 +172,14 @@ impl MonitorApp {
             },
             |ui| {
                 add = ui.button("Add file…").clicked();
-                download = crate::widgets::with_help(
-                    ui,
-                    "Search MalwareBazaar and MalShare; downloads land here",
-                    |ui| ui.button("Download…"),
-                )
-                .clicked();
-                custody = crate::widgets::with_help(
-                    ui,
-                    "What happened to every sample, with the hash chain checked",
-                    |ui| ui.button("Custody log"),
-                )
-                .clicked();
-                verify = crate::widgets::with_help(
-                    ui,
-                    "Read every archive back and compare its SHA-256",
-                    |ui| {
-                        ui.add_enabled(
-                            self.samples_page.verifying.is_none(),
-                            egui::Button::new("Verify all"),
-                        )
-                    },
-                )
-                .clicked();
+                download = ui.button("Download…").clicked();
+                custody = ui.button("Custody log").clicked();
+                verify = ui
+                    .add_enabled(
+                        self.samples_page.verifying.is_none(),
+                        egui::Button::new("Verify all"),
+                    )
+                    .clicked();
                 refresh = ui
                     .button(egui_phosphor::regular::ARROW_CLOCKWISE)
                     .name_tip("Refresh")
@@ -238,7 +223,7 @@ impl MonitorApp {
             );
             crate::widgets::clear_button(ui, &edit, &mut self.samples_page.query);
             let count = self.samples_page.tag_filter.len();
-            if crate::widgets::with_help(ui, "Samples that have every selected tag", |ui| {
+            if crate::widgets::hover_help(ui, "Samples that have every selected tag", |ui| {
                 ui.selectable_label(
                     self.samples_page.tags_open,
                     if count == 0 {
@@ -258,7 +243,7 @@ impl MonitorApp {
             if count > 0 && widgets::link(ui, "Clear").clicked() {
                 self.samples_page.tag_filter.clear();
             }
-            if crate::widgets::with_help(ui, "Samples with no known parent", |ui| {
+            if crate::widgets::hover_help(ui, "Samples with no known parent", |ui| {
                 widgets::toggle_chip(ui, "Roots only", self.samples_page.roots_only, None)
             })
             .clicked()

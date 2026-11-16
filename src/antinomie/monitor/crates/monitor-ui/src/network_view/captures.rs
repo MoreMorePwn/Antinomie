@@ -28,7 +28,7 @@ impl NetworkView {
             });
         });
         if let Some(active) = cx.active {
-            let button = crate::widgets::with_help(
+            let button = crate::widgets::hover_help(
                 ui,
                 format!("Stop writing {}", active.file.display()),
                 |ui| {
@@ -50,7 +50,7 @@ impl NetworkView {
             } else {
                 None
             };
-            let button = crate::widgets::with_help_or(
+            let button = crate::widgets::hover_help_or(
                 ui,
                 "Record every packet of the VM's network interface, outside the guest",
                 why.unwrap_or("Waiting for the VM"),

@@ -71,14 +71,13 @@ impl DiskView {
                 .wrap(),
             );
             ui.add_space(10.0);
-            if crate::widgets::with_help(ui, "Shut down the running VM", |ui| {
-                ui.add_enabled(
+            if ui
+                .add_enabled(
                     cx.can_stop_vm,
                     egui::Button::new(format!("{} Stop VM", egui_phosphor::regular::STOP)),
                 )
                 .on_disabled_hover_text("No VM is running")
-            })
-            .clicked()
+                .clicked()
             {
                 self.action = Some(DiskAction::StopVm);
             }
@@ -273,7 +272,7 @@ impl DiskView {
             None
         };
         ui.horizontal(|ui| {
-            if crate::widgets::with_help_or(
+            if crate::widgets::hover_help_or(
                 ui,
                 "Copy the allocated data into a temporary image and browse it",
                 why.unwrap_or(""),
@@ -336,7 +335,7 @@ impl DiskView {
         });
         let keep_blocked = self.keep_blocked(cx);
         ui.horizontal_wrapped(|ui| {
-            if crate::widgets::with_help_or(
+            if crate::widgets::hover_help_or(
                 ui,
                 "Promote this image to a saved dump: a rename, no second conversion",
                 keep_blocked.clone().unwrap_or_default(),

@@ -793,11 +793,6 @@ fn zoom_bar(
             .max_rect(bar)
             .layout(egui::Layout::right_to_left(egui::Align::Center)),
     );
-    // Right to left: the help icon ends the bar.
-    crate::widgets::help(
-        &mut child,
-        "Zoom\n\n- **1:1**: actual size, centred on the sample.\n- **Fit**: the whole graph.\n- **+** and **−**: zoom in and out.",
-    );
     if child.small_button("1:1").clicked() {
         let centre = layout
             .at

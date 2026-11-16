@@ -537,7 +537,7 @@ impl MonitorApp {
             },
             |ui| {
                 self.delete_run_item(ui, entry, go);
-                if crate::widgets::with_help_or(ui, "", "The run's folder was deleted", |ui| {
+                if crate::widgets::hover_help_or(ui, "", "The run's folder was deleted", |ui| {
                     ui.add_enabled(entry.folder, egui::Button::new("Open Triage"))
                 })
                 .clicked()
@@ -782,7 +782,7 @@ impl MonitorApp {
     fn delete_run_item(&self, ui: &mut egui::Ui, entry: &RunEntry, go: &mut Option<Go>) {
         let live = self.sample_run_live(&entry.run);
         let enabled = entry.folder && !live;
-        let response = crate::widgets::with_help_or(
+        let response = crate::widgets::hover_help_or(
             ui,
             "",
             if live {

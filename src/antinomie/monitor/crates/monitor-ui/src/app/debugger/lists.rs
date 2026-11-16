@@ -157,7 +157,7 @@ pub(super) fn breakpoints(
         );
         let entered =
             response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-        let add = crate::widgets::with_help_or(
+        let add = crate::widgets::hover_help_or(
             ui,
             "",
             match offered {
@@ -184,11 +184,8 @@ pub(super) fn breakpoints(
     ui.horizontal(|ui| {
         ui.weak("Add as");
         ui.add_enabled_ui(editable, |ui| {
-            crate::widgets::with_help(
-                ui,
-                "Software patches the code. Hardware and watchpoints use the CPU's debug \
-                     registers (a few slots); a watch covers 8 bytes from the address, and a \
-                     read watch also stops on writes, as the registers have no read-only mode.",
+            crate::widgets::hover_help(
+                ui, "Software patches the code; hardware and watchpoints use a few CPU debug registers. A watch covers 8 bytes, and a read watch also stops on writes.",
                 |ui| {
                     egui::ComboBox::from_id_salt("debugger-breakpoint-kind")
                         .selected_text(KINDS[panel.breakpoint_kind].0)

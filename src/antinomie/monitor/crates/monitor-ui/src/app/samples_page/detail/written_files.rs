@@ -212,21 +212,15 @@ pub(in crate::app::samples_page) fn section(
                         });
                         row.col(|ui| {
                             let buttons = |ui: &mut egui::Ui| {
-                                if crate::widgets::with_help(ui, "Show this file's history in the run's Triage", |ui| ui
-                                    .add(egui::Button::new("Open in Per-file history").small()))
+                                if ui
+                                    .add(egui::Button::new("Open in Per-file history").small())
                                     .clicked()
                                 {
                                     act = Some(Act::History(item.number, file.path.clone()));
                                     ui.close();
                                 }
                                 let deleted = file.state == "deleted";
-                                if crate::widgets::with_help(ui, if deleted {
-                                        "Open the file's reconstruction in Triage: its bytes are rebuilt \
-                                         from the recorded writes as of the last moment before the \
-                                         delete, checked against the guest's hash taken then, and saved"
-                                    } else {
-                                        "Open the file's reconstruction in Triage, where its bytes are saved"
-                                    }, |ui| ui
+                                if crate::widgets::hover_help(ui, if deleted { "Rebuilt from the recorded writes as of just before the delete, checked against the guest's hash taken then" } else { "Opens the reconstruction in Triage, where its bytes are saved" }, |ui| ui
                                     .add(
                                         egui::Button::new(if deleted {
                                             "Export bytes (as before deletion)"
@@ -240,7 +234,7 @@ pub(in crate::app::samples_page) fn section(
                                     act = Some(Act::Export(item.number, file.path.clone()));
                                     ui.close();
                                 }
-                                if crate::widgets::with_help_or(ui, "", "The guest took no hash of this file", |ui| ui
+                                if crate::widgets::hover_help_or(ui, "", "The guest took no hash of this file", |ui| ui
                                     .add_enabled(
                                         !file.sha256.is_empty(),
                                         egui::Button::new("Copy SHA-256").small(),

@@ -138,7 +138,7 @@ impl DiskView {
                         }
                         for checkpoint in &checkpoints {
                             let source = DiskSourceSpec::Checkpoint(checkpoint.id.clone());
-                            if crate::widgets::with_help(
+                            if crate::widgets::hover_help(
                                 ui,
                                 "The disk as it was when this checkpoint was saved. A \
                                      crash-consistent checkpoint usually reads as not cleanly \
@@ -155,7 +155,7 @@ impl DiskView {
                                 chosen = Some(source);
                             }
                         }
-                        if crate::widgets::with_help(
+                        if crate::widgets::hover_help(
                             ui,
                             "The image this VM's disk was created from",
                             |ui| {
@@ -217,7 +217,7 @@ impl DiskView {
             ui.horizontal(|ui| {
                 let supported = partition.fs == PartitionFs::Ext4;
                 let selected = measure.partition == Some(partition.index);
-                if crate::widgets::with_help_or(
+                if crate::widgets::hover_help_or(
                     ui,
                     "",
                     if supported {
@@ -245,12 +245,9 @@ impl DiskView {
                     fs_text(partition),
                 );
                 if !supported
-                    && crate::widgets::with_help(
-                        ui,
-                        "Write this partition's bytes to a file",
-                        |ui| ui.add_enabled(!busy, egui::Button::new("Save partition to host…")),
-                    )
-                    .clicked()
+                    && ui
+                        .add_enabled(!busy, egui::Button::new("Save partition to host…"))
+                        .clicked()
                 {
                     save = Some(partition.index);
                 }

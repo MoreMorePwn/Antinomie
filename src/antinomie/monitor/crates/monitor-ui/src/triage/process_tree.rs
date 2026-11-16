@@ -22,7 +22,7 @@ pub fn process_tree_nodes(
             let stored: Option<bool> = ui.ctx().data(|data| data.get_temp(thread_id));
             let expanded = stored.unwrap_or(thread_count < THREAD_FOLD);
             let label = format!("Show threads ({thread_count})");
-            if crate::widgets::with_help(ui, "Thread tasks of a process, one per recorded thread. Off, they fold into +N threads on their process.", |ui| crate::widgets::toggle_chip(ui, &label, expanded, None))
+            if crate::widgets::hover_help(ui, "Thread tasks of a process, one per recorded thread. Off, they fold into +N threads on their process.", |ui| crate::widgets::toggle_chip(ui, &label, expanded, None))
                 .clicked()
             {
                 ui.ctx().data_mut(|data| data.insert_temp(thread_id, !expanded));

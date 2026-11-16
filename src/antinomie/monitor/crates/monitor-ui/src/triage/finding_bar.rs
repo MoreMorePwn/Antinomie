@@ -37,7 +37,10 @@ impl TriageView {
             }
         }
         let info = counts.map(|counts| counts[Tier::Info.index()]);
-        if toggle_chip(ui, "Show INFO", view.show_info, info).clicked() {
+        if toggle_chip(ui, "Show INFO", view.show_info, info)
+            .help_tip("INFO matches are always counted; their rows are built only when this is on")
+            .clicked()
+        {
             view.show_info = !view.show_info;
             changed = true;
         }
@@ -48,9 +51,7 @@ impl TriageView {
                 .map(|tier| (tier.tag().to_uppercase(), tier.meaning())),
         );
         tiers.push_str(&format!(
-            "\n\nClick a tier to show only it; click again to add or remove tiers.\n\n\
-             **Show INFO**: INFO matches are always counted; their rows are built only when \
-             this is on. The calls stay in the recording either way.\n\n{}",
+            "\n\nClick a tier to show only it; click again to add or remove tiers.\n\n{}",
             super::rules::CONTEXT_NOTE
         ));
         crate::widgets::help(ui, tiers);
@@ -83,17 +84,15 @@ impl TriageView {
         } else {
             "Show hidden"
         };
-        if toggle_chip(ui, hidden_label, view.show_hidden, Some(hidden)).clicked() {
+        if toggle_chip(ui, hidden_label, view.show_hidden, Some(hidden))
+            .help_tip(format!(
+                "Rows hidden because the process is outside the run's tree. {suppressed} frames of VM housekeeping were skipped by the built-in suppression list (version {SUPPRESSION_VERSION}); they are counted, not listed."
+            ))
+            .clicked()
+        {
             view.show_hidden = !view.show_hidden;
             changed = true;
         }
-        crate::widgets::help(
-            ui,
-            format!(
-                "Show hidden\n\nRows hidden because the process is outside the run's tree.\n\n{suppressed} frames of VM housekeeping (time sync, mirrors, link-local discovery) were skipped by the built-in suppression list, version {}; they are counted, not listed.\n\nCapped rows are counted in a \"+N more\" row.",
-                SUPPRESSION_VERSION
-            ),
-        );
         if changed {
             self.scan_request.offsets[0] = 0;
             self.request_query_refresh();

@@ -68,7 +68,7 @@ impl CoreView {
                 }
             });
         });
-        if crate::widgets::with_help_or(
+        if crate::widgets::hover_help_or(
             ui,
             "Pause a selected process, capture its resident memory and thread context, then resume",
             unavailable.unwrap_or_default(),
@@ -95,7 +95,7 @@ impl CoreView {
         if let Some(cancel) = self.cancel_buttons(ui, can_cancel, boot_id) {
             action = Some(cancel);
         }
-        if crate::widgets::with_help_or(ui, "Reference a Linux x86-64, aarch64 or 32-bit ARM process core made elsewhere. The file stays where it is.", "Select a VM with a recording folder; wait for any current operation to finish.", |ui| ui
+        if crate::widgets::hover_help_or(ui, "Reference a Linux x86-64, aarch64 or 32-bit ARM process core made elsewhere. The file stays where it is.", "Select a VM with a recording folder; wait for any current operation to finish.", |ui| ui
             .add_enabled(
                 !self.roots.is_empty() && self.job.is_none(),
                 egui::Button::new(format!(
@@ -149,7 +149,7 @@ impl CoreView {
             &tags,
         );
         let filter_id = ui.id().with(("table-filter", "core-history"));
-        crate::widgets::with_help(
+        crate::widgets::hover_help(
             ui,
             match &self.triage_run {
                 Some(run) => format!(

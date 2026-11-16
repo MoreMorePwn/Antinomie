@@ -2,6 +2,7 @@
 //! Drawing, searching and copying the Raw view.
 use super::raw::{Mark, RawLine};
 use super::*;
+use crate::widgets::Tip as _;
 
 /// Matches kept for one search, so a very common word stays cheap.
 const MATCH_LIMIT: usize = 5000;
@@ -102,13 +103,8 @@ impl Terminal {
     /// The Formatted / Raw switch and, in Raw, the search field.
     pub(crate) fn view_controls(&mut self, ui: &mut egui::Ui) {
         let mut view = self.view;
-        let mut hints = Vec::new();
         for (value, label, hint) in [
-            (
-                View::Formatted,
-                "Formatted",
-                "Draw the output as a terminal does",
-            ),
+            (View::Formatted, "Formatted", ""),
             (
                 View::Raw,
                 "Raw",
@@ -116,12 +112,14 @@ impl Terminal {
                  Highlighted codes can hide output.",
             ),
         ] {
-            if ui.selectable_label(view == value, label).clicked() {
+            if ui
+                .selectable_label(view == value, label)
+                .help_tip(hint)
+                .clicked()
+            {
                 view = value;
             }
-            hints.push((label, hint));
         }
-        crate::widgets::help(ui, crate::widgets::list_help("", hints));
         self.set_view(view);
         if self.view != View::Raw {
             return;

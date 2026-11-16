@@ -208,7 +208,7 @@ pub(super) fn check_online(
     row: &SampleIoc,
     go: &mut Option<Go>,
 ) {
-    let response = crate::widgets::with_help_or(ui, "Opens the newest run with this indicator in Triage; turn on online lookups there", "No abuse.ch key is stored. Add one in Tools > API keys to ask abuse.ch about an indicator.", |ui| ui
+    let response = crate::widgets::hover_help_or(ui, "Opens the newest run with this indicator in Triage; turn on online lookups there", "No abuse.ch key is stored. Add one in Tools > API keys to ask abuse.ch about an indicator.", |ui| ui
         .add_enabled(have_key, egui::Button::new("Check online")));
     if response.clicked() {
         if let Some(seen) = row.sightings.last() {
@@ -340,7 +340,7 @@ impl MonitorApp {
                     "Show hxxp and [.] instead of live values; Copy follows it",
                 ),
             ] {
-                if crate::widgets::with_help(ui, tip, |ui| widgets::toggle_chip(ui, label, *flag, None))
+                if crate::widgets::hover_help(ui, tip, |ui| widgets::toggle_chip(ui, label, *flag, None))
                     .clicked()
                 {
                     *flag = !*flag;
@@ -366,7 +366,7 @@ impl MonitorApp {
             match selected {
                 Some(row) => check_online(ui, key, row, go),
                 None => {
-                    crate::widgets::with_help_or(ui, "", if key {
+                    crate::widgets::hover_help_or(ui, "", if key {
                             "Select an indicator first"
                         } else {
                             "No abuse.ch key is stored. Add one in Tools > API keys to ask abuse.ch about an indicator."
@@ -573,7 +573,7 @@ impl MonitorApp {
                     .runs
                     .iter()
                     .any(|entry| entry.number == seen.run && entry.folder);
-                if crate::widgets::with_help_or(ui, "", "The run's folder was deleted", |ui| {
+                if crate::widgets::hover_help_or(ui, "", "The run's folder was deleted", |ui| {
                     ui.add_enabled(has_folder, egui::Button::new(parts::run_name(seen.run)))
                 })
                 .clicked()

@@ -137,7 +137,7 @@ impl TriageView {
             {
                 crate::tools_page::geoip_attribution(ui);
             }
-            if crate::widgets::with_help(
+            if crate::widgets::hover_help(
                 ui,
                 "Indicators with dataset matches, their process and evidence",
                 |ui| ui.small_button("Open IOC"),

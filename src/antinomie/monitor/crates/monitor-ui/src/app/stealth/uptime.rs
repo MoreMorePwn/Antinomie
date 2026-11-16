@@ -32,11 +32,7 @@ pub(super) fn recommended(profile: &StealthProfile) -> String {
 fn explanation(profile: &StealthProfile) -> String {
     format!(
         "How long the guest says it has been up when the VM starts, the same at every \
-         start: type it (3 d 4 h, 90 min; up to {}) or press the dice for a random uptime \
-         in the recommended range.\n\nThe guest boots this long ago and reaches the present \
-         when the first program starts: a desktop or laptop as if it slept for part of it, a \
-         server, cloud machine or IoT device as if it never stopped (see Clock model).\n\n\
-         Off: a fresh boot (minutes of uptime).\n\n{}.",
+         start (3 d 4 h, 90 min; up to {}). Off: a fresh boot.\n\n{}.",
         boot_age_text(BOOT_AGE_MAX_S),
         recommended(profile)
     )
@@ -51,62 +47,62 @@ pub(super) fn uptime(
 ) {
     let kind = BootAge::of(profile);
     // The arm64 guest ignores a boot age for now: the field is shown
-    // disabled with the reason on its help icon; an uptime the profile
+    // disabled with the reason on its hover; an uptime the profile
     // already holds stays stored (an x86-64 VM uses it).
     let arm64 = arch == GuestArch::AARCH64;
     // The text being typed, kept with the age it was last read as: an age
     // set elsewhere (a preset, the dice) replaces it.
     let id = ui.make_persistent_id("stealth_uptime_text");
     let mut problem = None;
-    ui.add_enabled_ui(!arm64, |ui| ui.horizontal(|ui| {
-        let mut aged = profile.boot_age_s > 0;
-        if ui.checkbox(&mut aged, "Uptime").changed() {
-            profile.boot_age_s = if aged { kind.draw() } else { 0 };
-        }
-        if profile.boot_age_s > 0 {
-            let kept: Option<(String, u64)> = ui.data(|data| data.get_temp(id));
-            let mut text = match kept {
-                Some((text, age)) if age == profile.boot_age_s => text,
-                _ => boot_age_text(profile.boot_age_s),
-            };
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut text)
-                    .desired_width(crate::theme::plain_edit_width(110.0))
-                    .hint_text(crate::theme::placeholder(ui, "3 d 4 h")),
-            );
-            match parse_boot_age(&text) {
-                Ok(age) => {
-                    if response.changed() {
-                        profile.boot_age_s = age;
-                    }
-                    if response.lost_focus() {
-                        text = boot_age_text(profile.boot_age_s);
-                    }
-                }
-                Err(error) => problem = Some(error),
-            }
-            ui.data_mut(|data| data.insert_temp(id, (text, profile.boot_age_s)));
-            // Explained by the help icon beside it.
+    ui.add_enabled_ui(!arm64, |ui| {
+        ui.horizontal(|ui| {
+            let mut aged = profile.boot_age_s > 0;
+            let reason = format!("Not applied on arm64: {ARM64_UPTIME}. A later guest fixes it.");
             if ui
-                .button(egui_phosphor::regular::DICE_FIVE)
-                .name_tip("Random uptime")
-                .clicked()
+                .checkbox(&mut aged, "Uptime")
+                .help_tip_or(
+                    explanation(profile),
+                    if arm64 { reason.as_str() } else { "" },
+                )
+                .changed()
             {
-                profile.boot_age_s = kind.draw();
+                profile.boot_age_s = if aged { kind.draw() } else { 0 };
             }
-        } else {
-            ui.label(RichText::new("a fresh boot").color(theme::muted()));
-        }
-        let explained = explanation(profile);
-        help(
-            ui,
-            if arm64 {
-                format!("A fresh boot is shown on arm64\n\nThe uptime is not applied: {ARM64_UPTIME}. A later guest fixes it. An uptime this profile already holds stays stored for an x86-64 VM.\n\n{explained}")
+            if profile.boot_age_s > 0 {
+                let kept: Option<(String, u64)> = ui.data(|data| data.get_temp(id));
+                let mut text = match kept {
+                    Some((text, age)) if age == profile.boot_age_s => text,
+                    _ => boot_age_text(profile.boot_age_s),
+                };
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .desired_width(crate::theme::plain_edit_width(110.0))
+                        .hint_text(crate::theme::placeholder(ui, "3 d 4 h")),
+                );
+                match parse_boot_age(&text) {
+                    Ok(age) => {
+                        if response.changed() {
+                            profile.boot_age_s = age;
+                        }
+                        if response.lost_focus() {
+                            text = boot_age_text(profile.boot_age_s);
+                        }
+                    }
+                    Err(error) => problem = Some(error),
+                }
+                ui.data_mut(|data| data.insert_temp(id, (text, profile.boot_age_s)));
+                if ui
+                    .button(egui_phosphor::regular::DICE_FIVE)
+                    .name_tip("Random uptime")
+                    .clicked()
+                {
+                    profile.boot_age_s = kind.draw();
+                }
             } else {
-                explained
-            },
-        );
-    }));
+                ui.label(RichText::new("a fresh boot").color(theme::muted()));
+            }
+        })
+    });
     let (low, high) = kind.range();
     if arm64 {
         return;
@@ -167,15 +163,10 @@ fn clock_model(ui: &mut egui::Ui, profile: &mut StealthProfile, debian: bool) {
                     let label = clock_model_label(option, profile, debian);
                     ui.selectable_value(&mut profile.clock_model, option, label);
                 }
-            });
-        help(
-            ui,
-            "Always running: the machine never stopped, so both of the guest's clocks \
-             (CLOCK_MONOTONIC and CLOCK_BOOTTIME) step by the boot age.\n\nSuspend: the age \
-             reads as time asleep, so only CLOCK_BOOTTIME steps.\n\nAuto: a server, cloud \
-             machine or IoT device is always running and a desktop or laptop suspends, except \
-             on a Debian base, where stepping CLOCK_MONOTONIC makes systemd's watchdogs kill \
-             journald, udevd and logind at the first launch.",
-        );
+            })
+            .response
+            .help_tip(
+                "Always running steps both guest clocks by the boot age; Suspend steps only CLOCK_BOOTTIME. Auto picks by device kind, and on a Debian base never steps CLOCK_MONOTONIC, which would make systemd's watchdogs kill journald.",
+            );
     });
 }

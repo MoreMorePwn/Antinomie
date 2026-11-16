@@ -133,12 +133,7 @@ impl TabViewer for Viewer<'_> {
         }
     }
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Panel, _: egui_dock::NodePath) {
-        if !self.surface.is_main()
-            && crate::widgets::with_help(ui, "Move this tab into the main window", |ui| {
-                ui.button("Dock")
-            })
-            .clicked()
-        {
+        if !self.surface.is_main() && ui.button("Dock").clicked() {
             self.layout.dock_back = Some(tab.clone());
             ui.close();
         }

@@ -120,12 +120,8 @@ impl UpdateWindow {
                 } else if !*outbound && self.answer.is_none() {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new("Downloads are off.").color(theme::muted()));
-                        if crate::widgets::with_help(
-                            ui,
-                            "Antinomie contacts no server unless you allow it. This turns on \
-                                 Tools > Settings > Detection > Allow outbound catalog and rule \
-                                 downloads. The check sends one request to api.github.com, only \
-                                 when you ask.",
+                        if crate::widgets::hover_help(
+                            ui, "Antinomie contacts no server unless you allow it. The check sends one request to api.github.com, only when you ask.",
                             |ui| ui.button("Allow downloads"),
                         )
                         .clicked()
@@ -138,7 +134,7 @@ impl UpdateWindow {
                     answer_text(ui, self.answer.as_ref());
                 }
                 ui.add_space(6.0);
-                if crate::widgets::with_help(ui, "Sends one request to api.github.com", |ui| {
+                if crate::widgets::hover_help(ui, "Sends one request to api.github.com", |ui| {
                     ui.add_enabled(
                         self.worker.is_none() && *outbound,
                         egui::Button::new(if self.answer.is_some() {

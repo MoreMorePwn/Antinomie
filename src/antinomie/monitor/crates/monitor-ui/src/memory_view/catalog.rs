@@ -46,7 +46,7 @@ impl MemoryView {
                                     .margin(theme::TEXT_EDIT_MARGIN)
                                     .desired_width(crate::theme::edit_width(320.0)),
                             );
-                            if crate::widgets::with_help_or(ui, "", "The file chooser is open", |ui| ui
+                            if crate::widgets::hover_help_or(ui, "", "The file chooser is open", |ui| ui
                                 .add_enabled(import.picker.is_none(), egui::Button::new("Browse…")))
                                 .clicked()
                             {
@@ -93,7 +93,7 @@ impl MemoryView {
                                             .iter()
                                             .any(|other| other.directory == base.directory);
                                         ui.add_enabled_ui(has, |ui| {
-                                            crate::widgets::with_help_or(ui, "", "Built before Antinomie 0.4.0: its kernel has no \
+                                            crate::widgets::hover_help_or(ui, "", "Built before Antinomie 0.4.0: its kernel has no \
                                                  symbol table. Download the 0.4.0 base for one.", |ui| ui.selectable_value(
                                                 &mut import.base,
                                                 Some(base.directory.clone()),

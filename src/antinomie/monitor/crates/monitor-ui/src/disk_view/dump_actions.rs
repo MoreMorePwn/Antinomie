@@ -420,7 +420,7 @@ impl DiskView {
                             .margin(theme::TEXT_EDIT_MARGIN)
                             .desired_width(crate::theme::edit_width(320.0)),
                     );
-                    if crate::widgets::with_help_or(ui, "", "The file chooser is open", |ui| {
+                    if crate::widgets::hover_help_or(ui, "", "The file chooser is open", |ui| {
                         ui.add_enabled(import.picker.is_none(), egui::Button::new("Browse…"))
                     })
                     .clicked()

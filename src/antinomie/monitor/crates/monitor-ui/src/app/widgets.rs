@@ -355,16 +355,11 @@ pub(super) fn library_row(
     response
 }
 
-/// A one-line hint under a control, muted, with the longer explanation on a
-/// help icon after it. Settings keeps its paragraphs out of the page this way.
+/// A one-line hint under a control, muted, with the longer explanation on
+/// its hover (one sentence, two at most).
 pub(super) fn hint_tip(ui: &mut egui::Ui, short: &str, long: &str) -> egui::Response {
-    ui.horizontal_wrapped(|ui| {
-        let line =
-            ui.add(egui::Label::new(RichText::new(short).small().color(theme::muted())).wrap());
-        crate::widgets::help(ui, long);
-        line
-    })
-    .inner
+    ui.add(egui::Label::new(RichText::new(short).small().color(theme::muted())).wrap())
+        .help_tip(long)
 }
 
 pub(super) fn tool_button(ui: &mut egui::Ui, button: ToolButton<'_>) -> bool {
@@ -400,10 +395,14 @@ pub(super) fn tool_button(ui: &mut egui::Ui, button: ToolButton<'_>) -> bool {
     ui.scope(|ui| {
         theme::borderless_buttons(ui);
         let response = ui.add_enabled(button.enabled, widget);
-        if button.label.is_empty() {
+        if button.label.is_empty() && button.help.is_empty() {
             response.name_tip(button.tooltip).clicked()
+        } else if button.label.is_empty() {
+            response
+                .help_tip(format!("{}\n\n{}", button.tooltip, button.help))
+                .clicked()
         } else {
-            response.clicked()
+            response.help_tip(button.help).clicked()
         }
     })
     .inner
@@ -464,7 +463,7 @@ pub(super) fn status_line(ui: &mut egui::Ui, icon: &str, text: &str, color: egui
 pub(super) fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) -> bool {
     ui.scope(|ui| {
         theme::borderless_buttons(ui);
-        crate::widgets::with_help(ui, tooltip, |ui| {
+        crate::widgets::hover_help(ui, tooltip, |ui| {
             ui.add_enabled(
                 enabled,
                 egui::Button::new(

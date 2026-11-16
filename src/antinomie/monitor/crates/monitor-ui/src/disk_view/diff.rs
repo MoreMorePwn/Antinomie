@@ -396,7 +396,7 @@ impl DiskView {
         ui.menu_button("Compare with…", |ui| {
             crate::widgets::bounded_menu(ui, |ui| {
                 ui.add_enabled_ui(backend_ready, |ui| {
-                    if crate::widgets::with_help_or(
+                    if crate::widgets::hover_help_or(
                         ui,
                         "What the VM's disk was created from",
                         why,
@@ -407,7 +407,7 @@ impl DiskView {
                         chosen = Some(Against::Source(DiskSourceSpec::Base));
                     }
                     for checkpoint in source::offered(&self.checkpoints) {
-                        if crate::widgets::with_help_or(ui, "", why, |ui| {
+                        if crate::widgets::hover_help_or(ui, "", why, |ui| {
                             ui.button(format!(
                                 "Checkpoint {}",
                                 source::checkpoint_label(checkpoint)
@@ -423,7 +423,7 @@ impl DiskView {
                 });
                 ui.separator();
                 if selected_dump.is_some()
-                    && crate::widgets::with_help_or(
+                    && crate::widgets::hover_help_or(
                         ui,
                         "",
                         "Open the current disk (or a checkpoint) first",

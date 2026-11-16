@@ -115,9 +115,12 @@ impl MonitorApp {
         if self.trace_archive_directory().is_some() {
             let mut size = self.settings.trace_page_size.min(i64::MAX as usize) as i64;
             ui.label("Calls/page");
-            if crate::widgets::with_help(ui, "Calls per page; 0 or -1 shows all matching calls in a virtual table. Saved across restarts. Large pages load visible rows in bounded windows.", |ui| ui
-                .add(egui::DragValue::new(&mut size).range(-1..=i64::MAX)))
-                .changed()
+            if crate::widgets::hover_help(
+                ui,
+                "Calls per page; 0 or -1 shows all matching calls in a virtual table",
+                |ui| ui.add(egui::DragValue::new(&mut size).range(-1..=i64::MAX)),
+            )
+            .changed()
             {
                 self.set_trace_page_size(size.max(0) as usize);
             }
@@ -181,16 +184,9 @@ impl MonitorApp {
                 if self.settings.trace_page_size != 0 {
                     let mut page = self.trace_paging.page + 1;
                     ui.label("Go to page");
-                    if crate::widgets::with_help(
-                        ui,
-                        "Type a page number to jump directly; the active filter is preserved",
-                        |ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut page).range(1..=self.trace_page_count()),
-                            )
-                        },
-                    )
-                    .changed()
+                    if ui
+                        .add(egui::DragValue::new(&mut page).range(1..=self.trace_page_count()))
+                        .changed()
                     {
                         self.jump_trace_page(page - 1);
                     }

@@ -506,5 +506,8 @@ fn the_size_lines_follow_the_profile_and_name_its_machines() {
         CLOUD_SIZE.cpu_help(),
         "cloud VPS instances have 1 to 16 vCPUs"
     );
-    assert!(PC_SIZE.disk_help().ends_with("two minutes"));
+    assert_eq!(
+        PC_SIZE.disk_help(),
+        "PCs have 256 GiB or more (checks flag under 60 GiB)"
+    );
 }

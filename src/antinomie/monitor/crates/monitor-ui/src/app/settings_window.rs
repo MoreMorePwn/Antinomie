@@ -132,7 +132,7 @@ impl MonitorApp {
                 ui.vertical(|ui| {
                     let mut value = self.settings.analysis_limits.get(field.setting);
                     let speed = f64::from((field.max - field.min) / 200).max(1.0);
-                    let changed = crate::widgets::with_help(ui, format!("{} to {} {}", field.min, field.max, field.unit), |ui| ui
+                    let changed = crate::widgets::hover_help(ui, format!("{} to {} {}", field.min, field.max, field.unit), |ui| ui
                         .add(
                             egui::DragValue::new(&mut value)
                                 .range(field.min..=field.max)
@@ -153,10 +153,7 @@ impl MonitorApp {
             }
             ui.label("Ghidra for Disassembly");
             ui.vertical(|ui| {
-                crate::widgets::with_help(ui, "A run with Disassembly but without Decompilation also starts Ghidra, which lists \
-                     every architecture with labels and cross references. The built-in rows show first. \
-                     Needs Ghidra (Manage tools); the time limit and the listing size apply. \
-                     With Decompilation selected there is only the one Ghidra run, whatever this says.", |ui| ui.checkbox(
+                crate::widgets::hover_help(ui, "Also starts Ghidra for a run with Disassembly but without Decompilation, for labels and cross references on every architecture. Needs Ghidra (Manage tools).", |ui| ui.checkbox(
                     &mut self.settings.analysis_limits.ghidra_disassembly,
                     "List with Ghidra when Decompilation is not selected",
                 ));
@@ -329,15 +326,9 @@ impl MonitorApp {
             self.appearance_rows(ui, ctx);
             self.time_zone_row(ui);
             ui.label("Trace colors");
-            crate::widgets::with_help(
-                ui,
-                "Tint each syscall by its category, like Wireshark's coloring rules",
-                |ui| {
-                    ui.checkbox(
-                        &mut self.settings.trace_colors,
-                        "Color syscall rows by category",
-                    )
-                },
+            ui.checkbox(
+                &mut self.settings.trace_colors,
+                "Color syscall rows by category",
             );
             ui.end_row();
         });
@@ -452,15 +443,9 @@ impl MonitorApp {
         });
         ui.end_row();
         ui.label("Toolbar");
-        crate::widgets::with_help(
-            ui,
-            "Show only icons on the toolbar buttons; the names are in the hover text.",
-            |ui| {
-                ui.checkbox(
-                    &mut self.settings.minimal_toolbar,
-                    "Minimal toolbar (icons only)",
-                )
-            },
+        ui.checkbox(
+            &mut self.settings.minimal_toolbar,
+            "Minimal toolbar (icons only)",
         );
         ui.end_row();
     }
@@ -490,11 +475,11 @@ impl MonitorApp {
                 }
                 ui.end_row();
                 ui.label("Recording quota");
-                crate::widgets::with_help(ui, "The most disk space the recordings may use.", |ui| ui.add(
+                ui.add(
                     egui::DragValue::new(&mut self.settings.quota_gib)
                         .range(1..=4096)
                         .suffix(" GiB"),
-                ));
+                );
                 ui.end_row();
                 if let Some(path) = &self.snapshot.capture_dir {
                     ui.label("Recording");
@@ -510,18 +495,18 @@ impl MonitorApp {
             theme::section(ui, "Limits and timing");
             form_grid("settings_recording_limits", ui).show(ui, |ui| {
                 ui.label("Process cores: default budget");
-                crate::widgets::with_help(ui, "Stored-byte budget a process core starts with. Each guest accepts up to a maximum of its own, so the budget in effect can be lower.", |ui| ui.add(
+                crate::widgets::hover_help(ui, "Stored-byte budget a process core starts with; a guest may accept less", |ui| ui.add(
                     egui::DragValue::new(&mut self.settings.core_budget_mib)
                         .range(1..=1024)
                         .suffix(" MiB"),
                 ));
                 ui.end_row();
                 ui.label("Shutdown timeout");
-                crate::widgets::with_help(ui, "How long a VM is given to shut down before it is stopped.", |ui| ui.add(
+                ui.add(
                     egui::DragValue::new(&mut self.settings.timeout)
                         .range(1..=120)
                         .suffix(" s"),
-                ));
+                );
                 ui.end_row();
             });
         });
@@ -535,7 +520,11 @@ impl MonitorApp {
         };
         ui.horizontal(|ui| {
             let mut on = self.settings.live_detection_minutes != 0;
-            if ui.checkbox(&mut on, "Scan every").changed() {
+            if ui
+                .checkbox(&mut on, "Scan every")
+                .help_tip("Scans a run whose program is still running, at least 2 minutes apart. Off scans only when the run ends; the scan at the end always happens.")
+                .changed()
+            {
                 self.settings.live_detection_minutes = if on { DEFAULT } else { 0 };
             }
             ui.add_enabled_ui(on, |ui| {
@@ -548,10 +537,6 @@ impl MonitorApp {
                     self.settings.live_detection_minutes = minutes.clamp(MIN, MAX);
                 }
             });
-            crate::widgets::help(
-                ui,
-                "How often the detection engines scan a run whose program is still running (at least 2 minutes).\n\nOff scans only when the run ends. Scan now on the Detection tab scans at once; the scan at the end of the run always happens.",
-            );
         });
     }
 
@@ -559,7 +544,7 @@ impl MonitorApp {
         form_grid("settings_detection", ui).show(ui, |ui| {
             ui.label("After a run");
             ui.vertical(|ui| {
-                crate::widgets::with_help(ui, "Scans a run with YARA, IDS and Sigma once its evidence is ready, and again when the installed rule packs change. A run whose VM stopped is scanned with what it recorded, and the result says so. Scan still works when this is off.", |ui| ui.checkbox(
+                crate::widgets::hover_help(ui, "Scans a run with YARA, IDS and Sigma once its evidence is ready, and again when the rule packs change. Scan still works when off.", |ui| ui.checkbox(
                     &mut self.settings.automatic_detection,
                     "Scan runs with IDS and Sigma when they end",
                 ));
@@ -570,7 +555,7 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Downloads");
             ui.vertical(|ui| {
-                crate::widgets::with_help(ui, "Only the Detection rules Check and Download buttons use the network. Scans stay offline.", |ui| ui.checkbox(
+                crate::widgets::hover_help(ui, "Only the Detection rules Check and Download buttons use the network; scans stay offline", |ui| ui.checkbox(
                     &mut self.settings.outbound_catalog,
                     "Allow outbound catalog and rule downloads",
                 ));
@@ -587,7 +572,7 @@ impl MonitorApp {
         hint_tip(
             ui,
             "How long each engine may run.",
-            "How long each engine may run before it is stopped; a scan that runs out of time says so.",
+            "A scan that runs out of time says so.",
         );
         self.detection_timeouts(ui);
         ui.add_space(12.0);
@@ -595,7 +580,7 @@ impl MonitorApp {
         hint_tip(
             ui,
             "Hit positions each rule keeps.",
-            "How many hit positions of one rule a scan saves for its evidence (YARA byte offsets, IDS packets); every hit is still counted, and the scan says how many it left out. 16 to 10,000; the default is 100. A new value applies to the next scan.",
+            "Every hit is still counted, and the scan says how many it left out. 16 to 10,000; a new value applies to the next scan.",
         );
         self.saved_hits_row(ui);
     }
@@ -604,7 +589,7 @@ impl MonitorApp {
         form_grid("settings_notifications", ui).show(ui, |ui| {
             ui.label("Live findings");
             ui.vertical(|ui| {
-                crate::widgets::with_help(ui, "The first HIGH finding of each rule in a run that is still going raises one toast; later matches of the same rule add ×N to it. Applies at once.", |ui| ui.checkbox(
+                crate::widgets::hover_help(ui, "One toast per rule for its first HIGH finding in a run; later matches add ×N", |ui| ui.checkbox(
                     &mut self.settings.toast_high_findings,
                     "Toast for live HIGH findings",
                 ));
@@ -612,7 +597,7 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Runs");
             ui.vertical(|ui| {
-                crate::widgets::with_help(ui, "One toast per run when its program tree really ends: green for exit 0, neutral for another exit code, a stop or a time limit, a warning for a crash or a kill. It has Open Triage, and Open sample for a library sample. Applies at once.", |ui| ui.checkbox(
+                crate::widgets::hover_help(ui, "One toast per run when its program tree ends; its color shows how it ended", |ui| ui.checkbox(
                     &mut self.settings.toast_run_finished,
                     "Toast when a run finishes",
                 ));
@@ -620,11 +605,11 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Start");
             ui.vertical(|ui| {
-                crate::widgets::with_help(ui, "Start asks first when the VM has no snapshot, because then nothing can restore the disk and what the program changes stays in it. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.", |ui| ui.checkbox(
+                crate::widgets::hover_help(ui, "Start asks first when the VM has no snapshot, since nothing can then restore the disk", |ui| ui.checkbox(
                     &mut self.settings.warn_no_snapshot,
                     "Warn before starting a VM with no snapshot",
                 ));
-                crate::widgets::with_help(ui, "Clear in Activity asks first, because the saved log cannot be brought back. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.", |ui| ui.checkbox(
+                crate::widgets::hover_help(ui, "Clear in Activity asks first, since the saved log cannot be brought back", |ui| ui.checkbox(
                     &mut self.settings.warn_clear_activity,
                     "Ask before clearing Activity",
                 ));
@@ -654,7 +639,7 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Imported files");
             ui.vertical(|ui| {
-                crate::widgets::with_help(ui, "After Add file, sends the file's SHA-256 (nothing else) to MalwareBazaar with your abuse.ch key (Tools > API keys) and keeps its signature as a family candidate, shown as looked up by hash. Off by default; without a key nothing is sent.", |ui| ui.checkbox(
+                crate::widgets::hover_help(ui, "Sends only the file's SHA-256 to MalwareBazaar with your abuse.ch key and keeps its signature as a family candidate. Off by default; without a key nothing is sent.", |ui| ui.checkbox(
                     &mut self.settings.sample_hash_lookup,
                     "Look imported files up at MalwareBazaar",
                 ));
@@ -742,9 +727,7 @@ impl MonitorApp {
                         crate::triage::DEFAULT_REBUILD_RUN_MIB
                     ),
                     &format!(
-                        "Most bytes Triage > Files rebuilds of one changed file, and of all files of a run together, \
-                         from the writes the recording captured (memory while the run is open). Past a cap the rest \
-                         stays in the syscall evidence and the file says which cap was met. Defaults {} MiB per file, {} MiB per run.",
+                        "Past a cap the rest stays in the syscall evidence, and the file says which cap was met. Defaults {} MiB per file, {} MiB per run.",
                         crate::triage::DEFAULT_REBUILD_FILE_MIB,
                         crate::triage::DEFAULT_REBUILD_RUN_MIB
                     ),
@@ -777,7 +760,7 @@ impl MonitorApp {
         hint_tip(
             ui,
             "What a check keeps and reads before a bound cuts it short.",
-            "What a check keeps and reads before it says a bound cut its result short. A warning's Analysis settings button leads here. A change applies to analyses started afterwards; a check can be run again from its tab.",
+            "A change applies to analyses started afterwards; a check can be run again from its tab.",
         );
         self.analysis_limit_fields(ui);
         ui.add_space(6.0);
@@ -795,37 +778,23 @@ impl MonitorApp {
         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
             form_grid("settings_disks", ui).show(ui, |ui| {
                 ui.label("Extraction limit");
-                crate::widgets::with_help(
-                    ui,
-                    "Largest guest file the Disks tab extracts without asking",
-                    |ui| {
-                        ui.add(
+                ui.add(
                             egui::DragValue::new(&mut self.settings.disks.extract_cap_mib)
                                 .range(1..=4096)
                                 .suffix(" MiB"),
-                        )
-                    },
-                );
+                        );
                 ui.end_row();
                 ui.label("Hash limit");
-                crate::widgets::with_help(
-                    ui,
-                    "Largest guest file the Disks tab hashes on request",
-                    |ui| {
-                        ui.add(
+                ui.add(
                             egui::DragValue::new(&mut self.settings.disks.hash_cap_mib)
                                 .range(1..=1024)
                                 .suffix(" MiB"),
-                        )
-                    },
-                );
+                        );
                 ui.end_row();
                 ui.label("Dump hashes");
                 ui.vertical(|ui| {
-                    crate::widgets::with_help(
-                        ui,
-                        "Hash the whole image of a disk dump (what sha256sum prints). \
-                         Views are never hashed.",
+                    crate::widgets::hover_help(
+                        ui, "Hashes the whole image of a dump (what sha256sum prints); views are never hashed",
                         |ui| {
                             ui.checkbox(
                                 &mut self.settings.disks.dump_hash,
@@ -833,10 +802,8 @@ impl MonitorApp {
                             )
                         },
                     );
-                    crate::widgets::with_help(
-                        ui,
-                        "Also hash every layer of the disk chain a dump was read from. \
-                         Doubles the time of a dump; for evidence-grade provenance.",
+                    crate::widgets::hover_help(
+                        ui, "Also hashes every layer of the disk chain a dump was read from; doubles the time of a dump",
                         |ui| {
                             ui.checkbox(
                                 &mut self.settings.disks.source_digests,
@@ -855,8 +822,7 @@ impl MonitorApp {
         form_grid("settings_advanced", ui).show(ui, |ui| {
             ui.label("FPS counter");
             ui.vertical(|ui| {
-                crate::widgets::with_help(ui, "Shows frames per second, frame time and UI build time in the window corner. \
-                         It reads only frames that are painted anyway, so an idle window shows idle.", |ui| ui.checkbox(&mut self.settings.show_fps, "Show FPS counter"));
+                ui.checkbox(&mut self.settings.show_fps, "Show FPS counter");
             });
             ui.end_row();
         });
@@ -866,28 +832,28 @@ impl MonitorApp {
             ui.label("VM start and guest connection timeouts");
             ui.vertical(|ui| {
                 ui.horizontal_wrapped(|ui| {
-                    crate::widgets::with_help(ui, "How long a start waits for the guest to connect at KVM speed.", |ui| ui.add(
+                    crate::widgets::hover_help(ui, "How long a start waits for the guest to connect at KVM speed.", |ui| ui.add(
                         egui::DragValue::new(&mut self.settings.start.guest_connect_secs)
                             .range(antinomie_monitor_core::StartSettings::GUEST_CONNECT_SECS)
                             .suffix(" s guest connection"),
                     ));
-                    crate::widgets::with_help(ui, "TCG is software emulation, 10 to 50 times slower than KVM. Every start wait is this many times longer when a VM runs with TCG.", |ui| ui.add(
+                    crate::widgets::hover_help(ui, "TCG is 10 to 50 times slower than KVM; every start wait is this many times longer with TCG", |ui| ui.add(
                         egui::DragValue::new(&mut self.settings.start.tcg_multiplier)
                             .range(antinomie_monitor_core::StartSettings::TCG_MULTIPLIER)
                             .prefix("TCG multiplier x"),
                     ));
                 });
-                crate::widgets::with_help(ui, "How long the first run of a boot waits for a systemd guest to finish booting, at KVM speed (stretched by the TCG multiplier like the other waits). A guest still booting then gets the program anyway, with a warning on the run. Guests without systemd (BusyBox) never wait.", |ui| ui.add(
+                crate::widgets::hover_help(ui, "How long the first run of a boot waits for a systemd guest to finish booting, at KVM speed. A guest still booting gets the program anyway, with a warning.", |ui| ui.add(
                     egui::DragValue::new(&mut self.settings.start.boot_wait_secs)
                         .range(antinomie_monitor_core::StartSettings::BOOT_WAIT_SECS)
                         .suffix(" s boot wait before a run"),
                 ));
-                crate::widgets::with_help(ui, "How long a run on a Routed VM waits, at KVM speed (stretched by the TCG multiplier), for the guest to have its network address from the gateway's DHCP. A guest without one then gets the program anyway, with a note on the run that its first connections may fail with \"network is unreachable\". 0 starts the program without waiting.", |ui| ui.add(
+                crate::widgets::hover_help(ui, "How long a run on a Routed VM waits, at KVM speed, for the guest's network address from DHCP. 0 starts the program without waiting.", |ui| ui.add(
                     egui::DragValue::new(&mut self.settings.start.network_wait_secs)
                         .range(antinomie_monitor_core::StartSettings::NETWORK_WAIT_SECS)
                         .suffix(" s network wait before a run"),
                 ));
-                crate::widgets::with_help(ui, "A VM set to KVM runs with TCG when /dev/kvm cannot be used, instead of refusing to start. A VM set to Default always does.", |ui| ui.checkbox(
+                crate::widgets::hover_help(ui, "A VM set to KVM runs with TCG when /dev/kvm cannot be used, instead of refusing to start. A VM set to Default always does.", |ui| ui.checkbox(
                     &mut self.settings.start.kvm_fallback,
                     "Use TCG when KVM is unavailable",
                 ));
@@ -903,8 +869,7 @@ impl MonitorApp {
                         waits.guest_connect().as_secs()
                     ),
                     &format!(
-                        "A VM that runs with TCG waits up to {} s for its guest to connect now (the multiplier, and a host load above one per CPU, stretch every wait of a start; a QMP reply may take {} s). Raise the multiplier when a slow TCG boot is reported as not connecting. Applies to the next start.",
-                        waits.guest_connect().as_secs(),
+                        "The multiplier and a high host load stretch every wait of a start; a QMP reply may take {} s. Raise the multiplier when a slow TCG boot is reported as not connecting.",
                         waits.qmp_reply().as_secs()
                     ),
                 );
@@ -928,9 +893,7 @@ impl MonitorApp {
                         crate::values::thousands(crate::triage::STORED_ROWS as u64)
                     ),
                     &format!(
-                        "Most rows one Triage table (Opened, Read, Changed, Findings, Network) keeps per page and \
-                         one report table keeps. A table with more says \"first N of M\"; Next shows the rest. \
-                         Default {}; a higher value uses more memory.",
+                        "A table with more rows says \"first N of M\". Default {}; a higher value uses more memory.",
                         crate::values::thousands(crate::triage::STORED_ROWS as u64)
                     ),
                 );
@@ -957,9 +920,7 @@ impl MonitorApp {
                 hint_tip(
                     ui,
                     "Bytes the run wrote that File activity can give back.",
-                    "Bytes the run wrote that File activity can give back exactly. When a cap is \
-                     reached the first writes are kept; later ranges are listed as not captured. \
-                     The recording itself is limited by the Recording quota.",
+                    "When a cap is reached the first writes are kept; later ranges are listed as not captured.",
                 );
             });
             ui.end_row();
@@ -980,10 +941,7 @@ impl MonitorApp {
                 hint_tip(
                     ui,
                     "Bytes the files had before the run changed them.",
-                    "When a run ends, the earlier bytes (before the run changed them) of the \
-                     files it changed are copied into its recording, so they stay readable \
-                     after the base is gone. A file over a cap keeps its size and SHA-256 and is \
-                     listed as not captured. This copy is not counted in the Recording quota.",
+                    "A file over a cap keeps its size and SHA-256 and is listed as not captured. This copy is not counted in the Recording quota.",
                 );
             });
             ui.end_row();

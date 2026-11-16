@@ -153,7 +153,7 @@ impl MonitorApp {
                 _ => view.empty_text.into(),
             },
         };
-        crate::widgets::with_help(ui, view.hover, |ui| {
+        crate::widgets::hover_help(ui, view.hover, |ui| {
             let width = ui.available_width().min(view.max_width);
             egui::ComboBox::from_id_salt(view.id_salt)
                 .selected_text(text)

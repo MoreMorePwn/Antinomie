@@ -381,7 +381,7 @@ fn latency_table(
                             pick = Some(Pick::Count(row_click(row)));
                             ui.close();
                         }
-                        if crate::widgets::with_help(ui, "Only this call's calls at or above its 99th percentile (≈)", |ui| ui
+                        if crate::widgets::hover_help(ui, "Only this call's calls at or above its 99th percentile (≈)", |ui| ui
                             .button("Slowest 1 % in Trace"))
                             .clicked()
                         {
@@ -446,9 +446,7 @@ fn histogram(ui: &mut egui::Ui, state: &mut State, stats: &RunStatistics) {
                 int(row.timed)
             ),
         ));
-        crate::widgets::with_help(ui, "The same numbers as rows", |ui| {
-            ui.checkbox(&mut state.table, "Table")
-        });
+        ui.checkbox(&mut state.table, "Table");
     });
     if state.table {
         // The app's table, so its columns can be dragged like every other.

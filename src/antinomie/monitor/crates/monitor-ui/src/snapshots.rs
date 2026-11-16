@@ -662,7 +662,7 @@ fn footer(ui: &mut egui::Ui) -> bool {
         ui,
         |_| {},
         |ui| {
-            close = crate::widgets::with_help(
+            close = crate::widgets::hover_help(
                 ui,
                 "Restore a checkpoint, then save another to create a branch.",
                 |ui| ui.button("Close"),
@@ -712,14 +712,14 @@ fn draft_form(ui: &mut egui::Ui, draft: &mut Draft, tree: &VmSnapshotTree) {
             .char_limit(4096),
     );
     ui.add_enabled_ui(tree.capabilities.can_create_disk, |ui| {
-        crate::widgets::with_help(
+        crate::widgets::hover_help(
             ui,
             "Restores files and boots afresh. Live snapshots are crash-consistent.",
             |ui| ui.radio_value(&mut draft.mode, VmSnapshotMode::Disk, "Disk only"),
         );
     });
     ui.add_enabled_ui(tree.capabilities.can_create_full, |ui| {
-        crate::widgets::with_help(ui, "Preserves RAM and running programs. Uses more storage and requires compatible guest recovery.", |ui| ui.radio_value(&mut draft.mode, VmSnapshotMode::Full, "Disk + memory"));
+        crate::widgets::hover_help(ui, "Preserves RAM and running programs. Uses more storage and requires compatible guest recovery.", |ui| ui.radio_value(&mut draft.mode, VmSnapshotMode::Full, "Disk + memory"));
     });
 }
 

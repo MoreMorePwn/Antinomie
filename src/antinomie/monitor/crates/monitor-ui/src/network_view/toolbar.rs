@@ -90,7 +90,7 @@ impl NetworkView {
                     .show(ui, |ui| {
                         ui.label("Quick Search");
                         let width = ui.available_width().max(100.0);
-                        crate::widgets::with_help(ui, QUICK_SEARCH_HELP, |ui| {
+                        crate::widgets::hover_help(ui, QUICK_SEARCH_HELP, |ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.filter)
                                     .hint_text(crate::theme::placeholder(ui, QUICK_SEARCH_HINT))

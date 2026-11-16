@@ -399,7 +399,7 @@ impl ReportDialog {
                 });
                 ui.add_space(6.0);
                 ui.label(theme::section_title(ui, "Options"));
-                crate::widgets::with_help(
+                crate::widgets::hover_help(
                     ui,
                     "hxxp://example[.]com. JSON, MISP and STIX keep the raw values.",
                     |ui| {
@@ -411,7 +411,7 @@ impl ReportDialog {
                 );
                 ui.add_space(6.0);
                 ui.label(theme::section_title(ui, "Folder"));
-                crate::widgets::with_help(
+                crate::widgets::hover_help(
                     ui,
                     format!(
                         "Empty: {}. A path that is not absolute is inside the data folder.",
@@ -469,7 +469,7 @@ impl ReportDialog {
                     if running {
                         cancel_run = ui.button("Cancel").clicked();
                     } else {
-                        start = crate::widgets::with_help_or(
+                        start = crate::widgets::hover_help_or(
                             ui,
                             "",
                             if self.exported {

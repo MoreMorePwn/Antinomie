@@ -105,8 +105,8 @@ pub(super) fn source_bar(
                     crate::values::thousands(disassembly.instructions)
                 ));
                 if builtin
-                    && crate::widgets::with_help(ui, "Switch to the built-in disassembler's rows", |ui| ui
-                        .small_button(format!("Show {} rows", builtin_name(section))))
+                    && ui
+                        .small_button(format!("Show {} rows", builtin_name(section)))
                         .clicked()
                 {
                     state.builtin = true;
@@ -119,8 +119,8 @@ pub(super) fn source_bar(
                     ui.label(architecture);
                 }
                 if let Some(disassembly) = ghidra {
-                    if crate::widgets::with_help(ui, "Switch to Ghidra's listing with labels and references", |ui| ui
-                        .small_button(format!("Show {} listing", disassembly.tool)))
+                    if ui
+                        .small_button(format!("Show {} listing", disassembly.tool))
                         .clicked()
                     {
                         state.builtin = false;

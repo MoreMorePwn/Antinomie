@@ -576,17 +576,14 @@ impl MonitorApp {
             }
         };
         let buttons = |ui: &mut egui::Ui| {
-            if crate::widgets::with_help(
-                ui,
-                "A report of the sample: identity, static analysis, every run, lineage, \
-                         indicators and custody. HTML, PDF, JSON, MISP, STIX or Markdown",
-                |ui| ui.button("Export report…"),
-            )
+            if crate::widgets::hover_help(ui, "HTML, PDF, JSON, MISP, STIX or Markdown", |ui| {
+                ui.button("Export report…")
+            })
             .clicked()
             {
                 chosen = Some(Action::Report);
             }
-            if crate::widgets::with_help(
+            if crate::widgets::hover_help(
                 ui,
                 "JSON with a verifier, or HTML; optionally signed with your own key",
                 |ui| ui.button("Export custody record…"),
@@ -595,7 +592,7 @@ impl MonitorApp {
             {
                 chosen = Some(Action::Export);
             }
-            if crate::widgets::with_help_or(
+            if crate::widgets::hover_help_or(
                 ui,
                 "Send the archive into the running VM (its SHA-256 is read back first) \
                          and open Run program with it",
@@ -620,7 +617,7 @@ impl MonitorApp {
                                 .desired_width(280.0)
                                 .hint_text(crate::theme::placeholder(ui, "/bin/sh -c ls")),
                         );
-                        if crate::widgets::with_help(ui, "Sends the library into the running VM, then opens Run program with the program and LD_PRELOAD set to the library", |ui| ui
+                        if crate::widgets::hover_help(ui, "Sends the library into the running VM, then opens Run program with the program and LD_PRELOAD set to the library", |ui| ui
                             .add_enabled(!program.trim().is_empty(), egui::Button::new("Send and open Run program")))
                             .clicked()
                         {
@@ -628,7 +625,6 @@ impl MonitorApp {
                             ui.close();
                         }
                     });
-                    crate::widgets::help(ui, "Run a program with this library preloaded into it");
                 });
                 ui.data_mut(|d| d.insert_temp(memory, program));
             }

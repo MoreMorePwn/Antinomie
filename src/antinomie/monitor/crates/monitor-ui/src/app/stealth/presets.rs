@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Device profile's preset and cloud provider lists: a picked preset
-//! applies to every entry (an arm64 VM draws no uptime), and each list has
-//! one help icon that names its choices.
+//! applies to every entry (an arm64 VM draws no uptime), and each choice
+//! says what it is on hover.
 use super::*;
 
 /// Picks a preset, applying it to every entry, and a cloud's provider beside it.
@@ -24,14 +24,8 @@ pub(super) fn preset_list(
     arch: GuestArch,
 ) {
     let mut preset = profile.preset;
-    let presets = crate::widgets::list_help(
-        "Presets",
-        // Each description names what it needs (the IoT device: arm64
-        // only); the list shows the unavailable one disabled with the reason.
-        StealthPreset::ALL
-            .iter()
-            .map(|option| (option.label(), option.description())),
-    );
+    // Each description names what it needs (the IoT device: arm64 only); the
+    // list shows the unavailable one disabled with the reason.
     // One row (the dialog draws it in a grid cell): the list and its help.
     ui.horizontal(|ui| {
         egui::ComboBox::from_id_salt(id)
@@ -43,23 +37,22 @@ pub(super) fn preset_list(
             .show_ui(ui, |ui| {
                 for &option in StealthPreset::ALL {
                     let reason = option.unavailable(arch);
-                    let response = ui.add_enabled(
-                        reason.is_none(),
-                        egui::Button::selectable(preset == option, option.label()),
-                    );
-                    match reason {
-                        Some(reason) => {
-                            response.reason_tip(format!("{} ({reason})", option.description()));
-                        }
-                        None => {
-                            if response.clicked() {
-                                preset = option;
-                            }
-                        }
+                    let response = ui
+                        .add_enabled(
+                            reason.is_none(),
+                            egui::Button::selectable(preset == option, option.label()),
+                        )
+                        .help_tip_or(
+                            option.description(),
+                            reason.map_or(String::new(), |reason| {
+                                format!("{} ({reason})", option.description())
+                            }),
+                        );
+                    if reason.is_none() && response.clicked() {
+                        preset = option;
                     }
                 }
             });
-        help(ui, presets);
     });
     if preset != profile.preset {
         // An arm64 VM draws no uptime (its guest ignores one for now).

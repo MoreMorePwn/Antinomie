@@ -248,10 +248,7 @@ impl MonitorApp {
         hint_line(
             ui,
             "TShark needs .mmdb databases for Country and Organization.",
-            "TShark needs .mmdb databases to fill Country and Organization. Older \
-             GeoIP.dat files (such as /usr/share/GeoIP on Debian) do not work with \
-             TShark 4. Antinomie hands its databases to its own TShark runs only and \
-             never changes your Wireshark settings.",
+            "Older GeoIP.dat files (such as /usr/share/GeoIP on Debian) do not work with TShark 4. Antinomie hands its databases to its own TShark runs only.",
         );
         ui.add_space(4.0);
         tools_page::geoip_status(ui, self.routes.geoip.status());
@@ -282,9 +279,7 @@ impl MonitorApp {
             hint_line(
                 ui,
                 "Country and AS databases from db-ip.com, CC BY 4.0.",
-                "Country and AS databases from db-ip.com, CC BY 4.0. By installing you accept \
-                 that licence and the attribution it asks for. A cancelled download is kept \
-                 and resumed when you install again.",
+                "Installing means you accept that licence and its attribution. A cancelled download is kept and resumed.",
             );
         }
         if let Some(command) = command {
@@ -353,7 +348,7 @@ impl MonitorApp {
                     .color(theme::heading()),
             );
             let idle = self.routes.geoip.checking.is_none() && self.routes.geoip.update.is_none();
-            if crate::widgets::with_help_or(
+            if crate::widgets::hover_help_or(
                 ui,
                 "Two small requests to download.db-ip.com; nothing is downloaded",
                 "Turn on Settings > Detection > Allow outbound catalog and rule downloads",
@@ -376,7 +371,7 @@ impl MonitorApp {
             hint_line(
                 ui,
                 "Checking needs outbound downloads to be allowed.",
-                "Checking for a newer month needs Settings > Detection > Allow outbound catalog and rule downloads.",
+                "Settings > Detection > Allow outbound catalog and rule downloads.",
             );
         }
         match self.routes.geoip.latest.clone() {
@@ -387,10 +382,7 @@ impl MonitorApp {
                 } else if self.routes.geoip.update.is_none() {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(format!("DB-IP published {}.", latest.month));
-                        if crate::widgets::with_help(ui, "DB-IP publishes no signature, so a newer month cannot be checked \
-                                 against a pinned SHA-256: it is fetched over HTTPS and its hash is \
-                                 recorded in the tool record. The month pinned in Antinomie stays \
-                                 checked.", |ui| ui
+                        if crate::widgets::hover_help(ui, "DB-IP publishes no signature, so a newer month is fetched over HTTPS and its hash recorded, not checked against a pinned one", |ui| ui
                             .button(format!("Download {}", latest.month)))
                             .clicked()
                         {
@@ -495,10 +487,7 @@ impl MonitorApp {
         hint_line(
             ui,
             "A folder with your own MaxMind GeoLite2 or GeoIP2 .mmdb files.",
-            "A folder with your own MaxMind GeoLite2 or GeoIP2 .mmdb files: a Country or City \
-             database and an ASN database. MaxMind requires a free account to download them, \
-             so Antinomie cannot fetch them for you; the DB-IP Lite install needs no account. \
-             The files are read where they are, not copied.",
+            "MaxMind needs a free account to download them, so Antinomie cannot fetch them; the DB-IP Lite install needs none. The files are read where they are.",
         );
     }
 }

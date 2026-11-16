@@ -146,9 +146,9 @@ impl MonitorApp {
                             .runs
                             .iter()
                             .any(|run| run.number == seen.run && run.folder);
-                        if crate::widgets::with_help_or(
+                        if crate::widgets::hover_help_or(
                             ui,
-                            "Open this run in Triage at this indicator",
+                            "",
                             "The run's folder was deleted",
                             |ui| {
                                 ui.add_enabled(

@@ -227,9 +227,9 @@ impl MonitorApp {
                             self.shortcut_text(ctx, &Action::Palette)
                                 .unwrap_or_default()
                         );
-                        if crate::widgets::with_help(
+                        if crate::widgets::hover_help(
                             ui,
-                            "Command palette: find any action, tab, VM, run or sample",
+                            "Find any action, tab, VM, run or sample",
                             |ui| ui.add(egui::Button::new(text).frame(false)),
                         )
                         .clicked()
@@ -250,12 +250,11 @@ impl MonitorApp {
     /// VM's name and state take what is left of the row and cut the name with
     /// an ellipsis (the whole text is on hover).
     pub(super) fn toolbar(&mut self, root: &mut egui::Ui) {
-        let ctx = &root.ctx().clone();
         egui::Panel::top("toolbar")
             .exact_size(self.settings.font_size + 22.0)
             .frame(theme::frame(theme::panel()))
             .show(root, |ui| {
-                let specs = self.tool_specs(ctx);
+                let specs = self.tool_specs();
                 let minimal = self.settings.minimal_toolbar;
                 let shown = tool_layout(ui, &specs, minimal);
                 let hidden: Vec<usize> =
@@ -278,14 +277,6 @@ impl MonitorApp {
                             chosen = Some(spec.action);
                         }
                     }
-                    // One help icon explains every button, the hidden ones too.
-                    crate::widgets::help(
-                        ui,
-                        crate::widgets::list_help(
-                            "Toolbar",
-                            specs.iter().map(|spec| (spec.label, spec.tooltip.as_str())),
-                        ),
-                    );
                     if !hidden.is_empty() {
                         ui.menu_button(egui_phosphor::regular::CARET_RIGHT, |ui| {
                             for &at in &hidden {
@@ -368,8 +359,7 @@ impl MonitorApp {
     }
 
     /// The toolbar's buttons in the order they are drawn.
-    fn tool_specs(&self, ctx: &egui::Context) -> Vec<ToolSpec> {
-        let shortcut = |text: &str, action: Action| self.with_shortcut(ctx, text, &action);
+    fn tool_specs(&self) -> Vec<ToolSpec> {
         let observer = self.active_observer().map(|capture| {
             format!(
                 "Stop capture ({}); programs keep running",
@@ -379,10 +369,10 @@ impl MonitorApp {
         let capturing = observer.is_some();
         use egui_phosphor::regular as icon;
         vec![
-            self.vm_power_spec(&shortcut),
-            ToolSpec::new(ToolAction::Snapshots, 1, icon::CLOCK_COUNTER_CLOCKWISE, "Snapshots", "Save, restore and branch this VM's disk and memory".into(), self.selected.is_some() && !self.closing, theme::blue(), false, false),
-            ToolSpec::new(ToolAction::Kill, 2, icon::X_CIRCLE, "Stop run", "End the selected live run, or the newest live run when none is selected (the confirmation names it): the program and every process it started, even after the root exited. The recording closes normally (network capture, route counts, journal) and the VM keeps running.".into(), self.kill_target().is_some(), theme::error(), false, false),
-            ToolSpec::new(ToolAction::RunProgram, 2, icon::TERMINAL_WINDOW, "Run program", shortcut("Run a program in the VM and record it", Action::RunProgram), self.running(), theme::blue(), false, self.launch_open),
+            self.vm_power_spec(),
+            ToolSpec::new(ToolAction::Snapshots, 1, icon::CLOCK_COUNTER_CLOCKWISE, "Snapshots", String::new(), self.selected.is_some() && !self.closing, theme::blue(), false, false),
+            ToolSpec::new(ToolAction::Kill, 2, icon::X_CIRCLE, "Stop run", "Ends the selected live run, or the newest one: the program and every process it started. The VM keeps running.".into(), self.kill_target().is_some(), theme::error(), false, false),
+            ToolSpec::new(ToolAction::RunProgram, 2, icon::TERMINAL_WINDOW, "Run program", String::new(), self.running(), theme::blue(), false, self.launch_open),
             ToolSpec::new(
                 ToolAction::CaptureAll,
                 3,
@@ -395,14 +385,14 @@ impl MonitorApp {
                 capturing,
             ),
             ToolSpec::new(ToolAction::CaptureNetwork, 3, icon::NETWORK, "Capture network", self.network_toggle_label().into(), self.network_toggle_enabled(), theme::info(), false, self.snapshot.network_capture.is_some()),
-            ToolSpec::new(ToolAction::DumpMemory, 3, icon::DATABASE, "Dump memory", "Save the running VM's RAM".into(), self.running() && !self.closing && self.snapshot.memory_dump.is_none(), theme::info(), false, self.snapshot.memory_dump.is_some()),
+            ToolSpec::new(ToolAction::DumpMemory, 3, icon::DATABASE, "Dump memory", String::new(), self.running() && !self.closing && self.snapshot.memory_dump.is_none(), theme::info(), false, self.snapshot.memory_dump.is_some()),
             ToolSpec::new(ToolAction::DumpCore, 3, icon::FILE_ARCHIVE, "Dump core", self.manual_core_unavailable().unwrap_or("Pause a selected process, capture its core, then resume").to_owned(), self.manual_core_unavailable().is_none(), theme::info(), false, false),
         ]
     }
 
     /// One button for the VM's power: Start while none runs, Stop once one
     /// runs or starts (disabled while it is already stopping).
-    fn vm_power_spec(&self, shortcut: &dyn Fn(&str, Action) -> String) -> ToolSpec {
+    fn vm_power_spec(&self) -> ToolSpec {
         use egui_phosphor::regular as icon;
         if self.snapshot.active_vm.is_none() {
             return ToolSpec::new(
@@ -410,7 +400,7 @@ impl MonitorApp {
                 0,
                 icon::PLAY,
                 "Start",
-                shortcut("Start the selected VM", Action::StartVm),
+                String::new(),
                 self.can_start_vm(),
                 theme::good(),
                 true,
@@ -421,7 +411,7 @@ impl MonitorApp {
         let tooltip = if stopping {
             "The VM is shutting down".to_owned()
         } else {
-            shortcut("Shut down the running VM", Action::StopVm)
+            String::new()
         };
         ToolSpec::new(
             ToolAction::Stop,
@@ -498,7 +488,7 @@ pub(super) struct ToolSpec {
     group: u8,
     icon: &'static str,
     label: &'static str,
-    /// What the button does, for the toolbar's help icon.
+    /// What the button does, where its name is not enough (empty: nothing).
     tooltip: String,
     enabled: bool,
     tone: egui::Color32,
@@ -538,6 +528,7 @@ impl ToolSpec {
             label: if minimal { "" } else { self.label },
             // Icons only: the label is the name on hover.
             tooltip: self.label,
+            help: &self.tooltip,
             enabled: self.enabled,
             tone: self.tone,
             strong: self.strong,
@@ -573,9 +564,7 @@ fn tool_layout(ui: &egui::Ui, specs: &[ToolSpec], minimal: bool) -> Vec<usize> {
     let status = 150.0;
     // The sidebar button and its separator at the left end.
     let sidebar = ui.spacing().interact_size.y + 12.0;
-    // The help icon after the buttons.
-    let help = 20.0;
-    let budget = ui.available_width() - status - sidebar - help - 12.0;
+    let budget = ui.available_width() - status - sidebar - 12.0;
     let order: Vec<usize> = TOOL_PRIORITY
         .iter()
         .filter_map(|action| specs.iter().position(|spec| spec.action == *action))

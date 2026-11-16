@@ -382,11 +382,10 @@ pub(super) fn show(
     partial: bool,
 ) -> Option<Click> {
     ui.horizontal(|ui| {
-        crate::widgets::with_help(ui, "Keep only calls that returned an error number. Percentages are then of the failed calls. \
-             Harmless errors such as EAGAIN and EINPROGRESS count too.", |ui| ui.checkbox(&mut state.failed_only, "Failed only"));
-        crate::widgets::with_help(ui, "Result first, then the calls that returned it: ENOENT, then openat, newfstatat.", |ui| ui.checkbox(&mut state.by_error, "By error"));
+        crate::widgets::hover_help(ui, "Keep only calls that returned an error number; percentages are then of the failed calls", |ui| ui.checkbox(&mut state.failed_only, "Failed only"));
+        crate::widgets::hover_help(ui, "Result first, then the calls that returned it: ENOENT, then openat, newfstatat.", |ui| ui.checkbox(&mut state.by_error, "By error"));
         ui.add_enabled_ui(!state.by_error, |ui| {
-            crate::widgets::with_help(ui, "Put the calls under their categories (file, network, process…). Off, every call is a row of its own.", |ui| ui.checkbox(&mut state.by_category, "Group by category"));
+            crate::widgets::hover_help(ui, "Calls under their categories (file, network, process…); off, every call is a row of its own", |ui| ui.checkbox(&mut state.by_category, "Group by category"));
         });
     });
     let sort =

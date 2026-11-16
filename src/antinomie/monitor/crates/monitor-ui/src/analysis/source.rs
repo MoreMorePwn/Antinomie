@@ -109,7 +109,7 @@ pub(crate) fn rows(
             ui.end_row();
             // Under the field, so the field keeps the whole column.
             ui.label("");
-            if crate::widgets::with_help(ui, "Choose a file with the filesystem explorer", |ui| {
+            if crate::widgets::hover_help(ui, "Choose a file with the filesystem explorer", |ui| {
                 ui.add_enabled(
                     upload.can_choose && !upload.busy,
                     egui::Button::new("Choose…"),

@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The help icon: the one place where a control's explanation lives. A muted
-//! question mark beside the control shows the text on hover and, pinned, on
-//! a click (touch and keyboard users: it takes focus, Space or Enter opens
-//! it). It works in a disabled row too: egui shows an enabled widget's
-//! tooltip only while it is enabled, so a read-only window used to hide every
-//! hint.
+//! Explanations. A control explains itself on its own hover, through
+//! [`hover_help`] / [`hover_help_or`] (or `.help_tip(..)` on a response): only
+//! what the control's word cannot say (a term, a consequence, a unit or
+//! range, a permission or risk), in a sentence or two, and nothing where the
+//! label says it all. A disabled control shows why it is disabled (egui hides
+//! an enabled widget's tooltip while it is disabled, so the helpers use the
+//! "on disabled hover" form).
 //!
-//! Controls keep no long hover text. What may stay on a control (the guard
-//! `scripts/check-control-hover.py` enforces it): a name of one to four words
-//! for an icon-only button, a value that is only shown whole on hover, and a
-//! short reason why a control is disabled. The [`Tip`] helpers mark those.
+//! [`help`] is the muted question mark for a section or concept that belongs
+//! to no single control: it shows its text on hover and, pinned, on a click
+//! (touch and keyboard users: it takes focus, Space or Enter opens it).
+//!
+//! The guard `scripts/check-control-hover.py` keeps a raw hover on a control
+//! to a name of one to four words, and a literal help text to two sentences.
+//! The other [`Tip`] helpers mark what may stay raw: an icon-only button's
+//! name, a value shown whole, a short reason.
 //!
 //! The text is plain, with a few conventions:
 //! - paragraphs are separated by a blank line (`\n\n`) and drawn with room
@@ -100,81 +105,26 @@ fn qa_pin(ui: &egui::Ui, text: &str) -> bool {
     }
 }
 
-/// A control drawn by `add` with a help icon beside it. Both sit in one row,
-/// so the icon stays next to its control in a grid cell, a wrapping row or a
-/// column. Returns the control's response.
-pub fn with_help(
+/// A control drawn by `add` that explains itself on hover: `text` shows while
+/// the pointer is on the control, also when it is disabled. Empty text shows
+/// nothing. Returns the control's response.
+pub fn hover_help(
     ui: &mut egui::Ui,
     text: impl AsRef<str>,
     add: impl FnOnce(&mut egui::Ui) -> egui::Response,
 ) -> egui::Response {
-    row(ui, |ui, own| {
-        let response = beside_icon(ui, own, add);
-        help(ui, text);
-        response
-    })
+    add(ui).help_tip(text)
 }
 
-/// [`with_help`] for a control that may be disabled: while it is, the icon
-/// leads with `reason` (and shows even when `text` is empty).
-pub fn with_help_or(
+/// [`hover_help`] for a control that may be disabled: while it is, the hover
+/// shows `reason` (the text when there is no reason).
+pub fn hover_help_or(
     ui: &mut egui::Ui,
     text: impl AsRef<str>,
     reason: impl AsRef<str>,
     add: impl FnOnce(&mut egui::Ui) -> egui::Response,
 ) -> egui::Response {
-    row(ui, |ui, own| {
-        let response = beside_icon(ui, own, add);
-        let (text, reason) = (text.as_ref(), reason.as_ref());
-        if response.enabled() || reason.is_empty() {
-            if !text.is_empty() {
-                help(ui, text);
-            }
-        } else if text.is_empty() {
-            help(ui, reason);
-        } else {
-            help(ui, format!("{reason}\n\n{text}"));
-        }
-        response
-    })
-}
-
-/// Where a control and its icon go. A wrapping row places them itself (a
-/// row of its own there would start in what is left of the line and squeeze
-/// the control). Anywhere else (a column, a grid cell, a plain row) they get
-/// a row of their own that wraps text as the control's place did: a row does
-/// not wrap by itself, so a long checkbox label in a column would otherwise
-/// run past the window's edge.
-fn row(
-    ui: &mut egui::Ui,
-    add: impl FnOnce(&mut egui::Ui, bool) -> egui::Response,
-) -> egui::Response {
-    let layout = *ui.layout();
-    if layout.main_dir().is_horizontal() && layout.main_wrap() {
-        return add(ui, false);
-    }
-    let wrap = ui.wrap_mode();
-    ui.horizontal(|ui| {
-        ui.style_mut().wrap_mode = Some(wrap);
-        add(ui, true)
-    })
-    .inner
-}
-
-/// Draws `add` in a fresh row with the icon's room kept free at the end, so a
-/// control that takes the width it is given (a full-width button, a text
-/// field) still leaves its icon in view. The icon itself is placed past
-/// that width (a row lays out what overflows it).
-fn beside_icon(
-    ui: &mut egui::Ui,
-    own_row: bool,
-    add: impl FnOnce(&mut egui::Ui) -> egui::Response,
-) -> egui::Response {
-    if own_row {
-        let room = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.x + 2.0;
-        ui.set_max_width((ui.available_width() - room).max(0.0));
-    }
-    add(ui)
+    add(ui).help_tip_or(text, reason)
 }
 
 /// A help text for a set of choices (a list's entries, a row of tabs):
@@ -207,6 +157,12 @@ pub trait Tip {
     /// Why the control is disabled, where there is no room for an icon: one
     /// short line.
     fn reason_tip(self, reason: impl Into<egui::WidgetText>) -> Self;
+    /// What a control's word cannot say (a term, a consequence, a unit, a
+    /// risk): one sentence, two at most; see the module. Empty shows nothing.
+    fn help_tip(self, text: impl AsRef<str>) -> Self;
+    /// [`Tip::help_tip`] for a control that may be disabled: while it is, the
+    /// hover shows `reason` instead (the text when there is none).
+    fn help_tip_or(self, text: impl AsRef<str>, reason: impl AsRef<str>) -> Self;
 }
 
 impl Tip for egui::Response {
@@ -231,6 +187,28 @@ impl Tip for egui::Response {
 
     fn reason_tip(self, reason: impl Into<egui::WidgetText>) -> Self {
         self.on_disabled_hover_text(reason)
+    }
+
+    fn help_tip(self, text: impl AsRef<str>) -> Self {
+        self.help_tip_or(text, "")
+    }
+
+    fn help_tip_or(self, text: impl AsRef<str>, reason: impl AsRef<str>) -> Self {
+        let (text, reason) = (text.as_ref(), reason.as_ref());
+        if self.enabled() {
+            if text.is_empty() {
+                self
+            } else {
+                self.on_hover_ui(|ui| body(ui, text))
+            }
+        } else {
+            let shown = if reason.is_empty() { text } else { reason };
+            if shown.is_empty() {
+                self
+            } else {
+                self.on_disabled_hover_ui(|ui| body(ui, shown))
+            }
+        }
     }
 }
 

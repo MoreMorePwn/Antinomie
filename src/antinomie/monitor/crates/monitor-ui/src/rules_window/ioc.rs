@@ -86,13 +86,7 @@ impl Model {
                 Some(masked) => ui.colored_label(theme::good(), format!("set ({masked})")),
                 None => ui.colored_label(theme::neutral_accent(), "not set"),
             };
-            if crate::widgets::with_help(
-                ui,
-                "Open the API keys window to set the abuse.ch Auth-Key.",
-                |ui| ui.button("API keys…"),
-            )
-            .clicked()
-            {
+            if ui.button("API keys…").clicked() {
                 self.requested = Some(super::RulesAction::ApiKeys);
             }
         });
@@ -101,7 +95,7 @@ impl Model {
         let busy = self.job.is_some();
         ui.horizontal_wrapped(|ui| {
             let has_key = self.ioc.key_masked.is_some();
-            if crate::widgets::with_help(ui, {
+            if crate::widgets::hover_help(ui, {
                     // A typical size: the real sizes are asked when it starts.
                     let typical: u64 = self
                         .ioc
@@ -132,14 +126,14 @@ impl Model {
                 self.ioc_update(data_dir, *outbound, None);
             }
             if busy
-                && crate::widgets::with_help(ui, "Stop the running download; nothing is changed.", |ui| ui
-                    .button("Cancel"))
+                && ui
+                    .button("Cancel")
                     .clicked()
             {
                 self.cancel_job();
             }
-            if crate::widgets::with_help(ui, "Show the folder where the datasets are kept.", |ui| ui
-                .button("Open datasets folder"))
+            if ui
+                .button("Open datasets folder")
                 .clicked()
             {
                 let root = ioc::feeds::root(data_dir);

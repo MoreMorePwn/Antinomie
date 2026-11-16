@@ -851,13 +851,12 @@ impl MonitorApp {
         let page = &self.screenshots_page;
         let mut refresh = false;
         ui.horizontal(|ui| {
-            if crate::widgets::with_help(ui, "Read the screenshot folders again", |ui| {
-                ui.button(format!(
+            if ui
+                .button(format!(
                     "{} Refresh",
                     egui_phosphor::regular::ARROWS_CLOCKWISE
                 ))
-            })
-            .clicked()
+                .clicked()
             {
                 refresh = true;
             }

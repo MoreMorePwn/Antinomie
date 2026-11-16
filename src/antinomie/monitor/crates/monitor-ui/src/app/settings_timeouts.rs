@@ -34,7 +34,7 @@ impl MonitorApp {
                 };
                 self.settings.analysis_limits.timeouts.set(tool, stored);
             }
-            if crate::widgets::with_help_or(
+            if crate::widgets::hover_help_or(
                 ui,
                 format!("Back to the default time ({default} s)"),
                 format!("Already the default time ({default} s)"),
@@ -78,7 +78,7 @@ impl MonitorApp {
                         .timeouts
                         .set(engine, stored);
                 }
-                if crate::widgets::with_help_or(
+                if crate::widgets::hover_help_or(
                     ui,
                     format!("Back to the default time ({default} s)"),
                     format!("Already the default time ({default} s)"),
@@ -103,7 +103,7 @@ impl MonitorApp {
         let mut shown = self.triage.detection_settings().evidence_limit();
         ui.horizontal_wrapped(|ui| {
             ui.label("Saved hits per rule");
-            if crate::widgets::with_help(
+            if crate::widgets::hover_help(
                 ui,
                 format!(
                     "{} to {}",
@@ -121,7 +121,7 @@ impl MonitorApp {
                     shown
                 };
             }
-            if crate::widgets::with_help_or(
+            if crate::widgets::hover_help_or(
                 ui,
                 format!("Back to the default ({EVIDENCE_LIMIT_DEFAULT})"),
                 format!("Already the default ({EVIDENCE_LIMIT_DEFAULT})"),

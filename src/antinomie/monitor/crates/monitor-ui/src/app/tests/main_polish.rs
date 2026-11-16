@@ -58,30 +58,14 @@ fn hover_at(app: &mut MonitorApp, ctx: &egui::Context, pos: egui::Pos2) -> egui:
     output
 }
 
-/// The texts the help icon on the row of `of` (right of it) shows on hover.
+/// The texts shown on hover over the control or line at `of`.
 fn help_beside(
     app: &mut MonitorApp,
     ctx: &egui::Context,
     of: egui::Rect,
 ) -> Vec<(String, egui::Rect)> {
-    let shown = texts(&settle(app, ctx));
-    let icon = shown
-        .iter()
-        // On its row, or at the end of its last line when it wraps.
-        .filter(|(text, rect)| {
-            text == egui_phosphor::regular::QUESTION
-                && rect.center().y > of.top() - 6.0
-                && rect.center().y < of.bottom() + 6.0
-                && rect.left() > of.left()
-        })
-        .min_by(|a, b| {
-            a.1.left_top()
-                .distance(of.right_bottom())
-                .total_cmp(&b.1.left_top().distance(of.right_bottom()))
-        })
-        .unwrap_or_else(|| panic!("no help icon beside {of:?}: {shown:?}"))
-        .1;
-    texts(&hover_at(app, ctx, icon.center()))
+    settle(app, ctx);
+    texts(&hover_at(app, ctx, of.center()))
 }
 
 fn rects_filled_with(output: &egui::FullOutput, colour: egui::Color32) -> Vec<egui::Rect> {
@@ -253,7 +237,7 @@ fn settings_pages_keep_no_paragraph_only_short_lines() {
 }
 
 #[test]
-fn the_tcg_explanation_is_on_the_help_icon_of_a_short_line() {
+fn the_tcg_explanation_is_on_the_hover_of_a_short_line() {
     let ctx = context();
     let mut app = app();
     app.settings_open = true;

@@ -430,7 +430,7 @@ pub(crate) fn menu(
         crate::app::note_menu_item(ui, sample.as_deref(), note);
     } else if let Some(why) = extras.no_note {
         ui.separator();
-        crate::widgets::with_help_or(ui, "", why, |ui| {
+        crate::widgets::hover_help_or(ui, "", why, |ui| {
             ui.add_enabled(false, egui::Button::new("Add note…"))
         });
     }

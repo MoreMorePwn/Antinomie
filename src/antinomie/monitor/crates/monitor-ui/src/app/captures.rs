@@ -136,7 +136,7 @@ impl ProcessPicker {
                     if !nonresident {
                         self.core_nonresident = false;
                     }
-                    crate::widgets::with_help_or(ui, "Also read the pages that are not in memory (swapped out, or file pages the kernel dropped) while the process is paused. Slower; bounded by the budget and the deadline. Pages never touched stay out.", "Needs a base of guest contract revision 22: this guest copies only the pages that are in memory.", |ui| ui.add_enabled(nonresident, egui::Checkbox::new(&mut self.core_nonresident, "Read non-resident pages")));
+                    crate::widgets::hover_help_or(ui, "Also reads swapped-out and dropped file pages. Slower; bounded by the budget and the deadline.", "Needs a base of guest contract revision 22: this guest copies only the pages that are in memory.", |ui| ui.add_enabled(nonresident, egui::Checkbox::new(&mut self.core_nonresident, "Read non-resident pages")));
                     // Start from the remembered default, and follow a guest that lowers it.
                     if self.core_budget == 0
                         || limits.is_some_and(|limits| u64::from(self.core_budget) > limits.max_size)

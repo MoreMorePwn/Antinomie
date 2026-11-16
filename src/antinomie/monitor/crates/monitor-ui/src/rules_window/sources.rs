@@ -302,7 +302,7 @@ impl Model {
     }
 
     pub(super) fn remove_button(&mut self, ui: &mut egui::Ui, data_dir: &Path, id: &str) {
-        if crate::widgets::with_help(
+        if crate::widgets::hover_help(
             ui,
             "Deletes this pack and its retained versions from this computer.",
             |ui| ui.button("Remove"),

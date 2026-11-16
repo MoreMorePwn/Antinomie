@@ -735,8 +735,7 @@ fn terminal_header(ui: &mut egui::Ui, terminal: &mut RunTerminal, clipboard_read
                 terminal.terminal.view_controls(ui);
                 crate::widgets::help(ui, "Terminal keys\n\n- Drag to select text; double-click selects a word.\n- Copy with `Ctrl+Shift+C`, `Ctrl+Insert` or right-click.\n- `Ctrl+C` interrupts when nothing is selected.\n- Paste with `Ctrl+Shift+V` or `Ctrl+V`.\n- `Shift+PageUp` and `Shift+PageDown` scroll the output.\n\nRaw shows escape codes as text; Copy then gives that text.");
                 ui.separator();
-                type_clipboard = crate::widgets::with_help_or(ui, "Type the host clipboard into the VM's focused input (Ctrl+Shift+Y). \
-                         Uses a US keyboard layout; Caps Lock should be off. Maximum 4 KiB.", "Needs a running VM that is not busy", |ui| ui
+                type_clipboard = crate::widgets::hover_help_or(ui, "Types the host clipboard as key presses (Ctrl+Shift+Y). US layout, Caps Lock off, up to 4 KiB.", "Needs a running VM that is not busy", |ui| ui
                     .add_enabled(
                         clipboard_ready,
                         egui::Button::new(format!(
