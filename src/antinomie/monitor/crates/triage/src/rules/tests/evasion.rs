@@ -863,3 +863,23 @@ pub fn a_busybox_shell_running_an_applet_is_not_a_rename() {
         );
     }
 }
+
+#[test]
+pub fn a_shell_command_whose_shell_exited_127_did_not_happen() {
+    // A40, run 88c32e47: `sh -c 'chattr +i ...'` ran, but the base has no
+    // chattr: the shell exited 127.
+    let exit = |pid: u32, code: u64| sys(pid, 231, "exit_group", [code, 0, 0, 0, 0, 0], 0);
+    let out = run(vec![shell(1, "chattr +i /etc/cron.d/x"), exit(1, 127)]);
+    let row = rows(&out, "evasion.immutable_attr");
+    assert_eq!(row.len(), 1);
+    assert_eq!(text(row[0], "finding.result"), "all failed");
+    assert!(list(row[0], "finding.detail")
+        .iter()
+        .any(|line| line.contains("exited 127")));
+    // Exit 0: it happened.
+    let out = run(vec![shell(1, "chattr +i /etc/cron.d/x"), exit(1, 0)]);
+    assert_ne!(
+        text(rows(&out, "evasion.immutable_attr")[0], "finding.result"),
+        "all failed"
+    );
+}
