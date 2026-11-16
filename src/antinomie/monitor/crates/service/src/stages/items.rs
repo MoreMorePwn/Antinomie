@@ -415,6 +415,15 @@ impl<E: Engine> LaneStages<'_, E> {
     pub fn end_analyse(&mut self, job: &Run, work: &mut JobWork) -> Result<PhaseEnd, StageStop> {
         let store = self.env.store;
         if !work.plan.analyse_skipped() {
+            // A step that failed on a full disk says so, not only "disk I/O
+            // error" (A12).
+            if work.problems.iter().any(|p| {
+                crate::resources::disk_full(p) || p.to_ascii_lowercase().contains("i/o error")
+            }) && let Some(words) = self.env.host.low_disk()
+            {
+                work.problems
+                    .push(format!("the disk is below its floor: {words}"));
+            }
             if !work.problems.is_empty() && work.plan.requires(Stage::Analyse) {
                 let _ = store.end_stage(&job.id, StageStatus::Failed);
                 let failure = Failure::new(
@@ -510,7 +519,10 @@ impl<E: Engine> LaneStages<'_, E> {
             work.outcome = Outcome::Partial;
             return Ok(PhaseEnd::Next);
         }
-        self.retry_or_fail(job, work, failure)
+        // Not run again in place: `analyse` has finished in this attempt and
+        // cannot be entered again, and a report that cannot be written (a
+        // full disk) is not cured by building it twice (A12).
+        Err(StageStop::Failed(failure))
     }
 
     /// `cleanup`: the library tags and the end of the job.

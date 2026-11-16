@@ -1314,6 +1314,11 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **A failed analysis is tried again, and says when the disk was full.** The
+  presets' default `retry_on` includes `analysis_failed` (design: the host stages run
+  again on the saved recording, the VM does not); an analysis step that failed on a
+  full disk adds the floor's words to the failure; at start the daemon removes the
+  index temporaries an interrupted scan left in the recordings it resumes.
 - **`queue status` says why a lane is quarantined, and `auto lane reset` waits for
   a pending disk layer.** Each lane row of `queue status` (and `reason` in its JSON)
   has the quarantine's reason and words, and the `lane_quarantined` alert names them

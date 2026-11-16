@@ -4,7 +4,8 @@
 //! A failure is retried when all of these hold:
 //!
 //! 1. its code is in the preset's `retry_on` (default `vm_start_failed`,
-//!    `guest_unreachable`, `upload_failed`, `guest_lost`);
+//!    `guest_unreachable`, `upload_failed`, `guest_lost`, `analysis_failed`;
+//!    the last runs the host stages again in place, not the VM);
 //! 2. its code is not **permanent**. Some errors cannot be cured by running
 //!    the same job again, and the preset cannot make them retryable: a bad
 //!    sample or preset, a missing base or VM, a revert that failed (the lane
