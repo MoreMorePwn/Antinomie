@@ -621,8 +621,8 @@ pub fn resolve_path_dirfd(
             if dirfd != AT_FDCWD {
                 return match files.opened.get(&(cookie, pid, dirfd)) {
                     Some(base) if base.starts_with('/') => format!(
-                        "{}/{path} (lexical dirfd path; symlinks unknown)",
-                        base.split(" (lexical").next().unwrap_or(base)
+                        "{} (lexical dirfd path; symlinks unknown)",
+                        join_cwd(base.split(" (lexical").next().unwrap_or(base), path)
                     ),
                     _ => format!("{path} (relative, dirfd not recorded)"),
                 };
@@ -631,7 +631,10 @@ pub fn resolve_path_dirfd(
     }
     let directory = fs_owner(files, invocation.task_cookie, event.tid);
     match files.cwd.get(&directory) {
-        Some(cwd) => format!("{cwd}/{path} (lexical cwd path; symlinks unknown)"),
+        Some(cwd) => format!(
+            "{} (lexical cwd path; symlinks unknown)",
+            join_cwd(cwd, path)
+        ),
         None => format!("{path} (relative, cwd not recorded)"),
     }
 }

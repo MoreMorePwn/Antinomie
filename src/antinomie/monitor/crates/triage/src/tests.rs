@@ -383,6 +383,18 @@ pub fn repeats_of_one_task_are_one_row_with_a_count_and_a_time_span() {
 }
 
 #[test]
+pub fn a_relative_path_under_the_root_directory_has_one_slash() {
+    let start = path_call(1, 80, "chdir", 0, "/");
+    let mut opened = path_call(1, 257, "openat", 4, "note");
+    opened.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0, 0, 0, 0]);
+    let rows = file_rows(&[start, opened], OPEN_NAMES);
+    assert_eq!(
+        rows.rows[0][0].text,
+        "/note (lexical cwd path; symlinks unknown)"
+    );
+}
+
+#[test]
 pub fn relative_chdir_retains_symlink_components_and_unknown_fchdir_invalidates_cwd() {
     let start = path_call(1, 80, "chdir", 0, "/tmp/link");
     let relative = path_call(1, 80, "chdir", 0, "../child");
