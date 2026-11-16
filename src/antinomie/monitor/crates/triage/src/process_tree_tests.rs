@@ -730,3 +730,109 @@ pub fn a_crash_before_the_first_call_shows_the_signal_not_running() {
     assert_eq!(again[0].state, "exit not recorded");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+pub fn a_child_a_worker_thread_forks_takes_the_process_image_and_argv() {
+    // The sample's worker thread (tid 125) forks every few seconds; the
+    // thread never runs an exec of its own.
+    let calls = vec![
+        as_task(
+            exec(124, "/tmp/guardian", &["/tmp/guardian", "-d"]),
+            124,
+            124,
+            4,
+        ),
+        as_task(call(124, 202, "futex", 0), 124, 125, 5),
+        as_task(sys(124, 57, "fork", [0; 6], 164), 124, 125, 5),
+        as_task(call(164, 1, "write", 0), 164, 164, 64),
+    ];
+    let nodes = process_nodes(&calls);
+    let child = node(&nodes, 164, 64);
+    assert_eq!(child.comm, "/tmp/guardian");
+    assert_eq!(child.argv, ["/tmp/guardian", "-d"]);
+    assert!(child.forked);
+    assert_eq!(child.parent.unwrap().pid, 124);
+    assert!(!process_label(child).starts_with("unknown"));
+}
+
+#[test]
+pub fn a_subshell_that_only_forks_holds_its_children() {
+    // sh -c '(crontab -l | grep -v x) | crontab -': the subshell forks the
+    // two commands and runs no exec of its own.
+    let calls = vec![
+        as_task(
+            exec(
+                129,
+                "/bin/sh",
+                &["sh", "-c", "(crontab -l | grep -v x) | crontab -"],
+            ),
+            129,
+            129,
+            9,
+        ),
+        as_task(fork(129, 130), 129, 129, 9),
+        as_task(fork(130, 132), 130, 130, 10),
+        as_task(exec(132, "/bin/crontab", &["crontab", "-l"]), 132, 132, 12),
+        as_task(fork(130, 133), 130, 130, 10),
+        as_task(exec(133, "/bin/grep", &["grep", "-v", "x"]), 133, 133, 13),
+    ];
+    let nodes = process_nodes(&calls);
+    let subshell = node(&nodes, 130, 10);
+    assert_eq!(subshell.parent.unwrap().pid, 129);
+    assert!(subshell.forked);
+    assert_eq!(subshell.comm, "/bin/sh");
+    for pid in [132, 133] {
+        let child = nodes.iter().find(|n| n.pid == pid).unwrap();
+        assert_eq!(child.parent.unwrap().pid, 130, "{pid}");
+        assert!(!child.parent_missing, "{pid}");
+    }
+}
+
+#[test]
+pub fn a_failed_exec_is_in_the_tree_with_its_error() {
+    use super::rules::tests::support::failed_exec;
+    let calls = vec![
+        as_task(
+            exec(1, "/bin/sh", &["sh", "-c", "chattr +i /etc/x"]),
+            1,
+            1,
+            10,
+        ),
+        as_task(fork(1, 2), 1, 1, 10),
+        as_task(
+            failed_exec(2, "/usr/bin/chattr", &["chattr", "+i", "/etc/x"]),
+            2,
+            2,
+            20,
+        ),
+    ];
+    let nodes = process_nodes(&calls);
+    let child = node(&nodes, 2, 20);
+    assert_eq!(child.parent.unwrap().pid, 1);
+    let text = history_text(child);
+    assert_eq!(text, "exec of /usr/bin/chattr failed (ENOENT)");
+}
+
+#[test]
+pub fn a_program_run_again_through_proc_self_exe_is_named_by_its_argv0() {
+    let calls = vec![
+        as_task(
+            exec(129, "/bin/sh", &["sh", "-c", "crontab -l"]),
+            129,
+            129,
+            9,
+        ),
+        as_task(fork(129, 132), 129, 129, 9),
+        as_task(
+            exec(132, "/proc/self/exe", &["crontab", "-l"]),
+            132,
+            132,
+            12,
+        ),
+    ];
+    let nodes = process_nodes(&calls);
+    assert_eq!(
+        process_label(node(&nodes, 132, 12)),
+        "crontab via /proc/self/exe (132 \u{b7} 132)"
+    );
+}
