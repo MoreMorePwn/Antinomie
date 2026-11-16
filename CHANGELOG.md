@@ -1314,6 +1314,12 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **Queued runs no longer fail together after `[queue] wait_s`.** A run waiting for
+  disk or memory held by the runs in front of it now stays queued: the wait counts
+  only while no run is in progress, a shortage that is gone when the wait is up keeps
+  the run queued, and a run that does fail (`host_resources`) names the resource and
+  its numbers in `failure.detail`. The alert `queue_waiting` says what queued runs
+  wait for, with the numbers, when they start waiting and hourly while they do.
 - **A busy lane no longer runs the daemon out of open files.** Every lane's engine
   runs in the daemon's process, and a guest that scans the network opened up to 256
   connections per lane, each holding four or five descriptors; two such runs at once

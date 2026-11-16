@@ -525,7 +525,7 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `preset_denied` | submit | no | There is no such preset (`details.preset`); nothing is stored |
 | `limit_exceeded` | submit | no | The priority, the run time or the runs of the last 24 hours are above the caller's limit, or a value is above a node ceiling (`details.field`, `details.limit`, `details.source` `caller` or `node`; `details.next_at_ms` for the daily count); the caller's limits are set in `service.toml` `[limits.local]` and per watch folder `priority_max` |
 | `unavailable_on_node` | submit | no | The node does not have it: a live route, keeping the VM after a failure (both arrive with 0.9.1), or another lane group; `details.what` |
-| `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The run waits `queued` for up to `[queue] wait_s` (3600), then fails |
+| `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The run waits `queued` for up to `[queue] wait_s` (3600), then fails; `failure.detail` names what was short and its numbers. A wait for disk, memory or `max_running` does not count while any run is in progress (the runs in front hold what it waits for), and one whose shortage is gone when the time is up stays queued |
 | `no_base`, `no_vm` | provision | no | The lane VM or its base is gone; `auto lane list` says which |
 | `vm_start_failed`, `guest_unreachable` | provision, upload, launch | yes | The VM or its guest did not come up, the guest kernel crashed while it booted (the crash line is the detail), or the guest stopped answering before the program ran and the engine could not get it back in time; three in a row quarantine the lane |
 | `revert_failed`, `lane_changed` | provision | no | The lane is quarantined (see above) |
@@ -566,7 +566,9 @@ connections faster than they close gets no answer past what the limit leaves.
 `resources` (below `min_free_disk_gib` or the RAM floor, the queue pauses),
 `dependency`, `quota`, `queue_paused`, `layer_pending` (the previous run's disk is
 still being saved, which can take minutes after a run that changed many files),
-`backoff` or `lane_quarantined`. A file `<data>/run/PAUSE` pauses admission on
+`backoff` or `lane_quarantined`. The alert `queue_waiting` says what queued runs
+wait for, with the numbers, when they start waiting and hourly while they do. A
+file `<data>/run/PAUSE` pauses admission on
 every lane within five seconds, also while other lanes run runs (a lane running a
 run starts no other until it ends); `auto queue resume` or removing the file
 continues. Low disk and a missing KVM pause every lane the same way.

@@ -9,7 +9,10 @@ use crate::{
     },
     config::{Preset, service::Resources},
     lane::tests::VM,
-    resources::{Floors, Governor, LOW_MEMORY_ALERT_EVERY_MS, Probes, ResourceChecks, Shortage},
+    resources::{
+        Floors, Governor, LOW_MEMORY_ALERT_EVERY_MS, Probes, QUEUE_WAITING_ALERT_EVERY_MS,
+        ResourceChecks, Shortage,
+    },
     stages::{
         Driven, HostChecks, HostProblem,
         run_tests::{execute_run, stop_ok, stop_run_ok},
@@ -345,6 +348,51 @@ fn low_memory_is_alerted_once_an_hour_and_never_pauses() {
     governor.tick(LOW_MEMORY_ALERT_EVERY_MS + 1).unwrap();
     *machine.mem_mib.lock().unwrap() = Some(100);
     governor.tick(LOW_MEMORY_ALERT_EVERY_MS + 2).unwrap();
+    assert_eq!(alerts(&fx).len(), 3);
+}
+
+/// A43: queued runs that cannot start say what they wait for, with the
+/// numbers, once and then hourly; a queue with nothing short says nothing.
+#[test]
+fn queued_runs_short_of_a_resource_are_alerted_with_what_they_wait_for() {
+    let machine = Machine::healthy();
+    let fx = Fx::new("gov-waiting");
+    let mut governor = Governor::new(checks(&machine, true), &fx.store);
+    // Above the pause floor (20 GiB), below the floor plus a run (24 GiB).
+    machine.disk("/rec", 22);
+    governor.tick(0).unwrap();
+    assert!(alerts(&fx).is_empty(), "nothing is queued");
+    fx.queued(1);
+    fx.queued(2);
+    governor.tick(5_000).unwrap();
+    governor.tick(QUEUE_WAITING_ALERT_EVERY_MS - 1).unwrap();
+    assert_eq!(alerts(&fx), ["queue_waiting"]);
+    let text = fx
+        .store
+        .events_since(0, 1000)
+        .unwrap()
+        .into_iter()
+        .find_map(|e| match e.body {
+            EventBody::EngineAlert { code, text } if code == "queue_waiting" => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        text,
+        "2 queued run(s) wait for resources: /rec has 22 GiB free, 24 GiB are needed; they stay queued and start once it is back"
+    );
+    governor.tick(QUEUE_WAITING_ALERT_EVERY_MS + 5_000).unwrap();
+    assert_eq!(alerts(&fx), ["queue_waiting", "queue_waiting"]);
+    assert_eq!(fx.store.pause_reason().unwrap(), None, "runs just wait");
+    // Back, then short again: at once.
+    machine.disk("/rec", 500);
+    governor
+        .tick(QUEUE_WAITING_ALERT_EVERY_MS + 10_000)
+        .unwrap();
+    machine.disk("/rec", 22);
+    governor
+        .tick(QUEUE_WAITING_ALERT_EVERY_MS + 15_000)
+        .unwrap();
     assert_eq!(alerts(&fx).len(), 3);
 }
 

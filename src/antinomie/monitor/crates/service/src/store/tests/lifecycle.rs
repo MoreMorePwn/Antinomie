@@ -506,6 +506,59 @@ fn a_job_that_waits_too_long_fails_with_the_code_of_the_wait() {
     assert!(fx.store.expire_waits().unwrap().is_empty());
 }
 
+/// A43: the tail of a big batch waits for disk the runs in front of it
+/// hold. Its clock does not run while a run is in progress, a shortage that
+/// is gone keeps it queued, and a real one fails it with the resource and
+/// its numbers.
+#[test]
+fn a_resource_wait_counts_only_while_no_run_is_in_progress() {
+    let mut fx = Fx::new("wait-busy");
+    fx.limits.wait_s = 100;
+    let running = fx.running(1);
+    let tail: Vec<_> = (2..5).map(|n| fx.queued(n).id).collect();
+    fx.store
+        .claim_next(&lane(), &mut |_| Eligibility::Wait(WaitingFor::Resources))
+        .unwrap();
+    let words = "/data has 9 GiB free, 14 GiB are needed".to_owned();
+    let short = |wait: WaitingFor| (wait == WaitingFor::Resources).then(|| Some(words.clone()));
+    // An hour behind a run that holds the disk: still queued.
+    for _ in 0..36 {
+        fx.clock.advance(100_000);
+        assert!(fx.store.expire_waits_with(&short).unwrap().is_empty());
+    }
+    for id in &tail {
+        let job = fx.store.get(id).unwrap();
+        assert_eq!(job.state, RunState::Queued);
+        assert_eq!(job.waiting_for, Some(WaitingFor::Resources));
+    }
+    // The run ends; the clock starts from the last pass.
+    fx.store
+        .finish(&running.id, Outcome::Succeeded, None)
+        .unwrap();
+    fx.clock.advance(99_999);
+    assert!(fx.store.expire_waits_with(&short).unwrap().is_empty());
+    // The disk is back when the wait is up: the runs stay queued.
+    fx.clock.advance(1);
+    assert!(
+        fx.store
+            .expire_waits_with(&|_| Some(None))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fx.store.get(&tail[0]).unwrap().state, RunState::Queued);
+    // A shortage with nothing running for the whole wait is a real limit.
+    fx.clock.advance(100_000);
+    let failed = fx.store.expire_waits_with(&short).unwrap();
+    assert_eq!(failed.len(), 3);
+    let failure = failed[0].failure.as_ref().unwrap();
+    assert_eq!(failure.code, FailureCode::HostResources);
+    assert_eq!(
+        failure.message,
+        "waited 100 seconds for resources with no run in progress"
+    );
+    assert_eq!(failure.detail.as_deref(), Some(words.as_str()));
+}
+
 #[test]
 fn artifacts_warnings_and_assessment_belong_to_a_running_job() {
     use crate::api::{
