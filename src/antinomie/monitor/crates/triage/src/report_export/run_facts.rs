@@ -142,11 +142,14 @@ fn sample(job: &Job, run: &RunSummary) -> Option<SampleInfo> {
         .as_ref()
         .filter(|sample| sample.sha256.len() == 64)
     {
+        // Static analysis knows the size; without it (Auto mode may skip it)
+        // the library's record does.
         let size = job
             .sample
             .as_ref()
             .filter(|known| known.sha256 == recorded.sha256)
-            .and_then(|known| known.size);
+            .and_then(|known| known.size)
+            .or_else(|| library_size(job.data_dir.as_deref(), &recorded.sha256));
         return Some(SampleInfo {
             name: recorded.name.clone(),
             sha256: recorded.sha256.clone(),
@@ -168,7 +171,8 @@ fn sample(job: &Job, run: &RunSummary) -> Option<SampleInfo> {
                 .sample
                 .as_ref()
                 .filter(|known| known.sha256 == library.sha256)
-                .and_then(|known| known.size),
+                .and_then(|known| known.size)
+                .or_else(|| library_size(job.data_dir.as_deref(), &library.sha256)),
             role: match library.role() {
                 "preloaded" => "preloaded library".to_owned(),
                 other => other.to_owned(),
@@ -230,6 +234,13 @@ fn sample(job: &Job, run: &RunSummary) -> Option<SampleInfo> {
         size: Some(record.size),
         role: "preloaded library".into(),
     })
+}
+
+/// The size the sample library in `data_dir` records for `sha256`.
+pub(crate) fn library_size(data_dir: Option<&std::path::Path>, sha256: &str) -> Option<u64> {
+    let data_dir = data_dir?;
+    let library = antinomie_monitor_core::samples::Library::open(data_dir).ok()?;
+    library.get(sha256).ok().flatten().map(|record| record.size)
 }
 
 /// [`sample`] and [`command`] for the re-export check.
@@ -296,6 +307,38 @@ fn environment(run: &RunSummary) -> Vec<Fact> {
 mod tests {
     use super::*;
     use antinomie_monitor_core::{ExecRequest, RunExecution, RunState};
+
+    #[test]
+    fn the_sample_size_comes_from_the_library_without_static_analysis() {
+        use antinomie_monitor_core::samples::{Library, NewOrigin, NewSample, OriginKind};
+        let dir = std::env::temp_dir().join(format!(
+            "ant-sample-size-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let added = Library::open(&dir)
+            .unwrap()
+            .add_bytes(
+                b"\x7fELF a small sample",
+                NewSample {
+                    origin: NewOrigin {
+                        kind: OriginKind::Added,
+                        path: "/tmp/s".into(),
+                        ..NewOrigin::default()
+                    },
+                    ..NewSample::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(super::library_size(Some(&dir), &added.sha256), Some(19));
+        assert_eq!(super::library_size(Some(&dir), &"0".repeat(64)), None);
+        assert_eq!(super::library_size(None, &added.sha256), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn record(state: RunState, root: Option<WaitStatus>) -> RunSummary {
         let mut run = super::super::fixtures::test_run("r1", "/bin/sh");
