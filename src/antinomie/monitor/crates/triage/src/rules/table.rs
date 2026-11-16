@@ -981,6 +981,13 @@ pub const SPECS: &[Spec] = &[
     )
     .signal(),
     rule(
+        "lateral.exploit_payload",
+        1,
+        T::High,
+        C::Lateral,
+        &["T1210", "DET0118", "T1105"],
+    ),
+    rule(
         "lateral.service_exploit",
         1,
         T::Medium,

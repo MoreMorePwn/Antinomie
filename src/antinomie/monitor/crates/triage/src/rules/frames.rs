@@ -87,6 +87,8 @@ pub struct Frames {
     /// Every address a DNS answer of the run gave: a connect to one of
     /// these is to a named server, not a hard-coded one.
     pub resolved: std::collections::BTreeSet<IpAddr>,
+    /// HTTP requests that carried a download command (`lateral.exploit_payload`).
+    pub exploit_requests: u64,
 }
 
 /// Names the base looks up by itself: time sync, package mirrors and connectivity checks.
@@ -348,6 +350,24 @@ pub fn rules(st: &mut super::state::State, frame: &Frame) -> Vec<Hit> {
                     format!("HTTP on port {port} ({name})"),
                 ));
             }
+            let body = frame.text("http.body");
+            if let Some(command) = exploit_payload(uri).or_else(|| exploit_payload(body)) {
+                state.exploit_requests += 1;
+                let port = frame
+                    .port()
+                    .map_or_else(String::new, |port| format!(" on port {port}"));
+                hits.push(
+                    Hit::new(
+                        "lateral.exploit_payload",
+                        format!("HTTP{port}"),
+                        format!("HTTP request to {name}{port} carrying the command {command}"),
+                    )
+                    .detail(format!(
+                        "First request: {}",
+                        super::exec::short(&format!("{name}{uri}"))
+                    )),
+                );
+            }
             beat(state, &name, time, &mut hits);
         }
         FrameKind::Session => {
@@ -417,6 +437,133 @@ pub fn rules(st: &mut super::state::State, frame: &Frame) -> Vec<Hit> {
         }
     }
     hits
+}
+
+/// The download command an HTTP request line or body carries, when it is an
+/// exploit's payload (A15): `wget`, `curl`, `tftp`, `ftpget` or `busybox`
+/// with a URL, a shell or a pipe, after URL decoding (`nas_sharing.cgi?...
+/// wget http://x/ghost.sh;sh`, an xwiki Groovy call that runs `wget ...|sh`).
+pub fn exploit_payload(text: &str) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+    let decoded = percent_decode(text);
+    payload_in(&decoded).or_else(|| {
+        // A query value in base64 (`nas_sharing.cgi?...&system=ZWNobyAt...`),
+        // perhaps of `echo -e '\x77\x67...'`.
+        decoded
+            .split(['?', '&', '=', ';'])
+            .filter(|value| value.len() >= 16)
+            .filter_map(base64_text)
+            .find_map(|inner| payload_in(&hex_unescape(&inner)))
+    })
+}
+
+fn payload_in(decoded: &str) -> Option<String> {
+    let lower = decoded.to_ascii_lowercase();
+    let fetcher = [
+        "wget ",
+        "curl ",
+        "tftp ",
+        "ftpget ",
+        "busybox wget",
+        "busybox tftp",
+    ]
+    .iter()
+    .filter_map(|word| lower.find(word))
+    .min()?;
+    let rest = &lower[fetcher..];
+    let runs = rest.contains("http://")
+        || rest.contains("https://")
+        || rest.contains("|sh")
+        || rest.contains("| sh")
+        || rest.contains(";sh")
+        || rest.contains("; sh")
+        || rest.contains("chmod")
+        || rest.contains("-g ");
+    runs.then(|| {
+        let end = decoded[fetcher..]
+            .char_indices()
+            .nth(120)
+            .map_or(decoded.len(), |(at, _)| fetcher + at);
+        decoded[fetcher..end].trim().to_owned()
+    })
+}
+
+/// Standard base64 (padding optional) decoded to text, when all of
+/// `value` is base64 and the result is mostly printable.
+fn base64_text(value: &str) -> Option<String> {
+    let digit = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' | b'-' => Some(62),
+        b'/' | b'_' => Some(63),
+        _ => None,
+    };
+    let trimmed = value.trim_end_matches('=');
+    let mut bits = 0u32;
+    let mut held = 0;
+    let mut out = Vec::new();
+    for byte in trimmed.bytes() {
+        bits = (bits << 6) | u32::from(digit(byte)?);
+        held += 6;
+        if held >= 8 {
+            held -= 8;
+            out.push((bits >> held) as u8);
+            bits &= (1 << held) - 1;
+        }
+    }
+    let printable = out
+        .iter()
+        .filter(|b| b.is_ascii_graphic() || **b == b' ')
+        .count();
+    (out.len() >= 8 && printable * 10 >= out.len() * 9)
+        .then(|| String::from_utf8_lossy(&out).into_owned())
+}
+
+/// `\xNN` escapes decoded (`echo -e '\x77\x67\x65\x74'` is `wget`).
+fn hex_unescape(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let hex = |byte: u8| char::from(byte).to_digit(16);
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'\\' && at + 3 < bytes.len() && bytes[at + 1] == b'x' {
+            if let (Some(high), Some(low)) = (hex(bytes[at + 2]), hex(bytes[at + 3])) {
+                out.push((high * 16 + low) as u8);
+                at += 4;
+                continue;
+            }
+        }
+        out.push(bytes[at]);
+        at += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `%xx` and `+` decoded, invalid escapes kept as they are.
+fn percent_decode(text: &str) -> String {
+    let hex = |byte: u8| char::from(byte).to_digit(16);
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'%' if at + 2 < bytes.len() => {
+                if let (Some(high), Some(low)) = (hex(bytes[at + 1]), hex(bytes[at + 2])) {
+                    out.push((high * 16 + low) as u8);
+                    at += 3;
+                    continue;
+                }
+                out.push(b'%');
+            }
+            b'+' => out.push(b' '),
+            byte => out.push(byte),
+        }
+        at += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Requests to one host at a steady pace.

