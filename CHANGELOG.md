@@ -1314,6 +1314,11 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **The command line installs analysis tools and rule packs (ANT-T0556).**
+  `antinomie-cli tools list|install|update` downloads, checks and unpacks capa,
+  FLOSS, Ghidra, Detect It Easy and the other optional tools as Tools > Analysis
+  tools does, and `antinomie-cli rules catalog|install|update` installs and updates
+  the catalog's rule packs as Tools > Detection rules does, with the same code.
 - **capa on arm64 and under emulation (ANT-T0556, A44).** capa and FLOSS read x86
   programs only: for an ELF of another architecture their Auto item is skipped as
   "not applicable to this architecture" and no longer makes a warning or a partial

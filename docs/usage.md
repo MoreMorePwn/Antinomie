@@ -2468,6 +2468,26 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   custom groups with their state; `rules enable ID` and `rules disable ID` switch
   one (`pack:ID` or `group:ID` when an id names both). Changing the selection
   takes the data-directory lock; listing does not.
+- **Rule packs from the catalog.** `rules catalog` checks the rules catalog and
+  lists its packs (`id`, engine, the catalog's version, the installed one).
+  `rules install ID...` downloads, checks, filters and indexes catalog packs with
+  their default options, through the same code as **Tools > Detection rules**
+  (for example `rules install yara-forge-core`); the registry changes only once a
+  pack is complete, so a failed install keeps what was there. `rules update
+  [ID...]` installs the catalog's newer version of the installed packs (only the
+  named ones when ids are given) with the options they were installed with.
+  Running the command is the consent to download; Ctrl-C stops it. No engine lock:
+  a daemon may run meanwhile, and its next scan uses the new selection.
+- **Analysis tools.** `tools list` lists the optional static-analysis tools (capa,
+  FLOSS, Ghidra, Detect It Easy, UPX, Volatility 3, Sigma, Magika, ...): the
+  version this app pins, the version Antinomie installed and a system copy, which
+  takes precedence. `tools install ID...` downloads, checks (SHA-256) and unpacks
+  them into `<data>/tools/<id>/` exactly as **Tools > Analysis tools** does, and
+  resumes a cut download (`tools install capa floss ghidra die`). `tools update
+  [ID...]` installs again each tool Antinomie installed at another version than
+  the pinned one. No engine lock: each static analysis looks its tools up when it
+  starts, so a daemon's next run uses a tool installed now. The network routes'
+  programs (Tor, wireproxy) are set up with the routes, not here.
 - `ioc datasets list` lists the abuse.ch IOC datasets (ThreatFox, URLhaus dump,
   URLhaus payloads, Feodo Tracker, SSLBL JA3, SSLBL certificates, URLhaus recent):
   `name`, `state` (`loaded`, `old` past 14 days, `not_downloaded`, `failed`,
