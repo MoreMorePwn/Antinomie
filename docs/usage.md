@@ -1728,7 +1728,12 @@ line is cut, the whole of it is on hover) and **Tree status**, **Root exit** and
   with **Open in Per-file history**, **Export bytes** and **Copy SHA-256**. The list
   comes from each run's Triage digest. Every finished run gets its digest on its own
   (see **Run digests** below), so a run is listed as not read yet only in the moments
-  before its digest is built, or when its recording cannot be read. The ATT&CK section has **Show all N**: the same
+  before its digest is built, or when its recording cannot be read. **Similar
+  samples** lists up to five library samples within a **TLSH Distance** of 100 (0
+  is identical), nearest first, with what they share (imports for ELF files,
+  strings otherwise). Every sample of the library is compared, by the TLSH it
+  stored when it was added, without reading its file; only the samples listed are
+  read, for what they share ("archive not readable" when one cannot be). The ATT&CK section has **Show all N**: the same
   list as in Triage, each technique with what cited it and its runs as links into
   Triage.
 - **Runs**: the sample's runs in start order, with the run-state colours above.

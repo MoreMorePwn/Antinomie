@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Summary's Similar samples: library samples close to this one by TLSH
 //! distance, with what they share (imports for ELF files, strings otherwise).
-//! The comparison reads archives, so it runs on a worker thread once per
-//! window; parents and children are left out, the lineage graph shows them.
+//! The comparison reads every sample's stored TLSH and the archives of the
+//! few it lists, so it runs on a worker thread once per window; parents and
+//! children are left out, the lineage graph shows them.
 use super::{parts, *};
 use crate::widgets::fit_table;
 use antinomie_monitor_core::samples::Similar;
@@ -97,10 +98,10 @@ pub(super) fn section(ui: &mut egui::Ui, state: &State, font: f32) -> Option<Str
                             .at_least(200.0)
                             .clip(true),
                     )
-                    .column(crate::widgets::fit_table::Col::fixed(90.0))
+                    .column(crate::widgets::fit_table::Col::fixed(120.0))
                     .column(crate::widgets::fit_table::Col::fixed(180.0))
                     .header(fit_table::header_height(font), |mut header| {
-                        for title in ["Sample", "Distance", "Shared"] {
+                        for title in ["Sample", "TLSH Distance", "Shared"] {
                             header.col(|ui| fit_table::head(ui, title));
                         }
                     })
@@ -132,4 +133,44 @@ pub(super) fn section(ui: &mut egui::Ui, state: &State, font: f32) -> Option<Str
         }
     });
     open
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use antinomie_monitor_core::samples::Shared;
+
+    #[test]
+    fn the_distance_column_says_it_is_a_tlsh_distance() {
+        // ANT-T0555 item 5.
+        let state = State::Done(vec![Similar {
+            sha256: "ab".repeat(32),
+            name: "loader-2.sh".into(),
+            distance: 12,
+            shared: Shared::Unread,
+        }]);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let frame = || {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 400.0),
+                    )),
+                    ..Default::default()
+                },
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        section(ui, &state, 16.0);
+                    });
+                },
+            )
+        };
+        frame();
+        let shown = crate::app::tests::texts(&frame());
+        for text in ["TLSH Distance", "12", "archive not readable"] {
+            assert!(shown.iter().any(|(t, _)| t == text), "{text}: {shown:?}");
+        }
+    }
 }

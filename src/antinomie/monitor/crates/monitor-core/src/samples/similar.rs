@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Library samples that look like another by TLSH distance, and what they
-//! share. The stored hash cannot be parsed back by `tlsh2`, so a candidate's
-//! hash is built again from its archived bytes; only samples up to
-//! [`MAX_SIZE`] are compared and at most [`MAX_CANDIDATES`] are read, so
-//! opening a sample window never reads the whole library.
+//! share. The distance is computed on the TLSH each sample stored when it
+//! was added (`tlsh2` parses the `T1` text back), against every sample of
+//! the library, with no file read; only the few listed are read from their
+//! archives, for what they share.
 use super::Library;
 use std::collections::{BTreeSet, HashSet};
 
@@ -12,10 +12,6 @@ use std::collections::{BTreeSet, HashSet};
 pub const MAX_DISTANCE: i32 = 100;
 /// Rows the Summary lists.
 pub const MAX_ROWS: usize = 5;
-/// Archives larger than this are not compared.
-pub const MAX_SIZE: u64 = 16 * 1024 * 1024;
-/// Samples read for one comparison.
-pub const MAX_CANDIDATES: usize = 300;
 /// The shortest string that counts as shared.
 const MIN_STRING: usize = 8;
 /// Strings kept per file.
@@ -28,12 +24,16 @@ pub enum Shared {
     Imports { count: usize, examples: Vec<String> },
     /// Anything else: printable strings of eight or more characters.
     Strings { count: usize, examples: Vec<String> },
+    /// One of the two archives could not be read (removed, moved or
+    /// damaged): the distance stands, what they share is not known.
+    Unread,
 }
 
 impl Shared {
     pub fn count(&self) -> usize {
         match self {
             Shared::Imports { count, .. } | Shared::Strings { count, .. } => *count,
+            Shared::Unread => 0,
         }
     }
 
@@ -41,6 +41,7 @@ impl Shared {
         let (count, word) = match self {
             Shared::Imports { count, .. } => (*count, "import"),
             Shared::Strings { count, .. } => (*count, "string"),
+            Shared::Unread => return "archive not readable".into(),
         };
         format!("{count} {word}{}", if count == 1 { "" } else { "s" })
     }
@@ -48,6 +49,7 @@ impl Shared {
     pub fn examples(&self) -> &[String] {
         match self {
             Shared::Imports { examples, .. } | Shared::Strings { examples, .. } => examples,
+            Shared::Unread => &[],
         }
     }
 }
@@ -60,8 +62,10 @@ pub struct Similar {
     pub shared: Shared,
 }
 
-fn tlsh(bytes: &[u8]) -> Option<tlsh2::TlshDefault> {
-    tlsh2::TlshDefaultBuilder::build_from(bytes)
+/// A TLSH as the library stores it (`T1` and 70 hex digits, see
+/// `intake::tlsh_of`), or `None` when it is empty or not one.
+fn parse(hash: &str) -> Option<tlsh2::TlshDefault> {
+    hash.parse().ok()
 }
 
 /// Symbols an ELF file imports, or `None` when it is not an ELF file.
@@ -130,72 +134,83 @@ pub fn shared(a: &[u8], b: &[u8]) -> Shared {
     }
 }
 
-/// The closest of `candidates` to `subject`, nearest first.
-pub fn rank<'a>(
-    subject: &[u8],
-    candidates: impl Iterator<Item = (&'a str, &'a str, Vec<u8>)>,
-) -> Result<Vec<Similar>, String> {
-    let Some(mine) = tlsh(subject) else {
+/// The closest of `candidates` (sha256, name, stored TLSH) to the stored
+/// TLSH `subject`, nearest first (then by name): at most [`MAX_ROWS`] within
+/// [`MAX_DISTANCE`], as (sha256, name, distance). A candidate without a
+/// readable hash is left out.
+pub fn closest(
+    subject: &str,
+    candidates: impl IntoIterator<Item = (String, String, String)>,
+) -> Result<Vec<(String, String, i32)>, String> {
+    if subject.is_empty() {
         return Err("too small or too uniform for a similarity hash".into());
+    }
+    let Some(mine) = parse(subject) else {
+        return Err("its similarity hash is not readable".into());
     };
-    let mut found: Vec<Similar> = candidates
-        .filter_map(|(sha256, name, bytes)| {
-            let theirs = tlsh(&bytes)?;
-            let distance = mine.diff(&theirs, true);
-            (distance <= MAX_DISTANCE).then(|| Similar {
-                sha256: sha256.to_owned(),
-                name: name.to_owned(),
-                distance,
-                shared: shared(subject, &bytes),
-            })
+    let mut found: Vec<(String, String, i32)> = candidates
+        .into_iter()
+        .filter_map(|(sha256, name, hash)| {
+            let distance = mine.diff(&parse(&hash)?, true);
+            (distance <= MAX_DISTANCE).then_some((sha256, name, distance))
         })
         .collect();
-    found.sort_by(|a, b| {
-        a.distance
-            .cmp(&b.distance)
-            .then_with(|| a.name.cmp(&b.name))
-    });
+    found.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.1.cmp(&b.1)));
     found.truncate(MAX_ROWS);
     Ok(found)
 }
 
 impl Library {
     /// The samples most like `sha256`, leaving out `exclude` (itself, its
-    /// parents and its children, which the lineage graph shows).
+    /// parents and its children, which the lineage graph shows) and removed
+    /// samples. Every sample's stored TLSH is compared; only the samples
+    /// listed (and `sha256`) are read, for what they share.
     pub fn similar_to(
         &self,
         sha256: &str,
         exclude: &HashSet<String>,
     ) -> Result<Vec<Similar>, String> {
-        let archive = self.archive_path(sha256)?;
-        let subject = super::open_sample(&archive, sha256)?;
-        let mut loaded = Vec::new();
-        for record in self.list()? {
-            if loaded.len() >= MAX_CANDIDATES {
-                break;
-            }
-            if record.sha256 == sha256
-                || exclude.contains(&record.sha256)
-                || record.removed_ms.is_some()
-                || record.size > MAX_SIZE
-                || record.tlsh.is_empty()
-            {
-                continue;
-            }
-            let Ok(path) = self.archive_path(&record.sha256) else {
-                continue;
-            };
-            let Ok(bytes) = super::open_sample(&path, &record.sha256) else {
-                continue;
-            };
-            loaded.push((record.sha256, record.name, bytes));
+        let sha256 = sha256.to_ascii_lowercase();
+        let subject = self
+            .get(&sha256)?
+            .ok_or_else(|| format!("{sha256} is not in the library"))?;
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT sha256, name, tlsh FROM sample WHERE tlsh != '' AND removed_ms IS NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let candidates: Vec<(String, String, String)> = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .filter(|(candidate, _, _)| *candidate != sha256 && !exclude.contains(candidate))
+            .collect();
+        let found = closest(&subject.tlsh, candidates)?;
+        if found.is_empty() {
+            return Ok(Vec::new());
         }
-        rank(
-            &subject,
-            loaded
-                .iter()
-                .map(|(sha, name, bytes)| (sha.as_str(), name.as_str(), bytes.clone())),
-        )
+        let read = |sha: &str| {
+            self.archive_path(sha)
+                .and_then(|path| super::open_sample(&path, sha))
+                .ok()
+        };
+        let mine = read(&sha256);
+        Ok(found
+            .into_iter()
+            .map(|(sha256, name, distance)| {
+                let shared = match (&mine, read(&sha256)) {
+                    (Some(mine), Some(theirs)) => shared(mine, &theirs),
+                    _ => Shared::Unread,
+                };
+                Similar {
+                    sha256,
+                    name,
+                    distance,
+                    shared,
+                }
+            })
+            .collect())
     }
 }
 
@@ -219,6 +234,14 @@ mod tests {
         out.into_bytes()
     }
 
+    fn row(sha256: &str, name: &str, bytes: &[u8]) -> (String, String, String) {
+        (
+            sha256.into(),
+            name.into(),
+            super::super::intake::tlsh_of(bytes),
+        )
+    }
+
     #[test]
     fn a_near_copy_is_close_and_shares_strings_and_an_unrelated_file_is_not_listed() {
         let base = text(1);
@@ -227,26 +250,57 @@ mod tests {
         let unrelated: Vec<u8> = (0..60_000u32)
             .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
             .collect();
-        let found = rank(
-            &base,
+        let found = closest(
+            &super::super::intake::tlsh_of(&base),
             [
-                ("aa", "variant", variant.clone()),
-                ("bb", "noise", unrelated),
-            ]
-            .into_iter(),
+                row("aa", "variant", &variant),
+                row("bb", "noise", &unrelated),
+                ("cc".into(), "no hash".into(), String::new()),
+                ("dd".into(), "damaged".into(), "T1zz".into()),
+            ],
         )
         .unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!(found[0].sha256, "aa");
-        assert!(found[0].distance < 50);
-        assert!(matches!(found[0].shared, Shared::Strings { count, .. } if count > 100));
-        assert_eq!(found[0].shared.label().split(' ').nth(1), Some("strings"));
+        assert_eq!(found[0].0, "aa");
+        assert!(found[0].2 < 50);
+        let shared = shared(&base, &variant);
+        assert!(matches!(shared, Shared::Strings { count, .. } if count > 100));
+        assert_eq!(shared.label().split(' ').nth(1), Some("strings"));
+        assert_eq!(Shared::Unread.label(), "archive not readable");
     }
 
     #[test]
     fn a_subject_too_small_for_a_hash_says_why() {
-        let error = rank(b"tiny", std::iter::empty()).unwrap_err();
+        let error = closest("", Vec::new()).unwrap_err();
         assert!(error.contains("too small"), "{error}");
+        let error = closest("T1nothex", Vec::new()).unwrap_err();
+        assert!(error.contains("not readable"), "{error}");
+    }
+
+    #[test]
+    fn a_stored_hash_gives_the_distance_tlsh2_gives_on_the_files() {
+        // The stored text parses back to the same hash, and the distance on
+        // two parsed hashes is tlsh2's own `diff` on the two files.
+        let files: Vec<Vec<u8>> = (1..=12u32)
+            .map(|seed| {
+                let mut bytes = text(seed % 4 + 1);
+                // Near copies and far files alike.
+                bytes.extend(text(seed).iter().take(seed as usize * 700));
+                bytes
+            })
+            .collect();
+        for a in &files {
+            let stored = super::super::intake::tlsh_of(a);
+            let parsed = parse(&stored).expect("a stored TLSH parses");
+            assert_eq!(String::from_utf8_lossy(&parsed.hash()), stored);
+            for b in &files {
+                let built = tlsh2::TlshDefaultBuilder::build_from(a)
+                    .unwrap()
+                    .diff(&tlsh2::TlshDefaultBuilder::build_from(b).unwrap(), true);
+                let theirs = parse(&super::super::intake::tlsh_of(b)).unwrap();
+                assert_eq!(parsed.diff(&theirs, true), built);
+            }
+        }
     }
 
     #[test]
@@ -302,5 +356,80 @@ mod tests {
             "{names:?}"
         );
         assert!(matches!(shared(&bytes, &bytes), Shared::Imports { count, .. } if count > 10));
+    }
+
+    #[test]
+    fn every_library_sample_is_compared_by_its_stored_hash() {
+        // The variant is the oldest sample, behind thousands of newer ones:
+        // well past the 300 the old comparison read, in list order.
+        use crate::samples::{Library, NewSample};
+        let dir =
+            std::env::temp_dir().join(format!("ant-similar-many-{}", crate::storage::unique_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut library = Library::open(&dir).unwrap();
+        let base = text(1);
+        let mut variant = base.clone();
+        variant.extend_from_slice(b"\n# only the variant\n");
+        let add = |library: &mut Library, bytes: &[u8], name: &str| {
+            library
+                .add_bytes(
+                    bytes,
+                    NewSample {
+                        name: name.into(),
+                        ..NewSample::default()
+                    },
+                )
+                .unwrap()
+                .sha256
+        };
+        let near = add(&mut library, &variant, "variant");
+        let me = add(&mut library, &base, "base");
+        const ROWS: u64 = 4_000;
+        let newer = super::super::library::now_ms() + 1_000;
+        {
+            let tx = library.connection.unchecked_transaction().unwrap();
+            let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+            for n in 0..ROWS {
+                // A well-formed hash of random buckets: far from anything.
+                let mut hash = String::from("T1");
+                for _ in 0..35 {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    hash.push_str(&format!("{:02X}", x & 0xff));
+                }
+                tx.execute(
+                    "INSERT INTO sample(sha256, tlsh, name, size, added_ms) VALUES (?1, ?2, ?3, 1, ?4)",
+                    rusqlite::params![format!("{n:064x}"), hash, format!("synthetic {n}"), (newer + n) as i64],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        let position = library
+            .list()
+            .unwrap()
+            .iter()
+            .position(|record| record.sha256 == near)
+            .unwrap();
+        assert!(position > 300, "{position}");
+        let started = std::time::Instant::now();
+        let found = library.similar_to(&me, &HashSet::new()).unwrap();
+        let took = started.elapsed();
+        eprintln!("similar_to over {} samples: {took:?}", ROWS + 2);
+        assert_eq!(
+            found.first().map(|row| row.sha256.as_str()),
+            Some(near.as_str())
+        );
+        assert!(matches!(found[0].shared, Shared::Strings { count, .. } if count > 100));
+        // No archive read per candidate: thousands compare well within a
+        // second even on a loaded machine.
+        assert!(took < std::time::Duration::from_secs(3), "{took:?}");
+        // A listed sample whose archive is gone keeps its distance.
+        std::fs::remove_file(library.archive_path(&near).unwrap()).unwrap();
+        let found = library.similar_to(&me, &HashSet::new()).unwrap();
+        assert_eq!(found[0].sha256, near);
+        assert_eq!(found[0].shared, Shared::Unread);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
