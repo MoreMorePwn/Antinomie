@@ -32,6 +32,7 @@ x86 programs by their own table.
 - **arm64 VMs start as an IoT device (ANT-T0555, item 3).** New VM and Getting started give a VM on an arm64 base the **IoT device (Raspberry Pi)** preset; changing the base switches between it and Desktop while the profile is still the default; a preset you picked stays.
 - **Size hints follow the device profile (ANT-T0555, item 4).** The Still visible size lines and the VM dialog's CPU, RAM and disk hints name the profile's machines and use its ranges: Raspberry Pis 1 to 8 GiB of RAM and a disk of 8 GiB or more, cloud VPS instances 1 to 64 GiB and 20 to 200 GiB, servers 8 GiB and 240 GiB at least; Desktop and Laptop as before (a disk is flagged under 60 GiB, as the line said). The ranges and sources are in the catalog's `SOURCES.md`.
 - **Similar samples compares the whole library (ANT-T0555, item 5).** The column is **TLSH Distance**; every library sample is compared by its stored TLSH (it was only the first 300 in list order, each archive read again, and none over 16 MiB); only the five listed are read, for what they share.
+- **Time added in the Samples list (ANT-T0555, item 7).** A sortable **Time added** column follows SHA-256.
 - **Triage polish (ANT-T0550).** The Summary's MITRE ATT&CK, Processes of
   interest, Files and Network rows each have their own text colour; its notes
   are bullets and the run's last screenshot is gone from them; **Timed

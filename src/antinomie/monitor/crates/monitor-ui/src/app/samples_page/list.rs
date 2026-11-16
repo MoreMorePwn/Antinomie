@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The sample list: seven columns (name, description, tags, runs, parents /
-//! children, latest run, short SHA-256), a search field, a tag filter that
-//! keeps samples with every selected tag, and Roots only.
+//! The sample list: eight columns (name, description, tags, runs, parents /
+//! children, latest run, short SHA-256, time added), a search field, a tag
+//! filter that keeps samples with every selected tag, and Roots only.
 use super::{picker::TagPicker, *};
 use crate::widgets::Tip as _;
 use crate::{
@@ -123,7 +123,8 @@ impl MonitorApp {
                         .as_ref()
                         .and_then(|run| run.started_ms)
                         .cmp(&b.runs.latest.as_ref().and_then(|run| run.started_ms)),
-                    _ => a.record.sha256.cmp(&b.record.sha256),
+                    6 => a.record.sha256.cmp(&b.record.sha256),
+                    _ => a.record.added_ms.cmp(&b.record.added_ms),
                 }
             });
         let action = self.library_table(ui, &shown, &order, font);
@@ -352,6 +353,7 @@ impl MonitorApp {
                 .column(Col::fixed(100.0))
                 .column(Col::flex(250.0).at_least(120.0).resizable(true))
                 .column(Col::fixed(104.0))
+                .column(Col::fixed(140.0))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
                 .header(fit_table::header_height(font), |mut header| {
@@ -363,6 +365,7 @@ impl MonitorApp {
                         "Lineage",
                         "Latest run",
                         "SHA-256",
+                        "Time added",
                     ]
                     .into_iter()
                     .enumerate()
@@ -494,6 +497,11 @@ fn sample_cells(
     });
     table_row.col(|ui| {
         fit_table::cell(ui, fit_table::Cell::Mono, &sha256[..SHORT_HASH]).on_hover_text(sha256);
+    });
+    table_row.col(|ui| {
+        let added = Some(row.record.added_ms);
+        fit_table::cell(ui, fit_table::Cell::Mono, &started(added))
+            .on_hover_text(crate::time_format::unix_ms(added));
     });
 }
 

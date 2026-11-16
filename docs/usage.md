@@ -1700,7 +1700,9 @@ uid, SHA-256, size, when it was seen and whether it ended, and the hold).
 ## 5. Samples
 
 **Library > Samples** (sidebar) lists every sample across runs and VMs with its
-origins and tags; opening one shows the sample window with the tabs **Summary**,
+origins and tags, in the columns Name, Description, Tags, Runs, Lineage, Latest
+run, SHA-256 and **Time added** (when it came into the library, in the list's
+date format; click the header to sort by it); opening one shows the sample window with the tabs **Summary**,
 **Runs**, **IOCs**, **Custody log** and **Notes**. **Export report…** in its header
 is described in [the sample report guide](sample-report.md). The **Runs** list
 fills the window's width: **Arguments** takes the spare width (a long command

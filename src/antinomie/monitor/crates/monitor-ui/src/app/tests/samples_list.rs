@@ -452,3 +452,53 @@ fn the_name_and_description_dialog_saves_cancels_and_refuses_an_empty_name() {
     });
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn time_added_sits_right_of_the_sha256_and_sorts_the_list() {
+    // ANT-T0555 item 7.
+    let root = temp("added");
+    let (script, dropped, plain) = fixture(&root);
+    let (mut app, ctx) = open_page(&root);
+    // 2023-11-14 22:13:20 UTC and on: notes.txt oldest, install.sh newest.
+    app.samples_page.set_added_ms(&plain, 1_700_000_000_000);
+    app.samples_page.set_added_ms(&dropped, 1_700_000_100_000);
+    app.samples_page.set_added_ms(&script, 1_700_000_200_000);
+    for _ in 0..3 {
+        render(&mut app, &ctx, SIZE);
+    }
+    let shown = texts(&render(&mut app, &ctx, SIZE));
+    let rect = |name: &str| {
+        shown
+            .iter()
+            .find(|(text, _)| text == name)
+            .unwrap_or_else(|| panic!("missing {name}: {shown:?}"))
+            .1
+    };
+    let (sha, added) = (rect("SHA-256"), rect("Time added"));
+    assert!(added.left() >= sha.right(), "{added:?} {sha:?}");
+    assert!((added.center().y - sha.center().y).abs() < 4.0);
+    // Each row shows its time in the list's date format, under the header.
+    let times: Vec<_> = shown
+        .iter()
+        .filter(|(text, rect)| text.starts_with("2023-11-1") && rect.left() >= sha.right())
+        .collect();
+    assert_eq!(times.len(), 3, "{shown:?}");
+    assert!(times
+        .iter()
+        .all(|(text, _)| text.len() == "2023-11-14 22:13".len()));
+    // Ascending, then descending.
+    let order = |app: &mut MonitorApp| {
+        let shown = texts(&render(app, &ctx, SIZE));
+        crate::table_sort::testing::column_order(&shown, &["install.sh", ".x", "notes.txt"])
+    };
+    click_label(&mut app, &ctx, SIZE, "Time added");
+    assert_eq!(order(&mut app), ["notes.txt", ".x", "install.sh"]);
+    let header = texts(&render(&mut app, &ctx, SIZE))
+        .into_iter()
+        .find(|(text, _)| text.starts_with("Time added"))
+        .unwrap()
+        .0;
+    click_label(&mut app, &ctx, SIZE, &header);
+    assert_eq!(order(&mut app), ["install.sh", ".x", "notes.txt"]);
+    let _ = std::fs::remove_dir_all(root);
+}

@@ -797,6 +797,17 @@ impl SamplesPage {
 
 #[cfg(test)]
 impl SamplesPage {
+    /// The time a loaded row says its sample was added.
+    pub(super) fn set_added_ms(&mut self, sha256: &str, ms: u64) {
+        for row in self
+            .rows
+            .iter_mut()
+            .filter(|row| row.record.sha256 == sha256)
+        {
+            row.record.added_ms = ms;
+        }
+    }
+
     pub(super) fn show_tag_filter(&mut self, on: bool) {
         self.tags_open = on;
     }
