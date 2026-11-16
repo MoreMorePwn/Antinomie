@@ -16,7 +16,7 @@
 //! it.
 use super::{LaneStages, StageStop};
 use crate::{
-    api::run::Run,
+    api::run::{Outcome, Run, RunState},
     engine::Engine,
     lane::process::is_recorded_qemu,
     waiter::{SETTLE_WAIT, WaitError, settled_after_stop},
@@ -53,6 +53,19 @@ impl<E: Engine> LaneStages<'_, E> {
         vm: &str,
         stop_limit: Duration,
     ) -> Result<Stopped, StageStop> {
+        self.stop_lane_vm_with(job, vm, stop_limit, false)
+    }
+
+    /// [`stop_lane_vm`](Self::stop_lane_vm) for `collect`: with `end_cancel`
+    /// a person's cancel that comes in while the recording settles ends the
+    /// job `cancelled` at once (A37); the lane still waits for the recording.
+    pub(crate) fn stop_lane_vm_with(
+        &mut self,
+        job: &Run,
+        vm: &str,
+        stop_limit: Duration,
+        end_cancel: bool,
+    ) -> Result<Stopped, StageStop> {
         self.waiter.drain()?;
         let snapshot = self.waiter.snapshot();
         if snapshot
@@ -82,16 +95,23 @@ impl<E: Engine> LaneStages<'_, E> {
                 Err(other) => return Err(StageStop::Abort(other)),
             }
         }
-        self.settle_recording(vm)
+        self.settle_recording(vm, end_cancel.then_some(job))
     }
 
     /// Wait until the VM is stopped and its recording final (`layer_s`), or
     /// until the disk has been below its floor for [`LOW_DISK_SETTLE`].
-    fn settle_recording(&mut self, vm: &str) -> Result<Stopped, StageStop> {
+    fn settle_recording(
+        &mut self,
+        vm: &str,
+        cancel_ends: Option<&Run>,
+    ) -> Result<Stopped, StageStop> {
         let what = "the recording to settle after the stop";
         let deadline = self.waiter.now_ms() + crate::waiter::millis(SETTLE_WAIT);
         let mut low_since: Option<u64> = None;
         loop {
+            if let Some(job) = cancel_ends {
+                self.end_cancel_early(job);
+            }
             let left = deadline.saturating_sub(self.waiter.now_ms());
             let slice = Duration::from_millis(left).min(SETTLE_LOOK);
             match self
@@ -117,6 +137,27 @@ impl<E: Engine> LaneStages<'_, E> {
                 }
                 Err(other) => return Err(StageStop::Abort(other)),
             }
+        }
+    }
+
+    /// A person's cancel of a job whose lane is still stopping the VM and
+    /// saving the recording (A37): the job ends `cancelled` now, with its
+    /// finish time and outcome, instead of staying `cancelling` for as long
+    /// as a big recording takes to save. The lane keeps the job's VM until
+    /// the recording is final, so no other job starts on it before. A cancel
+    /// for the daemon's shutdown is left alone (that job goes back to the
+    /// queue). `true` when the job has ended `cancelled`.
+    pub(crate) fn end_cancel_early(&self, job: &Run) -> bool {
+        let store = self.env.store;
+        let Ok(current) = store.get(&job.id) else {
+            return false;
+        };
+        match current.state {
+            RunState::Cancelled => true,
+            RunState::Cancelling if !store.cancel_is_shutdown(&job.id).unwrap_or(true) => store
+                .finish(&job.id, Outcome::Cancelled, None)
+                .is_ok_and(|ended| ended.state == RunState::Cancelled),
+            _ => false,
         }
     }
 

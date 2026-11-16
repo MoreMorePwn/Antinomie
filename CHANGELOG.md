@@ -1314,6 +1314,11 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **A cancelled run ends `cancelled` when the cancel is seen.** A run cancelled
+  while its VM was stopping or its big recording was being saved stayed `cancelling`,
+  with no finish time, for as long as the saving took. It now ends `cancelled` at
+  once; the lane keeps the VM until the recording is saved, so no other run starts on
+  it before.
 - **A stop that a big process tree outlasts is reported.** When the program's tree
   ends 5 s or more after the stop, the run has the warning `stop_overrun` with how
   long it took and how many processes there were (2,096 processes took 19 s).

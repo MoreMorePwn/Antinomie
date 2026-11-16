@@ -537,7 +537,7 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `recording_failed` | collect | once | The recording could not be completed |
 | `analysis_failed` | analyse, report | yes | Only when the preset marks the stage required (`required_stages`); otherwise the run is `partial` with a warning. A static check that only timed out or stopped short is not this failure unless it is in `static_analysis.required_checks` (it is a `static_check_incomplete` warning and the run is `partial`) |
 | `deadline_exceeded` | analyse, report | no | The host stages passed their deadline (`host_time_factor` x the expected work, see "Time limits"): the running items were stopped (`timed_out`), the queued ones never started; what finished is kept. A busy host or too low a factor; try again later or raise `host_time_factor` |
-| `cancelled` | any | no | Cancelled by request; what was recorded is kept |
+| `cancelled` | any | no | Cancelled by request; what was recorded is kept. The run ends `cancelled` when the cancel is seen, also while its VM stops and its recording is saved (the lane keeps the VM until that is over) |
 | `internal` | any | maybe | A bug, or the watchdog: the whole run ran past `run` plus 30 minutes. `details.log` names the run log |
 
 A retry starts with a full revert. `backoff_s` (30 s, then 120 s) spaces the
