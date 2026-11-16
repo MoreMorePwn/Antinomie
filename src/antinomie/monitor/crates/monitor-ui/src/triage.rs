@@ -763,7 +763,6 @@ impl TriageView {
         match self.process {
             ProcessTab::Tree => {
                 if let Some(scan) = &self.scan {
-                    process_mermaid::copy_button(ui, &scan.process);
                     process_tree_nodes(
                         ui,
                         &scan.process,
@@ -774,7 +773,6 @@ impl TriageView {
                     let suspicious =
                         suspicious_output(input.invocations, rules::Options::default()).tasks;
                     let nodes = process_nodes(input.invocations);
-                    process_mermaid::copy_button(ui, &nodes);
                     process_tree_nodes(ui, &nodes, input.clock_anchor, &suspicious);
                 }
                 None

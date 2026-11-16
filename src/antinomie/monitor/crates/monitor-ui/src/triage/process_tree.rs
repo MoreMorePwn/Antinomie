@@ -15,19 +15,24 @@ pub fn process_tree_nodes(
     // of them; the chip lists them. The user's choice is kept for the session.
     let thread_count = nodes.iter().filter(|node| node.thread).count();
     let thread_id = egui::Id::new("triage-process-threads");
-    let expanded = if thread_count == 0 {
-        true
-    } else {
-        let stored: Option<bool> = ui.ctx().data(|data| data.get_temp(thread_id));
-        let expanded = stored.unwrap_or(thread_count < THREAD_FOLD);
-        ui.horizontal(|ui| {
+    // One row: Show threads on the left, Copy as Mermaid on the right, both
+    // centred on the row's middle.
+    ui.horizontal(|ui| {
+        if thread_count > 0 {
+            let stored: Option<bool> = ui.ctx().data(|data| data.get_temp(thread_id));
+            let expanded = stored.unwrap_or(thread_count < THREAD_FOLD);
             let label = format!("Show threads ({thread_count})");
             if crate::widgets::with_help(ui, "Thread tasks of a process, one per recorded thread. Off, they fold into +N threads on their process.", |ui| crate::widgets::toggle_chip(ui, &label, expanded, None))
                 .clicked()
             {
                 ui.ctx().data_mut(|data| data.insert_temp(thread_id, !expanded));
             }
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            super::process_mermaid::copy_button(ui, nodes);
         });
+    });
+    let expanded = thread_count == 0 || {
         let stored: Option<bool> = ui.ctx().data(|data| data.get_temp(thread_id));
         stored.unwrap_or(thread_count < THREAD_FOLD)
     };

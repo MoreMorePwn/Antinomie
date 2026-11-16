@@ -2144,8 +2144,8 @@ drag moves it.
 Every diagram can be copied as a Mermaid flowchart to paste into a README or an
 issue. The lineage graph of a sample, the VM snapshot graph and the file
 activity graph have **Copy as Mermaid** in their right-click menu; the Triage
-process tree, the phases of the Graph tab and the MITRE ATT&CK list in
-Summary have a small **Mermaid** button. Labels are escaped and each node's id
+process tree (on the row of **Show threads**, at its right end), the phases of the
+Graph tab and the MITRE ATT&CK list in Summary have a small **Mermaid** button. Labels are escaped and each node's id
 is made from its own key (a hash, a task, a snapshot id), so a copy keeps its
 ids when the diagram grows.
 

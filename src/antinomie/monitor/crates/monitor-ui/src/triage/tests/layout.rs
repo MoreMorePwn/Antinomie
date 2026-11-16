@@ -1048,3 +1048,29 @@ fn the_findings_count_lists_that_process_findings() {
     settle(&ctx, &mut view);
     assert!(view.process == ProcessTab::Suspicious);
 }
+
+#[test]
+fn the_mermaid_button_is_on_the_show_threads_row() {
+    // ANT-T0555 item 13: one row, both centred on its middle.
+    let ctx = context();
+    let (_temp, mut view) = view(Section::Process);
+    view.process = ProcessTab::Tree;
+    let scan = view.scan.as_mut().unwrap();
+    let mut thread = scan.process[0].clone();
+    thread.thread = true;
+    thread.tid = thread.pid + 1;
+    thread.cookie += 1;
+    scan.process.push(thread);
+    let out = settle(&ctx, &mut view);
+    let threads = texts(&out)
+        .into_iter()
+        .find(|(text, _)| text.contains("Show threads"))
+        .unwrap_or_else(|| panic!("no Show threads in {:?}", texts(&out)))
+        .1;
+    let mermaid = find(&out, &format!("{} Mermaid", egui_phosphor::regular::COPY));
+    assert!(
+        (mermaid.center().y - threads.center().y).abs() < 1.5,
+        "{mermaid:?} {threads:?}"
+    );
+    assert!(mermaid.left() > threads.right());
+}

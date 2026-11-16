@@ -19,13 +19,10 @@ pub(super) fn process_tree_mermaid(nodes: &[ProcessNode]) -> String {
     crate::mermaid::tree(&tree)
 }
 
-/// The small "Copy as Mermaid" button above the Process tree.
+/// The small "Copy as Mermaid" button on the Process tree's top row, at its
+/// right end (the row's layout places it).
 pub(super) fn copy_button(ui: &mut egui::Ui, nodes: &[ProcessNode]) {
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::mermaid::button(ui, || process_tree_mermaid(nodes));
-        });
-    });
+    crate::mermaid::button(ui, || process_tree_mermaid(nodes));
 }
 
 #[cfg(test)]
