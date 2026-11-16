@@ -161,6 +161,13 @@ pub fn connect(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     }
     dead_server(cx, st, (ip, port), &target, out);
     hardcoded(cx, st, (ip, port), out);
+    if port == 853 && !private(ip) {
+        out.push(Hit::new(
+            "network.dns_over_tls",
+            &target,
+            format!("connect to {target}, DNS over TLS: lookups the capture cannot read"),
+        ));
+    }
     let task = st.task(cx);
     task.connects.push(time, LOGINS.0, (ip, port));
     if !task.scan_done {

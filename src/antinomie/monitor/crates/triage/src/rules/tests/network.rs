@@ -548,3 +548,16 @@ pub fn a_quick_retry_two_connects_or_local_traffic_are_no_beacon() {
     let out = run(many);
     assert_eq!(rows(&out, "network.c2_ip_literal").len(), 8);
 }
+
+#[test]
+pub fn dns_over_tls_to_a_public_resolver_is_medium() {
+    // A31, runs 375e523b and 4e5f826d: 9.9.9.9, 1.1.1.1, 8.8.8.8 and 4.4.8.8
+    // on port 853.
+    let out = run(calls_home([9, 9, 9, 9], &[853], SECOND, 0));
+    assert_eq!(
+        tier(&out, "network.dns_over_tls").as_deref(),
+        Some("medium")
+    );
+    let local = run(calls_home([10, 0, 2, 3], &[853], SECOND, 0));
+    assert!(!has(&local, "network.dns_over_tls"));
+}

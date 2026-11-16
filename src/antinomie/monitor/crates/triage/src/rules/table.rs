@@ -937,6 +937,13 @@ pub const SPECS: &[Spec] = &[
     ),
     rule("network.tls_ip_literal", 1, T::Low, C::Command, &["T1573"]),
     rule(
+        "network.dns_over_tls",
+        1,
+        T::Medium,
+        C::Command,
+        &["T1071.004", "DET0400", "T1573"],
+    ),
+    rule(
         "network.proxy_tunnel",
         1,
         T::Medium,
