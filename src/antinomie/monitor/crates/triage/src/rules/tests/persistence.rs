@@ -397,3 +397,56 @@ fn a_persisted_copy_the_host_found_is_a_high_finding() {
         "persistence.copy_running"
     ));
 }
+
+#[test]
+pub fn persistence_attempts_in_shell_commands_are_found_even_when_the_shell_never_ran() {
+    // A16, run 28b1b1ad: 63 `sh -c` execs, all EACCES because the sample had
+    // chmod'ed BusyBox to 0000. Each line is one of them.
+    for (script, rule) in [
+        ("printf '[Unit]\\nDescription=System Service\\n[Service]\\nExecStart=/var/tmp/.e\\n[Install]\\nWantedBy=multi-user.target\\n' > /etc/systemd/system/.e.service 2>/dev/null", "persistence.systemd"),
+        ("grep -q '.e' /etc/rc.local 2>/dev/null || sed -i '/^exit 0/i /var/tmp/.e &' /etc/rc.local 2>/dev/null", "persistence.rc_init"),
+        ("printf '#!/bin/sh\\n/var/tmp/.e &\\n' > /etc/init.d/.e 2>/dev/null && chmod +x /etc/init.d/.e 2>/dev/null", "persistence.rc_init"),
+        ("grep -q '.e' /root/.bashrc 2>/dev/null || echo '/var/tmp/.e &' >> /root/.bashrc 2>/dev/null", "persistence.shell_profile"),
+        ("echo '* * * * * root /var/tmp/.e' > /etc/cron.d/.e 2>/dev/null", "persistence.cron"),
+        ("grep -q '.e' /etc/crontab 2>/dev/null || echo '* * * * * root /var/tmp/.e' >> /etc/crontab 2>/dev/null", "persistence.cron"),
+        ("echo x | tee -a /etc/profile.d/x.sh", "persistence.shell_profile"),
+    ] {
+        let mut attempt = shell(1, script);
+        attempt.exit.as_mut().unwrap().result = Some(-13);
+        let out = run(vec![attempt]);
+        let row = rows(&out, rule);
+        assert_eq!(row.len(), 1, "{script}: {:?}", rules_of(&out));
+        assert_eq!(text(row[0], "finding.result"), "all failed", "{script}");
+        assert!(has(&run(vec![shell(1, script)]), rule), "{script}");
+    }
+    // `systemctl enable` of the unit an earlier command tried to write.
+    let mut unit = shell(1, "printf '[Unit]' > /etc/systemd/system/.e.service");
+    unit.exit.as_mut().unwrap().result = Some(-13);
+    let mut enable = shell(
+        2,
+        "systemctl daemon-reload 2>/dev/null; systemctl enable .e 2>/dev/null",
+    );
+    enable.exit.as_mut().unwrap().result = Some(-13);
+    let out = run(vec![unit, enable]);
+    assert_eq!(
+        rows(&out, "persistence.systemd").len(),
+        2,
+        "{:?}",
+        rules_of(&out)
+    );
+    // Reading those files, or enabling a unit nobody wrote, is not.
+    for script in [
+        "grep -q x /etc/rc.local",
+        "cat /root/.bashrc > /tmp/copy",
+        "systemctl enable ssh",
+    ] {
+        let out = run(vec![shell(1, script)]);
+        assert!(
+            !rules_of(&out)
+                .iter()
+                .any(|rule| rule.starts_with("persistence.")),
+            "{script}: {:?}",
+            rules_of(&out)
+        );
+    }
+}
