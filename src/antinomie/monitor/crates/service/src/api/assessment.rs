@@ -43,7 +43,11 @@ pub enum Label {
 /// The `report::Counts` fields.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Counts {
+    /// Processes, not their threads.
     pub processes: u64,
+    /// Threads other than each process's main one.
+    #[serde(default)]
+    pub threads: u64,
     pub findings: u64,
     pub indicators: u64,
     pub indicators_matched: u64,

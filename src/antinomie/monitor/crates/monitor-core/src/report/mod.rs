@@ -190,7 +190,10 @@ pub struct Behaviour {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Counts {
+    /// Processes, not their threads.
     pub processes: u64,
+    /// Threads other than each process's main one.
+    pub threads: u64,
     pub findings: u64,
     pub indicators: u64,
     pub indicators_matched: u64,

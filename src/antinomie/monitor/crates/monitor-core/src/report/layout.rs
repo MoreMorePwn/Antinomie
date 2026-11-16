@@ -262,8 +262,14 @@ impl Builder {
         let many = |n: u64, one: &str, more: &str| {
             format!("{} {}", thousands(n), if n == 1 { one } else { more })
         };
-        let observed = vec![
-            to(many(c.processes, "process", "processes"), "processes"),
+        let mut observed = vec![to(many(c.processes, "process", "processes"), "processes")];
+        if c.threads > 0 {
+            observed.push(Span::plain(format!(
+                " and {}",
+                many(c.threads, "thread", "threads")
+            )));
+        }
+        observed.extend([
             Span::plain(", "),
             to(many(c.findings, "finding", "findings"), "findings"),
             Span::plain(", "),
@@ -289,7 +295,7 @@ impl Builder {
             to(many(c.endpoints, "endpoint", "endpoints"), "network"),
             Span::plain(", "),
             to(many(c.domains, "domain", "domains"), "network"),
-        ];
+        ]);
         blocks.push(Block::Facts(vec![
             (
                 "Highest tier".to_owned(),

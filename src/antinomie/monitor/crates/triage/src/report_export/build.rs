@@ -328,13 +328,16 @@ fn summary(
         key_findings_total: key_total,
         key_behaviours: key,
         counts: Counts {
-            processes: scan.process.len() as u64,
+            processes: scan.process.iter().filter(|node| !node.thread).count() as u64,
+            threads: scan.process.iter().filter(|node| node.thread).count() as u64,
             findings: scan.findings.len() as u64 + scan.findings_omitted,
             indicators: indicators.len() as u64,
             indicators_matched: matched as u64,
             techniques: techniques as u64,
-            files_changed: scan.changed.len() as u64 + scan.changed_omitted,
-            files_opened: scan.opened.len() as u64 + scan.opened_omitted,
+            // The files of the report's Written or changed table, of the
+            // files the run reached at all (see `FileActivity::counted`).
+            files_changed: changed_files(scan),
+            files_opened: opened_files(scan),
             endpoints: scan.new_tabs.endpoints.len() as u64 + scan.new_tabs.endpoints_omitted,
             domains: scan.new_tabs.domains.len() as u64 + scan.new_tabs.domains_omitted,
         },

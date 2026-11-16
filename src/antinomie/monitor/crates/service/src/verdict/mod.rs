@@ -93,6 +93,7 @@ impl Facts {
             highest_tier: tier(&summary.highest_tier),
             counts: Counts {
                 processes: counts.processes,
+                threads: counts.threads,
                 findings: counts.findings,
                 indicators: counts.indicators,
                 indicators_matched: counts.indicators_matched,
