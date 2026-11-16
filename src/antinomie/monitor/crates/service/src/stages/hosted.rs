@@ -128,7 +128,11 @@ impl<E: Engine> LaneStages<'_, E> {
             .map_err(|e| self.store_error(Stage::Analyse, e))?;
         let plan = plan::hosted(&frozen.preset);
         let items = items_for(&plan);
-        let inputs = timing::inputs_of(job, self.env.triage.load_scale());
+        let inputs = timing::inputs_of(
+            job,
+            self.env.triage.load_scale(),
+            self.env.triage.tcg_factor(),
+        );
         let rules = Timing::default();
         let limits: Vec<Duration> = items
             .iter()

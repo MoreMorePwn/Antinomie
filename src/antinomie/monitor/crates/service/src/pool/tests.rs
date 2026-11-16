@@ -62,6 +62,7 @@ fn pool_job(job: Run, plan: HostPlan, deadline_ms: u64) -> PoolJob {
         sample_bytes: Some(1 << 20),
         recording_bytes: Some(1 << 20),
         load: 1.0,
+        tcg: 1.0,
     };
     let views = items
         .iter()
@@ -281,6 +282,7 @@ fn the_limit_is_twice_the_estimate_and_a_policy_limit_overrides_it() {
         sample_bytes: Some(2 << 20),
         recording_bytes: Some(10 << 20),
         load: 1.0,
+        tcg: 1.0,
     };
     let plain = plan(&[AnalysisKind::Floss], true);
     let floss = ItemKind::Static(vec![AnalysisKind::Floss]);
@@ -320,6 +322,42 @@ fn the_limit_is_twice_the_estimate_and_a_policy_limit_overrides_it() {
 }
 
 #[test]
+fn emulated_lanes_stretch_the_code_analysis_tools_by_the_tcg_multiplier() {
+    // ANT-T0556, A44: capa timed out in 5 of 16 x86-64 runs on a node whose
+    // four lanes ran under TCG. The code-analysis tools' estimate is
+    // multiplied by the engine's TCG multiplier there; the others are not.
+    let timing = Timing::default();
+    let inputs = Inputs {
+        sample_bytes: Some(2 << 20),
+        recording_bytes: Some(10 << 20),
+        load: 1.0,
+        tcg: 10.0,
+    };
+    let plain = plan(&[AnalysisKind::Capabilities, AnalysisKind::Strings], true);
+    let capa = timing.of(
+        &ItemKind::Static(vec![AnalysisKind::Capabilities]),
+        &plain,
+        &inputs,
+    );
+    assert_eq!((capa.expected_s, capa.limit_s), (1500, 3000), "150 s x 10");
+    let strings = timing.of(
+        &ItemKind::Static(vec![AnalysisKind::Strings]),
+        &plain,
+        &inputs,
+    );
+    assert_eq!(strings.expected_s, 21, "15 s and 3 s a MiB, not stretched");
+    // KVM (and the default 0) leaves capa at its estimate.
+    for tcg in [0.0, 1.0] {
+        let kvm = timing.of(
+            &ItemKind::Static(vec![AnalysisKind::Capabilities]),
+            &plain,
+            &Inputs { tcg, ..inputs },
+        );
+        assert_eq!(kvm.expected_s, 150);
+    }
+}
+
+#[test]
 fn a_recent_median_on_this_host_replaces_a_lower_estimate() {
     let dir = std::env::temp_dir().join(format!(
         "ant-pool-median-{}",
@@ -340,6 +378,7 @@ fn a_recent_median_on_this_host_replaces_a_lower_estimate() {
         sample_bytes: Some(1 << 20),
         recording_bytes: None,
         load: 1.0,
+        tcg: 1.0,
     };
     timing.medians.record("static:floss", 40);
     timing.medians.record("static:floss", 400);
@@ -412,6 +451,7 @@ fn bh_07_a_job_is_not_failed_by_its_deadline_while_an_item_is_within_its_limit()
         sample_bytes: Some(1 << 20),
         recording_bytes: Some(512 << 20),
         load: 1.0,
+        tcg: 1.0,
     };
     let views: Vec<_> = items
         .iter()

@@ -114,6 +114,59 @@ fn check_name(kind: AnalysisKind) -> String {
     format!("{kind:?}").to_lowercase()
 }
 
+/// Why a static item cannot apply to the job's sample: capa and FLOSS read
+/// x86 and x86-64 programs only (vivisect), so on an ELF of another
+/// architecture (an arm64 lane's) the item is skipped with this reason and
+/// counts as neither missing nor incomplete (ANT-T0556, A44). `None` when
+/// the item applies, or when it holds another check.
+pub(super) fn not_applicable(group: &[AnalysisKind], job: &Run) -> Option<String> {
+    let sample = job.sample.as_ref()?;
+    if !sample.kind.eq_ignore_ascii_case("elf") {
+        return None;
+    }
+    let arch = crate::arch::canonical(sample.architecture.as_deref()?)?;
+    if matches!(arch, "x86_64" | "x86") {
+        return None;
+    }
+    let tools = group
+        .iter()
+        .map(|kind| match kind {
+            AnalysisKind::Capabilities => Some("capa"),
+            AnalysisKind::Floss => Some("FLOSS"),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!(
+        "not applicable to this architecture: {} read{} x86 and x86-64 programs only, and this program is for {arch}",
+        tools.join(" and "),
+        if tools.len() == 1 { "s" } else { "" }
+    ))
+}
+
+/// Why a static item had the limit it ran out of: the preset's fixed limit
+/// per tool, or twice (`daemon.host_time_factor`) its expected time on this
+/// host, which the TCG multiplier stretches for the code-analysis tools on
+/// an emulated node (ANT-T0556, A44).
+fn limit_reason(plan: &HostPlan, group: &[AnalysisKind]) -> String {
+    match plan.static_limit_min {
+        Some(minutes) if minutes > 0 => format!(
+            "the preset's time limit per tool ({minutes} min, static_analysis.time_limit_per_tool_min) for {} tool(s), stretched for the host's load",
+            group.len()
+        ),
+        _ => {
+            let code = group.iter().any(|k| super::timing::code_analysis(*k));
+            format!(
+                "the limit is the expected time from the sample's size and the host's load{}, times daemon.host_time_factor; set static_analysis.time_limit_per_tool_min in the preset for a fixed limit",
+                if code {
+                    ", times the TCG multiplier when the lanes are emulated"
+                } else {
+                    ""
+                }
+            )
+        }
+    }
+}
+
 /// Read the sections of a finished report: a check that ran out of time or
 /// stopped short is `soft`, and `hard` when the preset requires it.
 fn judge_report(plan: &HostPlan, report: &AnalysisReport) -> StaticOutcome {
@@ -347,8 +400,9 @@ impl<E: Engine> LaneStages<'_, E> {
                     StaticOutcome::unfinished(
                         plan,
                         format!(
-                            "static analysis ({words}) did not finish within {} seconds",
-                            limit.as_secs()
+                            "static analysis ({words}) did not finish within {} seconds and was stopped: {}",
+                            limit.as_secs(),
+                            limit_reason(plan, group)
                         ),
                     ),
                     true,

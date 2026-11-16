@@ -1314,6 +1314,12 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **capa on arm64 and under emulation (ANT-T0556, A44).** capa and FLOSS read x86
+  programs only: for an ELF of another architecture their Auto item is skipped as
+  "not applicable to this architecture" and no longer makes a warning or a partial
+  run. On a node whose lanes run under TCG, the code-analysis tools' time limit is
+  multiplied by the TCG multiplier, and a static item stopped at its limit says
+  where the limit came from.
 - **Auto mode runs arm64 programs with no preset file (ANT-T0556).** `auto init`
   sets the lane group from the base's architecture (`arm64` for an arm64 base)
   and writes it as `[lanes] group` of `service.toml` (a new file, or a table added

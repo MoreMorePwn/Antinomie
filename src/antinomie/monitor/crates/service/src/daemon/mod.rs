@@ -594,7 +594,8 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             triage: Arc::new(
                 RealTriage::new(setup.options.clone())
                     .with_address_lookup(address_lookup)
-                    .with_lanes(lane_options.clone()),
+                    .with_lanes(lane_options.clone())
+                    .with_tcg(!kvm || setup.options.force_tcg),
             ),
             tags: Arc::new(LibraryTags {
                 data_dir: data_dir.clone(),

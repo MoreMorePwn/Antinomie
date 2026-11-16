@@ -6,7 +6,7 @@
 //! | Expected time, in this order | From |
 //! |---|---|
 //! | `median` | the median of the item's last runs on this host (at least [`MEDIAN_MIN`] of the last [`MEDIAN_KEEP`], kept in `<data>/service/host-times.json`), when it is not below the estimate |
-//! | `estimate` | a base plus a rate per MiB of its input (the sample for a static tool, the recording for the others), times the host's load factor |
+//! | `estimate` | a base plus a rate per MiB of its input (the sample for a static tool, the recording for the others), times the host's load factor; on a node whose lanes run under TCG the code-analysis tools (capa, FLOSS, Ghidra) also times the engine's TCG multiplier, as the emulated lanes take the host's processors (ANT-T0556, A44) |
 //! | `fixed` | the stage's fixed limit of design 4.1, when the input size is not known |
 //!
 //! The limit is `daemon.host_time_factor` (default 2) times the expected
@@ -52,6 +52,21 @@ pub struct Inputs {
     pub recording_bytes: Option<u64>,
     /// How much a busy host stretches work (1 when idle).
     pub load: f64,
+    /// The engine's TCG multiplier when the node's lanes run under TCG, 1
+    /// (or 0, the default) under KVM: it stretches the code-analysis tools.
+    pub tcg: f64,
+}
+
+/// The static tools that analyse code (vivisect, Ghidra): they share the
+/// host's processors with emulated lanes and take far longer under TCG.
+pub fn code_analysis(kind: AnalysisKind) -> bool {
+    matches!(
+        kind,
+        AnalysisKind::Capabilities
+            | AnalysisKind::Floss
+            | AnalysisKind::Disassembly
+            | AnalysisKind::Decompilation
+    )
 }
 
 /// Base seconds and seconds per MiB of a static tool at an idle host.
@@ -157,7 +172,12 @@ impl Timing {
                     .iter()
                     .map(|k| {
                         let (base, rate) = static_rate(*k);
-                        base + rate * size
+                        let tcg = if code_analysis(*k) {
+                            inputs.tcg.max(1.0)
+                        } else {
+                            1.0
+                        };
+                        (base + rate * size) * tcg
                     })
                     .sum()
             }
@@ -233,8 +253,9 @@ impl Timing {
     }
 }
 
-/// The sizes the estimates read: the sample's, and the recording folder's.
-pub fn inputs_of(job: &crate::api::run::Run, load: f64) -> Inputs {
+/// The sizes the estimates read: the sample's, and the recording folder's;
+/// `load` and `tcg` as [`Inputs`] says.
+pub fn inputs_of(job: &crate::api::run::Run, load: f64, tcg: f64) -> Inputs {
     let recording_bytes = job
         .recording
         .as_ref()
@@ -244,6 +265,7 @@ pub fn inputs_of(job: &crate::api::run::Run, load: f64) -> Inputs {
         sample_bytes: job.sample.as_ref().map(|s| s.size),
         recording_bytes,
         load,
+        tcg,
     }
 }
 

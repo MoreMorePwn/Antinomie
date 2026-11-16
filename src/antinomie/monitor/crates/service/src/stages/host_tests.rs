@@ -29,7 +29,7 @@ use crate::{
 };
 use antinomie_monitor_core::{
     BackendOptions, ExecRequest, RunState as CoreRunState, RunSummary,
-    analysis::detection::Engine as DetectionEngine,
+    analysis::{AnalysisKind, detection::Engine as DetectionEngine},
     ioc::online::{Body, Transport},
     report::Choices,
     samples::SampleRef,
@@ -1307,5 +1307,67 @@ fn a_tool_with_nothing_to_give_is_named_in_its_warning() {
         warnings.iter().any(|x| x.code == "static_check_incomplete"
             && x.text.contains("the structures check was not available")),
         "{warnings:?}"
+    );
+}
+
+#[test]
+fn capa_is_not_applicable_to_an_arm64_program_and_counts_as_nothing_missing() {
+    // ANT-T0556, A44: an arm64 lane's ELF. capa reads x86 programs only, so
+    // its item is skipped with the reason and the job is not partial for it.
+    let w = world_with("host-static-arm64", |p| {
+        static_policy(p);
+        p.static_analysis.triage_checks = vec![
+            crate::api::spec::StaticCheck::Metadata,
+            crate::api::spec::StaticCheck::Capabilities,
+        ];
+    });
+    let job = collected(&w, 1);
+    let mut sample = job.sample.clone().unwrap();
+    sample.kind = "elf".into();
+    sample.architecture = Some("AArch64".into());
+    let mut job =
+        w.fx.store
+            .patch(
+                &job.id,
+                JobPatch {
+                    sample: Some(sample),
+                    ..JobPatch::default()
+                },
+            )
+            .unwrap();
+    let mut waiter = w.engine(|fake| {
+        fake.on("AnalyzeSample")
+            .then(SECOND, |s| {
+                s.analysis_reports.push(report_entry("rep-1", "complete"))
+            })
+            .ok("rep-1");
+    });
+    let done = finished(host(&w, &mut waiter, &job));
+    assert_eq!(done.state, RunState::Succeeded, "{:?}", done.warnings);
+    assert!(w.job(&job.id).warnings.is_empty());
+    let sent = waiter.engine_mut().sent();
+    assert_eq!(sent.len(), 1, "only metadata went to the engine");
+    assert!(!format!("{:?}", sent[0]).contains("Capabilities"));
+    // The item's note (the pool shows it in `host_work`; this lane path
+    // keeps no item list).
+    let note = super::analyse::not_applicable(&[AnalysisKind::Capabilities], &job)
+        .expect("capa does not apply to an arm64 program");
+    assert!(
+        note.starts_with(
+            "not applicable to this architecture: capa reads x86 and x86-64 programs only"
+        ) && note.ends_with("for arm64"),
+        "{note}"
+    );
+    // An x86-64 program or a script keeps the item.
+    job.sample.as_mut().unwrap().architecture = Some("x86_64".into());
+    assert_eq!(
+        super::analyse::not_applicable(&[AnalysisKind::Capabilities], &job),
+        None
+    );
+    job.sample.as_mut().unwrap().kind = "sh".into();
+    job.sample.as_mut().unwrap().architecture = None;
+    assert_eq!(
+        super::analyse::not_applicable(&[AnalysisKind::Floss], &job),
+        None
     );
 }
