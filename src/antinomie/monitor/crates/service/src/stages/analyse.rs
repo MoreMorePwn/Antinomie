@@ -22,7 +22,9 @@
 //! the stage: it is a job warning (`static_check_incomplete`) and the job ends
 //! `partial`, unless the preset lists the check in
 //! `static_analysis.required_checks` (default none), when it is a problem
-//! like any other.
+//! like any other. A check whose optional tool is not there (capa, a rule
+//! pack) is only a warning (`static_check_unavailable`): the job's outcome
+//! stays what it was (A07), unless the check is required.
 //!
 //! A step that fails is a *problem*. If the preset requires the `analyse`
 //! stage (`required_stages`) the stage fails `analysis_failed`;
@@ -81,18 +83,21 @@ pub(super) type TriageDone = Result<(SavedRun, ArchiveScan), (String, bool)>;
 pub(super) type DetectionDone = (Vec<(DetectionEngine, Outcome)>, Vec<String>, bool);
 
 /// What the static analysis left: `hard` is a failure of the analysis
-/// itself (or of a required check), `soft` a check that stopped short.
+/// itself (or of a required check), `soft` a check that stopped short,
+/// `unavailable` an optional check whose tool is not there (capa, a rule
+/// pack): a warning that leaves the job's outcome alone (A07).
 #[derive(Default)]
 pub(super) struct StaticOutcome {
     pub(super) hard: Vec<String>,
     pub(super) soft: Vec<String>,
+    pub(super) unavailable: Vec<String>,
 }
 
 impl StaticOutcome {
     fn hard(text: impl Into<String>) -> Self {
         Self {
             hard: vec![text.into()],
-            soft: Vec::new(),
+            ..Self::default()
         }
     }
 
@@ -101,8 +106,8 @@ impl StaticOutcome {
     fn unfinished(plan: &HostPlan, text: String) -> Self {
         if plan.required_checks.is_empty() {
             Self {
-                hard: Vec::new(),
                 soft: vec![text],
+                ..Self::default()
             }
         } else {
             Self::hard(text)
@@ -142,14 +147,15 @@ fn judge_report(plan: &HostPlan, report: &AnalysisReport) -> StaticOutcome {
             .filter(|s| s.state == AnalysisSectionState::Unavailable)
             .map(|s| check_name(s.kind))
             .collect();
-        out.soft.push(if unavailable.is_empty() {
-            "static analysis finished partly (a tool stopped short)".into()
+        if unavailable.is_empty() {
+            out.soft
+                .push("static analysis finished partly (a tool stopped short)".into());
         } else {
-            format!(
+            out.unavailable.push(format!(
                 "static analysis finished partly: the {} check was not available",
                 unavailable.join(" and ")
-            )
-        });
+            ));
+        }
     }
     out
 }

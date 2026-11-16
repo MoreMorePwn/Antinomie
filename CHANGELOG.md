@@ -1314,6 +1314,11 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **A missing optional tool no longer makes a run `partial`.** A static check whose
+  tool is not installed (capa, a rule pack) is the warning `static_check_unavailable`
+  and the run keeps its outcome; list the check in `static_analysis.required_checks`
+  to make it a failure. A check that ran out of time is still `partial`
+  (`static_check_incomplete`).
 - **Queued runs no longer fail together after `[queue] wait_s`.** A run waiting for
   disk or memory held by the runs in front of it now stays queued: the wait counts
   only while no run is in progress, a shortage that is gone when the wait is up keeps

@@ -1301,11 +1301,16 @@ fn a_tool_with_nothing_to_give_is_named_in_its_warning() {
         &[("metadata", "complete"), ("structures", "unavailable")],
     );
     let (w, job, hosted) = analyse_with("host-static-unavailable", false, Vec::new(), report);
-    assert_eq!(finished(hosted).state, RunState::Partial);
+    // A07: a missing optional tool is a warning, not `partial`.
+    assert_eq!(finished(hosted).state, RunState::Succeeded);
     let warnings = w.job(&job.id).warnings;
     assert!(
-        warnings.iter().any(|x| x.code == "static_check_incomplete"
+        warnings.iter().any(|x| x.code == "static_check_unavailable"
             && x.text.contains("the structures check was not available")),
+        "{warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|x| x.code == "static_check_incomplete"),
         "{warnings:?}"
     );
 }

@@ -220,7 +220,9 @@ its default is Standard's. The full list is in
   with `enabled = false` none. A check that runs out of its time (2 x its
   expected time, or `time_limit_per_tool_min` when it is above 0, stretched on a
   busy host like the guest waits) or stops short does not fail the run: the run
-  ends `partial` with a `static_check_incomplete` warning that names the check.
+  ends `partial` with a `static_check_incomplete` warning that names the check. A
+  check whose optional tool is not installed (capa, a rule pack) is the warning
+  `static_check_unavailable` and leaves the run's outcome alone.
   List checks in `static_analysis.required_checks` (default none) to make their
   timeout, or their being unavailable, a failure of the `analyse` stage; with
   `required_stages` naming `analyse` that ends the run `failed` with
