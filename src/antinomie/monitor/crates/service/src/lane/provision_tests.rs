@@ -422,6 +422,98 @@ fn reset_reverts_answers_stops_settles_and_lifts_the_quarantine() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+fn pending_layer(s: &mut antinomie_monitor_core::Snapshot) {
+    s.disk_layers
+        .push(antinomie_monitor_core::disk_layers::DiskLayer {
+            vm_id: VM.into(),
+            boot_id: "b7".into(),
+            phase: antinomie_monitor_core::disk_layers::LayerPhase::Finalizing,
+            started_ms: 0,
+            phase_ms: 0,
+        });
+}
+
+fn restores(waiter: &mut Waiter<FakeEngine>) {
+    waiter
+        .engine_mut()
+        .on("RestoreVmSnapshot")
+        .then(MS, |s| {
+            s.state = VmState::Running;
+            s.active_vm = Some(VM.into());
+        })
+        .then(5 * MS, |s| s.guest_kernel = Some(kernel(21)))
+        .ok("restored");
+    waiter.engine_mut().on("AwaitBoot").ok("booted");
+    waiter
+        .engine_mut()
+        .on("Stop")
+        .then(MS, |s| {
+            s.state = VmState::Stopped;
+            s.active_vm = None;
+        })
+        .ok("stopped");
+}
+
+/// A46: after a daemon restart the lane VM's last recording may still be
+/// saving (`disk_layer: pending`). The reset waits for the layer before the
+/// revert, instead of timing out on `RestoreVmSnapshot`.
+#[test]
+fn reset_waits_for_a_pending_layer_before_the_revert() {
+    let (root, lanes) = dir("resetlayer");
+    let mut quarantined = file();
+    quarantined.quarantine(FailureCode::RevertFailed, "after a restart", T0);
+    lanes.save(&quarantined).unwrap();
+    let mut waiter = settled_engine();
+    waiter.engine_mut().after(2 * MS, pending_layer);
+    waiter.pump(10 * MS).unwrap();
+    // The engine finishes the layer two minutes later.
+    waiter
+        .engine_mut()
+        .after(Duration::from_secs(120), |s| s.disk_layers.clear());
+    restores(&mut waiter);
+    let mut said = Vec::new();
+    let summary = reset_lane(&mut waiter, &lanes, &lane(), &NoProcs, &mut |line| {
+        said.push(line.to_owned())
+    })
+    .unwrap();
+    assert!(summary.quarantine.is_none(), "{summary:?}");
+    assert!(
+        said.iter()
+            .any(|line| line.contains("disk layer is pending")),
+        "{said:?}"
+    );
+    assert_eq!(
+        waiter.engine_mut().sent_names(),
+        ["RestoreVmSnapshot", "AwaitBoot", "Stop"]
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A46: a layer that does not settle within the wait is named, and the lane
+/// stays as it was (no revert sent).
+#[test]
+fn reset_names_a_layer_that_does_not_settle() {
+    let (root, lanes) = dir("resetstuck");
+    let mut quarantined = file();
+    quarantined.quarantine(FailureCode::RevertFailed, "after a restart", T0);
+    lanes.save(&quarantined).unwrap();
+    let mut waiter = settled_engine();
+    waiter.engine_mut().after(2 * MS, pending_layer);
+    waiter.pump(10 * MS).unwrap();
+    restores(&mut waiter);
+    let error = reset_lane(&mut waiter, &lanes, &lane(), &NoProcs, &mut |_| {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unavailable);
+    assert!(
+        error.message.contains("disk layer is still pending")
+            && error.message.contains("boot b7, phase finalizing"),
+        "{}",
+        error.message
+    );
+    assert!(waiter.engine_mut().sent_names().is_empty());
+    assert!(lanes.load(&lane()).unwrap().unwrap().is_quarantined());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[test]
 fn a_failed_reset_keeps_the_quarantine_and_a_busy_lane_is_not_touched() {
     let (root, lanes) = dir("resetfail");

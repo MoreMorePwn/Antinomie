@@ -388,8 +388,12 @@ starts in a row that did not reach a working guest. Queued runs stay queued with
 
 * `auto lane list` shows whether the lane is quarantined and what keeps it from a
   run;
+* `auto queue status` names the reason on the lane's row (`reason` in its JSON),
+  and so does the `lane_quarantined` alert;
 * `auto lane reset --yes` reverts the VM to its clean snapshot now and lifts the
-  quarantine when that works;
+  quarantine when that works. When the VM's last recording is still being saved
+  (`disk layer pending`, after a daemon restart) it waits up to 10 minutes for that
+  first, and names the layer if it does not settle;
 * `auto lane unquarantine` lifts it without reverting, when the checks pass.
 
 After a base update make a new lane VM with `auto init --replace`.

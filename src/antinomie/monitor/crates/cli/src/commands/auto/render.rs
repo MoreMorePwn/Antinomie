@@ -203,12 +203,17 @@ pub fn queue_text(status: &Value) -> String {
     for lane in status["lanes"].as_array().into_iter().flatten() {
         let _ = writeln!(
             out,
-            "{:<11} {} vm {} run {} disk layer {}",
+            "{:<11} {} vm {} run {} disk layer {}{}",
             format!("{}:", word(&lane["lane"])),
             word(&lane["state"]),
             word(&lane["vm_id"]),
             word(&lane["run_id"]),
-            word(&lane["disk_layer"])
+            word(&lane["disk_layer"]),
+            // Why a quarantined lane is out of service (A46).
+            lane["reason"]
+                .as_str()
+                .map(|why| format!(" reason {}", clean(why)))
+                .unwrap_or_default()
         );
     }
     out
@@ -316,6 +321,31 @@ mod tests {
         assert!(
             queue.contains("host pool:  5 queued, 2 running of 2 worker(s), 2 run(s)"),
             "{queue}"
+        );
+    }
+
+    /// A46: a quarantined lane says why in `queue status`.
+    #[test]
+    fn a_quarantined_lane_shows_its_reason() {
+        let queue = queue_text(&serde_json::json!({
+            "queued": 0, "running": 0, "owner": "daemon",
+            "lanes": [
+                {"lane": "lane-1", "state": "idle", "vm_id": "v1", "run_id": null, "disk_layer": "none"},
+                {"lane": "lane-2", "state": "quarantined", "vm_id": "v2", "run_id": null,
+                 "disk_layer": "pending",
+                 "reason": "revert_failed: the lane VM did not stop and settle after a forced stop"}
+            ]
+        }));
+        assert!(
+            queue.contains("lane-2:     quarantined vm v2 run - disk layer pending reason revert_failed: the lane VM did not stop and settle after a forced stop"),
+            "{queue}"
+        );
+        assert!(
+            !queue
+                .lines()
+                .find(|l| l.starts_with("lane-1"))
+                .unwrap()
+                .contains("reason")
         );
     }
 }

@@ -22,7 +22,7 @@
 //! reverting; a failed check keeps it (audit C19).
 
 use super::{
-    check::{LaneProblem, check_lane},
+    check::{LaneProblem, check_lane, layer_pending},
     process::Processes,
     reset::{ResetRefused, clear_for_reset},
     state::{LaneDir, LaneFile},
@@ -33,7 +33,7 @@ use crate::{
         ids::LaneId,
     },
     engine::Engine,
-    waiter::{BOOT_WAIT, SETTLE_WAIT, WaitError, Waiter},
+    waiter::{BOOT_WAIT, SETTLE_WAIT, WaitError, Waiter, settled_after_stop},
 };
 use antinomie_monitor_core::{Command, SnapshotRequest, VmSnapshotMode, VmState};
 use serde::Serialize;
@@ -434,8 +434,26 @@ pub fn unquarantine_lane<E: Engine>(
         .ok_or_else(|| ApiError::not_found("lane"))
 }
 
+/// How long `lane reset` waits for a pending disk layer before the revert:
+/// within the reset's own limit (900 s), with room for the revert after it.
+pub const RESET_LAYER_WAIT: Duration = Duration::from_secs(600);
+
+/// The pending layer of `vm_id` in words: "phase finalizing, 12 min".
+fn pending_layer_words(snapshot: &antinomie_monitor_core::Snapshot, vm_id: &str) -> String {
+    snapshot
+        .disk_layers
+        .iter()
+        .find(|layer| layer.vm_id == vm_id)
+        .map_or_else(
+            || "no layer listed".to_owned(),
+            |layer| format!("boot {}, phase {}", layer.boot_id, layer.phase.as_str()),
+        )
+}
+
 /// `lane reset`: the revert now, then the VM stopped and settled; a
-/// quarantine is lifted when it worked.
+/// quarantine is lifted when it worked. A pending disk layer (the last
+/// recording still being saved) is waited for first, up to
+/// [`RESET_LAYER_WAIT`], and named when it does not settle.
 pub fn reset_lane<E: Engine>(
     waiter: &mut Waiter<E>,
     lanes: &LaneDir,
@@ -447,9 +465,46 @@ pub fn reset_lane<E: Engine>(
     if waiter.snapshot().state != VmState::Stopped {
         let active = waiter.snapshot().active_vm.clone().unwrap_or_default();
         progress("stopping the running VM first");
-        waiter
-            .stop_vm(&active, Some(SETTLE_WAIT))
-            .map_err(|e| engine_error(e, "the running VM did not stop"))?;
+        match waiter.stop_vm(&active, Some(RESET_LAYER_WAIT)) {
+            Ok(_) => {}
+            // Stopped, the recording still saving: the layer wait below
+            // names it.
+            Err(WaitError::TimedOut { .. }) if waiter.snapshot().state == VmState::Stopped => {}
+            Err(e) => return Err(engine_error(e, "the running VM did not stop")),
+        }
+    }
+    // A recording still being saved holds the VM's disk layer, and the
+    // engine's restore waits for it (A46: the reset timed out waiting for
+    // RestoreVmSnapshot). Wait for the layer here, bounded, and name it when
+    // it does not settle.
+    if layer_pending(waiter.snapshot(), &file.vm_id) {
+        progress(
+            "waiting for the lane VM's last recording to be saved (its disk layer is pending)",
+        );
+        let vm = file.vm_id.clone();
+        let layer = pending_layer_words(waiter.snapshot(), &file.vm_id);
+        match waiter.wait_until(
+            "the lane VM's disk layer to settle",
+            Some(RESET_LAYER_WAIT),
+            move |s| settled_after_stop(s, &vm),
+        ) {
+            Ok(()) => {}
+            Err(WaitError::TimedOut { .. }) => {
+                return Err(ApiError::new(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "the lane VM's disk layer is still pending after {} s ({layer}): its last recording is still being saved; reset the lane again once `queue status` shows `disk layer none`, or restart the daemon, whose engine finishes the layer when it starts",
+                        RESET_LAYER_WAIT.as_secs()
+                    ),
+                ));
+            }
+            Err(other) => {
+                return Err(engine_error(
+                    other,
+                    "waiting for the pending disk layer failed",
+                ));
+            }
+        }
     }
     let now = waiter.now_ms();
     clear_for_reset(lanes, lane, procs, now).map_err(|refused| match refused {

@@ -1314,6 +1314,13 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **`queue status` says why a lane is quarantined, and `auto lane reset` waits for
+  a pending disk layer.** Each lane row of `queue status` (and `reason` in its JSON)
+  has the quarantine's reason and words, and the `lane_quarantined` alert names them
+  with the reset command. A reset whose lane VM still saves its last recording
+  (`disk layer pending`, after a daemon restart) waits up to 10 minutes for it before
+  the revert, instead of timing out on the restore, and names the layer when it does
+  not settle.
 - **A cancelled run ends `cancelled` when the cancel is seen.** A run cancelled
   while its VM was stopping or its big recording was being saved stayed `cancelling`,
   with no finish time, for as long as the saving took. It now ends `cancelled` at

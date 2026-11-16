@@ -315,6 +315,10 @@ impl Service {
             let pending = vm_id
                 .as_ref()
                 .is_some_and(|vm| view.disk_layers.iter().any(|l| &l.vm_id == vm));
+            let reason = file
+                .as_ref()
+                .and_then(|file| file.quarantine.as_ref())
+                .map(crate::lane::recover::quarantine_words);
             out.push(LaneStatus {
                 lane,
                 state,
@@ -326,6 +330,7 @@ impl Service {
                 } else {
                     DiskLayer::None
                 },
+                reason,
             });
         }
         out

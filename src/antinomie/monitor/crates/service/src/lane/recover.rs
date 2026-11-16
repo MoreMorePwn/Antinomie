@@ -425,6 +425,16 @@ fn end_recorded_qemu(procs: &dyn Processes, file: &mut LaneFile, now: u64) -> Qe
 
 /// Store `lane.state` (`quarantined`) and `engine.alert` for a lane whose file
 /// now holds a quarantine (design 4.5.3).
+/// The quarantine's reason code and words: "revert_failed: the restore
+/// failed twice" (A46: `queue status` and the alert say why).
+pub(crate) fn quarantine_words(quarantine: &super::state::Quarantine) -> String {
+    let code = serde_json::to_value(quarantine.reason)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "lane_changed".into());
+    format!("{code}: {}", quarantine.detail)
+}
+
 pub(crate) fn announce_quarantine(
     store: &Store,
     file: &LaneFile,
@@ -445,6 +455,11 @@ pub(crate) fn announce_quarantine(
     })?;
     store.emit_engine(EventBody::EngineAlert {
         code: "lane_quarantined".into(),
-        text: format!("{}: {}", file.lane, quarantine.detail),
+        text: format!(
+            "{} is quarantined ({}); `auto lane reset --lane {} --yes` reverts it",
+            file.lane,
+            quarantine_words(quarantine),
+            file.lane
+        ),
     })
 }

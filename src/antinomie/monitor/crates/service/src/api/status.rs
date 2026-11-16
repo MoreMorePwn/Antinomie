@@ -76,6 +76,10 @@ pub struct LaneStatus {
     pub vm_id: Option<String>,
     pub since_ms: u64,
     pub disk_layer: DiskLayer,
+    /// Why the lane is quarantined: its reason code and words, as the lane
+    /// file keeps them (A46). Absent for a lane that is not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
