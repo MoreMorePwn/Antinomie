@@ -326,7 +326,8 @@ images**, **Create new VM** and **Manage samples**.
 The sidebar's **Explorer** title has an **Open Folder** button (a folder icon);
 **File > Open folder…** does the same. Both open a small window with the path of
 the host folder to browse (Enter or **OK** accepts it) and a folder button that
-opens the filesystem explorer to choose it. Right-click a file in the Explorer for
+opens the filesystem explorer to choose it. The chosen folder's name is under
+the title, with its **Refresh Explorer** button on the name's right. Right-click a file in the Explorer for
 **Send and Run** (opens Upload file filled in), **Send to VM** (uploads it to
 `/tmp` in the running VM at once and does not run it) and **Add to Samples…**.
 **File > Import sample…** opens the Samples page's **Add file** dialog.

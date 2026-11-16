@@ -30,23 +30,31 @@ impl MonitorApp {
                 let mut open = false;
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        // The folder name, then its Refresh button on its
+                        // right; a long name is cut short to leave room.
+                        let button = ui.spacing().interact_size.y + ui.spacing().item_spacing.x;
+                        let name_width = (ui.available_width() - button).max(0.0);
+                        ui.scope(|ui| {
+                            ui.set_max_width(name_width);
+                            let response = ui
+                                .add(
+                                    egui::Label::new(RichText::new(label.as_ref()).strong())
+                                        .truncate(),
+                                )
+                                .on_hover_text(root.display().to_string());
+                            response.context_menu(|ui| {
+                                if ui.button("Open Directory").clicked() {
+                                    open = true;
+                                    ui.close();
+                                }
+                            });
+                        });
                         refresh = icon(
                             ui,
                             egui_phosphor::regular::ARROW_CLOCKWISE,
                             "Refresh Explorer",
                             true,
                         );
-                        let response = ui
-                            .add(
-                                egui::Label::new(RichText::new(label.as_ref()).strong()).truncate(),
-                            )
-                            .on_hover_text(root.display().to_string());
-                        response.context_menu(|ui| {
-                            if ui.button("Open Directory").clicked() {
-                                open = true;
-                                ui.close();
-                            }
-                        });
                     });
                 });
                 if open {

@@ -28,6 +28,7 @@ x86 programs by their own table.
   VM screen captures the keyboard on a click, and its only tab can be dragged to
   move the window; a list inside a scrollable window no longer scrolls the window
   at its top or bottom.
+- **Explorer refresh beside the folder (ANT-T0555, item 2).** The Explorer's **Refresh Explorer** button is on the right of the folder name.
 - **Triage polish (ANT-T0550).** The Summary's MITRE ATT&CK, Processes of
   interest, Files and Network rows each have their own text colour; its notes
   are bullets and the run's last screenshot is gone from them; **Timed

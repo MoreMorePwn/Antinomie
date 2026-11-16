@@ -433,3 +433,31 @@ fn open_folder_refuses_a_path_that_is_not_a_folder() {
         .iter()
         .any(|(text, _)| text == "This is not a folder that exists."));
 }
+
+#[test]
+fn explorer_refresh_sits_on_the_right_of_the_folder_name() {
+    // ANT-T0555 item 2: the folder name first, its Refresh button after it.
+    let fixture = upload_browser::tests::Fixture::new();
+    let root = fixture.0.join("cases");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("sample.sh"), b"#!/bin/sh\n").unwrap();
+    let mut app = upload_app();
+    explorer_fixture(&mut app, &root);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let size = egui::vec2(1280.0, 900.0);
+    wait_for_label(&mut app, &ctx, size, "sample.sh");
+    let visible = texts(&render(&mut app, &ctx, size));
+    let folder = visible
+        .iter()
+        .find(|(text, _)| text == "cases")
+        .unwrap_or_else(|| panic!("no folder name: {visible:?}"))
+        .1;
+    let refresh = visible
+        .iter()
+        .filter(|(text, _)| text == egui_phosphor::regular::ARROW_CLOCKWISE)
+        .map(|(_, rect)| *rect)
+        .find(|rect| (rect.center().y - folder.center().y).abs() < 6.0)
+        .unwrap_or_else(|| panic!("no Refresh beside the folder name: {visible:?}"));
+    assert!(refresh.left() >= folder.right(), "{refresh:?} {folder:?}");
+}
