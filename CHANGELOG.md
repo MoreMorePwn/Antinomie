@@ -1314,6 +1314,18 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **Static analysis in the run report and every export (ANT-T0556, A08).** A new
+  report part, **Static analysis** (`static_analysis`, in `all`), lists the
+  sample's checks (identification, packing and unpacking, strings, entropy, static
+  YARA, capa, ...) with their state, summary, tools and first 100 rows, in HTML,
+  PDF, Markdown and JSON; STIX carries it as a `malware-analysis` of the file and a
+  `note`, MISP as one comment per check. Auto mode's reports had none of it.
+- **The rule packs and tools a run's analysis used (ANT-T0556, A22).** The report's
+  environment adds the rule packs the detection scans used and the tools of the
+  static analysis (the run record lists what was installed when the run started,
+  which was empty for a pack installed later), and a scan's
+  `selection-manifest.json` carries the running app's version (the selection's
+  builder is kept as `selection_app_version`; it said 0.8.3 in 0.9.0 runs).
 - **The command line installs analysis tools and rule packs (ANT-T0556).**
   `antinomie-cli tools list|install|update` downloads, checks and unpacks capa,
   FLOSS, Ghidra, Detect It Easy and the other optional tools as Tools > Analysis

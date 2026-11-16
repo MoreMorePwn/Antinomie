@@ -39,6 +39,27 @@ pub(in crate::report) fn attribute(
     })
 }
 
+/// One line per check of the report's static analysis (ANT-T0556, A08):
+/// "Compiler and packer identification (complete): UPX 4.02 [Detect It Easy
+/// 3.21]". The STIX note and the MISP comments carry them.
+pub(in crate::report) fn static_lines(report: &Report) -> Vec<String> {
+    report
+        .static_analysis
+        .iter()
+        .flat_map(|analysis| &analysis.checks)
+        .map(|check| {
+            let mut line = format!("{} ({})", check.title, check.state);
+            if !check.summary.is_empty() {
+                line.push_str(&format!(": {}", check.summary));
+            }
+            if !check.tools.is_empty() {
+                line.push_str(&format!(" [{}]", check.tools.join(", ")));
+            }
+            line
+        })
+        .collect()
+}
+
 fn comment(indicator: &Indicator) -> String {
     let mut parts = vec![format!("verdict: {}", indicator.verdict)];
     if !indicator.dataset.is_empty() {
@@ -327,6 +348,18 @@ pub fn render(report: &Report) -> Result<String, String> {
             at,
         ));
     }
+    // The sample's static analysis: one comment per check.
+    for line in static_lines(report) {
+        attrs.push(attribute(
+            "comment",
+            "Other",
+            &format!("Static analysis: {line}"),
+            false,
+            "a check of the sample's static analysis (not the run)",
+            &seed,
+            at,
+        ));
+    }
     if not_started {
         attrs.push(attribute(
             "comment",
@@ -355,6 +388,13 @@ pub fn render(report: &Report) -> Result<String, String> {
         at,
     ));
     let mut tags = vec![json!({"name": "antinomie:triage-report", "colour": "#0b5cad"})];
+    if report
+        .static_analysis
+        .as_ref()
+        .is_some_and(|analysis| !analysis.checks.is_empty())
+    {
+        tags.push(json!({"name": "antinomie:static-analysis", "colour": "#2e6b30"}));
+    }
     let assessment = if not_started {
         "not_started"
     } else {

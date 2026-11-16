@@ -29,8 +29,9 @@ pub struct Report {
     #[arg(long, value_delimiter = ',', value_name = "LIST")]
     pub formats: Vec<String>,
     /// Parts, comma separated: summary, indicators, attack, processes,
-    /// findings, files, file_activity, network, detections, evidence, custody
-    /// (or all) [default: the export choices, every part unless set].
+    /// findings, files, file_activity, network, detections, evidence, custody,
+    /// static_analysis (or all) [default: the export choices, every part
+    /// unless set].
     #[arg(long, value_delimiter = ',', value_name = "LIST")]
     pub parts: Vec<String>,
     /// Also write the evidence bundle (.zip next to the report): the captures,

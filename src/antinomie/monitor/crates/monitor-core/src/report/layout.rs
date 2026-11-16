@@ -449,6 +449,65 @@ impl Builder {
         }
     }
 
+    /// The sample's static analysis (ANT-T0556, A08): one row per check with
+    /// its state, summary and tools, then each check's rows under its name.
+    /// Values read from the file (strings, rule names) are defanged on request.
+    fn static_section(&mut self, report: &Report) {
+        let Some(analysis) = &report.static_analysis else {
+            return;
+        };
+        let mut blocks = Vec::new();
+        if analysis.checks.is_empty() {
+            blocks.push(Block::Note(
+                "The sample has no static analysis: the preset turned it off, or it did not run."
+                    .into(),
+            ));
+        } else {
+            if !analysis.tools.is_empty() {
+                blocks.push(Block::Note(format!(
+                    "Tools: {}.",
+                    analysis.tools.join(", ")
+                )));
+            }
+            blocks.push(Block::Table(DocTable::plain(
+                ["Check", "State", "Summary", "Tools"]
+                    .map(String::from)
+                    .to_vec(),
+                analysis
+                    .checks
+                    .iter()
+                    .map(|check| {
+                        vec![
+                            check.title.clone(),
+                            check.state.clone(),
+                            self.free(&check.summary),
+                            check.tools.join(", "),
+                        ]
+                    })
+                    .collect(),
+            )));
+            for check in analysis.checks.iter().filter(|c| !c.rows.is_empty()) {
+                blocks.push(Block::sub(check.title.clone()));
+                blocks.push(Block::Table(DocTable::plain(
+                    ["Name", "Value"].map(String::from).to_vec(),
+                    check
+                        .rows
+                        .iter()
+                        .map(|row| vec![row.name.clone(), self.free(&row.value)])
+                        .collect(),
+                )));
+                if check.omitted > 0 {
+                    blocks.push(Block::Note(format!(
+                        "{} more row(s) of this check are in the static analysis report ({}).",
+                        thousands(check.omitted),
+                        analysis.reports.join(", ")
+                    )));
+                }
+            }
+        }
+        self.section("static", "Static analysis", blocks);
+    }
+
     /// The custody log's head and whether its chain verified.
     fn custody_section(&mut self, report: &Report) {
         if let Some(custody) = &report.custody {
@@ -539,6 +598,7 @@ pub fn document(report: &Report, defang: bool) -> Document {
         b.section("network", "Network", blocks);
     }
     b.detections_section(report);
+    b.static_section(report);
     b.evidence_section(report);
     b.custody_section(report);
     if !b.credits.is_empty() {
