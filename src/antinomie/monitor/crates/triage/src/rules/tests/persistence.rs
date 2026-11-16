@@ -450,3 +450,33 @@ pub fn persistence_attempts_in_shell_commands_are_found_even_when_the_shell_neve
         );
     }
 }
+
+#[test]
+pub fn a_new_file_in_a_system_folder_is_added_not_a_replaced_system_file() {
+    // A17, runs 1bcae1cc and 6529d2bb: hidden self-copies and a write test.
+    for path in [
+        "/usr/bin/.syslogd",
+        "/usr/bin/test_write",
+        "/usr/bin/sysd",
+        "/sbin/.udevd",
+    ] {
+        let out = run(writes(path));
+        assert_eq!(
+            tier(&out, "persistence.system_dir_add").as_deref(),
+            Some("medium"),
+            "{path}"
+        );
+        assert!(!has(&out, "persistence.binary_replace"), "{path}");
+        assert!(text(
+            rows(&out, "persistence.system_dir_add")[0],
+            "finding.summary"
+        )
+        .contains("adds the file"));
+    }
+    // A cut of a file that was there, or a rename onto it, replaces it.
+    let cut = run(vec![open_truncate(1, "/usr/bin/somebin", 3), close(1, 3)]);
+    assert!(has(&cut, "persistence.binary_replace") || has(&cut, "persistence.system_dir_add"));
+    let renamed = run(vec![rename(1, "/tmp/x", "/usr/bin/wget")]);
+    assert!(has(&renamed, "persistence.binary_replace"));
+    assert!(!has(&renamed, "persistence.system_dir_add"));
+}

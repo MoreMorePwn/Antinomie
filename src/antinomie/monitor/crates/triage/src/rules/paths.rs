@@ -580,7 +580,7 @@ pub fn changed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) -> b
         matched = true;
     }
     if !matched {
-        if let Some(hit) = system_file(cx, touch) {
+        if let Some(hit) = system_file(cx, st, touch) {
             out.push(hit);
             matched = true;
         }
@@ -617,8 +617,37 @@ pub fn via_pseudo(path: &str) -> bool {
         || path.starts_with("/dev/") && !path.starts_with("/dev/shm/")
 }
 
-/// A system program or library written over: a trojaned `sshd`, `ps` or library.
-pub fn system_file(cx: &Ctx, touch: &Touch) -> Option<Hit> {
+/// Programs every base has in its system folders: a create of one of these
+/// names (or of a shared library) replaces it, whatever the run saw before.
+const SYSTEM_PROGRAMS: &[&str] = &[
+    "ssh", "sshd", "scp", "sftp", "ps", "ls", "top", "netstat", "ss", "login", "su", "sudo",
+    "passwd", "crontab", "cron", "wget", "curl", "busybox", "bash", "sh", "dash", "ash", "init",
+    "systemd", "kill", "pidof", "pkill", "find", "lsof", "ifconfig", "ip", "iptables", "mount",
+    "insmod", "modprobe", "lsmod", "who", "w", "last", "dropbear", "telnetd", "tftp", "nc",
+    "python3", "perl",
+];
+
+/// Whether a file of the run's in a system folder replaces one that was
+/// there (a trojaned `sshd`) rather than adds a new one (a hidden copy
+/// `/usr/bin/.syslogd`, a write test `/usr/bin/test_write`): a write, cut,
+/// rename or link onto a path the run did not create, or a create of a
+/// well-known program or a shared library.
+fn replaces(st: &State, touch: &Touch) -> bool {
+    let path = touch.path.as_str();
+    let name = base(path);
+    let well_known =
+        SYSTEM_PROGRAMS.contains(&name) || (name.starts_with("lib") && name.contains(".so"));
+    match touch.op {
+        Op::Created => well_known,
+        _ => well_known || !st.created.contains(path),
+    }
+}
+
+/// A file written in a system program or library folder: a trojaned
+/// `sshd`, `ps` or library replaces the original (`persistence.binary_replace`,
+/// HIGH); a new file there (`persistence.system_dir_add`, MEDIUM) hides a
+/// copy among the system's programs (ANT-T0556, A17).
+pub fn system_file(cx: &Ctx, st: &State, touch: &Touch) -> Option<Hit> {
     let path = touch.path.as_str();
     let system = file_location::classify(path, &[]).contains(&file_location::Location::System);
     let noise =
@@ -632,11 +661,19 @@ pub fn system_file(cx: &Ctx, touch: &Touch) -> Option<Hit> {
     {
         return None;
     }
-    Some(Hit::new(
-        "persistence.binary_replace",
-        path,
-        format!("{} changes the system file {path}", cx.name),
-    ))
+    Some(if replaces(st, touch) {
+        Hit::new(
+            "persistence.binary_replace",
+            path,
+            format!("{} replaces the system file {path}", cx.name),
+        )
+    } else {
+        Hit::new(
+            "persistence.system_dir_add",
+            path,
+            format!("{} adds the file {path} to a system folder", cx.name),
+        )
+    })
 }
 
 /// A hidden file made where nothing hidden belongs.

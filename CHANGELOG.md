@@ -1354,6 +1354,15 @@ x86 programs by their own table.
   `summary.scans`, the report's notes, a MISP comment and a STIX note, with the
   counts and a sample; a target the program came back to three times or more (up
   to eight per port) or one a dataset matched stays.
+- **New and finer behaviour rules (ANT-T0556, A15, A16, A17, A31, A33, A34, A40).**
+  `network.c2_ip_literal` (repeated connects to a public address no lookup gave),
+  `network.tls_ip_literal` (TLS with no server name to such an address),
+  `network.dns_over_tls` (port 853), `lateral.exploit_payload` (HTTP requests
+  carrying a download command); shell commands that write a systemd unit, an init
+  script, `rc.local`, a cron table or a shell profile are found even when the
+  shell never ran; a shell command whose shell exited 127 or 126 reads "all
+  failed"; `persistence.binary_replace` is now only for replacing a system file,
+  and a new file in a system folder is `persistence.system_dir_add` (Medium).
 - **Domain indicators are host names (ANT-T0556, A42, A14).** An HTTP Host `x`,
   a single label (`debian`) or an obfuscated string is no domain indicator, and an
   address as HTTP Host is no domain in `counts.domains`.

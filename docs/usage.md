@@ -880,6 +880,32 @@ The network capture is the guest's own view on every route.
   `all failed`), with the last error in Details. A non-blocking connect that only
   reports "in progress" is neither a failure nor a success.
   Repeats fold into one row with a count.
+  **Calling home to a hard-coded address** (`network.c2_ip_literal`, Medium): three or
+  more connects, successful or not, to one public address over ten seconds or more,
+  and no DNS answer of the run gave the address (a bot's or an implant's command
+  server built into it); unusual ports are named in Details, at most eight addresses
+  get a row, and the targets a scanning or brute-forcing process retries on the
+  attacked ports do not count. **Encrypted session to a bare address**
+  (`network.tls_ip_literal`, Low): a TLS hello with no server name to a public address
+  no lookup gave. **Lookups over DNS over TLS** (`network.dns_over_tls`, Medium): a
+  connect to a public address on port 853. **Sending exploits that download code**
+  (`lateral.exploit_payload`, High): an HTTP request whose URL or body (after URL
+  decoding, and base64 and `\xNN` escapes in a query value) carries `wget`, `curl`,
+  `tftp`, `ftpget` or `busybox` with a URL, a pipe into a shell or a `chmod`.
+  A shell command that writes a systemd unit, an init script or `rc.local`, a cron
+  table or a shell profile (`echo ... >> /etc/crontab`, `printf ... >
+  /etc/systemd/system/x.service`, `sed -i ... /etc/rc.local`, `echo ... >>
+  ~/.bashrc`, `tee`) is the matching persistence row even when the shell never ran;
+  `systemctl enable` of a unit such a command tried to write is too. A finding from
+  a shell command whose shell exited 127 (not found) or 126 (not runnable) reads
+  `all failed`, with the exit in Details. **System file replaced**
+  (`persistence.binary_replace`, High) is a write, cut, rename or link over a file
+  that was in `/bin`, `/sbin`, `/usr/bin`, a library folder and the like, or a new
+  copy of a well-known program (`sshd`, `ps`, `wget` ...) or a shared library; a new
+  file there is **File added to a system folder** (`persistence.system_dir_add`,
+  Medium). A program that made no system call before the time limit or a Stop ended
+  it is **No call before the stop** (`process.no_calls_before_stop`, Low), not a
+  crash.
 
   The tiers mean: **High**, something ordinary software essentially never does
   and that directly gives control, persistence or privilege, so look at these

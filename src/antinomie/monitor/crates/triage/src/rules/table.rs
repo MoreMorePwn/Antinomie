@@ -401,10 +401,18 @@ pub const SPECS: &[Spec] = &[
     ),
     rule(
         "persistence.binary_replace",
-        1,
+        2,
         T::High,
         C::Persistence,
         &["T1554", "DET0336"],
+    )
+    .allow(PACKAGERS),
+    rule(
+        "persistence.system_dir_add",
+        1,
+        T::Medium,
+        C::Persistence,
+        &["T1036.005", "DET0347"],
     )
     .allow(PACKAGERS),
     rule(
