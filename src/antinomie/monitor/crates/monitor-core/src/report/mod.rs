@@ -291,8 +291,9 @@ pub struct Indicator {
     pub sha256: String,
     pub md5: String,
     pub sha1: String,
-    /// Why this is the base image's own traffic (clock sync, DHCP, apt) and not
-    /// the sample's; empty for the run's indicators. Such rows are listed in the
+    /// Why this is the base image's own traffic (clock sync, DHCP, apt) or
+    /// program (its BusyBox) and not the sample's; empty for the run's
+    /// indicators. Such rows are listed in the
     /// JSON only, not in the document tables, MISP or STIX.
     pub base_noise: String,
     /// For an endpoint on the Tor gateway's stand-in range: the name the

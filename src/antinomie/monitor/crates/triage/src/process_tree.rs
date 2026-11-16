@@ -814,8 +814,19 @@ pub fn process_label(node: &ProcessNode) -> String {
         format!("{ids}  thread")
     } else {
         let name = match node.comm.as_str() {
-            "?" | "" => "unknown",
-            comm => process_cells::file_name(comm),
+            "?" | "" => "unknown".to_owned(),
+            // A program run again through /proc/self/exe (BusyBox choosing
+            // an applet) is named by the argv[0] it chose.
+            comm if super::rules::process::proc_exe(comm) => match node
+                .argv
+                .first()
+                .map(|argv0| process_cells::called(argv0))
+                .filter(|called| !called.is_empty())
+            {
+                Some(called) => format!("{called} via {comm}"),
+                None => process_cells::file_name(comm).to_owned(),
+            },
+            comm => process_cells::file_name(comm).to_owned(),
         };
         format!("{name} {ids}")
     };

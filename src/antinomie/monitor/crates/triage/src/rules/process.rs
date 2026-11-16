@@ -282,14 +282,92 @@ pub fn prctl(cx: &Ctx, out: &mut Vec<Hit>) {
     }
 }
 
+/// `/proc/self/exe`, `/proc/<pid>/exe`: the program a process runs, by its
+/// process's name rather than a path.
+pub fn proc_exe(path: &str) -> bool {
+    path.strip_prefix("/proc/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(_, rest)| rest == "exe")
+}
+
+/// Where a base image keeps the links of its BusyBox applets.
+const APPLET_DIRECTORIES: &[&str] = &["/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/"];
+
+/// The program the task `key` runs, by the last path it (or, before its
+/// first exec, the process it was forked from) loaded by name: an exec of
+/// `/proc/self/exe` runs the same program again, so it is looked through.
+fn named_program(files: &FdState, mut key: TaskKey) -> Option<&str> {
+    for _ in 0..32 {
+        let node = files.process_images.get(&key)?;
+        if let Some(path) = node
+            .exec_history
+            .iter()
+            .rev()
+            .map(String::as_str)
+            .find(|path| path.starts_with('/') && !proc_exe(path))
+        {
+            return Some(path);
+        }
+        let parent = files.settled_parents.get(&key).copied().or(node.parent)?;
+        if parent == key {
+            return None;
+        }
+        key = parent;
+    }
+    None
+}
+
+/// The task runs the base image's BusyBox: its program is `busybox`, or an
+/// applet's link where the base keeps them (`/bin/sh` on a BusyBox base).
+pub fn runs_busybox(files: &FdState, key: TaskKey) -> bool {
+    named_program(files, key).is_some_and(|path| {
+        let name = crate::process_cells::file_name(path);
+        name == "busybox"
+            || (crate::process_cells::is_applet(name)
+                && APPLET_DIRECTORIES.iter().any(|dir| path.starts_with(dir)))
+    })
+}
+
+/// BusyBox runs an applet its shell does not build in by executing itself
+/// again through `/proc/self/exe` with the applet's name as argv[0], and then
+/// names the process after the applet (`prctl(PR_SET_NAME)`). That is the
+/// multi-call binary choosing its applet, not a disguise: the exec of `path`
+/// with `argv0` by a task of BusyBox.
+pub fn busybox_dispatch(cx: &Ctx, path: &str, argv0: &str) -> bool {
+    proc_exe(path)
+        && crate::process_cells::is_applet(crate::process_cells::called(argv0))
+        && runs_busybox(
+            cx.files,
+            TaskKey {
+                pid: cx.event.pid,
+                cookie: cx.call.task_cookie,
+            },
+        )
+}
+
 /// BusyBox's shell runs NOFORK and NOEXEC applets inside itself and sets `comm`
 /// to the applet's name. That is the new name being an applet that the process,
 /// a BusyBox binary or a shell, was asked to run in its own command line. A
-/// rename to another name, or in a process that never asked for the applet,
+/// BusyBox applet run through `/proc/self/exe` names itself after its argv[0].
+/// A rename to another name, or in a process that never asked for the applet,
 /// is still a rename.
 fn busybox_applet(cx: &Ctx, name: &str) -> bool {
     if !crate::process_cells::is_applet(name) {
         return false;
+    }
+    let key = TaskKey {
+        pid: cx.event.pid,
+        cookie: cx.call.task_cookie,
+    };
+    if let Some(node) = cx.files.process_images.get(&key)
+        && node.exec_history.last().is_some_and(|path| proc_exe(path))
+        && node
+            .argv
+            .first()
+            .is_some_and(|argv0| crate::process_cells::called(argv0) == name)
+        && runs_busybox(cx.files, key)
+    {
+        return true;
     }
     let image = crate::process_cells::family(cx.image_name());
     let busybox = image == "busybox"

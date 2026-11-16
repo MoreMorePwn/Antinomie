@@ -863,3 +863,81 @@ pub fn a_busybox_shell_running_an_applet_is_not_a_rename() {
         );
     }
 }
+
+#[test]
+pub fn busybox_running_an_applet_through_proc_self_exe_is_neither_a_rename_nor_a_disguise() {
+    let rename = |pid: u32, name: &str| {
+        with_path(
+            sys(pid, 157, "prctl", [15, 0, 0, 0, 0, 0], 0),
+            "arg1.name",
+            name,
+        )
+    };
+    // The BusyBox base's sh forks; the child runs itself again as "tr" and
+    // names the process after the applet.
+    let busybox = run(vec![
+        exec(1, "/bin/sh", &["sh", "-c", "cat /proc/cpuinfo | tr a b"]),
+        fork(1, 2),
+        exec(2, "/proc/self/exe", &["tr", "a", "b"]),
+        rename(2, "tr"),
+    ]);
+    assert!(!has(&busybox, "evasion.argv_masquerade"));
+    assert!(!has(&busybox, "evasion.process_rename"));
+    // The same through /bin/busybox, without a fork.
+    let direct = run(vec![
+        exec(1, "/bin/busybox", &["busybox", "sh"]),
+        exec(1, "/proc/self/exe", &["grep", "x"]),
+        rename(1, "grep"),
+    ]);
+    assert!(!has(&direct, "evasion.argv_masquerade"));
+    assert!(!has(&direct, "evasion.process_rename"));
+    // The sample doing it is still both, and so is BusyBox naming a
+    // non-applet or another name than its argv[0].
+    let sample = run(vec![
+        exec(1, "/tmp/x", &["x"]),
+        fork(1, 2),
+        exec(2, "/proc/self/exe", &["tr"]),
+        rename(2, "tr"),
+    ]);
+    assert!(has(&sample, "evasion.argv_masquerade"));
+    assert!(has(&sample, "evasion.process_rename"));
+    let odd = run(vec![
+        exec(1, "/bin/sh", &["sh"]),
+        fork(1, 2),
+        exec(2, "/proc/self/exe", &["worker-1"]),
+        rename(2, "cat"),
+    ]);
+    assert!(has(&odd, "evasion.argv_masquerade"));
+    assert!(has(&odd, "evasion.process_rename"));
+}
+
+#[test]
+pub fn a_rename_shows_the_name_the_guest_read_again_or_could_not_decode() {
+    let summary = |out: &super::super::engine::Output| -> String {
+        text(rows(out, "evasion.process_rename")[0], "finding.summary")
+    };
+    // Not in memory at entry (an empty field), read again as the call returned.
+    let mut late = sys(1, 157, "prctl", [15, 0, 0, 0, 0, 0], 0);
+    late = with_entry(late, "arg1.name", b"");
+    late.entry.as_mut().unwrap().fields[0].ranges.clear();
+    late = with_exit(late, "arg1.name", b"/usr/sbin/cron\0");
+    let out = run(vec![exec(1, "/tmp/x", &["x"]), late]);
+    assert!(
+        summary(&out).contains("\"/usr/sbin/cron\""),
+        "{}",
+        summary(&out)
+    );
+    // A name that is not UTF-8 is shown escaped, not "not recorded".
+    let odd = with_entry(
+        sys(1, 157, "prctl", [15, 0, 0, 0, 0, 0], 0),
+        "arg1.name",
+        b"k\xff\xfe\0",
+    );
+    let out = run(vec![exec(1, "/tmp/x", &["x"]), odd]);
+    assert!(
+        summary(&out).contains("k\\\\xff\\\\xfe"),
+        "{}",
+        summary(&out)
+    );
+    assert!(!summary(&out).contains("not recorded"));
+}

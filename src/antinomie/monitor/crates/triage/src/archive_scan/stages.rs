@@ -844,6 +844,11 @@ impl Scan {
                 capture: capture_state,
                 frames: network.counts.map(|counts| counts.0),
                 disk: Default::default(),
+                sample_sha256: files
+                    .journal
+                    .launch_image
+                    .as_ref()
+                    .map(|(_, sha)| sha.clone()),
             },
             request.data_dir.as_deref(),
             &recording.directory,
