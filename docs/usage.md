@@ -808,7 +808,11 @@ The network capture is the guest's own view on every route.
   its command line, user, status and exit code. The state is coloured (see
   *Run states* below). Double-click a run to open its
   Triage view. Select a trace entry to inspect its recorded call details.
-  The table spans the pane. A run's process tree scrolls inside its own box, which stops short of the details' scroll bar so the two never overlap. A run's details list **Analysis enabled** as a tree:
+  The table spans the pane. A run's process tree lists each process with its
+  **Arguments** (the full command line, shell-quoted, cut with "…" when long; the
+  row's hover has it whole, with the program), then PID, calls and exit. A BusyBox
+  applet that BusyBox runs again through `/proc/self/exe` is named after its
+  argv[0] (`crontab`, `grep`), with the BusyBox program on the hover. A run's process tree scrolls inside its own box, which stops short of the details' scroll bar so the two never overlap. A run's details list **Analysis enabled** as a tree:
   the static analysis with its checks below it, then the capture options; a check
   that produced no result, or a capture that was deleted or failed, is greyed.
   In a process's Details, **Show its calls** opens **Syscall Trace**

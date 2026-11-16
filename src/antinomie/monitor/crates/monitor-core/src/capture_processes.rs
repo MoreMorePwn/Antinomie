@@ -19,8 +19,13 @@ pub struct CaptureProcess {
     pub parent_pid: u32,
     /// Command name, or the file name of the last program it executed.
     pub name: String,
-    /// Path of the last program it executed during the capture.
+    /// Path of the last program it executed during the capture. A BusyBox
+    /// applet run again through `/proc/self/exe` keeps the program it ran
+    /// before (`/bin/busybox`) when that is known.
     pub exe: Option<String>,
+    /// The argument vector (argv[0] first) of that exec, or of the launch;
+    /// empty when none was captured. A string cut short ends with "…".
+    pub args: Vec<String>,
     /// Running when the capture started (from the guest process list).
     pub at_start: bool,
     /// Guest time of its first and last observed packet.
@@ -58,6 +63,80 @@ struct ExecPath {
     identity: (u64, u64),
     timestamp_ns: u64,
     path: String,
+    argv: Vec<String>,
+}
+
+/// Arguments read of one exec at most.
+const MAX_ARGS: usize = 256;
+
+/// The argument vector an exec entry captured: the strings of the table's
+/// `argv` argument (`argN.string[i]`) in order, up to the first one not
+/// captured; one cut short ends with "…".
+fn exec_argv(event: &EventSummary) -> Vec<String> {
+    let Some(index) = crate::syscalls::argument_of(event.syscall_nr, &event.syscall_name, "argv")
+    else {
+        return Vec::new();
+    };
+    let mut argv = Vec::new();
+    for at in 0..MAX_ARGS {
+        let key = format!("arg{index}.string[{at}]");
+        let Some(field) = event.fields.iter().find(|field| field.key == key) else {
+            break;
+        };
+        let (text, whole) = match field.preview.iter().position(|byte| *byte == 0) {
+            Some(end) => (&field.preview[..end], field.complete),
+            None => (&field.preview[..], false),
+        };
+        let mut text = String::from_utf8_lossy(text).into_owned();
+        if !whole {
+            text.push('\u{2026}');
+        }
+        argv.push(text);
+    }
+    argv
+}
+
+/// The launch's argument vector (`context.exec.argv[N]`), as far as it was
+/// written.
+fn launch_argv(event: &EventSummary) -> Vec<String> {
+    (0..MAX_ARGS)
+        .map_while(|at| {
+            let key = format!("context.exec.argv[{at}]");
+            let field = event.fields.iter().find(|field| field.key == key)?;
+            Some(preview_text(&field.preview).unwrap_or_default())
+        })
+        .collect()
+}
+
+/// A path that runs the calling program again: `/proc/self/exe` (BusyBox
+/// runs its applets that way) or `/proc/<pid>/exe`.
+fn runs_itself(path: &str) -> bool {
+    path.strip_prefix("/proc/")
+        .and_then(|rest| rest.strip_suffix("/exe"))
+        .is_some_and(|pid| pid == "self" || pid.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// `process` executed `path` with `argv`. Run again through `/proc/self/exe`
+/// it is named after its argv[0] (the BusyBox applet: `crontab`, `grep`)
+/// and keeps the program it ran before as its `exe`.
+fn exec_into(process: &mut CaptureProcess, path: String, argv: Vec<String>) {
+    if runs_itself(&path) {
+        let real = process
+            .exe
+            .clone()
+            .filter(|exe| !runs_itself(exe))
+            .unwrap_or(path);
+        process.name = argv
+            .first()
+            .map(|argv0| file_name(argv0.trim_end_matches('\u{2026}')))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| file_name(&real));
+        process.exe = Some(real);
+    } else {
+        process.name = file_name(&path);
+        process.exe = Some(path);
+    }
+    process.args = argv;
 }
 
 /// The key of an exec's program path: its `filename` argument by position in
@@ -312,6 +391,7 @@ impl ProcessTracker {
                         identity: (event.stream_id, event.task_cookie),
                         timestamp_ns: event.timestamp_ns,
                         path,
+                        argv: exec_argv(event),
                     },
                 );
             }
@@ -336,9 +416,23 @@ impl ProcessTracker {
                     .is_none_or(|life| event.timestamp_ns >= life.exec_ns)
             {
                 self.lifetimes.entry(event.pid).or_default().exec_ns = event.timestamp_ns;
-                let process = self.process(event.pid);
-                process.name = file_name(&path);
-                process.exe = Some(path);
+                let argv = exec_argv(event);
+                exec_into(self.process(event.pid), path, argv);
+                self.changed = true;
+            }
+            return;
+        }
+        // The launched program's own arguments (the kernel starts it, so no
+        // traced exec carries them).
+        if event.phase == 3
+            && event
+                .fields
+                .iter()
+                .any(|field| field.key == "lifecycle.launch")
+        {
+            let argv = launch_argv(event);
+            if !argv.is_empty() {
+                self.process(event.pid).args = argv;
                 self.changed = true;
             }
             return;
@@ -354,7 +448,7 @@ impl ProcessTracker {
                 let parent = self
                     .processes
                     .get(&event.pid)
-                    .map(|parent| (parent.name.clone(), parent.exe.clone()))
+                    .map(|parent| (parent.name.clone(), parent.exe.clone(), parent.args.clone()))
                     .unwrap_or_default();
                 let terminal = self.lifetimes.get(&child).map_or(0, |life| life.exit_ns);
                 // Older forks can be delivered after their child's exit. Only
@@ -369,7 +463,7 @@ impl ProcessTracker {
                 let process = self.process(child);
                 process.parent_pid = event.pid;
                 if process.name.is_empty() {
-                    (process.name, process.exe) = parent;
+                    (process.name, process.exe, process.args) = parent;
                 }
                 self.changed = true;
             }
@@ -385,9 +479,7 @@ impl ProcessTracker {
                 });
             if applicable && let Some(pending) = self.exec_paths.remove(&event.pid) {
                 self.lifetimes.entry(event.pid).or_default().exec_ns = event.timestamp_ns;
-                let process = self.process(event.pid);
-                process.name = file_name(&pending.path);
-                process.exe = Some(pending.path);
+                exec_into(self.process(event.pid), pending.path, pending.argv);
                 self.changed = true;
             }
         } else if let Some(code) = field_u64(event, "lifecycle.task_exit") {
@@ -675,5 +767,93 @@ mod tests {
         tracker.packet(&header(20, 1, 1));
         let pids: Vec<_> = tracker.list().iter().map(|p| p.pid).collect();
         assert_eq!(pids, [1, 10, 20]);
+    }
+
+    #[test]
+    fn an_exec_keeps_its_arguments_and_a_busybox_applet_its_applet_name() {
+        // ANT-T0555 item 10: the arguments of each exec and of the launch;
+        // an applet BusyBox runs through /proc/self/exe is named after its
+        // argv[0], with busybox as its program.
+        let mut tracker = ProcessTracker::default();
+        let string = |at: usize, text: &str| {
+            (
+                format!("arg1.string[{at}]"),
+                format!("{text}\0").into_bytes(),
+            )
+        };
+        let exec = |pid: u32, path: &str, argv: &[&str]| {
+            let mut fields: Vec<(String, Vec<u8>)> =
+                vec![("arg0.path".into(), format!("{path}\0").into_bytes())];
+            fields.extend(argv.iter().enumerate().map(|(at, text)| string(at, text)));
+            let borrowed: Vec<(&str, Vec<u8>)> = fields
+                .iter()
+                .map(|(key, bytes)| (key.as_str(), bytes.clone()))
+                .collect();
+            event(pid, 1, 59, &borrowed)
+        };
+        let commit = |pid: u32| {
+            event(
+                pid,
+                3,
+                0,
+                &[(
+                    "lifecycle.exec_commit",
+                    u64::from(pid).to_le_bytes().to_vec(),
+                )],
+            )
+        };
+        let fork = |parent: u32, child: u64| {
+            event(
+                parent,
+                3,
+                0,
+                &[("lifecycle.child_tgid", child.to_le_bytes().to_vec())],
+            )
+        };
+        // The launched shell: its arguments come with the launch.
+        tracker.packet(&header(300, 1, 1));
+        tracker.name_launched(300, "/bin/sh");
+        tracker.event(&event(
+            300,
+            3,
+            0,
+            &[
+                ("lifecycle.launch", 300u64.to_le_bytes().to_vec()),
+                ("context.exec.argv[0]", b"/bin/sh\0".to_vec()),
+                ("context.exec.argv[1]", b"/tmp/job.sh\0".to_vec()),
+            ],
+        ));
+        // It runs busybox, which runs its crontab applet again.
+        tracker.event(&fork(300, 301));
+        tracker.packet(&header(301, 1, 1));
+        tracker.event(&exec(301, "/bin/busybox", &["busybox", "sh"]));
+        tracker.event(&commit(301));
+        tracker.event(&fork(301, 302));
+        tracker.packet(&header(302, 1, 1));
+        // A forked child runs its parent's command line until it executes.
+        let pending = tracker.list();
+        let child = pending.iter().find(|p| p.pid == 302).unwrap();
+        assert_eq!(child.args, ["busybox", "sh"]);
+        tracker.event(&exec(302, "/proc/self/exe", &["crontab", "-l"]));
+        tracker.event(&commit(302));
+        // An argument cut short says so.
+        tracker.event(&fork(300, 303));
+        tracker.packet(&header(303, 1, 1));
+        let mut cut = exec(303, "/usr/bin/grep", &["grep", "a-very-long-pattern"]);
+        let last = cut.fields.last_mut().unwrap();
+        last.preview.truncate(6);
+        last.complete = false;
+        tracker.event(&cut);
+        tracker.event(&commit(303));
+        let list = tracker.list();
+        let get = |pid| list.iter().find(|p| p.pid == pid).unwrap();
+        assert_eq!(get(300).args, ["/bin/sh", "/tmp/job.sh"]);
+        assert_eq!(get(301).name, "busybox");
+        assert_eq!(get(302).name, "crontab");
+        assert_eq!(get(302).exe.as_deref(), Some("/bin/busybox"));
+        assert_eq!(get(302).args, ["crontab", "-l"]);
+        assert_eq!(get(303).args, ["grep", "a-very\u{2026}"]);
+        assert!(runs_itself("/proc/self/exe") && runs_itself("/proc/42/exe"));
+        assert!(!runs_itself("/proc/self/exe/x") && !runs_itself("/bin/exe"));
     }
 }

@@ -795,21 +795,19 @@ pub(super) fn process_tree_tinted(
     let char_width = ui.fonts_mut(|fonts| fonts.glyph_width(&mono, '0'));
     let row_height = theme::row_height(font_size);
     // The number columns have fixed widths; the process column is as wide as
-    // its longest row, or the panel if that is wider, and the tree scrolls
-    // sideways when it is not.
-    let numbers = char_width * 30.0 + 24.0 + 3.0 * ui.spacing().item_spacing.x;
+    // its longest row (branches and name), the Arguments column takes the
+    // rest of the panel (at least a few words), and the tree scrolls sideways
+    // when they do not fit.
+    let numbers = char_width * 30.0 + 24.0 + 4.0 * ui.spacing().item_spacing.x;
     let rows = layout.rows.iter().map(|row| {
         let process = &processes[row.process as usize];
-        let exe = process
-            .exe
-            .as_deref()
-            .map_or(0, |exe| exe.chars().count() + 2);
         let chars =
-            row.depth as usize * crate::tree_lines::CELL_CHARS + process.name.chars().count() + exe;
-        chars as f32 * char_width + 12.0
+            row.depth as usize * crate::tree_lines::CELL_CHARS + process.name.chars().count();
+        chars as f32 * char_width + 24.0
     });
-    let wanted = rows.fold(160.0_f32, f32::max);
-    let process_width = wanted.max(ui.available_width() - numbers - 16.0);
+    let process_width = rows.fold(120.0_f32, f32::max);
+    let arguments_width = (ui.available_width() - numbers - process_width - 16.0)
+        .max(char_width * ARGUMENTS_MIN_CHARS);
     ui.scope(|ui| {
         FitBuilder::new(ui)
             .id_salt("capture_process_tree")
@@ -820,11 +818,12 @@ pub(super) fn process_tree_tinted(
             .max_scroll_height(f32::INFINITY)
             .min_scrolled_height(0.0)
             .column(Col::fixed(process_width).clip(true))
+            .column(Col::fixed(arguments_width).clip(true))
             .column(Col::fixed(char_width * 8.0 + 8.0))
             .column(Col::fixed(char_width * 10.0 + 8.0))
             .column(Col::fixed(char_width * 12.0 + 8.0))
             .header(row_height + 4.0, |mut header| {
-                for label in ["Process", "PID", "Calls", "Exit"] {
+                for label in ["Process", "Arguments", "PID", "Calls", "Exit"] {
                     header.col(|ui| crate::widgets::fit_table::head(ui, label));
                 }
             })
@@ -875,20 +874,25 @@ pub(super) fn process_tree_tinted(
                         } else {
                             theme::value(theme::ValueKind::Name)
                         };
+                        // The program it runs is on the row's hover (a BusyBox
+                        // applet's name is its argv[0], its program busybox).
                         ui.add(
                             egui::Label::new(RichText::new(name).color(color))
                                 .selectable(false)
                                 .truncate(),
                         );
-                        if let Some(exe) = process.exe.as_deref().filter(|exe| {
-                            std::path::Path::new(exe)
-                                .file_name()
-                                .is_none_or(|file| file.to_string_lossy() != name)
-                        }) {
-                            ui.add_space(6.0);
+                    });
+                    row.col(|ui| {
+                        wash(ui);
+                        if process.args.is_empty() {
+                            ui.label(RichText::new("-").font(mono.clone()).color(theme::muted()));
+                        } else {
+                            // Cut short with "…"; the row's hover has it all.
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(exe).font(mono.clone()).color(theme::muted()),
+                                    RichText::new(command_line(process))
+                                        .font(mono.clone())
+                                        .color(theme::text()),
                                 )
                                 .selectable(false)
                                 .truncate(),
@@ -1014,13 +1018,24 @@ pub(super) fn process_menu(
     action
 }
 
+/// The Arguments column's shortest width, in characters.
+const ARGUMENTS_MIN_CHARS: f32 = 24.0;
+
+/// A process's command line, as a shell would take it back.
+fn command_line(process: &CaptureProcess) -> String {
+    antinomie_triage::process_cells::argv_line(&process.args)
+}
+
 fn process_hover(process: &CaptureProcess) -> String {
     let mut lines = vec![format!("PID {}", process.pid)];
     if process.parent_pid != 0 {
         lines.push(format!("Parent PID {}", process.parent_pid));
     }
     if let Some(exe) = &process.exe {
-        lines.push(format!("Executed {exe}"));
+        lines.push(format!("Program {exe}"));
+    }
+    if !process.args.is_empty() {
+        lines.push(format!("Command line {}", command_line(process)));
     }
     lines.push(if process.at_start {
         "Running when the capture started".into()
@@ -1225,6 +1240,60 @@ mod tests {
             .map(crate::tree_lines::Prefix::text)
             .collect();
         assert_eq!(branches, ["", "├── ", "│   └── ", "└── ", "    └── "]);
+    }
+
+    #[test]
+    fn the_arguments_column_follows_the_process_name() {
+        // ANT-T0555 item 10: a command line beside each name, "-" without
+        // one, and a BusyBox applet named after its argv[0].
+        let mut shell = process(1, 0);
+        shell.name = "sh".into();
+        shell.args = vec!["sh".into(), "-c".into(), "crontab -l | grep x".into()];
+        let mut applet = process(2, 1);
+        applet.name = "crontab".into();
+        applet.exe = Some("/bin/busybox".into());
+        applet.args = vec!["crontab".into(), "-l".into()];
+        let quiet = process(3, 1);
+        let processes = [shell, applet, quiet];
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let frame = || {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        process_tree(ui, &processes, None, 16.0);
+                    });
+                },
+            )
+        };
+        for _ in 0..2 {
+            frame();
+        }
+        let shown = crate::app::tests::texts(&frame());
+        let rect = |text: &str| {
+            shown
+                .iter()
+                .find(|(shown, _)| shown == text)
+                .unwrap_or_else(|| panic!("missing {text}: {shown:?}"))
+                .1
+        };
+        let (name, arguments, pid) = (rect("Process"), rect("Arguments"), rect("PID"));
+        assert!(name.right() < arguments.left() && arguments.right() < pid.left());
+        let line = rect("sh -c 'crontab -l | grep x'");
+        assert!(line.left() > rect("sh").right());
+        assert!((line.center().y - rect("sh").center().y).abs() < 6.0);
+        assert!(rect("crontab -l").left() >= arguments.left() - 1.0);
+        assert!(shown.iter().any(|(text, _)| text == "-"));
+        let hover = process_hover(&processes[1]);
+        assert!(hover.contains("Program /bin/busybox"), "{hover}");
+        assert!(hover.contains("Command line crontab -l"), "{hover}");
     }
 
     #[test]

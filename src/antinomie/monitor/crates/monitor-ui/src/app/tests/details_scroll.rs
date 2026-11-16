@@ -19,6 +19,7 @@ fn process(pid: u32, parent: u32, name: String) -> CaptureProcess {
         packets: 20,
         exited: true,
         exit_code: Some(0),
+        args: Vec::new(),
     }
 }
 

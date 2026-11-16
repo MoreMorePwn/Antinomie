@@ -153,6 +153,7 @@ fn process(pid: u32, parent: u32) -> antinomie_monitor_core::capture_processes::
         packets: 20,
         exited: true,
         exit_code: Some(0),
+        args: Vec::new(),
     }
 }
 
