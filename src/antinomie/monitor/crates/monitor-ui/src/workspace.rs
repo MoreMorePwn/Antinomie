@@ -8,6 +8,8 @@ mod workspace_details;
 mod workspace_drag;
 #[path = "workspace_migrate.rs"]
 mod workspace_migrate;
+#[path = "workspace_min.rs"]
+pub(crate) mod workspace_min;
 #[path = "workspace_tabs.rs"]
 mod workspace_tabs;
 #[cfg(test)]
@@ -25,6 +27,7 @@ use egui_dock::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub(crate) use workspace_details::{DetailsFollow, DetailsOf};
+use workspace_drag::primary_release;
 pub(crate) use workspace_migrate::load as load_layout;
 use workspace_viewer::Viewer;
 
@@ -181,6 +184,9 @@ pub(crate) struct WorkspaceLayout {
     /// The y (screen points) from which a released tab folds the pane.
     #[serde(skip)]
     bottom_edge: f32,
+    /// Tab bar and separator sizes for the least sizes (`workspace_min`).
+    #[serde(skip)]
+    min_room: Option<workspace_min::Room>,
 }
 
 impl Default for WorkspaceLayout {
@@ -220,6 +226,7 @@ impl Default for WorkspaceLayout {
             bottom_active: None,
             bottom_badge: false,
             bottom_edge: 0.0,
+            min_room: None,
         }
     }
 }
@@ -855,6 +862,7 @@ impl WorkspaceLayout {
         dock_style.buttons.add_tab_active_color = clear;
         dock_style.buttons.add_tab_bg_fill = clear;
         dock_style.buttons.add_tab_border_color = clear;
+        workspace_min::hold_surface(viewer.layout, &mut local, &dock_style, surface, strip_only);
         DockArea::new(&mut local)
             .id(egui::Id::new(("native-dock", surface.0)))
             .style(dock_style)
@@ -1182,18 +1190,6 @@ impl WorkspaceLayout {
             }
         }
     }
-}
-
-fn primary_release(input: &egui::InputState) -> Option<egui::Pos2> {
-    input.events.iter().rev().find_map(|event| match event {
-        egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            ..
-        } => Some(*pos),
-        _ => None,
-    })
 }
 
 #[cfg(test)]

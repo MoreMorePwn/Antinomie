@@ -5,6 +5,7 @@
 //! that file live.
 use crate::theme::{self, PacketColor, ValueKind};
 use crate::widgets::fit_table::{Col, FitBuilder};
+use crate::widgets::HeldPanel as _;
 use antinomie_monitor_core::network::{self, NetworkCapture, NetworkPacket, Transport};
 use antinomie_monitor_core::packet_filter::{
     CaptureIdentity, FieldRegistry, PacketDetail, PacketFilterEvent, PacketFilterIndex,
@@ -598,7 +599,7 @@ impl NetworkView {
                     right: 8,
                     ..Default::default()
                 }))
-                .show(ui, |ui| {
+                .show_held(ui, |ui| {
                     action = self.capture_list(ui, &cx);
                 });
         }

@@ -38,6 +38,22 @@ x86 programs by their own table.
 - **Triggered dumps only in the trigger log (ANT-T0555, item 12).** "Dump triggered by …: core requested." is no longer a run note; the trigger log lists the match and now says when the process was held at its exit.
 - **Mermaid on the Show threads row (ANT-T0555, item 13).** In Triage › Process tree the **Mermaid** button sits on the row of **Show threads**, centred with it.
 - **Statistics menu and tables (ANT-T0555, items 14 to 16).** The Statistics menu's entries are **Statistics**, **Properties**, **Hierarchy**… without the "Statistics:" prefix; Properties is a sortable, resizable table per block; Hierarchy lists every call on its own row unless **Group by category** (off by default) is ticked.
+- **Side lists keep their width (ANT-T0555, item 6).** The Memory dump list
+  no longer widens by itself up to its maximum (its buttons were one help icon
+  wider than the list); it keeps the width it has or the one you drag it to.
+  Every list beside a view (Core dumps, Network captures, Disks, the function
+  lists, the VM sidebar and the others) is held the same way.
+- **Every table column can be resized (ANT-T0555, item 8).** Every column of
+  every table, except the one that takes the rest of the width, has a divider
+  in its header to drag it wider or narrower; a table's last column fills the
+  width left. The Statistics latency histogram table is one of them now.
+- **Split windows keep a least size (ANT-T0555, item 9).** Dropping a tab at
+  a pane's edge no longer splits it into parts too small for their windows (it
+  joins the tabs instead, "Too small to split: join tabs"), and a separator
+  stops where the window beside it reaches its least size, so a split no longer
+  squeezes a window to a strip with its content cut off.
+- **Pop out is an icon (ANT-T0555, item 17).** The Statistics window's
+  **Pop out** button is an icon just left of its close button.
 - **Triage polish (ANT-T0550).** The Summary's MITRE ATT&CK, Processes of
   interest, Files and Network rows each have their own text colour; its notes
   are bullets and the run's last screenshot is gone from them; **Timed

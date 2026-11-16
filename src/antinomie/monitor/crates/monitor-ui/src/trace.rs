@@ -2,6 +2,7 @@
 //! Paired invocation presentation and inspectors for actually captured content.
 use crate::scroll_contain::ScrollContained as _;
 use crate::tree_lines::Prefix;
+use crate::widgets::HeldPanel as _;
 use crate::{
     data_view::{self, OpenData},
     theme::{self, ValueKind},
@@ -195,7 +196,7 @@ impl Inspector {
                 top: 4,
                 bottom: 4,
             }))
-            .show(ui, |ui| {
+            .show_held(ui, |ui| {
                 egui::ScrollArea::both()
                     .id_salt("argument_tree_scroll")
                     .auto_shrink([false, false])

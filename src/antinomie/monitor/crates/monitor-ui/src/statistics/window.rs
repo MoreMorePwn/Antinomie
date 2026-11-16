@@ -302,9 +302,11 @@ impl StatisticsWindow {
             ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, id));
         }
         let mut open = true;
+        let mut pop_out = false;
         let shown = crate::widgets::window(Self::title(view))
             .id(id)
             .open(&mut open)
+            .pop_out(&mut pop_out)
             .default_size(self.size)
             .min_size(MIN_SIZE)
             .show(ctx, |ui| self.body(ui, view, navigate));
@@ -312,6 +314,9 @@ impl StatisticsWindow {
             let rect = inner.response.rect;
             // The frame is part of the rect; the sizes asked for count it too.
             self.remember([rect.width(), rect.height()]);
+        }
+        if pop_out {
+            self.set_popped(true);
         }
         if !open || crate::widgets::escape_closes(ctx, id) {
             self.close();

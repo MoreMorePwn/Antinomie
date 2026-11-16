@@ -1486,7 +1486,14 @@ text; copy from Raw gives the escaped text. A saved run opens in whichever view
 is chosen.
 
 Panels can be dragged out into their own windows and docked back;
-**View → Reset layout** restores the default arrangement. Text size is under
+**View → Reset layout** restores the default arrangement. Each window keeps a
+least size (about 440 by 260 points for Trace, Network, Memory, Disks and Core
+dumps; 440 by 300 for Triage; 380 by 180 for Run History; 300 to 340 by 100 for
+Details, Activity and Jobs): a drop at a pane's edge that would split it into
+parts smaller than the windows in them need joins the tabs instead (the drag
+says "Too small to split: join tabs"), and a separator stops where the window on
+either side reaches its least size. When the main window itself is too small for
+both sides, they share the room in proportion to what each needs. Text size is under
 **Tools → Settings**.
 
 The main window and detached workspace windows use Antinomie's own title bar,
@@ -1521,9 +1528,9 @@ using it. The default `--graphics-driver system` keeps the existing environment.
 Keyboard) opens a menu with **Statistics** (the window on the tab it showed last)
 and one entry per tab (**Properties**, **Hierarchy**, …); each opens the Statistics window on the run or Capture all recording you have
 selected; the **Statistics of these calls** button on the Syscall Trace opens it
-with the Trace's filter. The window floats over the main window; **Pop out** moves
-it into its own window (and remembers that), **Back into the main window** returns
-it. It follows the run you select; **Change...** opens Run History. Esc closes it.
+with the Trace's filter. The window floats over the main window; the pop-out icon
+just left of its close button (hover: "Pop out") moves it into its own window (and
+remembers that), **Back into the main window** in its toolbar returns it. It follows the run you select; **Change...** opens Run History. Esc closes it.
 
 The top of the window is the same for every tab.
 
@@ -1946,10 +1953,17 @@ Layout at narrow windows: a tab bar whose tabs do not fit uses short names
 ("Trace", "History", "Cores", "Static"; the hover text keeps the full name) and
 tighter padding, and when even those do not fit it scrolls the active tab into
 view and shows a tab list button at its right end that opens every tab of the bar.
-Drag a column divider in a table to widen a column: the last column gives way
-first, and when it is at its minimum the table scrolls sideways inside its own
-area. Double-click a divider, or right-click it and choose **Fit columns**, to fit
-the box again. The dragged widths are kept per table for the session.
+Every column of every table has a divider at the right edge of its header
+cell: drag it to make the column wider or narrower (down to the column's
+minimum). The column that takes the rest of the width (the last one, unless a
+table names another) gives way first, and when it is at its minimum the table
+scrolls sideways inside its own area. Double-click a divider, or right-click it
+and choose **Fit columns**, to fit the box again. The dragged widths are kept per
+table for the session. Columns keep their order.
+
+The lists at the left of Memory, Core dumps, Network and Disks (and the other
+side panels, such as the VM sidebar) keep the width they have or the one you drag
+their edge to; their content does not widen them.
 
 The sample **Download** window (**Tools > Download malware samples…**) keeps its
 size while it loads: the results area and the Downloaded list have fixed heights

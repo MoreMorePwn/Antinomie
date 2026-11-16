@@ -19,6 +19,7 @@ pub fn window<'open>(title: impl Into<String>) -> Dialog<'open> {
         title,
         id: None,
         open: None,
+        pop_out: None,
         positioned: false,
         fixed: false,
         max_width: None,
@@ -34,6 +35,8 @@ pub struct Dialog<'open> {
     /// The window's id, when the caller gave one (else egui's: the title).
     id: Option<egui::Id>,
     open: Option<&'open mut bool>,
+    /// Set when the pop-out icon left of the close button is clicked.
+    pop_out: Option<&'open mut bool>,
     /// The caller placed the window; otherwise it opens centred.
     positioned: bool,
     /// The caller fixed the size.
@@ -69,6 +72,13 @@ impl<'open> Dialog<'open> {
     /// The close button clears `open`.
     pub fn open(mut self, open: &'open mut bool) -> Self {
         self.open = Some(open);
+        self
+    }
+
+    /// A "Pop out" icon just left of the close button sets `asked` when
+    /// clicked: the caller moves the window into its own OS window.
+    pub fn pop_out(mut self, asked: &'open mut bool) -> Self {
+        self.pop_out = Some(asked);
         self
     }
 
@@ -178,6 +188,7 @@ impl<'open> Dialog<'open> {
             title,
             id,
             open,
+            pop_out,
             positioned,
             fixed,
             max_width,
@@ -220,7 +231,9 @@ impl<'open> Dialog<'open> {
         .min(area_size)
         .max(egui::Vec2::ZERO);
         let closable = open.is_some();
+        let poppable = pop_out.is_some();
         let mut close = false;
+        let mut popped = false;
         let area = crate::title_bar::content_rect(ctx);
         let mut window = if fixed {
             window
@@ -290,6 +303,9 @@ impl<'open> Dialog<'open> {
                     if closable {
                         ui.add_space(CLOSE_SIZE + 12.0);
                     }
+                    if poppable {
+                        ui.add_space(CLOSE_SIZE + 4.0);
+                    }
                 })
                 .response
                 .rect;
@@ -315,40 +331,44 @@ impl<'open> Dialog<'open> {
                     egui::Stroke::new(1.0_f32, theme::line_soft()),
                 ),
             );
-            if !closable {
-                return inner;
+            // The title buttons from the right edge: close, then pop out.
+            let mut right = width.max;
+            for (shown, glyph, name, key, clicked) in [
+                (
+                    closable,
+                    egui_phosphor::regular::X,
+                    "Close",
+                    "close",
+                    &mut close,
+                ),
+                (
+                    poppable,
+                    egui_phosphor::regular::ARROW_SQUARE_OUT,
+                    "Pop out",
+                    "pop-out",
+                    &mut popped,
+                ),
+            ] {
+                if !shown {
+                    continue;
+                }
+                let button = egui::Rect::from_min_size(
+                    egui::pos2(right - CLOSE_SIZE, header.center().y - CLOSE_SIZE / 2.0),
+                    egui::vec2(CLOSE_SIZE, CLOSE_SIZE),
+                );
+                right -= CLOSE_SIZE + 4.0;
+                *clicked = title_button(ui, button, glyph, name, key);
             }
-            let button = egui::Rect::from_min_size(
-                egui::pos2(width.max - CLOSE_SIZE, header.center().y - CLOSE_SIZE / 2.0),
-                egui::vec2(CLOSE_SIZE, CLOSE_SIZE),
-            );
-            // Painted and sensed without taking layout space, so the window
-            // does not grow by the button every frame.
-            let response = ui
-                .interact(button, ui.id().with("close"), egui::Sense::click())
-                .on_hover_text("Close");
-            let color = if response.hovered() {
-                theme::palette().text
-            } else {
-                theme::palette().muted
-            };
-            if response.hovered() {
-                ui.painter()
-                    .rect_filled(button, 4.0, theme::palette().hover);
-            }
-            ui.painter().text(
-                button.center(),
-                egui::Align2::CENTER_CENTER,
-                egui_phosphor::regular::X,
-                egui::TextStyle::Body.resolve(ui.style()),
-                color,
-            );
-            close = response.clicked();
             inner
         });
         if close {
             if let Some(open) = open {
                 *open = false;
+            }
+        }
+        if popped {
+            if let Some(asked) = pop_out {
+                *asked = true;
             }
         }
         if !positioned {
@@ -370,6 +390,32 @@ impl<'open> Dialog<'open> {
         }
         shown
     }
+}
+
+/// One icon button of a window's title row (close, pop out), painted and
+/// sensed without taking layout space, so the window does not grow by the
+/// button every frame. Returns whether it was clicked.
+fn title_button(ui: &mut egui::Ui, button: egui::Rect, glyph: &str, name: &str, key: &str) -> bool {
+    let response = ui
+        .interact(button, ui.id().with(key), egui::Sense::click())
+        .on_hover_text(name);
+    let color = if response.hovered() {
+        theme::palette().text
+    } else {
+        theme::palette().muted
+    };
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(button, 4.0, theme::palette().hover);
+    }
+    ui.painter().text(
+        button.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        egui::TextStyle::Body.resolve(ui.style()),
+        color,
+    );
+    response.clicked()
 }
 
 /// Escape was pressed while the window `id` is the topmost one and no text

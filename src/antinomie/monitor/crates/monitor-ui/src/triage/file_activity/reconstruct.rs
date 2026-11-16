@@ -8,6 +8,7 @@ mod before_deletion;
 mod hash_state;
 mod text_mode;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::HeldPanel as _;
 use crate::widgets::Tip as _;
 pub(in crate::triage) use before_deletion::DATA_DIR;
 use text_mode::View;
@@ -277,7 +278,7 @@ impl Open {
             .resizable(true)
             .default_size(300.0)
             .size_range(220.0..=520.0)
-            .show(ui, |ui| self.side(ui, file, clock, directory));
+            .show_held(ui, |ui| self.side(ui, file, clock, directory));
         egui::CentralPanel::default().show(ui, |ui| {
             self.legend(ui);
             match self.view {

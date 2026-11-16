@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Process cores stay separate from VM RAM. Metadata, page reads and decoding
 //! run in a single bounded background job; rendering never loads a whole core.
+use crate::widgets::HeldPanel as _;
 use antinomie_monitor_core::core_dump::{self, CoreDump, CoreFunction, CoreMapping, CoreRecord};
 use antinomie_monitor_core::{ProcessCoreCapture, ProcessCorePhase};
 use eframe::egui::{self, RichText};
@@ -614,7 +615,7 @@ impl CoreView {
                     right: 8,
                     ..Default::default()
                 }))
-                .show(ui, |ui| {
+                .show_held(ui, |ui| {
                     action = self.dump_list(
                         ui,
                         controls.unavailable,
