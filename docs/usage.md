@@ -2351,12 +2351,24 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   families, the techniques, the key behaviours and the detections, and it writes
   nothing into the recording; `--parts` adds report parts to the result (`summary`, `indicators`, `attack`,
   `processes`, `findings`, `files`, `file_activity`, `network`, `detections`,
-  `evidence`, `custody`, or `all`). `report` writes the files the window's
+  `evidence`, `custody`, `static_analysis`, or `all`). `report` writes the files the window's
   **Export report** writes for the same run and choices (see
   [Triage report export](triage-report.md)); formats and parts default to the
   export choices in `settings.json` (HTML and PDF, every part, defanged), and the
   files go to `--out` (default `report-<first 8 characters of the run id>` in the
-  current folder), never into the recording. A recording over 1 GB that has to be read is warned about on standard error first (and the JSON result carries `large_recording` with its size and the estimated seconds). `detect` runs the engines over the
+  current folder), never into the recording. A run an Auto job made already has
+  its whole report (the job's `report-<sha8>.json`): when that report is current
+  (the same app and schema, and the recording, its digest and its detection scans
+  have not changed since), `report` writes the chosen formats and parts from it
+  and does not read the recording again, and the result names it in
+  `from_report`; with `--evidence-bundle` or `--include-content`, or when the
+  report is missing or stale, the run is indexed as before and standard error
+  says why. A recording over 1 GB that has to be read is warned about on standard error first (and the JSON result carries `large_recording` with its size and the estimated seconds). The
+  `static_analysis` part (in `all`) is the sample's static analysis: one row per
+  check (identification, packing and unpacking, strings, entropy, static YARA,
+  capa, ...) with its state, summary and tools, then each check's first 100 rows;
+  STIX gets it as a `malware-analysis` of the file and a `note`, MISP as one
+  comment per check. `detect` runs the engines over the
   run's evidence as the Detection tab does: the same evidence check, the same frozen
   rule selection and the same sandbox. YARA needs the static analysis of the run's
   sample (`run exec --static`), IDS a capture (`run exec --net-capture`), Sigma the

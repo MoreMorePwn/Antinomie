@@ -634,3 +634,63 @@ fn the_static_part_takes_the_newest_result_of_each_check_and_the_scans_name_thei
     assert!(build_sources::scan_packs(&dir.join("none")).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_current_stored_report_stands_for_a_new_index_and_a_stale_one_says_why() {
+    // ANT-T0556, A45: `antinomie-cli report` re-read a 2.5 GB recording for
+    // STIX and MISP although the Auto job had written the whole report.
+    let (temp, pcap) = fixture();
+    let job = job(&temp, &pcap, json_only());
+    let artifacts = temp.directory.join("job-artifacts");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let now = crate::time_format::now_ms();
+    let mut stored = report::Report::new(job.run.clone(), now + 60_000);
+    stored.summary = Some(Default::default());
+    stored.static_analysis = Some(Default::default());
+    let write = |report: &report::Report| {
+        std::fs::write(
+            artifacts.join("report-abababab.json"),
+            report.to_json().unwrap(),
+        )
+        .unwrap();
+    };
+    write(&stored);
+    // The MISP and STIX files beside it are not the JSON report.
+    std::fs::write(artifacts.join("report-abababab.misp.json"), "{}").unwrap();
+    std::fs::write(artifacts.join("report-abababab.stix.json"), "{}").unwrap();
+    let (found, path) = stored::stored_report(&job, &artifacts).unwrap();
+    assert_eq!(path, artifacts.join("report-abababab.json"));
+    assert_eq!(found, stored);
+    // Only the chosen parts stay.
+    let mut only = job.clone();
+    only.choices.parts = vec![Part::Summary];
+    let kept = stored::chosen(found, &only);
+    assert!(kept.summary.is_some() && kept.static_analysis.is_none());
+
+    // Made before the recording last changed: stale, and said.
+    let mut old = stored.clone();
+    old.generated_ms = 1_000;
+    write(&old);
+    let why = stored::stored_report(&job, &artifacts).unwrap_err();
+    assert!(
+        why.contains("changed after the job's report was made"),
+        "{why}"
+    );
+    // Another app's report, another run's, or none.
+    let mut other = stored.clone();
+    other.app = "Antinomie 0.8.3".into();
+    write(&other);
+    assert!(stored::stored_report(&job, &artifacts)
+        .unwrap_err()
+        .contains("made by Antinomie 0.8.3"));
+    let mut other = stored.clone();
+    other.run.run_id = "another".into();
+    write(&other);
+    assert!(stored::stored_report(&job, &artifacts)
+        .unwrap_err()
+        .contains("another run"));
+    std::fs::remove_file(artifacts.join("report-abababab.json")).unwrap();
+    assert!(stored::stored_report(&job, &artifacts)
+        .unwrap_err()
+        .contains("no JSON report"));
+}

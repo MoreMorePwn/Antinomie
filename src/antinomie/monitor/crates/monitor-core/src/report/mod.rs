@@ -534,6 +534,47 @@ impl Report {
         self.run.state.starts_with("Not started")
     }
 
+    /// Leave out every part not in `parts` (a stored report holds them all).
+    pub fn keep_parts(&mut self, parts: &[Part]) {
+        let has = |part| parts.contains(&part);
+        if !has(Part::Summary) {
+            self.summary = None;
+        }
+        if !has(Part::Indicators) {
+            self.indicators = None;
+        }
+        if !has(Part::Attack) {
+            self.attack = None;
+        }
+        if !has(Part::Processes) {
+            self.processes = None;
+        }
+        if !has(Part::Findings) {
+            self.findings = None;
+        }
+        if !has(Part::Files) {
+            self.files = None;
+        }
+        if !has(Part::FileActivity) {
+            self.file_activity = None;
+        }
+        if !has(Part::Network) {
+            self.network = None;
+        }
+        if !has(Part::Detections) {
+            self.detections = None;
+        }
+        if !has(Part::Evidence) {
+            self.evidence = None;
+        }
+        if !has(Part::Custody) {
+            self.custody = None;
+        }
+        if !has(Part::StaticAnalysis) {
+            self.static_analysis = None;
+        }
+    }
+
     /// The versioned machine-readable form.
     pub fn to_json(&self) -> Result<String, String> {
         serde_json::to_string_pretty(self).map_err(|error| error.to_string())

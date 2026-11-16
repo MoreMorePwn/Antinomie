@@ -76,7 +76,11 @@ comes from the export choices the window keeps in the data directory's
 `settings.json`. The files go to `--out` (default `report-<first 8 characters of
 the run id>` in the current folder), not into the recording. Detections are in
 the report when the run's Detection tab, or `antinomie-cli detect RUN --save`,
-has scanned it.
+has scanned it. For a run an Auto job made, `report` writes the formats from the
+job's finished JSON report instead of indexing the run again, as long as that
+report is current (the same app and schema, and neither the recording, its
+digest nor a detection scan changed since); otherwise, or with
+`--evidence-bundle` or `--include-content`, it indexes the run and says why.
 
 ## What a report holds, in order
 

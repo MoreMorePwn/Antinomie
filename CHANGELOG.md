@@ -1314,6 +1314,11 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **`antinomie-cli report` reuses an Auto run's finished report (ANT-T0556, A45).**
+  For a run an Auto job made, the formats are written from the job's JSON report
+  when it is current, instead of reading the whole recording again (over 20
+  minutes for a 2.5 GB run); a missing or stale report, `--evidence-bundle` and
+  `--include-content` index the run as before, and the command says why.
 - **Static analysis in the run report and every export (ANT-T0556, A08).** A new
   report part, **Static analysis** (`static_analysis`, in `all`), lists the
   sample's checks (identification, packing and unpacking, strings, entropy, static
