@@ -260,6 +260,9 @@ pub fn open_scan(
     if let Some(named) = named {
         name_launched(&mut files.process_images, named, request.root_cookie);
     }
+    files.journal.launch_image = named
+        .and_then(|named| named.path.clone())
+        .zip(launch.as_ref().and_then(launch_sha256));
     if let Some(launch) = &launch {
         if let (Some(writer), Some(first)) = (&mut event_journal, root_call) {
             let evidence = antinomie_monitor_core::analysis::detection::Evidence::Call {
@@ -1035,6 +1038,7 @@ impl Scan {
             attribution: network.attribution.take(),
             new_tabs: network.new_tabs,
             ioc: Some(Arc::new(ioc)),
+            launch_image: files.journal.launch_image.clone(),
             network_warning: network.network_warning,
             root_crash,
             last_failed_step: last_failed.map(|step| step.text),
@@ -1051,6 +1055,22 @@ impl Scan {
             },
         }))
     }
+}
+
+/// The guest's SHA-256 of the launched program's image, from the launch's own
+/// hash record: none for a script's interpreter or a file that changed while
+/// it was read.
+pub(crate) fn launch_sha256(
+    launch: &antinomie_monitor_core::recording::LaunchRecord,
+) -> Option<String> {
+    use antinomie_monitor_core::kernel_notes::{self, HashKind};
+    launch
+        .notes
+        .iter()
+        .filter_map(kernel_notes::file_hash)
+        .find(|hash| hash.kind == HashKind::Exec)
+        .filter(|hash| hash.skipped().is_none())
+        .and_then(|hash| hash.sha256_hex())
 }
 
 /// A program that died of a signal before its first recorded call has a

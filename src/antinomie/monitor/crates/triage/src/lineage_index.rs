@@ -78,11 +78,20 @@ pub fn kept_when_written(path: &str) -> bool {
             .any(|dir| lower.starts_with(dir))
 }
 
-/// Build the index.
-pub fn index(nodes: &[ProcessNode], ioc: Option<&ioc_scan::IocScan>) -> Lineage {
+/// Build the index. `launch` is the launched program's path and the guest's
+/// hash of its image: the sample's own exec is not an IOC file, so the list
+/// does not give it.
+pub fn index(
+    nodes: &[ProcessNode],
+    ioc: Option<&ioc_scan::IocScan>,
+    launch: Option<&(String, String)>,
+) -> Lineage {
     let mut out = Lineage::default();
     // Hashes the run knows for a path, from the IOC file list.
     let mut hashes: BTreeMap<&str, &str> = BTreeMap::new();
+    if let Some((path, sha256)) = launch {
+        hashes.insert(path.as_str(), sha256.as_str());
+    }
     // What the run said of each path's hash: where it came from, or why
     // there is none.
     let mut notes: BTreeMap<&str, &str> = BTreeMap::new();
@@ -223,7 +232,7 @@ pub mod tests {
             node(13, Some(10), "/tmp/.x", &["/tmp/.x"]),
             node(14, Some(10), "/tmp/.x", &["/tmp/.x"]),
         ];
-        let lineage = index(&nodes, None);
+        let lineage = index(&nodes, None, None);
         let find = |path: &str| lineage.execs.iter().find(|e| e.path == path).unwrap();
         assert_eq!(find("/tmp/.x").parent, "/tmp/install.sh");
         assert_eq!(find("/tmp/.x").count, 2);
@@ -231,6 +240,19 @@ pub mod tests {
         assert_eq!(find("/usr/bin/curl").parent, "/bin/sh");
         assert_eq!(find("/tmp/install.sh").parent, "");
         assert!(lineage.files.is_empty());
+    }
+
+    #[test]
+    fn the_samples_own_exec_has_the_launch_hash() {
+        let nodes = vec![
+            node(10, None, "/tmp/sample", &[]),
+            node(11, Some(10), "/bin/sh", &["sh"]),
+        ];
+        let launch = ("/tmp/sample".to_owned(), "ab".repeat(32));
+        let lineage = index(&nodes, None, Some(&launch));
+        let find = |path: &str| lineage.execs.iter().find(|e| e.path == path).unwrap();
+        assert_eq!(find("/tmp/sample").sha256, "ab".repeat(32));
+        assert_eq!(find("/bin/sh").sha256, "");
     }
 
     #[test]
