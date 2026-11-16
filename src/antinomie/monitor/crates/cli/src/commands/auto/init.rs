@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `auto init` (design 3.4.4, 4.5.3; card P3-5b): the lane VM, its clean
 //! snapshot, `service/lanes/lane-N.json`, and, for lane 1 with another VM
-//! name or snapshot than the defaults, the `[lanes]` table of a new
-//! `service.toml`. The presets need no file: five are built in.
+//! name, snapshot or lane group than the defaults, the `[lanes]` table of
+//! `service.toml` (a new file, or added to one that has no `[lanes]` table).
+//! The lane group is the base's architecture (`arm64` for an arm64 base,
+//! ANT-T0556), and the five built-in presets take the node's lane group and
+//! accept its architecture, so a run needs no preset file.
 //!
 //! It runs in this process and takes the lane's data folder for itself, so it
 //! is refused with exit 21 while the daemon (or the window) owns the folder:
@@ -74,17 +77,28 @@ pub struct Init {
     pub replace: bool,
 }
 
-/// The `[lanes]` table of a `service.toml` for a lane VM and its clean
-/// snapshot; `None` when both are the defaults.
-pub fn lanes_table(vm_name: &str, snapshot: &str) -> Option<String> {
+/// The `[lanes]` table of a `service.toml` for a lane VM, its clean
+/// snapshot and its lane group; `None` when all three are the defaults.
+pub fn lanes_table(vm_name: &str, snapshot: &str, group: &str) -> Option<String> {
     let defaults = Lanes::default();
-    (vm_name != defaults.vm || snapshot != defaults.revert_to).then(|| {
-        format!(
-            "[lanes]\nvm        = {}\nrevert_to = {}\n",
+    let mut table = String::new();
+    if vm_name != defaults.vm || snapshot != defaults.revert_to {
+        table.push_str(&format!(
+            "vm        = {}\nrevert_to = {}\n",
             toml_string(vm_name),
             toml_string(snapshot)
-        )
-    })
+        ));
+    }
+    if group != defaults.group {
+        table.push_str(&format!("group     = {}\n", toml_string(group)));
+    }
+    (!table.is_empty()).then(|| format!("[lanes]\n{table}"))
+}
+
+/// Whether the text of a `service.toml` has a `[lanes]` table (an operator's
+/// table is never rewritten; a file without one gets `auto init`'s).
+fn has_lanes_table(text: &str) -> bool {
+    antinomie_service::config::validate::has_table(text, "lanes")
 }
 
 fn toml_string(text: &str) -> String {
@@ -138,6 +152,15 @@ pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
             }
             _ => String::new(),
         };
+        // The lane group is the base's architecture, in the one spelling.
+        let group = engine
+            .snapshot()
+            .bases
+            .iter()
+            .find(|b| b.id == base)
+            .map_or(antinomie_service::config::preset::DEFAULT_LANE_GROUP, |b| {
+                antinomie_service::arch::of_guest(b.arch)
+            });
         let plan = InitPlan {
             lane: lane.clone(),
             create: command,
@@ -152,30 +175,57 @@ pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
         init_lane(engine.waiter(), &lanes, &plan, &mut |text| {
             logger.info(text)
         })
+        .map(|made| (made, group))
         .map_err(api)
     })();
     engine.finish();
-    let made = made?;
-    // Lane 1 with another VM name or snapshot: the lanes of service.toml
-    // point at it (a new file only; an existing one is the operator's).
+    let (made, group) = made?;
+    // Lane 1 with another VM name, snapshot or lane group: the lanes of
+    // service.toml point at it (a new file, or a table added to a file that
+    // has none; an operator's [lanes] table is only shown what to change).
     let mut written = None;
     let mut hint = None;
     let service = data_dir.join("service.toml");
     let configured = report.service.as_ref().map(|s| s.lanes.clone());
-    if arguments.lane == 1
-        && let Some(table) = lanes_table(&name, &arguments.snapshot)
-    {
-        if !service.exists() {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&service)
-                .and_then(|mut file| std::io::Write::write_all(&mut file, table.as_bytes()))
-                .map_err(|e| CliError::io(&service, &e))?;
-            written = Some(service.clone());
-        } else if configured.is_none_or(|l| l.vm != name || l.revert_to != arguments.snapshot) {
-            hint = Some(table);
+    let differs = |l: &Lanes| {
+        (arguments.lane == 1 && (l.vm != name || l.revert_to != arguments.snapshot))
+            || l.group != group
+    };
+    let table = if arguments.lane == 1 {
+        lanes_table(&name, &arguments.snapshot, group)
+    } else {
+        lanes_table(&Lanes::default().vm, &Lanes::default().revert_to, group)
+    };
+    if let Some(table) = table {
+        let text = std::fs::read_to_string(&service).ok();
+        match text {
+            None if !service.exists() => {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&service)
+                    .and_then(|mut file| std::io::Write::write_all(&mut file, table.as_bytes()))
+                    .map_err(|e| CliError::io(&service, &e))?;
+                written = Some(service.clone());
+            }
+            Some(text) if !has_lanes_table(&text) => {
+                let gap = if text.is_empty() || text.ends_with('\n') {
+                    "\n"
+                } else {
+                    "\n\n"
+                };
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&service)
+                    .and_then(|mut file| {
+                        std::io::Write::write_all(&mut file, format!("{gap}{table}").as_bytes())
+                    })
+                    .map_err(|e| CliError::io(&service, &e))?;
+                written = Some(service.clone());
+            }
+            _ if configured.as_ref().is_none_or(differs) => hint = Some(table),
+            _ => {}
         }
     }
     let mut human = format!(
@@ -192,7 +242,7 @@ pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
     );
     if let Some(path) = &written {
         human.push_str(&format!(
-            "{} written: [lanes] vm and revert_to point at this lane\n",
+            "{} written: its [lanes] table points at this lane (lane group {group}); the built-in presets take that group and accept {group} programs\n",
             path.display()
         ));
     }
@@ -213,7 +263,10 @@ pub fn run(arguments: &Init, context: &Context) -> Result<Reply, CliError> {
             made.lane, arguments.lane
         ));
     }
-    Ok(Reply::value(json!({"lane": made, "service_written": written})).with_human(human))
+    Ok(
+        Reply::value(json!({"lane": made, "lane_group": group, "service_written": written}))
+            .with_human(human),
+    )
 }
 
 #[cfg(test)]
@@ -243,9 +296,57 @@ mod tests {
     }
 
     #[test]
+    fn an_arm64_lane_writes_its_lane_group_and_the_built_ins_take_it() {
+        // The defaults with an x86-64 base: nothing to write.
+        assert_eq!(lanes_table("auto-1", "auto-clean", "x86_64"), None);
+        let text = lanes_table("auto-1", "auto-clean", "arm64").unwrap();
+        assert_eq!(text, "[lanes]\ngroup     = \"arm64\"\n");
+        let (config, problems) =
+            antinomie_service::config::validate::parse_service("service.toml", &text);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(config.unwrap().lanes.group, "arm64");
+        // A file without [lanes] gets the table; an operator's table stays.
+        assert!(!has_lanes_table("[daemon]\nlanes = 4\n"));
+        assert!(has_lanes_table(
+            "[daemon]\nlanes = 4\n[lanes]\ngroup = \"x\"\n"
+        ));
+        // With the table in place, Standard runs arm64 programs, no file.
+        let dir = std::env::temp_dir().join(format!(
+            "ant-init-group-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("service.toml"),
+            format!("[daemon]\nlanes = 2\n\n{text}"),
+        )
+        .unwrap();
+        let report = antinomie_service::config::validate::load(
+            &dir,
+            &antinomie_service::config::NoVms,
+            None,
+        );
+        assert!(!report.has_errors(), "{:?}", report.problems);
+        let set = report.preset_set();
+        assert_eq!(set.lane_group(), "arm64");
+        let standard = antinomie_service::config::PresetLookup::get(&set, "standard").unwrap();
+        assert_eq!(standard.preset.vm.lane_group, "arm64");
+        assert_eq!(standard.preset.accepts.arch, ["arm64"]);
+        assert!(
+            antinomie_service::store::admission::node_refusals(&standard.preset, "arm64")
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_lanes_table_points_at_the_lane_and_validates() {
-        assert_eq!(lanes_table("auto-1", "auto-clean"), None);
-        let text = lanes_table("lane \"x\"", "clean-1").unwrap();
+        assert_eq!(lanes_table("auto-1", "auto-clean", "x86_64"), None);
+        let text = lanes_table("lane \"x\"", "clean-1", "x86_64").unwrap();
         assert!(text.contains("vm        = \"lane \\\"x\\\"\""), "{text}");
         assert!(text.contains("revert_to = \"clean-1\""), "{text}");
         let (config, problems) =

@@ -214,6 +214,101 @@ pub fn queue_text(status: &Value) -> String {
     out
 }
 
+/// A preset as `preset.get` gives it (its name, digest and `built_in`
+/// beside the tables of the file), as the TOML of a preset file
+/// (`auto preset show`, ANT-T0556): save it as `presets/<name>.toml` under
+/// another name to start a preset from it. The name and digest are comments;
+/// a nested table is a `[table.sub]` header and a table inside a list an
+/// inline table, as in the file format.
+pub fn preset_toml(preset: &Value) -> String {
+    let mut out = String::new();
+    let Some(map) = preset.as_object() else {
+        return out;
+    };
+    let name = map.get("name").and_then(Value::as_str).unwrap_or("");
+    let _ = writeln!(out, "# preset {}", clean(name));
+    if let Some(digest) = map.get("digest").and_then(Value::as_str) {
+        let _ = writeln!(out, "# digest {}", clean(digest));
+    }
+    if map.get("built_in") == Some(&Value::Bool(true)) {
+        out.push_str(
+            "# built in and read-only: save this as presets/<another name>.toml to change it\n",
+        );
+    }
+    let settings: serde_json::Map<String, Value> = map
+        .iter()
+        .filter(|(key, _)| !matches!(key.as_str(), "name" | "digest" | "built_in"))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    toml_table(&mut out, "", &settings);
+    out
+}
+
+fn toml_table(out: &mut String, path: &str, map: &serde_json::Map<String, Value>) {
+    for (key, value) in map {
+        if value.is_object() || value.is_null() {
+            continue;
+        }
+        let _ = writeln!(out, "{} = {}", toml_key(key), toml_value(value));
+    }
+    for (key, value) in map {
+        let Value::Object(table) = value else {
+            continue;
+        };
+        let path = if path.is_empty() {
+            toml_key(key)
+        } else {
+            format!("{path}.{}", toml_key(key))
+        };
+        let _ = write!(out, "\n[{path}]\n");
+        toml_table(out, &path, table);
+    }
+}
+
+fn toml_key(key: &str) -> String {
+    if !key.is_empty()
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        key.to_owned()
+    } else {
+        toml_string(key)
+    }
+}
+
+/// A TOML basic string: JSON's escapes are TOML's, and no control character
+/// reaches the terminal unescaped.
+fn toml_string(text: &str) -> String {
+    serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
+}
+
+fn toml_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => toml_string(text),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(flag) => flag.to_string(),
+        Value::Array(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .filter(|item| !item.is_null())
+                .map(toml_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Object(map) => format!(
+            "{{ {} }}",
+            map.iter()
+                .filter(|(_, item)| !item.is_null())
+                .map(|(key, item)| format!("{} = {}", toml_key(key), toml_value(item)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Null => "\"\"".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +412,53 @@ mod tests {
             queue.contains("host pool:  5 queued, 2 running of 2 worker(s), 2 run(s)"),
             "{queue}"
         );
+    }
+
+    #[test]
+    fn preset_show_prints_a_preset_file_that_loads_as_the_same_preset() {
+        let set = antinomie_service::config::PresetSet::built_in();
+        let names: Vec<String> = set.names().map(str::to_owned).collect();
+        assert_eq!(names.len(), 5);
+        for name in names {
+            let detail = serde_json::to_value(set.detail(&name).unwrap()).unwrap();
+            let text = preset_toml(&detail);
+            // The old line was not TOML: `static_analysis.limits = {"rows_per_check":2048,...}`.
+            assert!(text.contains("\n[static_analysis.limits]\n"), "{text}");
+            assert!(text.contains("rows_per_check = 2048"), "{text}");
+            assert!(
+                text.starts_with(&format!("# preset {name}\n# digest ")),
+                "{text}"
+            );
+            let (copy, problems) = antinomie_service::config::validate::parse_preset(
+                "copy",
+                "presets/copy.toml",
+                &text,
+            );
+            // Live network's Tor route is a node matter in 0.9.0 (live
+            // routes arrive with 0.9.1), not a fault of the printed TOML.
+            let errors: Vec<_> = problems
+                .iter()
+                .filter(|p| p.severity == antinomie_service::config::Severity::Error)
+                .filter(|p| {
+                    !(p.key.as_deref() == Some("network.route")
+                        && p.message.contains("live routes arrive with 0.9.1"))
+                })
+                .collect();
+            assert!(errors.is_empty(), "{name}: {errors:?}\n{text}");
+            let original = antinomie_service::config::PresetLookup::get(&set, &name).unwrap();
+            assert_eq!(copy.unwrap().preset, original.preset, "{name}");
+        }
+        // A table in a list is an inline table, a key that is not bare is quoted.
+        let text = preset_toml(&serde_json::json!({
+            "name": "x", "digest": "d", "built_in": false,
+            "verdict": {"rule": [{"when": "a \"b\"", "label": "malicious"}]},
+            "odd key": "\u{1b}[31m"
+        }));
+        assert!(
+            text.contains("rule = [{ when = \"a \\\"b\\\"\", label = \"malicious\" }]"),
+            "{text}"
+        );
+        assert!(text.contains("\"odd key\" = \"\\u001b[31m\""), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text}");
     }
 }

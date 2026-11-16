@@ -20,8 +20,8 @@ use crate::{
     server::b64,
 };
 use antinomie_monitor_core::samples::{
-    ChainCheck, CustodyEvent, DATABASE, Library, SampleRecord, SeenRun, Tag, TagKind, arch_label,
-    merged_runs, samples_dir,
+    ChainCheck, CustodyEvent, DATABASE, Library, SampleRecord, SeenRun, Tag, TagKind, merged_runs,
+    samples_dir,
 };
 use serde_json::{Value, json};
 use std::{
@@ -146,7 +146,7 @@ pub fn sample_value(
         "sha256": record.sha256,
         "size": record.size,
         "type": record.file_type.to_ascii_lowercase(),
-        "architecture": (!record.arch.is_empty()).then(|| arch_label(&record.arch)),
+        "architecture": (!record.arch.is_empty()).then(|| crate::arch::normalize(&record.arch)),
         "name": record.name,
         "tags": tags.iter().map(tag_value).collect::<Vec<_>>(),
         "first_seen_ms": record.added_ms,

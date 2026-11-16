@@ -130,7 +130,7 @@ pub fn base_value(base: &BaseSummary) -> Value {
     json!({
         "id": base.id,
         "label": base.label,
-        "arch": base.arch.label(),
+        "arch": antinomie_service::arch::of_guest(base.arch),
         "size_bytes": base.size_bytes,
         "min_ram_mib": base.min_ram_mib,
         "min_disk_gib": base.min_disk_gib,

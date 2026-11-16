@@ -2569,11 +2569,19 @@ once and waits for the guest to answer and to finish booting (its root file syst
 mounted, so the initramfs no longer grows it to the lane disk; a Debian guest's
 start-up finished), stops it, waits until its disk has settled,
 takes the Disk snapshot `auto-clean` (`--snapshot`) and writes
-`<data>/service/lanes/lane-1.json`. With another VM name or snapshot than
-`auto-1` and `auto-clean` it writes them as `[lanes] vm` and `revert_to` of a new
-`service.toml` (an existing one is left alone, and the command prints the lines
-to add). The presets need no file: Standard accepts ELF x86-64 programs and shell
-scripts. A Debian
+`<data>/service/lanes/lane-1.json`. The lane group is the base's architecture
+(`x86_64`, or `arm64` for an arm64 base). With another VM name or snapshot than
+`auto-1` and `auto-clean`, or another lane group than `x86_64`, it writes them as
+`[lanes] vm`, `revert_to` and `group` of `service.toml`: a new file, or a table
+added to a file that has no `[lanes]` table (an operator's `[lanes]` table is left
+alone, and the command prints the lines to change). The presets need no file: the
+five built-in presets take the node's lane group and accept its architecture, so
+on an x86-64 node Standard accepts ELF x86-64 programs and shell scripts, and
+after `auto init` on an arm64 base it accepts arm64 programs and shell scripts.
+Architectures have one spelling in `service.toml`, the presets, the CLI and the
+run API: `x86_64`, `x86`, `arm64`, `arm`, `mips`, `powerpc`, `sparc`, `riscv`,
+`superh`, `m68k`, `other`; the older spellings (`AArch64`, `aarch64`, `ARM`,
+`x86-64`, `amd64`, ...) are still read. A Debian
 base needs a guest account: `--user NAME --password-stdin`, the password on
 standard input. A guest kernel that crashes in that first boot (the console shows
 a kernel `BUG` or oops, or the guest could not grow its file system) fails `auto
@@ -2613,7 +2621,7 @@ stays in its lane's folder, and the read commands given the data folder
 | `auto cancel RUN [--reason TEXT]` | A queued run is cancelled at once; a running one stops its run and VM and ends `cancelled` (its recording is kept) |
 | `auto rerun RUN [--preset NAME] [--override TABLE.KEY=VALUE] [--priority N]` | Run again: a new run from a finished one, with `repeat_of` set: the preset as it is now, or a Custom run's resolved options; `--preset` uses another preset as it is now instead; `--override program.run_time_s=60` changes one option; `--priority` replaces the old run's priority (kept otherwise, lowered to your `priority_max` when above it) |
 | `auto queue status\|pause\|resume` | The queue; a paused queue starts no run (running runs finish) |
-| `auto preset list`, `auto preset show NAME` | The presets (five built in, and `presets/*.toml`) with the permissions their options need and whether you can run them as they are; `show` prints every option of one preset (`table.key = value`; JSON with `-o json`) |
+| `auto preset list`, `auto preset show NAME` | The presets (five built in, and `presets/*.toml`) with the permissions their options need and whether you can run them as they are; `show` prints the preset as a preset file (TOML, its name and digest as comments) that you can save as `presets/<another name>.toml` and edit; JSON with `-o json` |
 | `auto delete RUN [--with-recording]` | Removes a finished run: its record, events and artifacts (the sample stays in the library). `--with-recording` also deletes the run's recording, and the run of each earlier attempt that launched, through the run deletion the window uses; a recording a client is reading, or still being written, is refused |
 | `auto gc [--dry-run]` | Applies retention now (below) and prints what was deleted and what was skipped and why; `--dry-run` deletes nothing. Works with a daemon, or on its own when none runs |
 | `auto watch list` | The watch folders: state, files taken, files rejected, entries refused and why. Without a daemon, the folders `service.toml` names |

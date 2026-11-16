@@ -690,7 +690,7 @@ mod tests {
             assert!(elf_sample.get(key).is_some(), "missing {key}");
         }
         assert_eq!(elf_sample["type"], "elf");
-        assert_eq!(elf_sample["architecture"], "x86-64");
+        assert_eq!(elf_sample["architecture"], "x86_64");
         assert_eq!(elf_sample["name"], "one.bin");
         assert_eq!(elf_sample["run_count"], 0);
         assert!(elf_sample["last_run"].is_null() && elf_sample["custody_ok"].is_null());

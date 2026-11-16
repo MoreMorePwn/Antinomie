@@ -1024,3 +1024,82 @@ fn limits_per_caller_are_unset_by_default_and_checked_when_set() {
     let (_, found) = parse_service("service.toml", "[limits.local]\nmax_jobs_per_day = 5\n");
     assert!(!found.is_empty());
 }
+
+#[test]
+fn an_architecture_has_one_spelling_and_the_old_ones_are_still_read() {
+    // ANT-T0556: the eval's hand-written preset said `AArch64`, the lane
+    // group `arm64`, the window and the bases `arm64` and `aarch64`.
+    let (preset, parsed) = parse_preset(
+        "eval",
+        "presets/eval.toml",
+        "[accepts]\narch = [\"AArch64\", \"aarch64\", \"ARM\", \"x86-64\"]\n",
+    );
+    assert!(parsed.is_empty(), "{parsed:?}");
+    assert_eq!(
+        preset.unwrap().preset.accepts.arch,
+        ["arm64", "arm", "x86_64"]
+    );
+    let found = problems("[accepts]\narch = [\"vax\"]\n");
+    assert!(
+        found
+            .iter()
+            .any(|p| p.contains("unknown architecture `vax`")
+                && p.contains("x86_64, x86, arm64, arm, mips")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn the_built_in_presets_take_the_nodes_lane_group_and_its_architecture() {
+    // ANT-T0556: no built-in preset ran on the arm64 eval node, so every run
+    // needed a hand-written preset.
+    let root = scratch("builtin-group");
+    fs::write(root.join("service.toml"), "[lanes]\ngroup = \"arm64\"\n").unwrap();
+    let report = validate::load(&root, &NoVms, None);
+    assert!(!report.has_errors(), "{:?}", report.problems);
+    let set = report.preset_set();
+    for name in [
+        "standard",
+        "quick-look",
+        "deep",
+        "interactive",
+        "live-network",
+    ] {
+        let preset = antinomie_service::config::PresetLookup::get(&set, name).unwrap();
+        assert_eq!(preset.preset.vm.lane_group, "arm64", "{name}");
+        assert_eq!(preset.preset.accepts.arch, ["arm64"], "{name}");
+        assert!(preset.built_in);
+    }
+    // Standard is usable on the node as it is; on an x86-64 node it is the
+    // file's Standard, digest included.
+    let summaries = set.list_for(&antinomie_service::api::ops::Caller::with_every_permission(
+        "local:1000",
+    ));
+    let standard = summaries.iter().find(|p| p.name == "standard").unwrap();
+    assert!(
+        standard.unavailable.is_empty(),
+        "{:?}",
+        standard.unavailable
+    );
+    let plain = PresetSet::built_in();
+    let x86 = antinomie_service::config::PresetLookup::get(&plain, "standard").unwrap();
+    assert_eq!(x86.preset.accepts.arch, ["x86_64"]);
+    assert_ne!(
+        x86.digest,
+        antinomie_service::config::PresetLookup::get(&set, "standard")
+            .unwrap()
+            .digest
+    );
+    // A group that is not an architecture keeps x86_64.
+    fs::write(root.join("service.toml"), "[lanes]\ngroup = \"lab\"\n").unwrap();
+    let set = validate::load(&root, &NoVms, None).preset_set();
+    let lab = antinomie_service::config::PresetLookup::get(&set, "standard").unwrap();
+    assert_eq!(
+        (
+            lab.preset.vm.lane_group.as_str(),
+            lab.preset.accepts.arch.clone()
+        ),
+        ("lab", vec!["x86_64".to_owned()])
+    );
+    let _ = fs::remove_dir_all(&root);
+}

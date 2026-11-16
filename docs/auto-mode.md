@@ -335,9 +335,16 @@ the recording is saved without it and the run succeeds; `run.pending` lists
   `vpn[:NAME]`, `socks5[:NAME]`) needs its `route.*` permission and is then refused
   `unavailable_on_node`: no live route is set up for the service before 0.9.1. In a
   preset file, a live route is "not set up on this node" for `config validate`.
-* **Accepted samples.** `[accepts]` of Standard takes ELF x86-64 programs and
-  shell scripts (`types = ["elf", "sh"]`). A script has no architecture, so
-  `arch` applies to ELF files only.
+* **Accepted samples.** `[accepts]` of Standard takes ELF programs of the node's
+  architecture and shell scripts (`types = ["elf", "sh"]`): the five built-in
+  presets take the node's lane group (`[lanes] group`, which `auto init` sets
+  from the lane base's architecture) and, when the group is an architecture
+  (`x86_64`, `arm64`), accept that architecture; another group name keeps
+  `x86_64`. A script has no architecture, so `arch` applies to ELF files only.
+  Architectures are written `x86_64`, `x86`, `arm64`, `arm`, `mips`, `powerpc`,
+  `sparc`, `riscv`, `superh`, `m68k` or `other` (`any` takes every one); the older
+  spellings (`AArch64`, `aarch64`, `ARM`, `x86-64`, `amd64`, ...) are read as
+  these.
 * **Duplicates.** `[duplicates] on_duplicate` is `run` (analyse again; the new run has
   `repeat_of`), `reuse` (return the earlier run) or `reject` (`duplicate_denied`).
   `reuse` returns only a run the caller may see (its own, or any with

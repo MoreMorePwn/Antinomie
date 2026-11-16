@@ -157,7 +157,7 @@ fn bases_table(snapshot: &Snapshot) -> String {
             vec![
                 base.id.chars().take(12).collect(),
                 base.label.clone(),
-                base.arch.label().to_owned(),
+                antinomie_service::arch::of_guest(base.arch).to_owned(),
                 format!("{} MiB", base.size_bytes / (1 << 20)),
                 base.revision.map_or("-".into(), |r| r.to_string()),
             ]

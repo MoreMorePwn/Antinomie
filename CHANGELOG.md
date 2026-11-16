@@ -1314,6 +1314,15 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **Auto mode runs arm64 programs with no preset file (ANT-T0556).** `auto init`
+  sets the lane group from the base's architecture (`arm64` for an arm64 base)
+  and writes it as `[lanes] group` of `service.toml` (a new file, or a table added
+  to one without `[lanes]`); the five built-in presets take the node's lane group
+  and accept its architecture. An architecture has one spelling in
+  `service.toml`, the presets, the CLI and the run API (`x86_64`, `x86`, `arm64`,
+  `arm`, `mips`, ...); `AArch64`, `aarch64`, `ARM`, `x86-64`, `amd64` and the other
+  old spellings are still read. `auto preset show` prints valid TOML that can be
+  saved as a preset file (it printed `static_analysis.limits = {...}` JSON).
 - **A truncated ELF's size in bytes (ANT-T0556, A52).** "This ELF is truncated"
   said "segments need 0.0 MB, the file has 0.0 MB" for a 20 KB program: sizes
   under a megabyte are now exact byte counts, and the note gives the gap

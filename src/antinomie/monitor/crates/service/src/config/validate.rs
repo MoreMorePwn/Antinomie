@@ -80,11 +80,9 @@ pub const MAX_BACKOFF_S: u32 = 3600;
 pub const SAMPLE_TYPES: [&str; 11] = [
     "elf", "sh", "py", "pl", "script", "exe", "zip", "gz", "bz2", "xz", "data",
 ];
-/// The architectures `detect_type` can return.
-pub const SAMPLE_ARCHES: [&str; 11] = [
-    "x86_64", "x86", "ARM", "AArch64", "MIPS", "PowerPC", "SPARC", "RISC-V", "SuperH", "m68k",
-    "other",
-];
+/// The architectures a preset accepts, in the one spelling (`crate::arch`;
+/// the old spellings are read as these).
+pub const SAMPLE_ARCHES: [&str; 11] = crate::arch::ARCHES;
 
 struct Sink<'a> {
     file: &'a str,
@@ -443,6 +441,30 @@ pub fn built_in_presets() -> BTreeMap<String, Arc<LoadedPreset>> {
             ))
         })
         .collect()
+}
+
+/// The five built-in presets on a node whose lane group is `group`
+/// (`[lanes] group`, which `auto init` sets from the lane base's
+/// architecture). They take the node's lane group, so one of them runs with
+/// no file after `auto init`; a group named after an architecture
+/// (`arm64`, any spelling of `crate::arch`) makes them accept that
+/// architecture instead of x86_64. Their digest then names the group too.
+pub fn built_in_presets_for(group: &str) -> BTreeMap<String, Arc<LoadedPreset>> {
+    let mut presets = built_in_presets();
+    if group == preset::DEFAULT_LANE_GROUP {
+        return presets;
+    }
+    for loaded in presets.values_mut() {
+        let mut node = (**loaded).clone();
+        node.preset.vm.lane_group = group.to_owned();
+        if let Some(arch) = crate::arch::canonical(group) {
+            node.preset.accepts.arch = vec![arch.to_owned()];
+        }
+        node.digest =
+            preset::sha256_hex(format!("{}\nlane group {group}\n", node.digest).as_bytes());
+        *loaded = Arc::new(node);
+    }
+    presets
 }
 
 /// A preset key 0.9.0 accepts only at its default, and why.
@@ -810,6 +832,12 @@ fn check_static(preset: &Preset, sink: &mut Sink<'_>) {
     }
 }
 
+/// Whether the TOML `text` has a top-level table `name`; a text that does
+/// not parse counts as having it (nothing is added to a broken file).
+pub fn has_table(text: &str, name: &str) -> bool {
+    toml::from_str::<toml::Table>(text).map_or(true, |table| table.contains_key(name))
+}
+
 /// A lane group's name: 1 to 64 bytes of `[A-Za-z0-9._-]`.
 pub fn valid_lane_group(name: &str) -> bool {
     (1..=64).contains(&name.len())
@@ -1064,7 +1092,10 @@ pub fn load(data_dir: &Path, catalog: &dyn VmCatalog, only_preset: Option<&str>)
     refuse_policies(data_dir, &mut report.problems);
 
     let mut found_only = only_preset.is_none_or(builtin::is_built_in);
-    for (name, loaded) in built_in_presets() {
+    let group = lanes
+        .as_ref()
+        .map_or(preset::DEFAULT_LANE_GROUP, |lanes| lanes.group.as_str());
+    for (name, loaded) in built_in_presets_for(group) {
         if only_preset.is_none_or(|only| only == name) {
             report.presets.insert(name, loaded);
         }
