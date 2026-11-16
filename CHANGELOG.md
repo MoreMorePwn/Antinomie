@@ -1321,6 +1321,13 @@ x86 programs by their own table.
   "nothing leaves the lab" preset) asked WHOIS and reverse DNS about up to 24
   sample destinations per run. Only the two dig-and-whois choices look up now,
   and never for the documentation ranges (the InetSim stand-in 198.51.100.1).
+- **A flood of one rule no longer hides the rest (ANT-T0556, A28).** The digest
+  and the report took the behaviour from the findings table's first 2,000 rows, so
+  two rules that fired on 1,000 processes each left out persistence, the sandbox
+  probe and their ATT&CK techniques, STIX and MISP included. The behaviour is now
+  added up per rule over every finding (a count per rule, eight examples per
+  evasion check); a digest list that is still cut keeps the high tiers and says so
+  (`coverage.budget_reached` and a reason).
 - **Domain indicators are host names (ANT-T0556, A42, A14).** An HTTP Host `x`,
   a single label (`debian`) or an obfuscated string is no domain indicator, and an
   address as HTTP Host is no domain in `counts.domains`.

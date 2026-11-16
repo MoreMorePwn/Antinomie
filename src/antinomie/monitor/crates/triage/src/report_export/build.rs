@@ -708,7 +708,7 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     let clock = scan.clock_anchor.or(job.clock);
     let mut report = Report::new(job.run.clone(), job.now_ms);
     report.sample = job.sample.clone();
-    let behaviour = digest::behaviour(&scan.findings);
+    let behaviour = digest::behaviour_of(scan);
     // `None` when no detection engine has run for the run (stored with the run).
     let digest_detections = RunDigest::read(&job.archive).and_then(|digest| digest.detections);
     let indicator_rows = indicators(job, scan);

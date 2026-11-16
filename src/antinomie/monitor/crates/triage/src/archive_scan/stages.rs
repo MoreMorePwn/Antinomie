@@ -861,6 +861,7 @@ impl Scan {
         let finding_notes = output.notes;
         let suspicious = output.tasks;
         let mut flagged_paths = crate::file_shown::Flags::new();
+        let mut tally = crate::digest::Tally::default();
         for finding in output.rows {
             let tier = crate::file_shown::text_of(&finding.values, "finding.tier")
                 .and_then(rules::Tier::from_tag)
@@ -882,6 +883,7 @@ impl Scan {
                 && finding_query.keep_table(&finding.values);
             graph.push(&finding, in_table);
             if in_table {
+                tally.push(&finding);
                 finding_page.push(finding)?;
             }
         }
@@ -1022,6 +1024,7 @@ impl Scan {
             suspicious,
             findings,
             findings_omitted,
+            behaviour: Some(tally.finish()),
             flagged_paths,
             graph,
             finding_notes,

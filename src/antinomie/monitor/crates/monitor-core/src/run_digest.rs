@@ -367,21 +367,60 @@ impl RunDigest {
         Ok(true)
     }
 
+    /// Keep every list at [`MAX_ROWS`]. Behaviour rules are cut by tier
+    /// (high first, the order kept within a tier), so a high-tier rule always
+    /// survives a flood of lower ones; whatever is cut is said in the
+    /// coverage (`budget_reached` and a reason), never dropped silently.
     fn cap(&mut self) {
+        let mut cut: Vec<String> = Vec::new();
+        let mut note = |what: &str, total: usize| {
+            if total > MAX_ROWS {
+                cut.push(format!("{what} {MAX_ROWS} of {total}"));
+            }
+        };
         if let Some(behaviour) = &mut self.behaviour {
+            note("behaviour rules", behaviour.rules.len());
+            note("evasion checks", behaviour.evasion.len());
+            if behaviour.rules.len() > MAX_ROWS {
+                behaviour.rules.sort_by_key(|hit| tier_rank(&hit.tier));
+            }
             behaviour.rules.truncate(MAX_ROWS);
             behaviour.evasion.truncate(MAX_ROWS);
         }
         if let Some(detections) = &mut self.detections {
+            note("detections", detections.len());
             detections.truncate(MAX_ROWS);
         }
         if let Some(indicators) = &mut self.indicators {
+            note("indicators", indicators.len());
             indicators.truncate(MAX_ROWS);
         }
         if let Some(lineage) = &mut self.lineage {
+            note("lineage files", lineage.files.len());
+            note("lineage programs", lineage.execs.len());
             lineage.files.truncate(MAX_ROWS);
             lineage.execs.truncate(MAX_ROWS);
         }
+        if cut.is_empty() {
+            return;
+        }
+        let coverage = self.coverage.get_or_insert_with(Coverage::default);
+        coverage.budget_reached = true;
+        let reason = format!("The digest keeps {}.", cut.join(", "));
+        if !coverage.reasons.contains(&reason) {
+            coverage.reasons.push(reason);
+        }
+    }
+}
+
+/// `high` 0, `medium` 1, `low` 2, `info` 3, anything else after them.
+fn tier_rank(tier: &str) -> u8 {
+    match tier {
+        "high" => 0,
+        "medium" => 1,
+        "low" => 2,
+        "info" => 3,
+        _ => 4,
     }
 }
 
@@ -440,6 +479,60 @@ mod tests {
         assert_eq!(read.behaviour.as_ref().unwrap().highest, "high");
         assert!(read.detections.is_none());
         assert_eq!(read.version, VERSION);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_cut_list_keeps_the_high_tier_rules_and_says_it_was_cut() {
+        // A28: more rule rows than the budget; the high ones come last.
+        let dir = dir("cut");
+        let hit = |rule: String, tier: &str| BehaviourHit {
+            rule,
+            tier: tier.into(),
+            count: 1,
+            ..BehaviourHit::default()
+        };
+        let mut rules: Vec<BehaviourHit> = (0..MAX_ROWS + 500)
+            .map(|n| hit(format!("low.rule_{n}"), "low"))
+            .collect();
+        rules.push(hit("persistence.rc_init".into(), "high"));
+        rules.push(hit("persistence.shell_profile".into(), "medium"));
+        RunDigest::update(&dir, |digest| {
+            digest.behaviour = Some(Behaviour {
+                highest: "high".into(),
+                rules,
+                evasion: Vec::new(),
+            });
+        })
+        .unwrap();
+        let read = RunDigest::read(&dir).unwrap();
+        let kept = read.behaviour.unwrap().rules;
+        assert_eq!(kept.len(), MAX_ROWS);
+        assert_eq!(kept[0].rule, "persistence.rc_init");
+        assert_eq!(kept[1].rule, "persistence.shell_profile");
+        assert_eq!(kept[2].rule, "low.rule_0");
+        let coverage = read.coverage.unwrap();
+        assert!(coverage.budget_reached);
+        assert_eq!(
+            coverage.reasons,
+            [format!(
+                "The digest keeps behaviour rules {MAX_ROWS} of {}.",
+                MAX_ROWS + 502
+            )]
+        );
+        // Under the budget nothing is said.
+        RunDigest::update(&dir, |digest| {
+            digest.behaviour = Some(Behaviour::default());
+            digest.coverage = Some(Coverage::default());
+        })
+        .unwrap();
+        assert!(
+            !RunDigest::read(&dir)
+                .unwrap()
+                .coverage
+                .unwrap()
+                .budget_reached
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

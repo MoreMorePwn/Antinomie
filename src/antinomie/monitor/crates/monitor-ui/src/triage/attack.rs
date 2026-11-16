@@ -50,7 +50,7 @@ impl super::TriageView {
                 .map_or((&[], &[]), |(_, list, details)| (list, details));
         }
         if self.attacked.as_ref().map(|(key, ..)| key) != Some(&fingerprint) {
-            let behaviour = super::digest::behaviour(&scan.findings);
+            let behaviour = super::digest::behaviour_of(scan);
             let detections = super::digest::detections(&self.detection.results);
             let detections = detections.as_deref().unwrap_or_default();
             let list = techniques(&behaviour, detections);

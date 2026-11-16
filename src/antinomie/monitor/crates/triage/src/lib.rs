@@ -580,6 +580,9 @@ pub struct ScanData {
     pub suspicious: Suspicious,
     pub findings: Vec<Finding>,
     pub findings_omitted: u64,
+    /// Every finding of the findings view added up per rule, the page's
+    /// omitted rows included (the digest's and the report's behaviour).
+    pub behaviour: Option<antinomie_monitor_core::run_digest::Behaviour>,
     /// Paths a finding above Info names as its object, whatever the findings
     /// table is filtered to, with what they say: the tag of those files in Files.
     pub flagged_paths: file_shown::Flags,
