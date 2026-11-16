@@ -1512,3 +1512,27 @@ pub fn bpf_rows_without_an_image_each_have_their_own_key() {
         );
     }
 }
+
+#[test]
+pub fn a_failed_terminal_request_on_a_file_that_is_not_a_terminal_is_no_schema_gap() {
+    let ioctl = |request: u64, result: i64| {
+        let mut row = call(1, 16, "ioctl", result);
+        row.entry.as_mut().unwrap().args = Some([1, request, 0x7ff0, 0, 0, 0]);
+        let mut gap = captured("arg2.ioctl", "", b"");
+        gap.status = Some(4);
+        row.entry.as_mut().unwrap().fields.push(gap);
+        row
+    };
+    let mut gaps = std::collections::BTreeMap::new();
+    for row in [ioctl(0x5413, -25), ioctl(0x5413, 0), ioctl(0x5421, -25)] {
+        let event = trace::representative(&row).unwrap().clone();
+        archive_scan::note_schema_gaps(&mut gaps, &row, &event);
+    }
+    assert_eq!(
+        gaps.into_iter().collect::<Vec<_>>(),
+        [
+            ("ioctl TIOCGWINSZ (0x5413, arg2.ioctl)".to_owned(), 1),
+            ("ioctl request 0x5421 (arg2.ioctl)".to_owned(), 1),
+        ]
+    );
+}

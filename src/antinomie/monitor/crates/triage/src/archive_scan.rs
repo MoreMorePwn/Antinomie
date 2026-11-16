@@ -132,6 +132,17 @@ pub fn scan_archive_query(
     Ok(done)
 }
 
+/// Terminal requests whose argument only carries the kernel's answer (the
+/// guest decodes them on the terminals it knows by device number).
+pub const TTY_ANSWERS: &[(u64, &str)] = &[
+    (0x5401, "TCGETS"),
+    (0x540f, "TIOCGPGRP"),
+    (0x5413, "TIOCGWINSZ"),
+    (0x541b, "FIONREAD"),
+    (0x5429, "TIOCGSID"),
+    (0x802c_542a, "TCGETS2"),
+];
+
 /// Count the fields of this call the guest had no decoder for (status
 /// NO_DECODER), under the call's name, the field and, for `ioctl`, the request.
 pub fn note_schema_gaps(
@@ -157,10 +168,28 @@ pub fn note_schema_gaps(
     {
         keys.remove("schema.argument_metadata");
     }
+    let failed = invocation
+        .exit
+        .as_ref()
+        .and_then(|exit| exit.result)
+        .is_some_and(|result| result < 0);
     for key in keys {
         let name = event.syscall_name.as_str();
         let label = match (name, call_args(invocation)) {
-            ("ioctl", Some(args)) => format!("ioctl request {:#x} ({key})", args[1]),
+            ("ioctl", Some(args)) => {
+                let answer = TTY_ANSWERS
+                    .iter()
+                    .find(|(request, _)| *request == args[1] & 0xffff_ffff);
+                // A terminal request on a file that is not a terminal fails
+                // (ENOTTY) and the kernel wrote nothing to decode.
+                if failed && answer.is_some() {
+                    continue;
+                }
+                match answer {
+                    Some((request, named)) => format!("ioctl {named} ({request:#x}, {key})"),
+                    None => format!("ioctl request {:#x} ({key})", args[1]),
+                }
+            }
             ("arch_prctl" | "prctl" | "fcntl" | "futex", Some(args)) => {
                 format!("{name} selector {:#x} ({key})", args[0])
             }
