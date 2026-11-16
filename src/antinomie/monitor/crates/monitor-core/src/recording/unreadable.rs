@@ -34,6 +34,7 @@ fn unreadable_run(directory: &Path, vm_id: &str, error: &RecordingError) -> RunS
         boot_wait: None,
         triggers: None,
         stopped_by_user: false,
+        stop_reason: None,
         stopped_at_ms: None,
         persisted: None,
         started_ms: None,

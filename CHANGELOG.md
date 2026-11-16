@@ -1314,6 +1314,22 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **A stop that a big process tree outlasts is reported.** When the program's tree
+  ends 5 s or more after the stop, the run has the warning `stop_overrun` with how
+  long it took and how many processes there were (2,096 processes took 19 s).
+- **A per-run trace cap.** `[resources] trace_cap_mib` (default 2048, 0 for none)
+  bounds what one run's recording takes on disk: at the cap the program is stopped,
+  the run ends `partial` with the warning `trace_cap_reached` (the cap, what was
+  recorded and when) and its report reads "Trace cap (2048 MiB) reached". The
+  engine's per-boot quota is no longer silent either: `trace_reduced` when it
+  switched to keeping only the calls the rules read, `trace_quota_reached` when it
+  stopped recording.
+- **A run the service stopped is not "Stopped by you".** A run that reached its
+  time limit reads "Time limit (2 min) reached at 2 min 0 s" in the report, the
+  Markdown, the run's state line and the window, and its `run.json` and the report's
+  `run` record `stop_reason` (`time_limit`, `trace_cap`, `low_disk` or `cancelled`)
+  instead of `stopped_by_user`; MISP calls it a finished analysis. The engine takes a
+  `StopRunFor` command for a stop with a reason.
 - **A missing optional tool no longer makes a run `partial`.** A static check whose
   tool is not installed (capa, a rule pack) is the warning `static_check_unavailable`
   and the run keeps its outcome; list the check in `static_analysis.required_checks`

@@ -789,7 +789,7 @@ fn a_cancel_while_the_program_runs_stops_it_stops_the_vm_and_keeps_the_recording
             "UploadSample",
             "UploadSample",
             "Execute",
-            "StopRun",
+            "StopRunFor",
             "Stop"
         ]
     );

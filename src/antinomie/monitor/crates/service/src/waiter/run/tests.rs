@@ -118,7 +118,9 @@ fn happy_with(clock: &Arc<ManualClock>, finish_after_ms: u64, analysis: bool) ->
     fake.queue
         .push_back(Notification::Snapshot(running_vm(vec![])));
     fake.react = Some(Box::new(move |command, id, queue| match command {
-        Command::UploadSample { .. } | Command::TerminalRead { .. } | Command::StopRun { .. } => {
+        Command::UploadSample { .. }
+        | Command::TerminalRead { .. }
+        | Command::StopRunFor { .. } => {
             if !matches!(command, Command::TerminalRead { .. }) {
                 queue.push_back(result(id, true, "ok"));
             }
@@ -160,7 +162,7 @@ fn a_program_that_ends_by_itself_is_uploaded_run_collected_and_settled() {
     assert!(position("Execute") < position("TerminalRead"));
     assert!(position("TerminalRead") < position("Stop"));
     assert!(!sent.contains(&"Start".to_owned()), "{sent:?}");
-    assert!(!sent.contains(&"StopRun".to_owned()), "{sent:?}");
+    assert!(!sent.contains(&"StopRunFor".to_owned()), "{sent:?}");
     assert_eq!(
         stages(&events),
         [
@@ -199,7 +201,7 @@ fn the_run_limit_sends_stop_run_once_and_the_run_still_settles() {
     let stopped = Arc::new(Mutex::new(0u32));
     let count = stopped.clone();
     fake.react = Some(Box::new(move |command, id, queue| {
-        if matches!(command, Command::StopRun { .. }) {
+        if matches!(command, Command::StopRunFor { .. }) {
             *count.lock().unwrap() += 1;
             queue.push_back(result(id, true, "stop requested"));
         } else {
@@ -246,7 +248,7 @@ fn a_run_held_open_for_a_persisted_copy_ends_at_the_run_limit() {
         .push((2_000, Notification::Snapshot(running_vm(vec![held(true)]))));
     let mut react = fake.react.take().unwrap();
     fake.react = Some(Box::new(move |command, id, queue| {
-        if matches!(command, Command::StopRun { .. }) {
+        if matches!(command, Command::StopRunFor { .. }) {
             queue.push_back(result(id, true, "no longer held open"));
             queue.push_back(Notification::Snapshot(running_vm(vec![held(false)])));
         } else {

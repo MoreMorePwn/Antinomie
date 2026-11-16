@@ -33,6 +33,7 @@ fn saved_run(spool: &PacketSpool) -> RunSummary {
         boot_wait: None,
         triggers: None,
         stopped_by_user: false,
+        stop_reason: None,
         stopped_at_ms: None,
         persisted: None,
         started_ms: Some(1_792_000_000_000),

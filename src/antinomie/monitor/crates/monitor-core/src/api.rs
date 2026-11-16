@@ -1199,13 +1199,64 @@ pub struct RunSummary {
     /// "Stopped by you at 5 min 9 s" whatever time the tree took to end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped_at_ms: Option<u64>,
+    /// Why a front end with no person stopped the run (`Command::StopRunFor`:
+    /// the service's time limit, its disk floor, a cancel). Absent for a
+    /// person's Stop run (`stopped_by_user`) and for runs not stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<StopReason>,
     /// Copies of the run's program found running outside its recorded tree,
     /// and whether the run was held open for them; absent when none was found.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persisted: Option<crate::persisted_copy::PersistedCopies>,
 }
 
+/// Why a run was stopped when no person pressed Stop run (A06).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum StopReason {
+    /// The run's time limit (`seconds`) was reached.
+    TimeLimit { seconds: u64 },
+    /// The run's recording reached the service's trace cap (`mib`).
+    TraceCap { mib: u64 },
+    /// The disk fell below its floor.
+    LowDisk,
+    /// The job that ran the program was cancelled.
+    Cancelled,
+}
+
+/// "45 s", "2 min", "2 min 30 s", "1 h", "1 h 30 min".
+fn limit_words(seconds: u64) -> String {
+    let (hours, minutes, rest) = (seconds / 3600, seconds % 3600 / 60, seconds % 60);
+    match (hours, minutes, rest) {
+        (0, 0, s) => format!("{s} s"),
+        (0, m, 0) => format!("{m} min"),
+        (0, m, s) => format!("{m} min {s} s"),
+        (h, 0, 0) => format!("{h} h"),
+        (h, m, _) => format!("{h} h {m} min"),
+    }
+}
+
+impl StopReason {
+    /// The words a run state line starts with: "Time limit (2 min) reached".
+    pub fn words(&self) -> String {
+        match self {
+            Self::TimeLimit { seconds } => {
+                format!("Time limit ({}) reached", limit_words(*seconds))
+            }
+            Self::TraceCap { mib } => format!("Trace cap ({mib} MiB) reached"),
+            Self::LowDisk => "Stopped: the disk fell below its floor".into(),
+            Self::Cancelled => "Stopped: the run was cancelled".into(),
+        }
+    }
+}
+
 impl RunSummary {
+    /// A Stop was asked for the run: by a person (Stop run) or by a front
+    /// end with a reason ([`StopReason`]).
+    pub fn stop_requested(&self) -> bool {
+        self.stopped_by_user || self.stop_reason.is_some()
+    }
+
     /// The run's tree ended but the run is held open for a copy of its
     /// program outside the tree (`persisted.holding`): it still captures.
     pub fn held_open(&self) -> bool {
@@ -2562,6 +2613,12 @@ pub enum Command {
     StopRun {
         run_id: String,
     },
+    /// `StopRun` from a front end with no person behind it: the run records
+    /// `reason` instead of `stopped_by_user` (A06).
+    StopRunFor {
+        run_id: String,
+        reason: StopReason,
+    },
     /// Take a finished run whose recording folder is gone off this boot's run
     /// list. Refused for a live run, for a run whose folder still exists (its
     /// evidence is deleted through `DeleteEvidence` or the Samples page) and
@@ -2730,6 +2787,7 @@ impl Command {
                 | Command::TerminalResize { .. }
                 | Command::Signal { .. }
                 | Command::StopRun { .. }
+                | Command::StopRunFor { .. }
                 | Command::RecorderStats
                 | Command::ListProcesses { .. }
                 | Command::AttachProcess { .. }

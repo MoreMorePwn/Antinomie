@@ -163,7 +163,8 @@ impl Worker {
                 session.runs.remove(&cookie);
                 Ok(format!("run {run_id} removed from this list"))
             }
-            Command::StopRun { run_id } => self.stop_run(run_id),
+            Command::StopRun { run_id } => self.stop_run(run_id, None),
+            Command::StopRunFor { run_id, reason } => self.stop_run(run_id, Some(reason)),
             Command::RecorderStats => self.recorder_stats(),
             _ => Err("not a guest command".into()),
         }

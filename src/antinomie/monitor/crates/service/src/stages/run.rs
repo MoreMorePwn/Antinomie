@@ -41,7 +41,7 @@ use crate::{
     waiter::{Phase, STOP_RUN_GRACE, phase},
     watchdog::{ENGINE_SILENCE, Watchdog},
 };
-use antinomie_monitor_core::{Command, RunSummary, WaitStatus};
+use antinomie_monitor_core::{Command, RunSummary, StopReason, WaitStatus};
 use std::time::Duration;
 
 /// How often the run is looked at.
@@ -49,6 +49,41 @@ const POLL: Duration = Duration::from_millis(200);
 
 /// How often the disk floor is looked at while the program runs (4.6.3).
 const FLOOR_EVERY_MS: u64 = 60_000;
+
+/// A tree that ends this long after the stop is reported (`stop_overrun`).
+const STOP_OVERRUN_MS: u64 = 5_000;
+
+/// How often the run's recording is measured against its cap (A47).
+const TRACE_EVERY_MS: u64 = 5_000;
+
+/// The bytes the run's folder holds: its raw trace, captures and saved
+/// files. Bounded: a folder with more entries than any run makes counts as
+/// what was summed so far.
+fn trace_bytes(directory: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let mut pending = vec![(directory.to_path_buf(), 0u32)];
+    let mut seen = 0usize;
+    while let Some((path, depth)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > 200_000 {
+                return total;
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() && depth < 8 {
+                pending.push((entry.path(), depth + 1));
+            } else if meta.is_file() {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
+}
 
 /// How the run ended.
 #[derive(Clone, Debug)]
@@ -118,6 +153,13 @@ impl<E: Engine> LaneStages<'_, E> {
         let mut floor_stop: Option<String> = None;
         let mut next_floor_ms = begun + FLOOR_EVERY_MS;
         let mut cancelled = false;
+        // The run's recording against `[resources] trace_cap_mib` (A47),
+        // and what the engine's own quota did to it, said once each.
+        let trace_cap = self.env.host.trace_cap();
+        let mut trace_stop: Option<u64> = None;
+        let mut next_trace_ms = begun + TRACE_EVERY_MS;
+        let mut reduced_said = false;
+        let mut quota_said = false;
 
         let ended = loop {
             self.listen(&mut dog)?;
@@ -213,6 +255,56 @@ impl<E: Engine> LaneStages<'_, E> {
                     crate::resources::pause_for_low_disk(self.env.store, &words);
                 }
             }
+            if !reduced_said && run.reduced.is_some() {
+                reduced_said = true;
+                self.warn(
+                    job,
+                    "trace_reduced",
+                    "the recording quota of this run's VM boot was nearly full: from then on only the calls the suspicious-activity rules read were recorded",
+                );
+            }
+            if !quota_said
+                && run
+                    .recording_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("recording quota"))
+            {
+                quota_said = true;
+                self.warn(
+                    job,
+                    "trace_quota_reached",
+                    &format!(
+                        "the run's recording stopped at the VM boot's recording quota: {}",
+                        run.recording_error.as_deref().unwrap_or_default()
+                    ),
+                );
+            }
+            if stop_sent_ms.is_none()
+                && now >= next_trace_ms
+                && let Some(cap) = trace_cap
+            {
+                next_trace_ms = now + TRACE_EVERY_MS;
+                let bytes = trace_bytes(&run.directory);
+                if bytes >= cap {
+                    trace_stop = Some(cap);
+                    stop_sent_ms = Some(now);
+                    self.progress(
+                        job,
+                        Stage::Run,
+                        "the run's recording reached its cap; stopping the run",
+                    );
+                    self.warn(
+                        job,
+                        "trace_cap_reached",
+                        &format!(
+                            "the run's recording reached its cap of {} MiB ({} MiB recorded) after {} s; the program was stopped, and the analysis reads what was recorded until then",
+                            cap >> 20,
+                            bytes >> 20,
+                            now.saturating_sub(begun) / 1000
+                        ),
+                    );
+                }
+            }
             let elapsed = now.saturating_sub(begun);
             if stop_sent_ms.is_none() && elapsed >= limit_ms {
                 stop_sent_ms = Some(now);
@@ -224,8 +316,22 @@ impl<E: Engine> LaneStages<'_, E> {
                 );
             }
             if stop_sent_ms.is_some() && stop_id.is_none() {
-                stop_id = self.waiter.guest_send(Command::StopRun {
+                // The run records why the service stopped it (A06): never
+                // "Stopped by you".
+                let reason = if floor_stop.is_some() {
+                    StopReason::LowDisk
+                } else if let Some(cap) = trace_stop {
+                    StopReason::TraceCap { mib: cap >> 20 }
+                } else if limit_stop {
+                    StopReason::TimeLimit {
+                        seconds: limit_ms / 1000,
+                    }
+                } else {
+                    StopReason::Cancelled
+                };
+                stop_id = self.waiter.guest_send(Command::StopRunFor {
                     run_id: run_id.clone(),
+                    reason,
                 })?;
                 if stop_id.is_none() {
                     self.note_transition(job, &mut transition_noted);
@@ -275,6 +381,26 @@ impl<E: Engine> LaneStages<'_, E> {
             self.waiter.discard_results();
         };
 
+        // A big tree can take long to end after the stop (A54: 2,096
+        // processes ended 19 s after it): the job says how long, so the
+        // program's length over its limit is explained.
+        if let Some(sent) = stop_sent_ms {
+            let overrun = self.waiter.now_ms().saturating_sub(sent);
+            if overrun >= STOP_OVERRUN_MS {
+                let processes = ended
+                    .execution
+                    .as_ref()
+                    .map_or(0, |execution| execution.total_task_count);
+                self.warn(
+                    job,
+                    "stop_overrun",
+                    &format!(
+                        "the run's process tree ended {} s after the stop ({processes} processes): the guest sends SIGTERM to every process, then SIGKILL to what is still alive after its grace",
+                        overrun / 1000
+                    ),
+                );
+            }
+        }
         // One last read so the tail holds the program's final lines.
         self.waiter.guest_send(Command::TerminalRead {
             run_id: run_id.clone(),
@@ -283,30 +409,31 @@ impl<E: Engine> LaneStages<'_, E> {
         self.waiter.drain()?;
         self.waiter.discard_results();
 
-        let (reason, exit, signal, core_dumped) = if cancelled || floor_stop.is_some() {
-            (EndReason::Stopped, None, None, false)
-        } else if limit_stop {
-            (EndReason::TimeLimit, None, None, false)
-        } else {
-            match ended.execution.as_ref().and_then(|e| e.root_exit.as_ref()) {
-                Some(WaitStatus::Exited { code }) => {
-                    (EndReason::Exited, Some(i32::from(*code)), None, false)
+        let (reason, exit, signal, core_dumped) =
+            if cancelled || floor_stop.is_some() || trace_stop.is_some() {
+                (EndReason::Stopped, None, None, false)
+            } else if limit_stop {
+                (EndReason::TimeLimit, None, None, false)
+            } else {
+                match ended.execution.as_ref().and_then(|e| e.root_exit.as_ref()) {
+                    Some(WaitStatus::Exited { code }) => {
+                        (EndReason::Exited, Some(i32::from(*code)), None, false)
+                    }
+                    Some(WaitStatus::Signaled {
+                        signal,
+                        core_dumped,
+                    }) => (
+                        EndReason::Signaled,
+                        None,
+                        Some(i32::from(*signal)),
+                        *core_dumped,
+                    ),
+                    None if ended.state == antinomie_monitor_core::RunState::Stopped => {
+                        (EndReason::Stopped, None, None, false)
+                    }
+                    None => (EndReason::Exited, None, None, false),
                 }
-                Some(WaitStatus::Signaled {
-                    signal,
-                    core_dumped,
-                }) => (
-                    EndReason::Signaled,
-                    None,
-                    Some(i32::from(*signal)),
-                    *core_dumped,
-                ),
-                None if ended.state == antinomie_monitor_core::RunState::Stopped => {
-                    (EndReason::Stopped, None, None, false)
-                }
-                None => (EndReason::Exited, None, None, false),
-            }
-        };
+            };
         let end = RunEnd {
             run: ended,
             reason,

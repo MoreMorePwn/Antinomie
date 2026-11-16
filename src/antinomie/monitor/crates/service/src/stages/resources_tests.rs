@@ -80,6 +80,7 @@ fn floors(require_kvm: bool) -> Floors {
             min_free_disk_gib: 20,
             min_free_ram_mib: None,
             require_kvm,
+            ..Resources::default()
         },
         1024,
         vec!["/data".into(), "/rec".into()],
@@ -126,6 +127,7 @@ fn the_floors_come_from_the_configuration_and_the_lane_vm() {
             min_free_disk_gib: 5,
             min_free_ram_mib: Some(8000),
             require_kvm: false,
+            ..Resources::default()
         },
         4096,
         Vec::new(),
@@ -572,7 +574,7 @@ fn a_disk_that_falls_below_the_floor_stops_the_run_pauses_the_queue_and_ends_the
             .engine_mut()
             .sent_names()
             .iter()
-            .any(|n| n == "StopRun")
+            .any(|n| n == "StopRunFor")
     );
     // The recording is complete and the lane free for when the queue resumes.
     let file = w.lane_file();

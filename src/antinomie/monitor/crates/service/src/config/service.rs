@@ -270,7 +270,17 @@ pub struct Resources {
     /// Default: the lane VM's RAM plus 2048.
     pub min_free_ram_mib: Option<u32>,
     pub require_kvm: bool,
+    /// The most one run's recording (its raw trace, captures and saved
+    /// files) may take on disk, in MiB (A47). When the run's folder reaches
+    /// it the program is stopped, so the analysis reads what was recorded,
+    /// and the job says so (`trace_cap_reached`, `partial`). 0: no cap but
+    /// the engine's own per-boot recording quota. Default 2048; at least
+    /// [`MIN_TRACE_CAP_MIB`] when set.
+    pub trace_cap_mib: u32,
 }
+
+/// The smallest `[resources] trace_cap_mib` other than 0.
+pub const MIN_TRACE_CAP_MIB: u32 = 64;
 
 impl Default for Resources {
     fn default() -> Self {
@@ -278,6 +288,7 @@ impl Default for Resources {
             min_free_disk_gib: 20,
             min_free_ram_mib: None,
             require_kvm: true,
+            trace_cap_mib: 2048,
         }
     }
 }

@@ -128,7 +128,12 @@ impl Worker {
     }
 
     /// Ask the guest to end a run: SIGTERM, then SIGKILL on a guest that escalates.
-    pub(super) fn stop_run(&mut self, run_id: String) -> Result<String, String> {
+    /// `reason` is a front end's own stop (A06); `None` is a person's Stop run.
+    pub(super) fn stop_run(
+        &mut self,
+        run_id: String,
+        reason: Option<crate::api::StopReason>,
+    ) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         let timeout = session.reply_timeout();
         let cookie = session.run_cookie(&run_id)?;
@@ -138,7 +143,8 @@ impl Worker {
         if run.end_hold("the run was stopped") {
             // As a Stop of a live run: the run reads "Stopped by you".
             run.summary.state = RunState::Stopped;
-            run.summary.stopped_by_user = true;
+            run.summary.stopped_by_user = reason.is_none();
+            run.summary.stop_reason = reason;
             run.summary.stopped_at_ms.get_or_insert_with(super::unix_ms);
             if let Some(log) = run.custody.as_mut() {
                 log.action(
@@ -180,7 +186,8 @@ impl Worker {
         }
         let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
         run.summary.state = RunState::StopRequested;
-        run.summary.stopped_by_user = true;
+        run.summary.stopped_by_user = reason.is_none();
+        run.summary.stop_reason = reason;
         run.summary.stopped_at_ms.get_or_insert_with(super::unix_ms);
         if let Some(log) = run.custody.as_mut() {
             log.action(

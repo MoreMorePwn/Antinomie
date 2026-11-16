@@ -98,6 +98,7 @@ pub fn run_info(
         },
         exit: root.map(exit_text).unwrap_or_default(),
         stopped_by_user: run.stopped_by_user,
+        stop_reason: run.stop_reason,
         ended_ms: if run.state.is_live() { None } else { ended_ms },
         duration_ms: run.started_ms.zip(end).map(|(s, e)| e.saturating_sub(s)),
         route: run

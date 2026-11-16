@@ -88,6 +88,8 @@ pub struct Floors {
     pub vm_ram_mib: u64,
     /// `capture_quota_size` in GiB (the per-job estimate).
     pub quota_gib: u64,
+    /// `[resources] trace_cap_mib` in bytes; `None` for no cap (A47).
+    pub trace_cap_bytes: Option<u64>,
 }
 
 impl Floors {
@@ -109,6 +111,8 @@ impl Floors {
             disk_paths,
             vm_ram_mib: u64::from(vm_ram_mib),
             quota_gib: quota_bytes.div_ceil(1 << 30),
+            trace_cap_bytes: (config.trace_cap_mib > 0)
+                .then(|| u64::from(config.trace_cap_mib) << 20),
         }
     }
 }
@@ -207,6 +211,10 @@ impl HostChecks for ResourceChecks<'_> {
 
     fn low_disk(&self) -> Option<String> {
         self.disk(0).map(|shortage| shortage.words())
+    }
+
+    fn trace_cap(&self) -> Option<u64> {
+        self.floors.trace_cap_bytes
     }
 
     fn admission(&self) -> Option<(WaitingFor, String)> {

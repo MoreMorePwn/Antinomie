@@ -4,7 +4,7 @@
 //! and stall rules, the hard path of a hung stop, cancellation. No VM, no
 //! sleeping.
 use super::{
-    CollectEnd, Launched, Prepared, RunEnd, StageStop, Stopped,
+    CollectEnd, HostChecks, Launched, Prepared, RunEnd, StageStop, Stopped,
     tests::{MS, SECOND, W, cycle, restore_ok, run_summary, upload_ok},
 };
 use crate::{
@@ -81,7 +81,7 @@ pub(super) fn stop_ok(fake: &mut FakeEngine) {
 
 /// `StopRun` is accepted and the run is `Stopped` two seconds later.
 pub(super) fn stop_run_ok(fake: &mut FakeEngine) {
-    fake.on("StopRun")
+    fake.on("StopRunFor")
         .after(100 * MS)
         .then(2 * SECOND, |s| {
             s.runs[0].state = RunState::Stopped;
@@ -181,7 +181,7 @@ fn a_program_that_exits_ends_the_run_with_its_exit_code() {
         !waiter
             .engine_mut()
             .sent_names()
-            .contains(&"StopRun".to_owned()),
+            .contains(&"StopRunFor".to_owned()),
         "a run that ends by itself is not stopped"
     );
 }
@@ -233,13 +233,150 @@ fn the_run_limit_stops_the_run_once_and_is_not_a_failure() {
         .engine_mut()
         .sent_names()
         .iter()
-        .filter(|n| *n == "StopRun")
+        .filter(|n| *n == "StopRunFor")
         .count();
     assert_eq!(stops, 1);
+    // The run records the limit, not a person's Stop run (A06).
+    let stop = waiter
+        .engine_mut()
+        .sent()
+        .into_iter()
+        .find(|sent| sent.name == "StopRunFor")
+        .unwrap();
+    assert!(
+        stop.detail.contains("reason: TimeLimit { seconds: 20 }"),
+        "{}",
+        stop.detail
+    );
     assert_eq!(
         w.job(&job.id).program.unwrap().end_reason,
         Some(EndReason::TimeLimit)
     );
+}
+
+/// A54: a big tree that takes long to end after the stop is reported, with
+/// how long and how many processes; a prompt end is not.
+#[test]
+fn a_tree_that_ends_long_after_the_stop_is_reported() {
+    let w = W::with("run-overrun", |p| p.program.run_time_s = 20);
+    let job = w.fx.running(1);
+    let mut waiter = w.engine(|fake| {
+        restore_ok(fake);
+        upload_ok(fake);
+        execute_run(fake, None);
+        fake.on("StopRunFor")
+            .after(100 * MS)
+            .then(19 * SECOND, |s| {
+                s.runs[0].state = RunState::Stopped;
+                let mut done = execution(0, None);
+                done.total_task_count = 2096;
+                s.runs[0].execution = Some(done);
+            })
+            .ok("stop requested");
+    });
+    let ready = launched(&w, &mut waiter, &job);
+    let end = run_stage(&w, &mut waiter, &job, &ready).unwrap();
+    assert_eq!(end.reason, EndReason::TimeLimit);
+    let warnings = w.job(&job.id).warnings;
+    let overrun = warnings
+        .iter()
+        .find(|x| x.code == "stop_overrun")
+        .expect("the overrun is reported");
+    assert!(
+        overrun
+            .text
+            .contains("ended 19 s after the stop (2096 processes)"),
+        "{}",
+        overrun.text
+    );
+
+    let prompt = W::with("run-prompt", |p| p.program.run_time_s = 20);
+    let job = prompt.fx.running(1);
+    let mut waiter = prompt.engine(|fake| {
+        restore_ok(fake);
+        upload_ok(fake);
+        execute_run(fake, None);
+        stop_run_ok(fake);
+    });
+    let ready = launched(&prompt, &mut waiter, &job);
+    run_stage(&prompt, &mut waiter, &job, &ready).unwrap();
+    assert!(
+        !prompt
+            .job(&job.id)
+            .warnings
+            .iter()
+            .any(|x| x.code == "stop_overrun")
+    );
+}
+
+/// A host whose trace cap is `0` bytes over a folder the test fills (A47).
+struct Capped(u64);
+
+impl HostChecks for Capped {
+    fn check(&self, _: &Run, _: &crate::config::Preset) -> Result<(), super::HostProblem> {
+        Ok(())
+    }
+    fn trace_cap(&self) -> Option<u64> {
+        Some(self.0)
+    }
+}
+
+/// A47: a run whose recording reaches `[resources] trace_cap_mib` is
+/// stopped, says why in its warnings and its stop reason, and ends
+/// `stopped`, long before its time limit.
+#[test]
+fn a_run_that_reaches_its_trace_cap_is_stopped_and_says_so() {
+    let mut w = W::with("run-trace-cap", |p| p.program.run_time_s = 600);
+    w.host = Box::new(Capped(64 << 20));
+    let folder = crate::store::tests::scratch("run-trace-cap-folder");
+    std::fs::create_dir_all(folder.join("objects")).unwrap();
+    // 80 MiB of trace, sparse: no disk is used.
+    std::fs::File::create(folder.join("objects/objects-000000.seg"))
+        .unwrap()
+        .set_len(80 << 20)
+        .unwrap();
+    let job = w.fx.running(1);
+    let directory = folder.clone();
+    let mut waiter = w.engine(move |fake| {
+        restore_ok(fake);
+        upload_ok(fake);
+        fake.on("Execute")
+            .after(SECOND)
+            .then(500 * MS, move |s| {
+                let mut run = live_run();
+                run.directory = directory.clone();
+                s.runs.push(run);
+            })
+            .ok("launched pid 750, terminal session 1");
+        stop_run_ok(fake);
+    });
+    let ready = launched(&w, &mut waiter, &job);
+    let began = now(&w);
+    let end = run_stage(&w, &mut waiter, &job, &ready).unwrap();
+    assert_eq!(end.reason, EndReason::Stopped);
+    assert!(seconds(&w, began) < 30, "stopped at the cap, not the limit");
+    let stop = waiter
+        .engine_mut()
+        .sent()
+        .into_iter()
+        .find(|sent| sent.name == "StopRunFor")
+        .expect("the run was stopped");
+    assert!(
+        stop.detail.contains("TraceCap { mib: 64 }"),
+        "{}",
+        stop.detail
+    );
+    let warnings = w.job(&job.id).warnings;
+    let cap = warnings
+        .iter()
+        .find(|x| x.code == "trace_cap_reached")
+        .expect("the job says the cap was reached");
+    assert!(
+        cap.text.contains("cap of 64 MiB (80 MiB recorded)"),
+        "{}",
+        cap.text
+    );
+    let _ = std::fs::remove_dir_all(folder);
 }
 
 #[test]
@@ -250,7 +387,7 @@ fn a_run_that_ignores_stop_run_is_guest_lost_after_the_grace() {
         restore_ok(fake);
         upload_ok(fake);
         execute_run(fake, None);
-        fake.on("StopRun").after(100 * MS).ok("stop requested");
+        fake.on("StopRunFor").after(100 * MS).ok("stop requested");
     });
     let ready = launched(&w, &mut waiter, &job);
     let began = now(&w);
@@ -484,7 +621,7 @@ fn a_cancel_stops_the_run_and_ends_the_stage_cancelled() {
         waiter
             .engine_mut()
             .sent_names()
-            .contains(&"StopRun".to_owned())
+            .contains(&"StopRunFor".to_owned())
     );
     assert_eq!(
         w.job(&job.id).program.unwrap().end_reason,
@@ -506,7 +643,7 @@ fn a_cancelled_run_that_will_not_stop_is_given_up_after_the_grace() {
             .then(500 * MS, |s| s.runs.push(live_run()))
             .call(6 * SECOND, move || raised.store(true, Ordering::SeqCst))
             .ok("launched");
-        fake.on("StopRun").ok("stop requested");
+        fake.on("StopRunFor").ok("stop requested");
     });
     let ready = launched(&w, &mut waiter, &job);
     let polled = flag.clone();

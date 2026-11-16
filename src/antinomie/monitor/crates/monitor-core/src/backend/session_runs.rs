@@ -558,7 +558,7 @@ impl Session {
             // A Stop run that ended the tree reads as stopped even when the
             // root had exited before it, or obeyed the signal with exit 0.
             run.summary.state =
-                crate::execution::state_after_stop(&execution, run.summary.stopped_by_user);
+                crate::execution::state_after_stop(&execution, run.summary.stop_requested());
             let tree_ended = matches!(
                 crate::execution::state(&execution),
                 RunState::Finished | RunState::Stopped
@@ -664,6 +664,7 @@ mod forget_tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
         }

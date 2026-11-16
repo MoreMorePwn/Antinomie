@@ -145,8 +145,9 @@ impl<E: Engine> LaneStages<'_, E> {
         self.update_lane(|file| file.checkpoint(Stage::Collect, Checkpoint::Started, now))?;
         let end = match self.collect(job, launched) {
             Ok(mut end) => {
-                // A run stopped for the disk floor is a partial result.
-                if self.floor_stopped(job) {
+                // A run stopped for the disk floor, or at its trace cap
+                // (A47), is a partial result.
+                if self.floor_stopped(job) || self.trace_capped(job) {
                     end.outcome = Outcome::Partial;
                 }
                 end
@@ -170,6 +171,17 @@ impl<E: Engine> LaneStages<'_, E> {
             .end_stage(&job.id, StageStatus::Finished)
             .map_err(|e| self.store_error(Stage::Collect, e))?;
         Ok(end)
+    }
+
+    /// The run was stopped at its trace cap (its `trace_cap_reached`
+    /// warning, A47).
+    pub(super) fn trace_capped(&self, job: &Run) -> bool {
+        self.env.store.get(&job.id).is_ok_and(|stored| {
+            stored
+                .warnings
+                .iter()
+                .any(|w| w.code == "trace_cap_reached")
+        })
     }
 
     /// The run was stopped for the disk floor (its `low_disk` warning, which

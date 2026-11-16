@@ -59,7 +59,7 @@ fn now(w: &W) -> u64 {
 fn stop_runs_sent(fake: &mut FakeEngine) -> Vec<u64> {
     fake.sent()
         .into_iter()
-        .filter(|s| s.name == "StopRun")
+        .filter(|s| s.name == "StopRunFor")
         .map(|s| s.at_ms)
         .collect()
 }
@@ -147,7 +147,7 @@ fn a_hung_guest_that_refuses_the_stop_is_guest_lost_after_the_limit_and_the_grac
         restore_ok(fake);
         upload_ok(fake);
         execute_run(fake, None);
-        fake.on("StopRun").after(100 * MS).ok("stop requested");
+        fake.on("StopRunFor").after(100 * MS).ok("stop requested");
     });
     let ready = launched(&w, &mut waiter, &job);
     let began = now(&w);
@@ -185,7 +185,9 @@ fn a_stop_run_the_engine_cancelled_at_a_guest_transition_is_sent_again() {
         restore_ok(fake);
         upload_ok(fake);
         execute_run(fake, None);
-        fake.on("StopRun").after(100 * MS).fail(TRANSITION_CANCEL);
+        fake.on("StopRunFor")
+            .after(100 * MS)
+            .fail(TRANSITION_CANCEL);
         stop_run_ok(fake);
     });
     let ready = launched(&w, &mut waiter, &job);
@@ -226,7 +228,7 @@ fn a_floor_stop_refused_during_a_guest_transition_still_ends_the_run_stopped_and
     assert_eq!(stored.program.unwrap().end_reason, Some(EndReason::Stopped));
     assert!(stored.warnings.iter().any(|x| x.code == "low_disk"));
     let fake = waiter.engine_mut();
-    assert!(fake.refused().iter().any(|(name, _)| name == "StopRun"));
+    assert!(fake.refused().iter().any(|(name, _)| name == "StopRunFor"));
     let stops = stop_runs_sent(fake);
     assert_eq!(stops.len(), 1, "{stops:?}");
     assert!(stops[0] >= 140_000, "{stops:?}");
@@ -253,7 +255,7 @@ fn a_floor_stopped_run_the_guest_never_ends_is_stopped_and_partial_not_guest_los
         restore_ok(fake);
         upload_ok(fake);
         execute_run(fake, None);
-        fake.on("StopRun").after(100 * MS).ok("stop requested");
+        fake.on("StopRunFor").after(100 * MS).ok("stop requested");
         fake.call_after(100 * SECOND, move || low.store(true, Ordering::SeqCst));
         fake.after(300 * SECOND, |s| {
             s.state = VmState::Failed;
