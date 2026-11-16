@@ -56,6 +56,7 @@ pub(super) fn fixture() -> Report {
         other_families: Vec::new(),
         family_evidence: Vec::new(),
         tags: Vec::new(),
+        scans: Vec::new(),
         key_behaviours: vec![Behaviour {
             rule: "exec-from-tmp".into(),
             tier: "high".into(),
@@ -548,6 +549,43 @@ fn pdf_defangs_and_shows_non_latin_text_as_question_marks() {
     let (content, _) = pdf_text(&bytes);
     assert!(content.contains("203[.]0[.]113[.]5:443"));
     assert!(content.contains("caf\\351 ?? \\(x\\) \\\\y"), "{content}");
+}
+
+#[test]
+fn a_scan_is_one_comment_in_misp_and_one_note_in_stix() {
+    // A36: the scan's targets are not indicators; the exports say it once.
+    let mut report = fixture();
+    report.summary.as_mut().unwrap().scans = vec![ScanSummary {
+        port: 23,
+        targets: 9_676,
+        connections: 10_380,
+        requests: 0,
+        sample: vec!["203.0.113.7:23".into()],
+        sample_requests: Vec::new(),
+    }];
+    let event: serde_json::Value = serde_json::from_str(&misp::render(&report).unwrap()).unwrap();
+    let comments: Vec<&str> = event["Event"]["Attribute"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["type"] == "comment")
+        .filter_map(|a| a["value"].as_str())
+        .filter(|v| v.contains("scanned"))
+        .collect();
+    assert_eq!(comments.len(), 1);
+    assert!(
+        comments[0].contains("9676 addresses on port 23"),
+        "{}",
+        comments[0]
+    );
+    let bundle: serde_json::Value = serde_json::from_str(&stix::render(&report).unwrap()).unwrap();
+    let notes = bundle["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| o["type"] == "note" && o["abstract"] == "Network scan on port 23")
+        .count();
+    assert_eq!(notes, 1);
 }
 
 #[test]

@@ -1348,6 +1348,12 @@ x86 programs by their own table.
   added up per rule over every finding (a count per rule, eight examples per
   evasion check); a digest list that is still cut keeps the high tiers and says so
   (`coverage.budget_reached` and a reason).
+- **A scan is one behaviour, not thousands of indicators (ANT-T0556, A36).** A
+  port with 32 or more addresses is a scan: its targets (and the URLs and TLS
+  sessions to them) leave the indicator list and are told once in
+  `summary.scans`, the report's notes, a MISP comment and a STIX note, with the
+  counts and a sample; a target the program came back to three times or more (up
+  to eight per port) or one a dataset matched stays.
 - **Domain indicators are host names (ANT-T0556, A42, A14).** An HTTP Host `x`,
   a single label (`debian`) or an obfuscated string is no domain indicator, and an
   address as HTTP Host is no domain in `counts.domains`.

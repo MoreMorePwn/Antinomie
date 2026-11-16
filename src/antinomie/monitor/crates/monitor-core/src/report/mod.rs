@@ -30,6 +30,7 @@ mod pdf_layout;
 mod pdf_wrap;
 pub mod refs;
 pub mod sample;
+pub mod scan;
 pub mod shared;
 pub mod stix;
 
@@ -214,6 +215,24 @@ pub struct TierCounts {
     pub info_not_listed: u64,
 }
 
+/// One scanned port ([`scan::collapse`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScanSummary {
+    pub port: u16,
+    /// Distinct addresses tried on the port.
+    pub targets: u64,
+    /// Connections to the targets that are not listed as indicators.
+    pub connections: u64,
+    /// HTTP requests and TLS sessions to those targets (an exploit spray).
+    pub requests: u64,
+    /// Some of the targets, `ip:port`.
+    pub sample: Vec<String>,
+    /// Some of the requests, as the URL indicators showed them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sample_requests: Vec<String>,
+}
+
 /// A family the run's own evidence names (see [`Summary::family_evidence`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -255,6 +274,10 @@ pub struct Summary {
     /// ("persistence", "staging", "Go binary", "Torii-like"): never a family.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Ports the run scanned: their targets are counted here and are not
+    /// indicators (see [`scan`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub scans: Vec<ScanSummary>,
     /// HIGH and MEDIUM rules that matched, worst first.
     pub key_behaviours: Vec<Behaviour>,
     /// Behaviour rules that fired, by tier.

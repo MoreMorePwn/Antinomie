@@ -370,6 +370,22 @@ pub fn render(report: &Report) -> Result<String, String> {
         ));
     }
 
+    // A scan is one behaviour with its counts, not an indicator per target.
+    for scan in report.summary.iter().flat_map(|summary| &summary.scans) {
+        objects.push(object_since(
+            "note",
+            &format!("{run}:scan:{}", scan.port),
+            &since,
+            &at,
+            json!({
+                "abstract": format!("Network scan on port {}", scan.port),
+                "content": super::scan::sentence(scan),
+                "object_refs": [malware_id.clone().unwrap_or_else(|| identity_id.clone())],
+                "created_by_ref": identity_id,
+            }),
+        ));
+    }
+
     // A report ties the bundle together for importers that list reports.
     if let Some(malware) = &malware_id {
         let refs: Vec<String> = objects

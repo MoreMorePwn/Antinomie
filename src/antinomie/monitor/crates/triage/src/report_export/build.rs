@@ -319,6 +319,7 @@ fn summary(
         other_families,
         family_evidence: super::super::family::observed_families(candidates),
         tags,
+        scans: Vec::new(),
         tiers: {
             // The app's tier chips count every finding, INFO included; the
             // index lists INFO rows only when asked for them.
@@ -721,7 +722,9 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     let behaviour = digest::behaviour_of(scan);
     // `None` when no detection engine has run for the run (stored with the run).
     let digest_detections = RunDigest::read(&job.archive).and_then(|digest| digest.detections);
-    let indicator_rows = indicators(job, scan);
+    let mut indicator_rows = indicators(job, scan);
+    // A scanned port's targets are one behaviour, not indicators (A36).
+    let scans = antinomie_monitor_core::report::scan::collapse(&mut indicator_rows);
     let techniques = super::super::attack::techniques(
         &behaviour,
         digest_detections.as_deref().unwrap_or_default(),
@@ -763,9 +766,17 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
             techniques.len(),
             clock,
         ));
+        if let Some(summary) = report.summary.as_mut() {
+            summary.scans.clone_from(&scans);
+        }
     }
     if let Some(note) = schema_gap_note(scan) {
         report.notes.push(note);
+    }
+    for scan in &scans {
+        report
+            .notes
+            .push(antinomie_monitor_core::report::scan::sentence(scan));
     }
     if let Some(note) = suffix_variant_note(&indicator_rows) {
         report.notes.push(note);

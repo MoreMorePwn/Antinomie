@@ -290,6 +290,17 @@ pub fn render(report: &Report) -> Result<String, String> {
             }
         }
     }
+    for scan in report.summary.iter().flat_map(|summary| &summary.scans) {
+        attrs.push(attribute(
+            "comment",
+            "Other",
+            &super::scan::sentence(scan),
+            false,
+            "",
+            &format!("{seed}:scan:{}", scan.port),
+            at,
+        ));
+    }
     for hit in report.detections.iter().flatten() {
         attrs.push(attribute(
             "comment",

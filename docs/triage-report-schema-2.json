@@ -433,6 +433,50 @@
           },
           "description": "Families this run's own evidence names (a detection rule of the run or a behaviour signature, not only the MalwareBazaar record), strong when a strong rule or the behaviour named it: what the default label counts."
         },
+        "scans": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "port",
+              "targets",
+              "connections",
+              "requests",
+              "sample"
+            ],
+            "properties": {
+              "port": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "targets": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "connections": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "requests": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sample": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sample_requests": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "description": "Ports the run scanned (32 or more addresses on one port): their targets are counted here and are not indicators."
+        },
         "tags": {
           "type": "array",
           "items": {
