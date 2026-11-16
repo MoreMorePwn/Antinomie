@@ -439,7 +439,10 @@ impl HostHead {
         notes.truncated = elf.truncation_note();
         if let Linking::Interpreter(path) = elf.linking(&self.bytes) {
             notes.interpreter = Some(format!(
-                "It needs the program interpreter {path}, which is not in this guest's base, so the guest reports the program as missing."
+                "It needs the program interpreter {path}{}, which is not in this guest's base, so the guest reports the program as missing.{}",
+                c_library(&path)
+                    .map_or(String::new(), |name| format!(" ({name}'s dynamic loader)")),
+                loader_hint(&path)
             ));
         }
         let machine = u32::from(elf.machine);
@@ -474,6 +477,44 @@ fn machine_runs(machine: u32, guest: crate::api::GuestArch) -> bool {
         || (guest.machine == crate::api::GuestArch::ELF_X86_64
             && machine == crate::api::GuestArch::ELF_386)
 }
+
+/// The C library whose dynamic loader `interpreter` (a program's PT_INTERP)
+/// is: `glibc`, `musl`, `uClibc` or `Android's bionic`; `None` for a path
+/// none of them uses.
+pub fn c_library(interpreter: &str) -> Option<&'static str> {
+    let name = interpreter.rsplit('/').next().unwrap_or(interpreter);
+    if interpreter.starts_with("/system/bin/linker") {
+        Some("Android's bionic")
+    } else if name.starts_with("ld-uClibc") {
+        Some("uClibc")
+    } else if name.starts_with("ld-musl-") {
+        Some("musl")
+    } else if name.starts_with("ld-linux") || name == "ld.so.1" || name.starts_with("ld64.so.") {
+        Some("glibc")
+    } else {
+        None
+    }
+}
+
+/// What a person can do about a missing loader, as a sentence with its
+/// leading space (empty when there is nothing to add): no base ships musl,
+/// uClibc or bionic; glibc's 64-bit loader is in the Debian bases and in
+/// BusyBox bases built with its runtime (ANT-T0556), not in older ones.
+fn loader_hint(interpreter: &str) -> String {
+    match c_library(interpreter) {
+        Some("glibc") if GLIBC_BASE_LOADERS.contains(&interpreter) => {
+            " An older BusyBox base has no glibc: a BusyBox base built with glibc's runtime, or a Debian base, has it.".into()
+        }
+        Some(name @ ("musl" | "uClibc" | "Android's bionic")) => {
+            format!(" No Antinomie base ships {name}, so the program cannot start in any of them.")
+        }
+        _ => String::new(),
+    }
+}
+
+/// The glibc loaders a BusyBox base built with glibc's runtime has (its
+/// bundle.json lists them in `program_interpreters`).
+const GLIBC_BASE_LOADERS: [&str; 2] = ["/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-aarch64.so.1"];
 
 /// What the host reads of a sample's ELF headers to say whether any installed
 /// base can run it (the Samples page; the same facts as `HostHead`).
@@ -540,6 +581,14 @@ impl SampleElf {
                 self.bits,
                 machine_name(self.machine),
                 names.join(", ")
+            ));
+        }
+        // musl, uClibc and bionic programs: no base ships their loader.
+        if let Some(path) = self.interpreter.as_deref()
+            && let Some(name @ ("musl" | "uClibc" | "Android's bionic")) = c_library(path)
+        {
+            return Some(format!(
+                "This program needs {path} ({name}'s dynamic loader), which no Antinomie base ships: it will not start."
             ));
         }
         let arm32 = self.machine == crate::api::GuestArch::ELF_ARM;
@@ -890,5 +939,56 @@ mod tests {
             hf.base_note(&[GuestArch::AARCH64, GuestArch::X86_64], None)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn a_loader_is_named_by_its_c_library() {
+        // The loaders the arm64 eval's samples named (ANT-T0554 A51, E13).
+        for (path, name) in [
+            ("/lib64/ld-linux-x86-64.so.2", Some("glibc")),
+            ("/lib/ld-linux-aarch64.so.1", Some("glibc")),
+            ("/lib/ld-linux-armhf.so.3", Some("glibc")),
+            ("/lib/ld-linux.so.2", Some("glibc")),
+            ("/lib/ld.so.1", Some("glibc")),
+            ("/lib/ld-uClibc.so.0", Some("uClibc")),
+            ("/lib/ld-musl-armhf.so.1", Some("musl")),
+            ("/system/bin/linker64", Some("Android's bionic")),
+            ("/system/bin/linker", Some("Android's bionic")),
+            ("/tmp/loader", None),
+        ] {
+            assert_eq!(c_library(path), name, "{path}");
+        }
+    }
+
+    #[test]
+    fn a_missing_loader_says_which_c_library_and_what_has_it() {
+        use crate::api::GuestArch;
+        let sample = |interpreter: &str| SampleElf {
+            machine: GuestArch::ELF_AARCH64,
+            bits: 64,
+            old_abi: false,
+            interpreter: Some(interpreter.into()),
+        };
+        let uclibc = sample("/lib/ld-uClibc.so.0")
+            .base_note(&[GuestArch::AARCH64], None)
+            .unwrap();
+        assert!(
+            uclibc.contains("/lib/ld-uClibc.so.0 (uClibc's dynamic loader)"),
+            "{uclibc}"
+        );
+        assert!(uclibc.contains("no Antinomie base ships"), "{uclibc}");
+        let bionic = sample("/system/bin/linker64")
+            .base_note(&[GuestArch::AARCH64], None)
+            .unwrap();
+        assert!(bionic.contains("Android's bionic"), "{bionic}");
+        // glibc: the bases have it (a rebuilt BusyBox base, Debian), no note.
+        assert_eq!(
+            sample("/lib/ld-linux-aarch64.so.1").base_note(&[GuestArch::AARCH64], None),
+            None
+        );
+        assert!(loader_hint("/lib/ld-uClibc.so.0").contains("No Antinomie base ships uClibc"));
+        assert!(loader_hint("/lib64/ld-linux-x86-64.so.2").contains("older BusyBox base"));
+        assert_eq!(loader_hint("/lib/ld-linux.so.2"), "");
+        assert_eq!(loader_hint("/tmp/loader"), "");
     }
 }

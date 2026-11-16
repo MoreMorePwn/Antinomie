@@ -1314,6 +1314,26 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **BusyBox bases run programs linked against glibc (ANT-T0556, eval A51).** The
+  BusyBox bases had no dynamic loader, so a glibc program did not start (8 of 25
+  x86-64 samples in the 0.9.0 evaluation, every Sliver implant). The kit now puts
+  glibc's runtime from the pinned `libc6` 2.41 (the Debian bases' version) into
+  `/lib`: the loader (`/lib64` links to `lib` on x86-64), `libc`, `libm`,
+  `libresolv`, the stub libraries older programs name and `/etc/nsswitch.conf`
+  (about 3.4 MB on x86-64, 3.1 MB on arm64). `bundle.json` lists the loader
+  paths in `program_interpreters`; on such a base Auto mode refuses a program
+  whose loader the base lacks before the VM starts (`unavailable_on_node`,
+  naming the loader and its C library). A guest that refuses a launch for a
+  missing loader now names its C library too, and says that no base ships
+  uClibc, musl or Android's bionic (the Samples page says so before a run). A
+  base gets the runtime when it is rebuilt.
+- **A sample that chmods `/bin/reboot` no longer disables the BusyBox shell
+  (ANT-T0556, eval A26).** Every applet was a link to `/bin/busybox` and chmod
+  follows links, so Mirai's `chmod 0000 /bin/reboot` made BusyBox and `/bin/sh`
+  unrunnable for the rest of the run. The kit now gives `/bin/sh` its own copy
+  of BusyBox and reboot, halt, poweroff and netstat another (hard links); the
+  shell runs its applets from its own image. About 4 MB more per base; a base
+  gets it when it is rebuilt.
 - **A number in a run request reads back as the same number.** A very long number
   in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
   integer) was read as a floating-point value that, written again by the service,

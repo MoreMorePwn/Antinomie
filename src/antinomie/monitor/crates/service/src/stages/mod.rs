@@ -35,6 +35,9 @@ mod host_tests;
 mod hosted;
 pub mod items;
 mod launch;
+pub mod loader;
+#[cfg(test)]
+mod loader_tests;
 pub mod online;
 #[cfg(test)]
 mod online_tests;

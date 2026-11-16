@@ -13,7 +13,10 @@ use crate::{
     store::{Eligibility, admission},
     waiter::WaitError,
 };
-use antinomie_monitor_core::{Command, Snapshot, VmState};
+use antinomie_monitor_core::{
+    Command, Snapshot, VmState,
+    samples::{archive_path, open_sample},
+};
 use std::time::Duration;
 
 fn fail(code: FailureCode, message: &str, detail: Option<&str>) -> StageStop {
@@ -104,6 +107,25 @@ impl<E: Engine> LaneStages<'_, E> {
             Ok(()) | Err(WaitError::TimedOut { .. }) => Ok(()),
             Err(other) => Err(StageStop::Abort(other)),
         }
+    }
+
+    /// The dynamic loader the sample names, against the program
+    /// interpreters the lane's base lists (`loader`): why the base cannot
+    /// start it, or `None` (a static program, a script, a base without the
+    /// list, a sample the library cannot open).
+    fn missing_loader(&self, job: &Run, file: &LaneFile) -> Option<super::loader::MissingLoader> {
+        let sample = job.sample.as_ref().filter(|s| s.kind == "elf")?;
+        let base = self
+            .waiter
+            .snapshot()
+            .bases
+            .iter()
+            .find(|base| base.id == file.base_identity)?;
+        let interpreters = super::loader::base_interpreters(&base.directory)?;
+        let sha256 = sample.sha256.as_str();
+        let archive = archive_path(self.env.data_dir, sha256).ok()?;
+        let bytes = open_sample(&archive, sha256).ok()?;
+        super::loader::missing_loader(&bytes, &interpreters)
     }
 
     /// The client still holds every permission the run uses (the preset the
@@ -201,6 +223,19 @@ impl<E: Engine> LaneStages<'_, E> {
                 // `provision` waits this one out: the job is already ours.
                 LaneProblem::LayerPending | LaneProblem::Quarantined(_) => {}
             }
+        }
+        if let Some(missing) = self.missing_loader(job, &file) {
+            let mut failure = Failure::new(
+                FailureCode::UnavailableOnNode,
+                Stage::Prechecks,
+                "the lane's base cannot start this program",
+                Some(&missing.why),
+            );
+            failure.details.insert(
+                "what".into(),
+                format!("program_interpreter.{}", missing.interpreter).into(),
+            );
+            return Err(StageStop::Failed(failure));
         }
         let effective = plan::effective(&frozen.preset, self.env.revert);
         Ok(Prepared {

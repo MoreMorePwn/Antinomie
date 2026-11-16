@@ -135,7 +135,12 @@ The **Base images** section in the left sidebar lists installed bases. Use
 - **Download base…**: fetch a published, checksum-verified base.
 - **Import base…**: install a bundle folder you already have.
 - **Build base…**: build one with the app's own build kit. Choose **BusyBox**,
-  **Debian 13 (minimal, console)** or **Debian 13 (desktop)**. A short wizard asks
+  **Debian 13 (minimal, console)** or **Debian 13 (desktop)**. A BusyBox base has
+  BusyBox and glibc's runtime (its loader and libraries in `/lib`, from Debian
+  13's `libc6`), so programs linked against glibc start too; an older BusyBox base has
+  none (its `bundle.json` lists no `program_interpreters`). No base ships uClibc, musl or Android's bionic:
+  a program that needs their loader does not start, and the guest's refusal (or,
+  in Auto mode, the run's `unavailable_on_node` failure) names the loader. A short wizard asks
   installer-style questions (hostname; for Debian also language, keyboard, time
   zone, software and mirror), then builds where you choose and installs the result.
   **Where** is Automatic or one of Native (this Linux host, needs the tool suite),
@@ -475,7 +480,7 @@ packet history already has it, and specimen Content supports a byte-offset jump.
 ## arm64 guests (0.9.0)
 
 Antinomie also runs arm64 Linux guests: a BusyBox arm64 base (Debian 13's
-arm64 BusyBox and e2fsprogs packages with the patched 6.12.94 kernel built for
+arm64 BusyBox, glibc and e2fsprogs packages with the patched 6.12.94 kernel built for
 arm64) runs arm64 programs and, on the same kernel, 32-bit ARM (AArch32)
 programs. On an x86-64 host QEMU emulates the CPU (TCG, no KVM), so an arm64
 VM is several times slower than an x86-64 one; it always starts with TCG and
