@@ -97,8 +97,8 @@ fn open_presets(app: &mut MonitorApp, ctx: &egui::Context) {
     hover_at(app, ctx, AWAY);
 }
 
-/// The hints missing when the help icon beside each label is hovered:
-/// `(label, part of its tip)`. The control itself shows nothing.
+/// The hints missing when each control is hovered: `(label, part of its
+/// tip)`. The hint shows on the control itself, with no icon beside it.
 fn missing_tips(app: &mut MonitorApp, ctx: &egui::Context, cases: &[(&str, &str)]) -> Vec<String> {
     let mut missing = Vec::new();
     for &(label, tip) in cases {
@@ -108,30 +108,9 @@ fn missing_tips(app: &mut MonitorApp, ctx: &egui::Context, cases: &[(&str, &str)
             missing.push(format!("{label}: not drawn"));
             continue;
         };
-        // A tooltip is text that shows only while the control is hovered.
-        let on_control = texts(&hover_at(app, ctx, rect.center()));
-        if on_control
-            .iter()
-            .any(|(text, _)| text.contains(tip) && !found.iter().any(|(away, _)| away == text))
-        {
-            missing.push(format!("{label}: still a tooltip on the control"));
-        }
-        let Some(icon) = found
-            .iter()
-            .filter(|(text, icon)| {
-                text == egui_phosphor::regular::QUESTION
-                    && (icon.center().y - rect.center().y).abs() < 10.0
-                    && icon.left() > rect.right()
-            })
-            .min_by(|a, b| a.1.left().total_cmp(&b.1.left()))
-            .map(|(_, icon)| *icon)
-        else {
-            missing.push(format!("{label}: no help icon"));
-            continue;
-        };
-        let shown = texts(&hover_at(app, ctx, icon.center()));
+        let shown = texts(&hover_at(app, ctx, rect.center()));
         if !shown.iter().any(|(text, _)| text.contains(tip)) {
-            missing.push(format!("{label}: no help {tip:?}"));
+            missing.push(format!("{label}: no hover {tip:?}"));
         }
     }
     missing
@@ -381,19 +360,19 @@ fn the_uptime_is_typed_or_drawn_in_the_recommended_range() {
     let shown = lines(&mut app, &ctx);
     assert!(shown.contains(&boot_age_text(age)), "{shown:?}");
     assert!(!shown.iter().any(|text| text.contains("is not an uptime")));
-    // Its help icon says what the dice does.
-    let help = texts(&hover_at(&mut app, &ctx, AWAY))
-        .into_iter()
-        .filter(|(text, _)| text == egui_phosphor::regular::QUESTION)
-        .map(|(_, rect)| rect)
-        .collect::<Vec<_>>();
-    let tips: Vec<String> = help
+    // The Uptime box explains the field on hover; the dice shows its name.
+    let found = texts(&hover_at(&mut app, &ctx, AWAY));
+    let uptime = found
         .iter()
-        .flat_map(|rect| texts(&hover_at(&mut app, &ctx, rect.center())))
+        .rfind(|(text, _)| text == "Uptime")
+        .expect("the Uptime box")
+        .1;
+    let tips: Vec<String> = texts(&hover_at(&mut app, &ctx, uptime.center()))
+        .into_iter()
         .map(|(text, _)| text)
         .collect();
     assert!(
-        tips.iter().any(|text| text.contains("press the dice")),
+        tips.iter().any(|text| text.contains("the same at every")),
         "{tips:?}"
     );
 }
@@ -468,7 +447,7 @@ fn an_iot_vm_on_debian_is_offered_the_busybox_base() {
 // ----- item 6: the Routed button's help -----
 
 #[test]
-fn the_routed_buttons_help_icon_says_what_it_does() {
+fn the_routed_buttons_hover_says_what_it_does() {
     use antinomie_monitor_core::stealth::{StealthProfile, CLOUDS};
     let ctx = context();
     let mut app = app();
@@ -482,17 +461,7 @@ fn the_routed_buttons_help_icon_says_what_it_does() {
         .find(|(text, _)| text == "Use Routed for cloud metadata")
         .expect("offered")
         .1;
-    let icon = found
-        .iter()
-        .filter(|(text, rect)| {
-            text == egui_phosphor::regular::QUESTION
-                && (rect.center().y - button.center().y).abs() < 8.0
-                && rect.left() > button.right()
-        })
-        .map(|(_, rect)| *rect)
-        .next()
-        .expect("a help icon beside the button");
-    let tip = texts(&hover_at(&mut app, &ctx, icon.center()));
+    let tip = texts(&hover_at(&mut app, &ctx, button.center()));
     assert!(
         tip.iter().any(|(text, _)| text.contains("route gateway"))
             && tip
@@ -554,32 +523,20 @@ fn an_arm64_vm_draws_no_uptime_and_shows_the_field_disabled_with_its_note() {
     // The field is disabled: a click does not turn it on.
     click_last(&mut app, &ctx, "Uptime");
     assert_eq!(app.draft.stealth.boot_age_s, 0);
-    // Its help icon (on the Uptime row) says why.
-    let output = hover_at(&mut app, &ctx, AWAY);
-    let found = texts(&output);
+    // Hovering the greyed Uptime box says why.
+    let found = texts(&hover_at(&mut app, &ctx, AWAY));
     let row = found
         .iter()
         .rfind(|(text, _)| text == "Uptime")
         .expect("the Uptime row")
         .1;
-    let icon = found
-        .iter()
-        .filter(|(text, rect)| {
-            text == egui_phosphor::regular::QUESTION
-                && (rect.center().y - row.center().y).abs() < 8.0
-                && rect.left() > row.right()
-        })
-        .map(|(_, rect)| *rect)
-        .min_by(|a, b| a.left().total_cmp(&b.left()))
-        .expect("a help icon on the Uptime row");
-    let tip: Vec<String> = texts(&hover_at(&mut app, &ctx, icon.center()))
+    let tip: Vec<String> = texts(&hover_at(&mut app, &ctx, row.center()))
         .into_iter()
         .map(|(text, _)| text)
         .collect();
     assert!(
-        tip.iter()
-            .any(|text| text == "A fresh boot is shown on arm64"),
-        "icon {icon:?} row {row:?}: {tip:?}"
+        tip.iter().any(|text| text.contains("Not applied on arm64")),
+        "row {row:?}: {tip:?}"
     );
     // A profile that already holds an uptime keeps it and says so.
     app.draft.stealth.boot_age_s = 5 * 86_400;

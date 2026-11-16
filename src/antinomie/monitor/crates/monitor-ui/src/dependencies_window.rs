@@ -314,8 +314,7 @@ fn kvm_actions(
     );
     ui.horizontal_wrapped(|ui| {
         if let Some(vm) = vm
-            && ui.button(format!("Use TCG for {vm}"))
-            .clicked()
+            && ui.button(format!("Use TCG for {vm}")).clicked()
         {
             outcome.tcg_for_vm = true;
         }
@@ -356,9 +355,7 @@ fn route_programs(ui: &mut egui::Ui, routes: &RoutePrograms<'_>, outcome: &mut O
         }
     }
     ui.add_space(4.0);
-    if ui.button("Open Network routes settings")
-    .clicked()
-    {
+    if ui.button("Open Network routes settings").clicked() {
         outcome.open_routes = true;
     }
 }
@@ -371,9 +368,7 @@ fn geoip_database(ui: &mut egui::Ui, routes: &RoutePrograms<'_>, outcome: &mut O
     ui.weak("TShark reads MaxMind-format (.mmdb) databases to fill Country and Organization.");
     crate::tools_page::geoip_status(ui, routes.geoip);
     ui.add_space(4.0);
-    if ui.button("Open Network lookup settings")
-    .clicked()
-    {
+    if ui.button("Open Network lookup settings").clicked() {
         outcome.open_lookup = true;
     }
 }

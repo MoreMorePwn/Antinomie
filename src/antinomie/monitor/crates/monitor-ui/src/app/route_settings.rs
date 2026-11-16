@@ -384,7 +384,8 @@ impl MonitorApp {
             ui.label("Private addresses");
             ui.vertical(|ui| {
                 crate::widgets::hover_help(
-                    ui, "Off: the Internet route reaches public addresses only",
+                    ui,
+                    "Off: the Internet route reaches public addresses only",
                     |ui| ui.checkbox(&mut draft.allow_lan, "Allow private network addresses"),
                 );
             });

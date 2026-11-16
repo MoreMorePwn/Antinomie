@@ -102,8 +102,9 @@ impl MonitorApp {
             );
             crate::widgets::clear_button(ui, &edit, &mut self.shortcut_ui.filter);
             let any = !self.settings.shortcuts.is_empty();
-            if ui.add_enabled(any, egui::Button::new("Reset all"))
-            .clicked()
+            if ui
+                .add_enabled(any, egui::Button::new("Reset all"))
+                .clicked()
             {
                 self.settings.shortcuts.clear();
                 self.shortcut_ui.conflict = None;
@@ -187,23 +188,27 @@ impl MonitorApp {
                             .as_ref()
                             .map_or_else(|| "None".to_owned(), bindings::to_text)
                     };
-                    let key =
-                        crate::widgets::hover_help(ui, "Click, then press the new shortcut", |ui| {
+                    let key = crate::widgets::hover_help(
+                        ui,
+                        "Click, then press the new shortcut",
+                        |ui| {
                             ui.add(
                                 egui::Button::new(
                                     RichText::new(text).monospace().color(theme::text()),
                                 )
                                 .min_size(egui::vec2(key_width, 0.0)),
                             )
-                        });
+                        },
+                    );
                     if key.clicked() {
                         start = Some(action.clone());
                     }
-                    if ui.add_enabled(
+                    if ui
+                        .add_enabled(
                             current.is_some(),
                             egui::Button::new("Clear").min_size(egui::vec2(button_width, 0.0)),
                         )
-                    .clicked()
+                        .clicked()
                     {
                         set.push((action.clone(), None));
                     }

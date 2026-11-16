@@ -182,7 +182,8 @@ impl MemoryView {
                 .iter()
                 .any(|job| job.run.dump_id == dump.id && job.run.plugin == plugin);
             if crate::widgets::hover_help_or(
-                ui, "",
+                ui,
+                "",
                 if linux {
                     "This report is already running on this dump"
                 } else {

@@ -576,16 +576,16 @@ impl MonitorApp {
             }
         };
         let buttons = |ui: &mut egui::Ui| {
-            if crate::widgets::hover_help(
-                ui, "HTML, PDF, JSON, MISP, STIX or Markdown",
-                |ui| ui.button("Export report…"),
-            )
+            if crate::widgets::hover_help(ui, "HTML, PDF, JSON, MISP, STIX or Markdown", |ui| {
+                ui.button("Export report…")
+            })
             .clicked()
             {
                 chosen = Some(Action::Report);
             }
             if crate::widgets::hover_help(
-                ui, "JSON with a verifier, or HTML; optionally signed with your own key",
+                ui,
+                "JSON with a verifier, or HTML; optionally signed with your own key",
                 |ui| ui.button("Export custody record…"),
             )
             .clicked()

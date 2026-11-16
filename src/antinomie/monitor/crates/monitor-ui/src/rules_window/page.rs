@@ -615,7 +615,10 @@ impl Model {
         name: &str,
     ) {
         let clicked = ui
-            .button(format!("{} Rules", egui_phosphor::regular::ARROW_SQUARE_OUT))
+            .button(format!(
+                "{} Rules",
+                egui_phosphor::regular::ARROW_SQUARE_OUT
+            ))
             .clicked();
         if clicked {
             let engine = self.engine.clone();

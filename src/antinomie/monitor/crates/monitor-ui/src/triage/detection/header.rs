@@ -297,8 +297,9 @@ impl View {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Not scanned.").color(theme::muted()));
             let ready = self.rx.is_none() && self.identity.is_some();
-            if ui.add_enabled(ready, egui::Button::new(self.scan_label()))
-            .clicked()
+            if ui
+                .add_enabled(ready, egui::Button::new(self.scan_label()))
+                .clicked()
             {
                 self.scan_now(ui.ctx(), index, scan);
             }
@@ -315,7 +316,12 @@ impl View {
     fn scan_buttons(&mut self, ui: &mut egui::Ui, index: usize, scan: Option<&ArchiveScan>) {
         let ready = self.rx.is_none() && self.identity.is_some();
         if crate::widgets::hover_help(
-            ui, if self.live_run { "Scan what the run has recorded so far, without waiting for the next timed scan" } else { "" },
+            ui,
+            if self.live_run {
+                "Scan what the run has recorded so far, without waiting for the next timed scan"
+            } else {
+                ""
+            },
             |ui| ui.add_enabled(ready, egui::Button::new(self.scan_label())),
         )
         .clicked()

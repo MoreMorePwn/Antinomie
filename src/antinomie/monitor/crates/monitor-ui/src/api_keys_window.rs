@@ -255,7 +255,8 @@ impl ApiKeysWindow {
                 self.save(data_dir, key);
             }
             if crate::widgets::hover_help_or(
-                ui, "",
+                ui,
+                "",
                 if state.masked.is_none() {
                     "Save a key first"
                 } else {

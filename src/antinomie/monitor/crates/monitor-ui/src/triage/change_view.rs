@@ -96,17 +96,12 @@ pub fn gap_note(ui: &mut egui::Ui, note: &retention::GapNote) {
         crate::activity::warning(ui, &note.text);
     });
     ui.horizontal(|ui| {
-        if note.limit
-            && ui.small_button("Open this limit in Settings")
-            .clicked()
-        {
+        if note.limit && ui.small_button("Open this limit in Settings").clicked() {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new(OPEN_REBUILD_LIMIT), true));
         }
         if let Some((stream, cookie, call)) = note.evidence {
-            if ui.small_button("Show the syscall evidence")
-            .clicked()
-            {
+            if ui.small_button("Show the syscall evidence").clicked() {
                 ui.ctx().data_mut(|data| {
                     data.insert_temp(egui::Id::new("triage-call-jump"), (stream, cookie, call))
                 });

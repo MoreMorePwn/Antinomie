@@ -124,9 +124,7 @@ pub(crate) fn show(
                 boot_from_disk: true,
             });
         }
-        if ui.button("Open Snapshots…")
-        .clicked()
-        {
+        if ui.button("Open Snapshots…").clicked() {
             action = Some(Action::Open);
         }
     });

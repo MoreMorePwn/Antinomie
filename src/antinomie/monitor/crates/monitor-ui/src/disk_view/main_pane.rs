@@ -71,12 +71,13 @@ impl DiskView {
                 .wrap(),
             );
             ui.add_space(10.0);
-            if ui.add_enabled(
+            if ui
+                .add_enabled(
                     cx.can_stop_vm,
                     egui::Button::new(format!("{} Stop VM", egui_phosphor::regular::STOP)),
                 )
                 .on_disabled_hover_text("No VM is running")
-            .clicked()
+                .clicked()
             {
                 self.action = Some(DiskAction::StopVm);
             }

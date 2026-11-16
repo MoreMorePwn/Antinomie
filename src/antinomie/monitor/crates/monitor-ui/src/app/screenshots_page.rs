@@ -851,11 +851,12 @@ impl MonitorApp {
         let page = &self.screenshots_page;
         let mut refresh = false;
         ui.horizontal(|ui| {
-            if ui.button(format!(
+            if ui
+                .button(format!(
                     "{} Refresh",
                     egui_phosphor::regular::ARROWS_CLOCKWISE
                 ))
-            .clicked()
+                .clicked()
             {
                 refresh = true;
             }

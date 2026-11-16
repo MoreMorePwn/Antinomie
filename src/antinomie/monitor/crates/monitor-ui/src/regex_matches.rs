@@ -200,7 +200,8 @@ impl RegexWindow {
     fn body(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if crate::widgets::hover_help(
-                ui, "Rescans with the patterns as the rule manager has them now",
+                ui,
+                "Rescans with the patterns as the rule manager has them now",
                 |ui| ui.add_enabled(self.running.is_none(), egui::Button::new("Scan again")),
             )
             .clicked()

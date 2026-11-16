@@ -313,10 +313,9 @@ impl ContentView {
         let last_page = size.saturating_sub(1) / PAGE_SIZE * PAGE_SIZE;
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.mode, Mode::Hex, "Hex");
-            crate::widgets::hover_help(
-                ui, "A byte that is not printable shows as a dot",
-                |ui| ui.selectable_value(&mut self.mode, Mode::Text, "Text"),
-            );
+            crate::widgets::hover_help(ui, "A byte that is not printable shows as a dot", |ui| {
+                ui.selectable_value(&mut self.mode, Mode::Text, "Text")
+            });
             ui.separator();
             let go = egui::TextEdit::singleline(&mut self.goto)
                 .hint_text(crate::theme::placeholder(

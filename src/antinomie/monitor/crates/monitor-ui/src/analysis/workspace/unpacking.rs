@@ -112,9 +112,7 @@ fn details(ui: &mut egui::Ui, layer: &UnpackLayer) -> Option<ReportAction> {
         if layer.index != 0 {
             match &layer.report_id {
                 Some(id) => {
-                    if ui.button("Show its analysis")
-                    .clicked()
-                    {
+                    if ui.button("Show its analysis").clicked() {
                         action = Some(ReportAction::ShowReport {
                             report_id: id.clone(),
                         });

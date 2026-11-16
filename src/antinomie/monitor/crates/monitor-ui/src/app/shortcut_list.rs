@@ -228,9 +228,7 @@ impl MonitorApp {
             .show(ctx, |ui| {
                 ui.label(OWNERSHIP_RULE);
                 ui.add_space(6.0);
-                if ui.button("Change shortcuts…")
-                .clicked()
-                {
+                if ui.button("Change shortcuts…").clicked() {
                     open_keyboard = true;
                 }
                 ui.add_space(6.0);

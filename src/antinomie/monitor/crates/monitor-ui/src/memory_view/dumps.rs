@@ -165,7 +165,8 @@ impl MemoryView {
         };
         let full = egui::vec2(ui.available_width(), 0.0);
         if crate::widgets::hover_help_or(
-            ui, "Writes the VM's RAM to a dump. The VM pauses while it is written.",
+            ui,
+            "Writes the VM's RAM to a dump. The VM pauses while it is written.",
             why.unwrap_or("Waiting for the VM"),
             |ui| {
                 ui.add_enabled(
@@ -180,7 +181,8 @@ impl MemoryView {
             action = Some(MemoryAction::Dump);
         }
         if crate::widgets::hover_help_or(
-            ui, "Analyse a dump made elsewhere. The file stays where it is.",
+            ui,
+            "Analyse a dump made elsewhere. The file stays where it is.",
             "Select a VM: imported dumps are kept with its recordings",
             |ui| {
                 ui.add_enabled(

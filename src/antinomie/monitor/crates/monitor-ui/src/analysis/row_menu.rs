@@ -181,9 +181,7 @@ pub(super) fn menu(
         }
     }
     if let Some(offset) = records::file_offset(entry, specimen_len).filter(|_| content) {
-        if ui.button("Show in Content")
-        .clicked()
-        {
+        if ui.button("Show in Content").clicked() {
             command = Some(RowCommand::ShowInContent(offset));
             ui.close();
         }

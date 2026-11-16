@@ -338,7 +338,8 @@ impl AddDialog {
                 }
                 ui.add_space(6.0);
                 crate::widgets::hover_help(
-                    ui, "Read back and hash-checked first; then a plain delete, with the path logged",
+                    ui,
+                    "Read back and hash-checked first; then a plain delete, with the path logged",
                     |ui| {
                         ui.add_enabled(
                             !busy,

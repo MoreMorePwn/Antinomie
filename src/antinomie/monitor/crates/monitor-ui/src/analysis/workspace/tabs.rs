@@ -284,11 +284,12 @@ fn header(
             }
         }
         if let Some(offset) = selected_offset(report, state) {
-            if ui.button(format!(
-                        "{} Show 0x{offset:x} in Content",
-                        egui_phosphor::regular::FILE_MAGNIFYING_GLASS
-                    ))
-            .clicked()
+            if ui
+                .button(format!(
+                    "{} Show 0x{offset:x} in Content",
+                    egui_phosphor::regular::FILE_MAGNIFYING_GLASS
+                ))
+                .clicked()
             {
                 state.content.go_to(offset);
                 state.tab = Tab::Content;

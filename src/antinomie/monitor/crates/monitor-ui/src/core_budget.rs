@@ -2,8 +2,8 @@
 //! The process-core budget and deadline chooser, shared by Run program and the
 //! Dump core dialog. The guest says what it accepts; the choices above that are
 //! shown but disabled, with the reason as their hover text.
-use antinomie_monitor_core::{CoreLimits, CORE_DEFAULT_BUDGET_MIB, CORE_MAX_SUPPORTED};
 use crate::widgets::Tip as _;
+use antinomie_monitor_core::{CoreLimits, CORE_DEFAULT_BUDGET_MIB, CORE_MAX_SUPPORTED};
 use eframe::egui;
 
 const MIB: u64 = 1024 * 1024;

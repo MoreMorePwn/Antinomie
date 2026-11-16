@@ -147,7 +147,8 @@ impl MonitorApp {
                             .iter()
                             .any(|run| run.number == seen.run && run.folder);
                         if crate::widgets::hover_help_or(
-                            ui, "",
+                            ui,
+                            "",
                             "The run's folder was deleted",
                             |ui| {
                                 ui.add_enabled(

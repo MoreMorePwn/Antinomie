@@ -331,7 +331,8 @@ impl MemoryView {
                 .iter()
                 .any(|job| job.run.dump_id == dump.id && job.run.plugin == current.name);
             if crate::widgets::hover_help_or(
-                ui, "",
+                ui,
+                "",
                 "This plugin is already running on this dump",
                 |ui| {
                     ui.add_enabled(

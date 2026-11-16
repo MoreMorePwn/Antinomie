@@ -290,9 +290,9 @@ impl Board {
             format!("{count} jobs")
         };
         ui.add(egui::Button::new(
-                RichText::new(format!("{} {text}", egui_phosphor::regular::GEAR_FINE))
-                    .color(theme::warn()),
-            ))
+            RichText::new(format!("{} {text}", egui_phosphor::regular::GEAR_FINE))
+                .color(theme::warn()),
+        ))
         .clicked()
     }
 
@@ -312,11 +312,12 @@ impl Board {
                  work the app is doing now",
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(
+                if ui
+                    .add_enabled(
                         !self.finished.is_empty(),
                         egui::Button::new("Clear finished"),
                     )
-                .clicked()
+                    .clicked()
                 {
                     self.finished.clear();
                 }

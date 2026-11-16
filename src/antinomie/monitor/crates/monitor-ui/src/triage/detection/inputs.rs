@@ -370,13 +370,14 @@ fn row(
         } else {
             "Scan"
         };
-        action.scan = crate::widgets::hover_help(ui, format!("Scans every {engine} input, not only this one"), |ui| ui
-            .add_enabled(scan.ready, egui::Button::new(RichText::new(label).small())))
-            .clicked();
+        action.scan = crate::widgets::hover_help(
+            ui,
+            format!("Scans every {engine} input, not only this one"),
+            |ui| ui.add_enabled(scan.ready, egui::Button::new(RichText::new(label).small())),
+        )
+        .clicked();
         if input.outcome == InputOutcome::Failed {
-            action.log = ui
-                .small_button("Show log")
-                .clicked();
+            action.log = ui.small_button("Show log").clicked();
         }
     });
     let wrapped = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {

@@ -228,7 +228,8 @@ impl DiskView {
                 }
             }
             if crate::widgets::hover_help_or(
-                ui, "",
+                ui,
+                "",
                 "Needs a finished dump, and no other check running",
                 |ui| {
                     ui.add_enabled(
@@ -446,13 +447,15 @@ impl DiskView {
             {
                 self.request_extract(path.to_owned(), size, Intent::View);
             }
-            if ui.add_enabled(extractable && !busy, egui::Button::new("Save to host…"))
-            .clicked()
+            if ui
+                .add_enabled(extractable && !busy, egui::Button::new("Save to host…"))
+                .clicked()
             {
                 self.request_extract(path.to_owned(), size, Intent::Save);
             }
-            if ui.add_enabled(extractable && !busy, egui::Button::new("Open with…"))
-            .clicked()
+            if ui
+                .add_enabled(extractable && !busy, egui::Button::new("Open with…"))
+                .clicked()
             {
                 self.request_extract(path.to_owned(), size, Intent::OpenWith);
             }

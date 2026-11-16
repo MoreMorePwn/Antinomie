@@ -2,8 +2,8 @@
 //! The File activity section: its tabs, filters and tables. The tab model and
 //! the rows' sink are in `antinomie_triage::file_tabs`.
 use super::file_category::EVENT_HEADERS;
-use crate::widgets::Tip as _;
 use super::*;
+use crate::widgets::Tip as _;
 
 pub(super) use antinomie_triage::file_tabs::*;
 

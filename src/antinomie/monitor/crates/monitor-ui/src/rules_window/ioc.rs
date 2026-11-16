@@ -86,9 +86,7 @@ impl Model {
                 Some(masked) => ui.colored_label(theme::good(), format!("set ({masked})")),
                 None => ui.colored_label(theme::neutral_accent(), "not set"),
             };
-            if ui.button("API keys…")
-            .clicked()
-            {
+            if ui.button("API keys…").clicked() {
                 self.requested = Some(super::RulesAction::ApiKeys);
             }
         });

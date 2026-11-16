@@ -77,10 +77,7 @@ pub(super) fn function_panel(
         }))
         .show(ui, |ui| {
             crate::code_listing::heading(ui, names.len(), names.len());
-            if ui
-                .button("Export text")
-                .clicked()
-            {
+            if ui.button("Export text").clicked() {
                 *action = Some(ReportAction::Export {
                     report_id: report.id.clone(),
                     kind: Some(kind),

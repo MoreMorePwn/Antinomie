@@ -69,7 +69,11 @@ pub(super) fn capture_selection(
         // below its options.
         trigger_selection(ui, request, capabilities);
         ui.add_space(6.0);
-        crate::widgets::hover_help(ui, "VM memory after the process tree exits, not a process core", |ui| ui.checkbox(&mut request.memory_dump_on_exit, "Memory Dump on Exit"));
+        crate::widgets::hover_help(
+            ui,
+            "VM memory after the process tree exits, not a process core",
+            |ui| ui.checkbox(&mut request.memory_dump_on_exit, "Memory Dump on Exit"),
+        );
         let core_enabled = core_supported && request.run_in == RunIn::AppTerminal;
         crate::widgets::hover_help_or(ui, "Thread registers and selected memory of the root process before it exits: native programs on x86-64 and arm64 guests, 32-bit ARM programs on arm64. The budget below bounds it, so a core may be partial.", core_unavailable_reason(core_supported), |ui| ui.add_enabled(
             core_enabled,
@@ -92,15 +96,24 @@ pub(super) fn capture_selection(
         // A VM without a network card has nothing to capture: the box is off
         // and says what to change, rather than a run that cannot start.
         let card = capabilities.route.network != antinomie_monitor_core::VmNetwork::Disconnected;
-        crate::widgets::hover_help_or(ui, "Packets are VM-wide, not attributed to this process", NO_NETWORK_CARD, |ui| ui.add_enabled(
-            card,
-            egui::Checkbox::new(&mut request.capture_network, "Capture network from start until tree exits"),
-        ));
+        crate::widgets::hover_help_or(
+            ui,
+            "Packets are VM-wide, not attributed to this process",
+            NO_NETWORK_CARD,
+            |ui| {
+                ui.add_enabled(
+                    card,
+                    egui::Checkbox::new(
+                        &mut request.capture_network,
+                        "Capture network from start until tree exits",
+                    ),
+                )
+            },
+        );
         if !card {
             ui.horizontal_wrapped(|ui| {
                 ui.add(egui::Label::new(egui::RichText::new(NO_NETWORK_CARD).weak()).wrap());
-                outcome.open_vm_settings = ui.button("VM settings…")
-                .clicked();
+                outcome.open_vm_settings = ui.button("VM settings…").clicked();
             });
         }
         crate::route_ui::selector(ui, request, &capabilities.route);
@@ -280,18 +293,29 @@ pub(super) fn screenshot_selection(ui: &mut egui::Ui, request: &mut ExecRequest,
         });
         let mut on = request.screenshot_every_s.is_some();
         ui.horizontal(|ui| {
-            crate::widgets::hover_help_or(ui, "A screen that has not changed since the last picture is skipped", NO_SCREEN, |ui| ui.add_enabled(available, egui::Checkbox::new(&mut on, "Take screenshots")));
+            crate::widgets::hover_help_or(
+                ui,
+                "A screen that has not changed since the last picture is skipped",
+                NO_SCREEN,
+                |ui| ui.add_enabled(available, egui::Checkbox::new(&mut on, "Take screenshots")),
+            );
             ui.add_enabled_ui(available && on, |ui| {
                 ui.label("every");
-                crate::widgets::hover_help(ui, format!(
-                    "{} to {} seconds",
-                    shots::MIN_INTERVAL_S,
-                    shots::MAX_INTERVAL_S
-                ), |ui| ui.add(
-                    egui::DragValue::new(&mut every)
-                        .range(shots::MIN_INTERVAL_S..=shots::MAX_INTERVAL_S)
-                        .suffix(" s"),
-                ));
+                crate::widgets::hover_help(
+                    ui,
+                    format!(
+                        "{} to {} seconds",
+                        shots::MIN_INTERVAL_S,
+                        shots::MAX_INTERVAL_S
+                    ),
+                    |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut every)
+                                .range(shots::MIN_INTERVAL_S..=shots::MAX_INTERVAL_S)
+                                .suffix(" s"),
+                        )
+                    },
+                );
             });
         });
         ui.data_mut(|data| data.insert_temp(draft_id, every));
@@ -363,10 +387,17 @@ pub(super) fn debugger_selection(ui: &mut egui::Ui, request: &mut ExecRequest, s
         "Debug on start requires a base built for Antinomie 0.7.0."
     };
     folding_section(ui, "Debugging", |ui| {
-        crate::widgets::hover_help_or(ui, "Stops the program before its first instruction and opens the debugger on it", reason, |ui| ui.add_enabled(
-            enabled,
-            egui::Checkbox::new(&mut request.debug_on_start, "Debug on start"),
-        ));
+        crate::widgets::hover_help_or(
+            ui,
+            "Stops the program before its first instruction and opens the debugger on it",
+            reason,
+            |ui| {
+                ui.add_enabled(
+                    enabled,
+                    egui::Checkbox::new(&mut request.debug_on_start, "Debug on start"),
+                )
+            },
+        );
         if !enabled {
             ui.add(egui::Label::new(egui::RichText::new(reason).weak()).wrap());
         }

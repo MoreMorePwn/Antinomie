@@ -228,7 +228,8 @@ impl MonitorApp {
                                 .unwrap_or_default()
                         );
                         if crate::widgets::hover_help(
-                            ui, "Find any action, tab, VM, run or sample",
+                            ui,
+                            "Find any action, tab, VM, run or sample",
                             |ui| ui.add(egui::Button::new(text).frame(false)),
                         )
                         .clicked()
@@ -249,7 +250,6 @@ impl MonitorApp {
     /// VM's name and state take what is left of the row and cut the name with
     /// an ellipsis (the whole text is on hover).
     pub(super) fn toolbar(&mut self, root: &mut egui::Ui) {
-        let ctx = &root.ctx().clone();
         egui::Panel::top("toolbar")
             .exact_size(self.settings.font_size + 22.0)
             .frame(theme::frame(theme::panel()))

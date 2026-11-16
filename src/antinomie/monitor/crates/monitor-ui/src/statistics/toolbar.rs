@@ -317,9 +317,7 @@ impl StatisticsWindow {
                     antinomie_monitor_core::byte_size::short_size(size),
                 );
             }
-            if ui.button("Change…")
-            .clicked()
-            {
+            if ui.button("Change…").clicked() {
                 navigate.push(Navigate::RunHistory);
             }
         });

@@ -561,10 +561,7 @@ impl Window {
 
     /// The button at the top right of the history that opens the reconstruction.
     fn reconstruct_entry(&mut self, ui: &mut egui::Ui, file: &FileActivity) {
-        if ui
-            .button("Reconstruct contents…")
-            .clicked()
-        {
+        if ui.button("Reconstruct contents…").clicked() {
             self.reconstruction = Some(reconstruct::Open::new(file));
         }
     }

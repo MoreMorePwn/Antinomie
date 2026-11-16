@@ -561,8 +561,7 @@ fn details(ui: &mut egui::Ui, state: &mut State, data: &Data, out: &mut Option<O
                 }
             }
             NodeKind::Captured | NodeKind::Lost if !node.path.is_empty() => {
-                let ask = ui.button("Add to Samples…")
-                .clicked();
+                let ask = ui.button("Add to Samples…").clicked();
                 if ask {
                     *out = Some(promote_out(&cached.graph, node));
                 }

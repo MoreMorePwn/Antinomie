@@ -402,9 +402,7 @@ fn header(
                     console.quit();
                 }
             }
-            if ui.small_button("Restart")
-            .clicked()
-            {
+            if ui.small_button("Restart").clicked() {
                 console.restart();
             }
         }

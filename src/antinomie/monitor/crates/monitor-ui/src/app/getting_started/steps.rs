@@ -226,13 +226,17 @@ impl MonitorApp {
             });
             ui.end_row();
             ui.label("Disk");
-            crate::widgets::hover_help(ui, format!("At least {min_disk} GiB for this base"), |ui| {
-                ui.add(
-                    egui::DragValue::new(&mut draft.disk_gib)
-                        .range(min_disk..=2048)
-                        .suffix(" GiB"),
-                )
-            });
+            crate::widgets::hover_help(
+                ui,
+                format!("At least {min_disk} GiB for this base"),
+                |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut draft.disk_gib)
+                            .range(min_disk..=2048)
+                            .suffix(" GiB"),
+                    )
+                },
+            );
             ui.end_row();
             super::super::stealth::preset_row(
                 ui,
@@ -280,8 +284,9 @@ impl MonitorApp {
             theme::loading(ui, "Creating the VM…");
         }
         let enabled = !pending && !self.closing;
-        let create = ui.add_enabled(enabled, primary_button("Create VM"))
-        .clicked();
+        let create = ui
+            .add_enabled(enabled, primary_button("Create VM"))
+            .clicked();
         self.getting_started.draft = Some(draft);
         if create {
             self.create_first_vm();

@@ -64,12 +64,12 @@ impl MonitorApp {
                     self.catalog_feedback.show_updated(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_enabled(
-                                    !older.is_empty(),
-                                    egui::Checkbox::new(
-                                        show_older,
-                                        format!("Show older bases ({})", older.len()),
-                                    ),
-                                );
+                            !older.is_empty(),
+                            egui::Checkbox::new(
+                                show_older,
+                                format!("Show older bases ({})", older.len()),
+                            ),
+                        );
                     });
                 });
                 if let Some(error) = &self.snapshot.remote_error {

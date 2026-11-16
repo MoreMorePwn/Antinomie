@@ -322,9 +322,7 @@ pub(super) fn preset_row(
     ui.label("");
     ui.horizontal_wrapped(|ui| {
         ui.weak(profile.preset.description());
-        if ui.button(details_label)
-        .clicked()
-        {
+        if ui.button(details_label).clicked() {
             *open = !*open;
         }
         if !fallbacks.is_empty() {

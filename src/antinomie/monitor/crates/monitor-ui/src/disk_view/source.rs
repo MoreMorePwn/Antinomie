@@ -245,8 +245,9 @@ impl DiskView {
                     fs_text(partition),
                 );
                 if !supported
-                    && ui.add_enabled(!busy, egui::Button::new("Save partition to host…"))
-                    .clicked()
+                    && ui
+                        .add_enabled(!busy, egui::Button::new("Save partition to host…"))
+                        .clicked()
                 {
                     save = Some(partition.index);
                 }

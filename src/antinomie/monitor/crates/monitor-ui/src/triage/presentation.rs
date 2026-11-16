@@ -97,7 +97,8 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
             if !wrapped && room >= 110.0 {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::hover_help_or(
-                        ui, "",
+                        ui,
+                        "",
                         "The run has no saved recording yet",
                         |ui| {
                             ui.add_enabled(

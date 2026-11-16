@@ -3,7 +3,6 @@
 //! applies to every entry (an arm64 VM draws no uptime), and each choice
 //! says what it is on hover.
 use super::*;
-use crate::widgets::Tip as _;
 
 /// Picks a preset, applying it to every entry, and a cloud's provider beside it.
 pub(super) fn preset_combo(

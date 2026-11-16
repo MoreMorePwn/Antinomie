@@ -75,16 +75,12 @@ pub(in crate::triage) fn menu(
     values: &[(&str, crate::triage::RowValue)],
 ) {
     if let Some(path) = row_path(table, values) {
-        if ui.button("Open file history")
-        .clicked()
-        {
+        if ui.button("Open file history").clicked() {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new(HISTORY_REQUEST), path.clone()));
             ui.close();
         }
-        if ui.button("Reconstruct contents…")
-        .clicked()
-        {
+        if ui.button("Reconstruct contents…").clicked() {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new(REQUEST), path));
             ui.close();

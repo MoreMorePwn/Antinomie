@@ -32,10 +32,7 @@ pub(super) fn export_controls(
             }
         }
     });
-    if directory
-        && ui.button("Open result directory")
-        .clicked()
-    {
+    if directory && ui.button("Open result directory").clicked() {
         action = Some(ReportAction::ShowDirectory {
             report_id: report.id.clone(),
         });

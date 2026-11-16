@@ -826,8 +826,9 @@ impl View {
             let mut rescan = false;
             ui.horizontal_wrapped(|ui| {
                 crate::activity::warning(ui, "Scanned with an older rule set.");
-                rescan = ui.add_enabled(self.rx.is_none(), egui::Button::new("Rescan"))
-                .clicked();
+                rescan = ui
+                    .add_enabled(self.rx.is_none(), egui::Button::new("Rescan"))
+                    .clicked();
             });
             if rescan {
                 self.rescan = Some(index);

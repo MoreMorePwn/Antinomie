@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Drawing, searching and copying the Raw view.
 use super::raw::{Mark, RawLine};
-use crate::widgets::Tip as _;
 use super::*;
+use crate::widgets::Tip as _;
 
 /// Matches kept for one search, so a very common word stays cheap.
 const MATCH_LIMIT: usize = 5000;
@@ -104,11 +104,7 @@ impl Terminal {
     pub(crate) fn view_controls(&mut self, ui: &mut egui::Ui) {
         let mut view = self.view;
         for (value, label, hint) in [
-            (
-                View::Formatted,
-                "Formatted",
-                "",
-            ),
+            (View::Formatted, "Formatted", ""),
             (
                 View::Raw,
                 "Raw",

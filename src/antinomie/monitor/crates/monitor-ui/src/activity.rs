@@ -233,7 +233,8 @@ impl Journal {
                 egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
                 |ui| {
                     if crate::widgets::hover_help(
-                        ui, "Includes the entries the filter hides",
+                        ui,
+                        "Includes the entries the filter hides",
                         |ui| ui.button("Clear"),
                     )
                     .clicked()

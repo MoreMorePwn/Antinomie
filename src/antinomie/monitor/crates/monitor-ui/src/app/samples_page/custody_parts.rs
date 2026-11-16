@@ -55,8 +55,9 @@ pub(super) fn banner(ui: &mut egui::Ui, check: &ChainCheck, verifying: bool) -> 
                         }
                     }
                 }
-                if ui.add_enabled(!verifying, egui::Button::new("Verify"))
-                .clicked()
+                if ui
+                    .add_enabled(!verifying, egui::Button::new("Verify"))
+                    .clicked()
                 {
                     verify = true;
                 }

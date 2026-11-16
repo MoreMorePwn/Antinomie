@@ -131,9 +131,7 @@ fn fnv1a(text: &str) -> u32 {
 /// The "Copy as Mermaid" item of a context menu: `text` goes to the
 /// clipboard and the menu closes.
 pub(crate) fn menu_item(ui: &mut egui::Ui, text: impl FnOnce() -> String) {
-    if ui.button("Copy as Mermaid")
-    .clicked()
-    {
+    if ui.button("Copy as Mermaid").clicked() {
         ui.ctx().copy_text(text());
         ui.close();
     }

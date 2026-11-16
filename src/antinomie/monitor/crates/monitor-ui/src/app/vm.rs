@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! VM configuration, launch and the VM settings dialog.
 use super::*;
-use crate::widgets::Tip as _;
 use crate::scroll_contain::ScrollContained as _;
+use crate::widgets::Tip as _;
 
 mod dialog;
 

@@ -3,7 +3,6 @@
 //! when it starts (the boot age), typed or drawn in the recommended range,
 //! and the clock model that carries it.
 use super::*;
-use crate::widgets::Tip as _;
 use antinomie_monitor_core::stealth::{
     boot_age_text, parse_boot_age, BootAge, ClockModel, ARM64_UPTIME, BOOT_AGE_MAX_S,
 };
@@ -55,50 +54,55 @@ pub(super) fn uptime(
     // set elsewhere (a preset, the dice) replaces it.
     let id = ui.make_persistent_id("stealth_uptime_text");
     let mut problem = None;
-    ui.add_enabled_ui(!arm64, |ui| ui.horizontal(|ui| {
-        let mut aged = profile.boot_age_s > 0;
-        let reason = format!("Not applied on arm64: {ARM64_UPTIME}. A later guest fixes it.");
-        if ui
-            .checkbox(&mut aged, "Uptime")
-            .help_tip_or(explanation(profile), if arm64 { reason.as_str() } else { "" })
-            .changed()
-        {
-            profile.boot_age_s = if aged { kind.draw() } else { 0 };
-        }
-        if profile.boot_age_s > 0 {
-            let kept: Option<(String, u64)> = ui.data(|data| data.get_temp(id));
-            let mut text = match kept {
-                Some((text, age)) if age == profile.boot_age_s => text,
-                _ => boot_age_text(profile.boot_age_s),
-            };
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut text)
-                    .desired_width(crate::theme::plain_edit_width(110.0))
-                    .hint_text(crate::theme::placeholder(ui, "3 d 4 h")),
-            );
-            match parse_boot_age(&text) {
-                Ok(age) => {
-                    if response.changed() {
-                        profile.boot_age_s = age;
-                    }
-                    if response.lost_focus() {
-                        text = boot_age_text(profile.boot_age_s);
-                    }
-                }
-                Err(error) => problem = Some(error),
-            }
-            ui.data_mut(|data| data.insert_temp(id, (text, profile.boot_age_s)));
+    ui.add_enabled_ui(!arm64, |ui| {
+        ui.horizontal(|ui| {
+            let mut aged = profile.boot_age_s > 0;
+            let reason = format!("Not applied on arm64: {ARM64_UPTIME}. A later guest fixes it.");
             if ui
-                .button(egui_phosphor::regular::DICE_FIVE)
-                .name_tip("Random uptime")
-                .clicked()
+                .checkbox(&mut aged, "Uptime")
+                .help_tip_or(
+                    explanation(profile),
+                    if arm64 { reason.as_str() } else { "" },
+                )
+                .changed()
             {
-                profile.boot_age_s = kind.draw();
+                profile.boot_age_s = if aged { kind.draw() } else { 0 };
             }
-        } else {
-            ui.label(RichText::new("a fresh boot").color(theme::muted()));
-        }
-    }));
+            if profile.boot_age_s > 0 {
+                let kept: Option<(String, u64)> = ui.data(|data| data.get_temp(id));
+                let mut text = match kept {
+                    Some((text, age)) if age == profile.boot_age_s => text,
+                    _ => boot_age_text(profile.boot_age_s),
+                };
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .desired_width(crate::theme::plain_edit_width(110.0))
+                        .hint_text(crate::theme::placeholder(ui, "3 d 4 h")),
+                );
+                match parse_boot_age(&text) {
+                    Ok(age) => {
+                        if response.changed() {
+                            profile.boot_age_s = age;
+                        }
+                        if response.lost_focus() {
+                            text = boot_age_text(profile.boot_age_s);
+                        }
+                    }
+                    Err(error) => problem = Some(error),
+                }
+                ui.data_mut(|data| data.insert_temp(id, (text, profile.boot_age_s)));
+                if ui
+                    .button(egui_phosphor::regular::DICE_FIVE)
+                    .name_tip("Random uptime")
+                    .clicked()
+                {
+                    profile.boot_age_s = kind.draw();
+                }
+            } else {
+                ui.label(RichText::new("a fresh boot").color(theme::muted()));
+            }
+        })
+    });
     let (low, high) = kind.range();
     if arm64 {
         return;

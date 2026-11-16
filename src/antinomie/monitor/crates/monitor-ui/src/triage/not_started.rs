@@ -60,10 +60,7 @@ pub(crate) fn not_started_panel(ui: &mut egui::Ui, run: &NotStartedRun) -> bool 
                 crate::widgets::fact_line(ui, check, found);
             }
             ui.add_space(10.0);
-            if ui
-                .button("Export report…")
-                .clicked()
-            {
+            if ui.button("Export report…").clicked() {
                 export = true;
             }
         });

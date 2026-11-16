@@ -39,9 +39,7 @@ pub fn written_files(ui: &mut egui::Ui, id: &str, files: &[(String, PathBuf)], r
         ui.label(RichText::new("Folder").weak());
         // The buttons first, from the right: the path takes what is left.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("Open folder")
-            .clicked()
-            {
+            if ui.small_button("Open folder").clicked() {
                 crate::folders::show_detached(folder.clone());
             }
             if ui.small_button("Copy path").clicked() {

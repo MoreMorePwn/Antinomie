@@ -171,15 +171,14 @@ impl MonitorApp {
             },
             |ui| {
                 add = ui.button("Add file…").clicked();
-                download = ui.button("Download…")
-                .clicked();
-                custody = ui.button("Custody log")
-                .clicked();
-                verify = ui.add_enabled(
-                            self.samples_page.verifying.is_none(),
-                            egui::Button::new("Verify all"),
-                        )
-                .clicked();
+                download = ui.button("Download…").clicked();
+                custody = ui.button("Custody log").clicked();
+                verify = ui
+                    .add_enabled(
+                        self.samples_page.verifying.is_none(),
+                        egui::Button::new("Verify all"),
+                    )
+                    .clicked();
                 refresh = ui
                     .button(egui_phosphor::regular::ARROW_CLOCKWISE)
                     .name_tip("Refresh")

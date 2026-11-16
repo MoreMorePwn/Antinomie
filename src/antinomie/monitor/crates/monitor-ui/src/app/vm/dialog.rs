@@ -381,9 +381,7 @@ impl MonitorApp {
             }
             ui.end_row();
             ui.label("Transport");
-            if ui.button("Telemetry transport…")
-            .clicked()
-            {
+            if ui.button("Telemetry transport…").clicked() {
                 app.transport_open = !app.transport_open;
             }
             ui.end_row();

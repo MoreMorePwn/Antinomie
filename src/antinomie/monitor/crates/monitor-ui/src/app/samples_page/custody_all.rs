@@ -120,8 +120,9 @@ impl CustodyAll {
                 }
             },
             |ui| {
-                if ui.add_enabled(self.loading.is_none(), egui::Button::new("Verify all"))
-                .clicked()
+                if ui
+                    .add_enabled(self.loading.is_none(), egui::Button::new("Verify all"))
+                    .clicked()
                 {
                     self.stale = true;
                 }

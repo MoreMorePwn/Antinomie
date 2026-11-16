@@ -333,7 +333,8 @@ impl Open {
                 "Save what the recording shows; bytes it never saw are 00, marked in a .mask file next to it",
             )
         };
-        if crate::widgets::hover_help(ui, hover, |ui| ui.add_enabled(can, button(label))).clicked() {
+        if crate::widgets::hover_help(ui, hover, |ui| ui.add_enabled(can, button(label))).clicked()
+        {
             if let Some(directory) = directory {
                 let (ctx, map) = (ui.ctx().clone(), self.map.clone());
                 let custody = Custody::of(&ctx);

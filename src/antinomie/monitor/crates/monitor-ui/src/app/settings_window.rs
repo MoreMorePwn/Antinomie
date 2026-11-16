@@ -327,9 +327,9 @@ impl MonitorApp {
             self.time_zone_row(ui);
             ui.label("Trace colors");
             ui.checkbox(
-                        &mut self.settings.trace_colors,
-                        "Color syscall rows by category",
-                    );
+                &mut self.settings.trace_colors,
+                "Color syscall rows by category",
+            );
             ui.end_row();
         });
     }
@@ -444,9 +444,9 @@ impl MonitorApp {
         ui.end_row();
         ui.label("Toolbar");
         ui.checkbox(
-                    &mut self.settings.minimal_toolbar,
-                    "Minimal toolbar (icons only)",
-                );
+            &mut self.settings.minimal_toolbar,
+            "Minimal toolbar (icons only)",
+        );
         ui.end_row();
     }
 

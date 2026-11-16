@@ -597,19 +597,16 @@ impl BuildWizard {
         );
         ui.add_space(4.0);
         ui.label("HTTP proxy (leave empty for none)");
-        crate::widgets::hover_help(
-            ui, "Used while building; not kept in the image",
-            |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut options.proxy)
-                        .desired_width(crate::theme::plain_edit_width(420.0))
-                        .hint_text(crate::theme::placeholder(
-                            ui,
-                            "http://user:password@host:port/",
-                        )),
-                )
-            },
-        );
+        crate::widgets::hover_help(ui, "Used while building; not kept in the image", |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut options.proxy)
+                    .desired_width(crate::theme::plain_edit_width(420.0))
+                    .hint_text(crate::theme::placeholder(
+                        ui,
+                        "http://user:password@host:port/",
+                    )),
+            )
+        });
         let mut probe = options.clone();
         probe.hostname = "probe".into();
         match probe.validate(self.kind()) {

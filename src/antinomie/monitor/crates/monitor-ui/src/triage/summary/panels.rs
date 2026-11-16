@@ -79,9 +79,7 @@ pub(super) fn key_findings(
                 } else {
                     format!("Show more ({rest})")
                 };
-                if ui.button(label)
-                .clicked()
-                {
+                if ui.button(label).clicked() {
                     *open = !*open;
                 }
             }
@@ -342,8 +340,9 @@ pub(super) fn indicators(
                     acts.push(Act::Go(Destination::Ioc));
                 }
             }
-            copy = ui.add_enabled(!found.is_empty(), egui::Button::new("Copy all"))
-            .clicked();
+            copy = ui
+                .add_enabled(!found.is_empty(), egui::Button::new("Copy all"))
+                .clicked();
             export = crate::widgets::hover_help(
                 ui,
                 "Write the indicators as JSON beside the run's other files",

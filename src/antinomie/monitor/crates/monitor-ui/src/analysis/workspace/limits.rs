@@ -43,8 +43,7 @@ pub(super) fn notes(
             // A bound a setting raises leads to that setting's field; the rest
             // (a file that disagrees with itself, an unpacking depth) are fixed.
             if let Some(setting) = limit.setting
-                && ui.small_button("Analysis settings…")
-                .clicked()
+                && ui.small_button("Analysis settings…").clicked()
             {
                 action = Some(ReportAction::OpenAnalysisLimit(setting));
             }

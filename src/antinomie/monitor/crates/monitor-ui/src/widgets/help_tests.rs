@@ -217,13 +217,17 @@ fn a_control_shows_its_help_on_hover_with_no_icon_beside_it() {
     let at = control(&first, "Randomize serials").center();
     let shown = texts(&hover(&ctx, at, &mut draw));
     assert!(
-        shown.iter().any(|(text, _)| text == "Why this box matters."),
+        shown
+            .iter()
+            .any(|(text, _)| text == "Why this box matters."),
         "{shown:?}"
     );
     let away = egui::pos2(600.0, 500.0);
     let shown = texts(&hover(&ctx, away, &mut draw));
     assert!(
-        !shown.iter().any(|(text, _)| text == "Why this box matters."),
+        !shown
+            .iter()
+            .any(|(text, _)| text == "Why this box matters."),
         "gone with the pointer"
     );
 }
@@ -242,7 +246,9 @@ fn a_disabled_control_still_shows_its_help_on_hover() {
     let at = control(&frame(&ctx, vec![], &mut draw), "Randomize serials").center();
     let shown = texts(&hover(&ctx, at, &mut draw));
     assert!(
-        shown.iter().any(|(text, _)| text == "Why this box matters."),
+        shown
+            .iter()
+            .any(|(text, _)| text == "Why this box matters."),
         "{shown:?}"
     );
 }
@@ -262,29 +268,42 @@ fn a_disabled_control_shows_the_reason_and_an_enabled_one_the_text() {
         shown.iter().any(|(text, _)| text == "Start the VM first"),
         "{shown:?}"
     );
-    assert!(!shown.iter().any(|(text, _)| text == "Reads the archive back."));
+    assert!(!shown
+        .iter()
+        .any(|(text, _)| text == "Reads the archive back."));
     enabled.set(true);
     let shown = texts(&hover(&ctx, at, &mut draw));
     assert!(
         !shown.iter().any(|(text, _)| text == "Start the VM first"),
         "{shown:?}"
     );
-    assert!(shown.iter().any(|(text, _)| text == "Reads the archive back."));
+    assert!(shown
+        .iter()
+        .any(|(text, _)| text == "Reads the archive back."));
 }
 
 #[test]
-fn empty_help_shows_nothing_and_a_disabled_control_without_a_reason_shows_the_text() {
+fn empty_help_shows_nothing() {
     let ctx = context();
     let mut draw = |ui: &mut egui::Ui| {
         ui.button("Plain").help_tip("");
+    };
+    let plain = control(&frame(&ctx, vec![], &mut draw), "Plain").center();
+    let shown = texts(&hover(&ctx, plain, &mut draw));
+    assert!(
+        shown.iter().all(|(text, _)| text == "Plain"),
+        "only the button: {shown:?}"
+    );
+}
+
+#[test]
+fn a_disabled_control_without_a_reason_shows_the_text() {
+    let ctx = context();
+    let mut draw = |ui: &mut egui::Ui| {
         ui.add_enabled(false, egui::Button::new("Greyed"))
             .help_tip_or("Greyed text.", "");
     };
-    let first = frame(&ctx, vec![], &mut draw);
-    let plain = control(&first, "Plain").center();
-    let shown = texts(&hover(&ctx, plain, &mut draw));
-    assert_eq!(shown.len(), 2, "only the two buttons: {shown:?}");
-    let greyed = control(&first, "Greyed").center();
+    let greyed = control(&frame(&ctx, vec![], &mut draw), "Greyed").center();
     let shown = texts(&hover(&ctx, greyed, &mut draw));
     assert!(
         shown.iter().any(|(text, _)| text == "Greyed text."),

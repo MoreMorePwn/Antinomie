@@ -115,18 +115,13 @@ impl DiskView {
                 });
             let enter = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             let can = !self.find.query.trim().is_empty() && !self.find.running;
-            if ui.add_enabled(can, egui::Button::new("Find"))
-            .clicked()
-                || (enter && can)
-            {
+            if ui.add_enabled(can, egui::Button::new("Find")).clicked() || (enter && can) {
                 start = true;
             }
             if self.find.running {
                 theme::spinner(ui);
                 ui.colored_label(theme::muted(), "Searching…");
-                if ui.button("Cancel")
-                .clicked()
-                {
+                if ui.button("Cancel").clicked() {
                     self.cancel_find();
                 }
             }

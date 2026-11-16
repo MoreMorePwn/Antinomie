@@ -600,16 +600,15 @@ fn rule_text(ui: &mut egui::Ui, id: egui::Id, title: &str, text: &str) {
         if ui.button("Copy rule").clicked() {
             ui.ctx().copy_text(text.to_owned());
         }
-        if ui.checkbox(&mut wrap, "Wrap lines")
-        .changed()
-        {
+        if ui.checkbox(&mut wrap, "Wrap lines").changed() {
             ui.ctx().data_mut(|data| data.insert_temp(wrap_id, wrap));
         }
-        if ui.button(format!(
-                    "{} Open in a window",
-                    egui_phosphor::regular::ARROWS_OUT
-                ))
-        .clicked()
+        if ui
+            .button(format!(
+                "{} Open in a window",
+                egui_phosphor::regular::ARROWS_OUT
+            ))
+            .clicked()
         {
             ui.ctx().data_mut(|data| {
                 data.insert_temp(
