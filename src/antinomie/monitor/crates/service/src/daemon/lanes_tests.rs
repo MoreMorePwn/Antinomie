@@ -968,6 +968,9 @@ fn the_daemon_runs_with_no_automatic_lookup_whatever_settings_json_says() {
     assert!(!settings.memory_online_symbols, "online symbols are off");
     assert!(!settings.sample_hash_lookup, "the hash lookup is off");
     assert_eq!(settings.address_lookup, AddressLookup::Off);
+    assert!(!antinomie_triage::network::online_lookup(
+        settings.address_lookup
+    ));
     assert_eq!(settings.quota_gib, 9);
     stop(daemon);
     // With `[privacy] address_lookup = "tshark"` the daemon keeps TShark's
@@ -977,6 +980,9 @@ fn the_daemon_runs_with_no_automatic_lookup_whatever_settings_json_says() {
     let (settings, problem) = super::service::node_settings(&data, &config);
     assert!(problem.is_none());
     assert_eq!(settings.address_lookup, AddressLookup::Tshark);
+    assert!(!antinomie_triage::network::online_lookup(
+        settings.address_lookup
+    ));
     assert!(!settings.memory_online_symbols && !settings.sample_hash_lookup);
     // A file that cannot be read gives the defaults, with the reason.
     std::fs::write(data.join("settings.json"), "{ broken").unwrap();

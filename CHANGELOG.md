@@ -1314,6 +1314,13 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **No address lookup leaves the host unless you chose dig and whois (ANT-T0556,
+  A09).** Triage ran `whois` and `dig -x` for public destinations exactly when
+  the address lookup was **TShark GeoIP only** or off, the opposite of the
+  setting, so a daemon whose `[privacy] address_lookup` is `off` or `tshark` (a
+  "nothing leaves the lab" preset) asked WHOIS and reverse DNS about up to 24
+  sample destinations per run. Only the two dig-and-whois choices look up now,
+  and never for the documentation ranges (the InetSim stand-in 198.51.100.1).
 - **A number in a run request reads back as the same number.** A very long number
   in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
   integer) was read as a floating-point value that, written again by the service,

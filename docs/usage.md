@@ -2032,8 +2032,11 @@ a dump, each that came too late, and how many more the budget held back).
 **Tools > Settings > Network lookup** decides how the public destination
 addresses in the Network tabs get a Country and an Organization. **Address
 lookup** has three choices: **TShark GeoIP only** (the default), **dig and whois
-only**, and **TShark GeoIP, then dig and whois when unavailable**. Local addresses
-are never queried. Below it, **IP geolocation database (TShark)** is about the
+only**, and **TShark GeoIP, then dig and whois when unavailable**. Only the two
+choices that name dig and whois ask another machine; TShark GeoIP reads local
+databases. Local addresses, the documentation ranges (192.0.2.0/24,
+198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32, the lab's InetSim stand-in
+198.51.100.1 among them), 198.18.0.0/15 and 100.64.0.0/10 are never queried. Below it, **IP geolocation database (TShark)** is about the
 first choice: TShark needs `.mmdb` databases to fill Country and Organization.
 Older `GeoIP.dat` files (such as `/usr/share/GeoIP` on Debian) do not work with
 TShark 4. Antinomie hands its databases to its own TShark runs only and never
