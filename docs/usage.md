@@ -2252,6 +2252,10 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
   required count; a missing KVM is a warning (VMs then run with TCG). Tool names:
   `qemu`, `qemu-img`, `gtk`, `kvm`, `curl`, `debian-account`, `bubblewrap`,
   `tshark`, `prlimit`, `suricata`, `python-venv`, `wireshark`, `binwalk`, `file-chooser`.
+  The `open-files` row is the open-file limit a daemon or a command started now
+  gets (the command line raises its soft limit to the hard one, at most 65,536): a
+  warning, never a missing tool, when it stays below 4,096 (`soft_limit`,
+  `hard_limit`); raise the hard limit (`ulimit -Hn`, `LimitNOFILE=` in a unit).
 - `capabilities` prints the API version, the app version and revision, the lane
   count, the report formats and the accelerator (`kvm` or `tcg`).
 - `doctor` also reports who owns the data directory (`data_dir.owner`, from

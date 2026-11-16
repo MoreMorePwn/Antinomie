@@ -1314,6 +1314,16 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **A busy lane no longer runs the daemon out of open files.** Every lane's engine
+  runs in the daemon's process, and a guest that scans the network opened up to 256
+  connections per lane, each holding four or five descriptors; two such runs at once
+  used up a 1,024 limit and failed every analysis in progress with "Too many open
+  files". A guest connection now holds one descriptor (two for a built-in InetSim
+  service), the lanes' gateways together stay below what the open-file limit leaves
+  after 512 for the rest of the process (a connection over it goes unanswered, as one
+  over a lane's own limit), and `auto daemon` and the command line raise their soft
+  open-file limit to the hard limit (at most 65,536) at start and log it. `doctor`
+  has an `open-files` row: a warning when the limit stays below 4,096.
 - **A number in a run request reads back as the same number.** A very long number
   in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
   integer) was read as a floating-point value that, written again by the service,

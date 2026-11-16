@@ -68,6 +68,7 @@ pub mod network;
 pub mod network_link;
 mod object_pack;
 pub mod observation;
+pub mod open_files;
 pub mod packet_filter;
 pub mod parser;
 pub mod persisted_copy;

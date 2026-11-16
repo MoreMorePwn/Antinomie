@@ -554,6 +554,14 @@ util-linux tshark curl`. Bubblewrap must work: on Ubuntu 24.04 an AppArmor setti
 (`kernel.apparmor_restrict_unprivileged_userns`) can forbid it; the run then stops
 with `dependency_missing` instead of running unsandboxed.
 
+**"Too many open files".** Every lane's engine, its network gateway and the host
+work share the daemon's process. The daemon raises its soft open-file limit to the
+hard limit (at most 65,536) at start and logs it (`open-file limit raised from 1024
+to 65536`); a warning in the log or in `doctor` (`open-files`) means the hard limit
+is too low: raise it (`LimitNOFILE=` in the unit, which the shipped units set to
+65,536, or `ulimit -Hn` before a daemon started by hand). A guest that opens
+connections faster than they close gets no answer past what the limit leaves.
+
 **Runs stay `queued`.** `auto status RUN` shows `waiting_for`: `lane` (busy),
 `resources` (below `min_free_disk_gib` or the RAM floor, the queue pauses),
 `dependency`, `quota`, `queue_paused`, `layer_pending` (the previous run's disk is

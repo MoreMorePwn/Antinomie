@@ -200,6 +200,11 @@ impl Loop {
             Counters::add(&self.shared.counters.tcp_blocked, 1);
             return;
         }
+        // Every lane's gateway shares the process's open files (A27).
+        let Some(slot) = super::super::budget::take() else {
+            Counters::add(&self.shared.counters.tcp_blocked, 1);
+            return;
+        };
         let sink = matches!(egress, Egress::Sink(_)) || metadata.is_some();
         // The router's own addresses and the guest's network are never
         // connected to (QEMU's NAT would reach the host's loopback there).
@@ -234,6 +239,7 @@ impl Loop {
         self.next_id += 1;
         let mut conn = Conn::new(syn, self.random(), now);
         conn.generation = generation;
+        conn.hold(slot);
         self.conns.insert(flow, (id, conn));
         self.flows.insert(id, flow);
         let (tx, shared) = (self.events_tx.clone(), self.shared.clone());
