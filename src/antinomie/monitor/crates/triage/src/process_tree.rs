@@ -937,19 +937,30 @@ pub fn exec_argv(invocation: &InvocationSummary, event: &EventSummary) -> Vec<St
 /// The text a captured buffer argument held, up to its first NUL or newline.
 pub fn argument_text(invocation: &InvocationSummary, index: usize) -> Option<String> {
     let prefix = format!("arg{index}.");
-    let field = invocation
+    // The entry's field, or the exit's when the guest read the input again
+    // as the call returned (it was not in memory at entry).
+    invocation
         .entry
         .iter()
         .chain(invocation.exit.iter())
         .flat_map(|event| &event.fields)
-        .find(|field| field.key.starts_with(&prefix) && !field.key.contains('['))?;
-    let bytes = trace::covered_preview(field);
+        .filter(|field| field.key.starts_with(&prefix) && !field.key.contains('['))
+        .map(|field| text_bytes(trace::covered_preview(field), &[0, b'\n']))
+        .map(|text| text.trim().to_owned())
+        .find(|text| !text.is_empty())
+}
+
+/// Captured bytes as text, up to the first of `stops`: UTF-8 as it is, other
+/// bytes escaped (`\xff`) so a name that is not text still shows.
+pub fn text_bytes(bytes: &[u8], stops: &[u8]) -> String {
     let end = bytes
         .iter()
-        .position(|byte| *byte == 0 || *byte == b'\n')
+        .position(|byte| stops.contains(byte))
         .unwrap_or(bytes.len());
-    let text = std::str::from_utf8(&bytes[..end]).ok()?.trim();
-    (!text.is_empty()).then(|| text.to_owned())
+    match std::str::from_utf8(&bytes[..end]) {
+        Ok(text) => text.to_owned(),
+        Err(_) => bytes[..end].escape_ascii().to_string(),
+    }
 }
 
 /// A name the task gave itself: `prctl(PR_SET_NAME)`, or a write to a `comm`

@@ -239,14 +239,28 @@ impl<'a> Ctx<'a> {
     }
 
     /// The text of a captured string argument.
+    /// The entry's field when it holds bytes, else the exit's (an input the
+    /// guest read again when the call returned); bytes that are not UTF-8
+    /// are shown escaped (`\xff`), not dropped.
     pub fn text(&self, argument: usize) -> Option<String> {
-        let field = self.field(argument, "")?;
-        let bytes = trace::covered_preview(field);
-        let end = bytes
+        let mut fields = self
+            .call
+            .entry
             .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(bytes.len());
-        std::str::from_utf8(&bytes[..end]).ok().map(str::to_owned)
+            .chain(self.call.exit.iter())
+            .flat_map(|event| &event.fields)
+            .filter(|field| {
+                trace::field_argument_on(self.event.syscall_nr, self.name, field) == Some(argument)
+            });
+        let first = fields.next()?;
+        let field = std::iter::once(first)
+            .chain(fields)
+            .find(|field| !trace::covered_preview(field).is_empty())
+            .unwrap_or(first);
+        Some(crate::process_tree::text_bytes(
+            trace::covered_preview(field),
+            &[0],
+        ))
     }
 
     /// A native-endian 64-bit word at `offset` of an argument's pointee.
