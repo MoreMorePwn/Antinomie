@@ -1030,6 +1030,7 @@ mod dump_trigger {
                 error: None,
                 note: None,
             }),
+            held: false,
         }
     }
 

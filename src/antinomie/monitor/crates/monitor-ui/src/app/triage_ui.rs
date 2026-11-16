@@ -62,6 +62,14 @@ impl MonitorApp {
         }
         crate::route_ui::line(ui, &route);
         let mut notes = crate::run_recording::note_lines(&run);
+        let timed = self.screenshots_page.timed_for(&run);
+        // The series' counts go beside the Screenshots title, not among
+        // the notes; with no picture to show, the note stays a note.
+        let shots_note = if timed.is_empty() {
+            None
+        } else {
+            crate::run_recording::take_shots_note(&mut notes)
+        };
         notes.extend(route.note.clone());
         self.triage.set_notes(notes);
         self.triage.set_route_text(route);
@@ -72,13 +80,14 @@ impl MonitorApp {
                 .as_ref()
                 .map(|environment| environment.base_name.clone())
                 .filter(|name| !name.is_empty()),
-            self.screenshots_page.timed_for(&run),
+            timed,
             run.request
                 .preloaded
                 .iter()
                 .map(antinomie_monitor_core::samples::PreloadRef::line)
                 .collect(),
         );
+        self.triage.set_shots_note(shots_note);
         if let Some(error) = &self.archive_error {
             crate::activity::error(ui, error);
         }

@@ -327,6 +327,10 @@ pub struct TriggerRecord {
     pub memory: Option<TriggerDump>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core: Option<TriggerDump>,
+    /// The process was held at its exit for the dump (revision-22 bases):
+    /// it had ended when the match was handled. The trigger log says so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 impl LiveFinding {

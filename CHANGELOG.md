@@ -34,6 +34,8 @@ x86 programs by their own table.
 - **Similar samples compares the whole library (ANT-T0555, item 5).** The column is **TLSH Distance**; every library sample is compared by its stored TLSH (it was only the first 300 in list order, each archive read again, and none over 16 MiB); only the five listed are read, for what they share.
 - **Time added in the Samples list (ANT-T0555, item 7).** A sortable **Time added** column follows SHA-256.
 - **Arguments in a run's process tree (ANT-T0555, item 10).** The run details' and capture's process list has an **Arguments** column after the process name (cut with "…", whole on hover); a BusyBox applet run through `/proc/self/exe` is named after its argv[0] (`crontab`), with BusyBox as its program on hover.
+- **Screenshot counts beside the title (ANT-T0555, item 11).** Triage's **Screenshots (N)** has the series' line ("every 2 s: 3 saved, 0 skipped") beside its title instead of among the notes.
+- **Triggered dumps only in the trigger log (ANT-T0555, item 12).** "Dump triggered by …: core requested." is no longer a run note; the trigger log lists the match and now says when the process was held at its exit.
 - **Triage polish (ANT-T0550).** The Summary's MITRE ATT&CK, Processes of
   interest, Files and Network rows each have their own text colour; its notes
   are bullets and the run's last screenshot is gone from them; **Timed

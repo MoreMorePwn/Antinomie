@@ -249,11 +249,16 @@ fn trigger_log(ui: &mut egui::Ui, log: Option<&TriggerLog>) {
     for record in &log.records {
         ui.add(
             egui::Label::new(format!(
-                "{}  {} ({}) in process {}: core {}, memory {}",
+                "{}  {} ({}) in process {}{}: core {}, memory {}",
                 parts::second(record.at_ms),
                 record.finding.rule,
                 record.finding.tier.label(),
                 record.finding.pid,
+                if record.held {
+                    " (held at its exit)"
+                } else {
+                    ""
+                },
                 state(&record.core),
                 state(&record.memory),
             ))
@@ -317,7 +322,7 @@ pub(crate) fn fixture_run(dir: &std::path::Path) -> RunSummary {
                 "summary": "", "tier": "high", "pid": 1352, "tid": 1352, "task_cookie": 2,
                 "stream_id": 1, "call_id": 1, "guest_ns": 1, "syscall": "setsockopt"},
                 "core": {"state": "partial", "path": dir.join("core-captures/c1/process.elf"),
-                    "capture_id": "c1", "size": 4}}]
+                    "capture_id": "c1", "size": 4}, "held": true}]
         }))
         .unwrap();
     std::fs::write(
@@ -400,6 +405,8 @@ mod tests {
             "2 packets",
             "Triggered by c2.bpf_backdoor (High, pid 1352)",
             "Trigger log",
+            // ANT-T0555 item 12: the log, not a run note, says it was held.
+            "c2.bpf_backdoor (High) in process 1352 (held at its exit): core",
             "3 more matches took no dump",
             "f9c3d854",
         ] {

@@ -27,6 +27,9 @@ pub(super) struct RunFacts {
     pub timed: Vec<antinomie_monitor_core::timed_shots::RunShot>,
     /// The libraries the run loaded into its program, one line each.
     pub preloaded: Vec<String>,
+    /// What the screenshot series did ("every 2 s: 3 saved, 0 skipped
+    /// (screen unchanged)"), shown beside the Screenshots title.
+    pub shots_note: Option<String>,
 }
 
 /// What a click in the Summary asks for, applied once the frame is drawn.
@@ -235,8 +238,14 @@ impl TriageView {
                 base,
                 timed,
                 preloaded,
+                shots_note: self.run_facts.shots_note.take(),
             };
         }
+    }
+
+    /// The line beside the Summary's Screenshots title (the series' counts).
+    pub(crate) fn set_shots_note(&mut self, note: Option<String>) {
+        self.run_facts.shots_note = note;
     }
 }
 

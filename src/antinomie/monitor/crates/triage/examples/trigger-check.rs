@@ -351,8 +351,15 @@ fn check(bundle: &str, data: &str, native: &str, compat: Option<&str>) -> Result
             match rule {
                 Some(rule) => fired(&run, rule, name == "compat" && !arm64).and_then(|()| {
                     // The exit hold is what made the core possible.
-                    if name == "fast" && !run.notes.iter().any(|n| n.contains("held at its exit")) {
-                        return Err("the fast program's note does not say it was held".into());
+                    if name == "fast"
+                        && !run
+                            .triggers
+                            .as_ref()
+                            .is_some_and(|log| log.records.iter().any(|record| record.held))
+                    {
+                        return Err(
+                            "the fast program's trigger record does not say it was held".into()
+                        );
                     }
                     Ok(())
                 }),

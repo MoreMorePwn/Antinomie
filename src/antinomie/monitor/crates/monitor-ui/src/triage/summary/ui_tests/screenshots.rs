@@ -54,6 +54,27 @@ fn the_screenshots_box_is_titled_with_its_count_and_has_a_redirect_button() {
 }
 
 #[test]
+fn the_series_counts_sit_on_the_right_of_the_screenshots_title() {
+    // ANT-T0555 item 11: the timed screenshots' line is beside the title,
+    // not among the notes.
+    let (_files, mut view) = fixture();
+    view.set_notes(vec!["First note".to_owned()]);
+    view.set_run_facts(None, shots(3), Vec::new());
+    view.set_shots_note(Some(
+        "every 2 s: 3 saved, 0 skipped (screen unchanged)".into(),
+    ));
+    let ctx = context(16.0);
+    let out = settle(&ctx, &mut view, WIDE, None);
+    let title = find(&out, "Screenshots (3)");
+    let line = find(&out, "every 2 s: 3 saved, 0 skipped (screen unchanged)");
+    assert!(line.left() > find(&out, REDIRECT).right(), "{line:?}");
+    assert!((line.center().y - title.center().y).abs() < 6.0);
+    assert!(!texts(&out)
+        .iter()
+        .any(|(t, _)| t.contains("Timed screenshots")));
+}
+
+#[test]
 fn a_run_without_screenshots_has_no_screenshots_box() {
     let (_files, mut view) = fixture();
     let ctx = context(16.0);

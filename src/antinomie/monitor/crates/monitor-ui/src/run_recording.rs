@@ -127,12 +127,30 @@ pub(crate) fn reduced_lines(run: &RunSummary) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The notes shown as muted lines: all but the telemetry loss.
+/// The note earlier builds wrote for each dump trigger ("Dump triggered by
+/// … : core requested."): the trigger log says it, so it is not shown.
+const TRIGGER_NOTE: &str = "Dump triggered by ";
+
+/// The start of the timed screenshots' note.
+const SHOTS_NOTE: &str = "Timed screenshots ";
+
+/// The notes shown as muted lines: all but the telemetry loss and the old
+/// dump trigger lines.
 fn quiet_notes(run: &RunSummary) -> impl Iterator<Item = &String> {
     let loss = run.telemetry_loss_note();
     run.notes
         .iter()
-        .filter(move |note| Some(note.as_str()) != loss)
+        .filter(move |note| Some(note.as_str()) != loss && !note.starts_with(TRIGGER_NOTE))
+}
+
+/// Take the timed screenshots' note out of `notes` (as [`note_lines`] gives
+/// them) and return it short, for beside Triage's Screenshots title: "every
+/// 2 s: 3 saved, 0 skipped (screen unchanged)".
+pub(crate) fn take_shots_note(notes: &mut Vec<String>) -> Option<String> {
+    let at = notes.iter().position(|note| note.starts_with(SHOTS_NOTE))?;
+    let note = notes.remove(at);
+    let short = note[SHOTS_NOTE.len()..].trim_end_matches('.');
+    Some(short.to_owned())
 }
 
 /// The run's notes but the telemetry loss (a warning), one line each, as plain text.
@@ -208,6 +226,34 @@ mod skipped_tests {
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].starts_with("Dump skipped 13 times for credential.shadow_read (High)"));
         assert_eq!(tooltip(&run).matches("Dump skipped").count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod moved_notes_tests {
+    use super::*;
+
+    #[test]
+    fn the_screenshot_line_moves_out_and_old_trigger_notes_are_left_to_the_log() {
+        // ANT-T0555 items 11 and 12.
+        let mut run = crate::run_link::test_run("r", "/tmp/x");
+        run.notes = vec![
+            "Dump triggered by persistence.binary_replace (High) in process 143: core requested."
+                .into(),
+            "Timed screenshots every 2 s: 3 saved, 0 skipped (screen unchanged).".into(),
+            "Something else.".into(),
+        ];
+        let mut lines = note_lines(&run);
+        assert!(
+            !lines.iter().any(|line| line.starts_with("Dump triggered")),
+            "{lines:?}"
+        );
+        assert_eq!(
+            take_shots_note(&mut lines).as_deref(),
+            Some("every 2 s: 3 saved, 0 skipped (screen unchanged)")
+        );
+        assert_eq!(lines, ["Something else."]);
+        assert_eq!(take_shots_note(&mut lines), None);
     }
 }
 

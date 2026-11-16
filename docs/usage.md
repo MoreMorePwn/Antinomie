@@ -322,7 +322,9 @@ In **Triage > Summary**, a run with timed screenshots shows them in a box titled
 **Screenshots (N)**, a strip with the run-relative time under each picture. A click
 opens the picture in a viewer window over Triage (it does not switch to
 **Library > Screenshots**); the viewer steps through the run with the Left and
-Right arrow keys. The small arrow icon beside the title (**Open in Screenshots**)
+Right arrow keys. Beside the title, a short muted line says what the series did
+("every 2 s: 3 saved, 0 skipped (screen unchanged)"); it is not repeated among the
+Summary's notes. The small arrow icon beside the title (**Open in Screenshots**)
 opens **Library > Screenshots**, where the series is grouped under its run
 ("timed screenshots of run ...", a link that opens that run in Triage) and each
 cell shows its run-relative time. The report lists the series in
@@ -2050,7 +2052,10 @@ the refresh button beside each title stays for a manual read.
 memory dumps and capture segments in the rows of the sample page's Artifacts
 (same columns; **Open** shows the tab for this run only), the run's time window,
 the packet count of each capture segment and the trigger log (each match that took
-a dump, each that came too late, and how many more the budget held back).
+a dump, with its rule, tier and process, whether the process was held at its exit
+and what became of the core and the memory dump; each that came too late; and how
+many more the budget held back). A match that took a dump is in the trigger log
+only, not in the run's notes.
 
 ### Country and organization of addresses (GeoIP)
 

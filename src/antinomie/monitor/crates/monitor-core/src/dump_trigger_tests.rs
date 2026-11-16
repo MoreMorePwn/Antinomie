@@ -225,6 +225,7 @@ fn a_trigger_that_never_matched_says_so_and_one_that_did_does_not() {
                 finding: finding.clone(),
                 memory: None,
                 core: None,
+                held: false,
             }],
             ..TriggerLog::default()
         },
@@ -475,6 +476,7 @@ fn each_dump_kind_counts_against_its_own_limit() {
         finding: finding.clone(),
         memory: memory.then(TriggerDump::default),
         core: Some(TriggerDump::default()),
+        held: false,
     };
     let mut log = TriggerLog::default();
     assert_eq!(plan.room(&log), (true, true));

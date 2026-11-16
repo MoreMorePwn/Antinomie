@@ -185,6 +185,7 @@ impl Worker {
             finding: finding.clone(),
             memory: None,
             core: None,
+            held,
         };
         let (run_id, root_pid) = (run.summary.id.clone(), run.summary.pid);
         if want_core {
@@ -223,30 +224,8 @@ impl Worker {
                     Some(self.start_trigger_memory(plan.memory_max_mib, cookie, &finding));
             }
         }
-        let note = format!(
-            "Dump triggered by {} ({}) in process {}{}: {}.",
-            finding.rule,
-            finding.tier.label(),
-            finding.pid,
-            if held { " (held at its exit)" } else { "" },
-            [("memory", &record.memory), ("core", &record.core)]
-                .iter()
-                .filter_map(|(name, dump)| dump.as_ref().map(|dump| match &dump.error {
-                    Some(error) if dump.state == RunArtifactState::Failed => {
-                        format!("{name} not taken ({error})")
-                    }
-                    _ => format!("{name} requested"),
-                }))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        if let Some(run) = self
-            .session
-            .as_mut()
-            .and_then(|session| session.runs.get_mut(&cookie))
-        {
-            run.add_note(note);
-        }
+        // Not a run note: the trigger log lists the match, the process, whether
+        // it was held at its exit and what each dump became (ANT-T0555).
         self.save_trigger(cookie, |log| log.records.push(record));
         // Start the core now: the first step asks the guest for it.
         self.check_manual_cores();
@@ -689,6 +668,7 @@ mod tests {
             },
             memory: None,
             core: Some(failed("gone")),
+            held: false,
         }
     }
 

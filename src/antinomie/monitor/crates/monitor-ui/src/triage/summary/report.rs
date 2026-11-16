@@ -211,6 +211,7 @@ fn notes(ui: &mut egui::Ui, notes: &[String]) {
 fn timed_shots(
     ui: &mut egui::Ui,
     shots: &[antinomie_monitor_core::timed_shots::RunShot],
+    note: Option<&str>,
     strip: &mut super::strip::Strip,
 ) -> (Option<std::path::PathBuf>, bool) {
     if shots.is_empty() {
@@ -231,6 +232,12 @@ fn timed_shots(
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text("Open in Screenshots")
                 .clicked();
+            // What the series did, short and muted (it was a run note).
+            if let Some(note) = note {
+                ui.add(
+                    egui::Label::new(RichText::new(note).small().color(theme::muted())).truncate(),
+                );
+            }
         });
         ui.add_space(8.0);
         ui.label(
@@ -483,7 +490,12 @@ pub(super) fn content(
                 &scan.signals,
             ));
             notes(ui, &shown);
-            let (clicked, redirect) = timed_shots(ui, &view.run_facts.timed, &mut state.strip);
+            let (clicked, redirect) = timed_shots(
+                ui,
+                &view.run_facts.timed,
+                view.run_facts.shots_note.as_deref(),
+                &mut state.strip,
+            );
             if let Some(path) = clicked {
                 acts.push(Act::Screenshot(path));
             }
