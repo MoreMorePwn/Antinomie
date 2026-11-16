@@ -566,7 +566,7 @@ impl CoreView {
                     top: 4,
                     bottom: 4,
                 }))
-                .show(ui, |ui| self.mapping_panel(ui, mapping));
+                .show_held(ui, |ui| self.mapping_panel(ui, mapping));
         } else {
             egui::CollapsingHeader::new("Mapping details")
                 .default_open(true)

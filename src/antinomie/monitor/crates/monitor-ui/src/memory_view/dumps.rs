@@ -163,7 +163,10 @@ impl MemoryView {
         } else {
             None
         };
-        let full = egui::vec2(ui.available_width(), 0.0);
+        // Each button takes the width its row leaves, measured inside the
+        // row: the list's whole width was wider than the panel and widened it
+        // every frame up to its maximum.
+        let full = |ui: &egui::Ui| egui::vec2(ui.available_width(), 0.0);
         if crate::widgets::hover_help_or(
             ui,
             "Writes the VM's RAM to a dump. The VM pauses while it is written.",
@@ -172,7 +175,7 @@ impl MemoryView {
                 ui.add_enabled(
                     why.is_none() && !cx.pending,
                     egui::Button::new(format!("{} Dump memory", egui_phosphor::regular::MEMORY))
-                        .min_size(full),
+                        .min_size(full(ui)),
                 )
             },
         )
@@ -191,7 +194,7 @@ impl MemoryView {
                         "{} Import dump…",
                         egui_phosphor::regular::FILE_ARROW_UP
                     ))
-                    .min_size(full),
+                    .min_size(full(ui)),
                 )
             },
         )

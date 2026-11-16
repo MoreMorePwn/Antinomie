@@ -15,7 +15,7 @@ impl CoreView {
                 right: 8,
                 ..Default::default()
             }))
-            .show(ui, |ui| {
+            .show_held(ui, |ui| {
                 let filter = crate::query::table_filter(
                     ui,
                     ("core-function-filter", &record.dir),

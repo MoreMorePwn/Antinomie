@@ -9,6 +9,7 @@ use crate::scroll_contain::ScrollContained as _;
 use crate::theme;
 use crate::triage::tone;
 use crate::triage::{details, Cell, RowValue};
+use crate::widgets::HeldPanel as _;
 use crate::widgets::{self, Tone};
 use antinomie_monitor_core::file_writes::{Piece, Tally};
 use eframe::egui;
@@ -221,12 +222,12 @@ impl Window {
             egui::Panel::left("file-activity-list")
                 .resizable(true)
                 .default_size(310.0)
-                .show(ui, |ui| self.list(ui, activity, &shown, clock));
+                .show_held(ui, |ui| self.list(ui, activity, &shown, clock));
         } else {
             egui::Panel::top("file-activity-list")
                 .resizable(true)
                 .default_size(230.0)
-                .show(ui, |ui| self.list(ui, activity, &shown, clock));
+                .show_held(ui, |ui| self.list(ui, activity, &shown, clock));
         }
         egui::CentralPanel::default().show(ui, |ui| {
             match self.selected_file(activity) {

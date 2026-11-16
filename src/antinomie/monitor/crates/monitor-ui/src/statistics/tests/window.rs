@@ -75,8 +75,30 @@ fn b3_pop_out_draws_a_viewport_and_back_returns_to_the_floating_window() {
     // Floating again: no frame goes through the viewport.
     assert_eq!(rig.window.drawn_popped, popped);
     assert!(rig.window.drawn > floating);
+    // Popping out is the icon just left of the close button (no text button).
     let shown = rig.texts();
-    assert!(shown.iter().any(|(text, _)| text == "Pop out"), "{shown:?}");
+    assert!(
+        !shown.iter().any(|(text, _)| text == "Pop out"),
+        "{shown:?}"
+    );
+    let glyph = |name: &str| {
+        shown
+            .iter()
+            .find(|(text, _)| text == name)
+            .unwrap_or_else(|| panic!("missing {name}: {shown:?}"))
+            .1
+    };
+    let close = glyph(egui_phosphor::regular::X);
+    let pop = glyph(egui_phosphor::regular::ARROW_SQUARE_OUT);
+    assert!(
+        pop.right() < close.left(),
+        "pop out {pop:?} close {close:?}"
+    );
+    assert!((pop.center().y - close.center().y).abs() < 2.0);
+    assert!(close.left() - pop.right() < 20.0, "beside each other");
+    rig.click(egui_phosphor::regular::ARROW_SQUARE_OUT);
+    assert!(rig.window.popped(), "the icon pops the window out");
+    assert!(rig.window.open);
 }
 
 #[test]

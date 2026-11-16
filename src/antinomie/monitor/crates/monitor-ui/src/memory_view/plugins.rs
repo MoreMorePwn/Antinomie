@@ -92,7 +92,7 @@ impl MemoryView {
                 right: 8,
                 ..Default::default()
             }))
-            .show(ui, |ui| self.run_list(ui, cx.font_size));
+            .show_held(ui, |ui| self.run_list(ui, cx.font_size));
         egui::CentralPanel::default()
             .frame(egui::Frame::new())
             .show(ui, |ui| self.result_view(ui, &dump, cx.font_size));

@@ -449,17 +449,30 @@ fn histogram(ui: &mut egui::Ui, state: &mut State, stats: &RunStatistics) {
         ui.checkbox(&mut state.table, "Table");
     });
     if state.table {
-        egui::Grid::new("statistics-latency-hist")
+        // The app's table, so its columns can be dragged like every other.
+        use crate::widgets::fit_table::{self, Cell, Col, FitBuilder};
+        let height = theme::row_height(ui.text_style_height(&egui::TextStyle::Body) + 2.0);
+        FitBuilder::new(ui)
+            .id_salt("statistics-latency-hist")
             .striped(true)
-            .show(ui, |ui| {
-                ui.strong("Up to");
-                ui.strong("Calls");
-                ui.end_row();
-                for (bound, n) in &row.histogram {
-                    ui.monospace(duration_ns(*bound));
-                    ui.monospace(int(*n));
-                    ui.end_row();
-                }
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Col::fixed(140.0))
+            .column(Col::rest(120.0))
+            .vscroll(false)
+            .header(26.0, |mut header| {
+                header.col(|ui| fit_table::head(ui, "Up to"));
+                header.col(|ui| fit_table::head(ui, "Calls"));
+            })
+            .body(|body| {
+                body.rows(height, row.histogram.len(), |mut table_row| {
+                    let (bound, n) = &row.histogram[table_row.index()];
+                    table_row.col(|ui| {
+                        fit_table::cell(ui, Cell::Mono, &duration_ns(*bound));
+                    });
+                    table_row.col(|ui| {
+                        fit_table::cell(ui, Cell::Mono, &int(*n));
+                    });
+                });
             });
         return;
     }

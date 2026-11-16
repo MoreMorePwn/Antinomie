@@ -32,3 +32,40 @@ impl WorkspaceLayout {
             .collect()
     }
 }
+
+impl WorkspaceLayout {
+    /// Put `panel` in a pane of its own, split off Run History's pane on the
+    /// `split` side with the old pane's part at `fraction`, and show it (for
+    /// the rendered tests and the split screenshots).
+    #[cfg(test)]
+    pub(crate) fn split_beside_history(
+        &mut self,
+        panel: &Panel,
+        split: egui_dock::Split,
+        fraction: f32,
+    ) {
+        if let Panel::Library(page) = panel {
+            self.open_library(*page);
+        }
+        // Run History itself is split off Overview's pane.
+        let anchor = if *panel == Panel::RunHistory {
+            Panel::Summary
+        } else {
+            Panel::RunHistory
+        };
+        let Some(location) = self.dock.find_tab(panel) else {
+            return;
+        };
+        let _ = self.dock.remove_tab(location);
+        let Some(history) = self.dock.find_tab(&anchor) else {
+            return;
+        };
+        self.dock[history.surface].split(
+            history.node,
+            split,
+            fraction,
+            egui_dock::Node::leaf(panel.clone()),
+        );
+        self.focus(panel.clone());
+    }
+}

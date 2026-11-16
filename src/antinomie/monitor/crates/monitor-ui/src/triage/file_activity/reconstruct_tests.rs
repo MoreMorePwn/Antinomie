@@ -329,10 +329,28 @@ fn the_hash_check_matches_the_guests_hash_when_every_byte_is_known() {
     let mut harness = Harness::new();
     // A complete file is hashed without being asked.
     harness.settle(&mut open, &activity, file, None);
+    let text = harness.frame(&mut open, &activity, file, None, Vec::new());
+    // The side column keeps its width (it no longer widens to its content),
+    // so the hashes wrap and the verdict is further down: scroll to it.
+    let side = find(&text, "Hash check").center();
     let mut text = Vec::new();
     for _ in 0..200 {
         std::thread::sleep(std::time::Duration::from_millis(10));
-        text = harness.frame(&mut open, &activity, file, None, Vec::new());
+        text = harness.frame(
+            &mut open,
+            &activity,
+            file,
+            None,
+            vec![
+                egui::Event::PointerMoved(side),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -200.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
         if text
             .iter()
             .any(|(text, _)| text.contains("matches the guest"))

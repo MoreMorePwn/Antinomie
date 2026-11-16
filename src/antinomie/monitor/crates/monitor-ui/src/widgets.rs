@@ -22,6 +22,8 @@
 //!   fills come from the active theme's visuals.
 //! - Grouped facts on a page: [`card`]; a jump to another view: [`link`].
 //! - A run-based window with nothing to show: [`info_panel`].
+//! - A resizable side panel: `.show_held(...)` ([`HeldPanel`]) instead of
+//!   `.show(...)`, so its content cannot widen the panel frame by frame.
 //! - Status words: [`chip`] with a [`Tone`]; filter-bar switches: [`toggle_chip`].
 //! - An explanation of a control: [`hover_help`] (it shows on the control's
 //!   own hover); [`help`] is the icon for a section or concept only (see
@@ -39,6 +41,7 @@ pub mod fit_table;
 mod help;
 mod info_panel;
 mod lost_release;
+mod side_panel;
 mod tabs;
 pub(crate) mod tone;
 mod wheel;
@@ -54,6 +57,7 @@ pub(crate) use help::qa_pin_key;
 pub use help::{help, hover_help, hover_help_or, list_help, Tip};
 pub use info_panel::{info_panel, InfoPanel};
 pub(crate) use lost_release::install as end_drags_that_lose_their_release;
+pub use side_panel::HeldPanel;
 pub use tabs::{segmented, tab, tab_row, tabs, tight_tabs, TabItem, TIGHT_SAVING};
 pub use tone::{chip, chip_wide, chip_width, fg_or_muted, toggle_chip, toggle_chip_with, Tone};
 pub(crate) use wheel::raw_delta;

@@ -291,3 +291,61 @@ fn a_centred_dialog_opens_centred_whatever_place_an_earlier_session_kept() {
         "{rect:?} is not centred in {area:?}"
     );
 }
+
+/// The width saved for a side panel of the workspace.
+fn panel_width(ctx: &egui::Context, id: &str) -> f32 {
+    egui::containers::panel::PanelState::load(ctx, egui::Id::new(id))
+        .unwrap_or_else(|| panic!("panel {id} was not drawn"))
+        .outer_rect
+        .width()
+}
+
+#[test]
+fn the_memory_dump_list_keeps_its_width_frame_after_frame() {
+    // The list's buttons were the list's width plus a help icon wide, and
+    // the panel took that as its width for the next frame: it grew by
+    // itself up to its maximum.
+    for size in [egui::vec2(1600.0, 900.0), egui::vec2(1000.0, 700.0)] {
+        let mut app = app();
+        app.focus_panel = Some(Panel::Memory);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let first = panel_width(&ctx, "memory_dump_list");
+        for _ in 0..60 {
+            render(&mut app, &ctx, size);
+        }
+        let later = panel_width(&ctx, "memory_dump_list");
+        assert!((later - first).abs() < 0.5, "{size:?}: {first} -> {later}");
+        assert!(
+            later < 300.0,
+            "{size:?}: the list opens near 240, not {later}"
+        );
+    }
+}
+
+#[test]
+fn every_side_list_keeps_its_width_frame_after_frame() {
+    for (panel, id) in [
+        (Panel::CoreDump, "core_dump_list"),
+        (Panel::Network, "network_captures"),
+        (Panel::Disks, "disk_entries"),
+    ] {
+        let mut app = app();
+        app.focus_panel = Some(panel.clone());
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let size = egui::vec2(1280.0, 800.0);
+        for _ in 0..3 {
+            render(&mut app, &ctx, size);
+        }
+        let first = panel_width(&ctx, id);
+        for _ in 0..40 {
+            render(&mut app, &ctx, size);
+        }
+        let later = panel_width(&ctx, id);
+        assert!((later - first).abs() < 0.5, "{panel:?}: {first} -> {later}");
+    }
+}
