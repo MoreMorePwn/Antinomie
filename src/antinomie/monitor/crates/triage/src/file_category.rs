@@ -131,10 +131,7 @@ impl Outcome {
     pub fn label(self) -> String {
         match self {
             Self::Succeeded => "Succeeded".into(),
-            Self::Failed(ret) => match self.errno() {
-                Some(name) => format!("Failed ({name})"),
-                None => format!("Failed ({ret})"),
-            },
+            Self::Failed(ret) => crate::files::failure_label(ret),
             Self::NoExit => "No exit".into(),
         }
     }

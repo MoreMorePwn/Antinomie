@@ -396,7 +396,13 @@ impl FileIndex {
         // inference above is not: a shared descriptor, an append.
         let kernel_position = kernel_records::file_position(call).filter(|_| reading || writing);
         if let Some(position) = kernel_position {
-            offset = Some(position.offset);
+            // The guest records the position the call left less what it moved.
+            // A file whose handler does not move the position
+            // (`/proc/self/loginuid` takes its 10 bytes and stays at 0) gives a
+            // negative start: the offset is not known, not 2^64 - 10.
+            offset = (position.offset <= i64::MAX as u64
+                && position.offset.checked_add(position.len).is_some())
+            .then_some(position.offset);
         }
         let copy = kernel_records::file_copy(call).filter(|_| success && changed);
         let copied = copy
@@ -688,9 +694,26 @@ pub fn unavailable_descriptor(fd: Option<u64>) -> String {
 pub fn result_label(ret: Option<i64>) -> String {
     match ret {
         Some(ret) if ret >= 0 => format!("Success ({ret})"),
-        Some(ret) => format!("Failed ({ret})"),
+        Some(ret) => failure_label(ret),
         None => "Exit unavailable".into(),
     }
+}
+
+/// A failed call's result in words: the errno's name, and a restart code
+/// that leaked to the exit (a signal interrupted the call) as "Interrupted".
+pub fn failure_label(ret: i64) -> String {
+    let errno = ret.unsigned_abs();
+    match crate::values::errno_name(errno) {
+        Some(name) if interrupted(errno) => format!("Interrupted ({name})"),
+        Some(name) => format!("Failed ({name})"),
+        None => format!("Failed ({ret})"),
+    }
+}
+
+/// ERESTARTSYS, ERESTARTNOINTR, ERESTARTNOHAND, ERESTART_RESTARTBLOCK: a
+/// signal interrupted the call, which the kernel restarts or ends with EINTR.
+pub fn interrupted(errno: u64) -> bool {
+    matches!(errno, 512..=514 | 516)
 }
 
 pub fn change_operation(call: &InvocationSummary, event: &EventSummary) -> bool {
@@ -1930,6 +1953,48 @@ pub mod tests {
         let activity = activity_of(&calls);
         let file = file(&activity, "/tmp/file");
         assert_eq!(file.writes.read(8, 3).unwrap(), b"xyz");
+    }
+
+    #[test]
+    fn a_failed_result_is_named_and_a_restart_code_reads_as_interrupted() {
+        assert_eq!(result_label(Some(-512)), "Interrupted (ERESTARTSYS)");
+        assert_eq!(
+            result_label(Some(-516)),
+            "Interrupted (ERESTART_RESTARTBLOCK)"
+        );
+        assert_eq!(result_label(Some(-2)), "Failed (ENOENT)");
+        assert_eq!(result_label(Some(-4000)), "Failed (-4000)");
+        assert_eq!(result_label(Some(3)), "Success (3)");
+        assert_eq!(
+            crate::file_category::Outcome::Failed(-512).label(),
+            "Interrupted (ERESTARTSYS)"
+        );
+    }
+
+    #[test]
+    fn a_write_that_leaves_the_position_where_it_was_has_no_offset_not_a_wrapped_one() {
+        // /proc/self/loginuid: 10 bytes taken, the position stays 0, so the
+        // guest's start (position less result) is -10.
+        let mut write = operation(2, 1, "write", 10, [3, 0, 10, 0, 0, 0], b"4294967295");
+        write
+            .exit
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(position(0u64.wrapping_sub(10), 10));
+        let activity = activity_of(&[open(0x1), write]);
+        let file = file(&activity, "/tmp/file");
+        let event = file.events.iter().find(|e| e.kind == Kind::Write).unwrap();
+        assert_eq!(event.offset, None);
+        assert_eq!(file.writes.tally.offset_unknown, 10);
+        let mut map = antinomie_monitor_core::file_reconstruct::Reconstruction::new(
+            crate::file_activity::start_of(file),
+            &file.timeline,
+        );
+        map.goto(file.timeline.steps().len());
+        let counts = map.counts();
+        assert!(counts.total() <= 10, "{counts:?}");
+        assert_eq!(counts.unknown + counts.mapping, map.size());
     }
 
     fn position(offset: u64, len: u64) -> antinomie_monitor_core::api::FieldSummary {
