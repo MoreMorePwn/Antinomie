@@ -210,6 +210,24 @@ mod tests {
         assert!(text.contains("Identified on the host"), "{text}");
         assert!(text.contains("The guest said: guest said this"), "{text}");
         assert!(!text.contains("does not exist"), "{text}");
+        assert!(text.contains("(glibc's dynamic loader)"), "{text}");
+    }
+
+    #[test]
+    fn a_loader_no_base_ships_is_named_with_its_c_library() {
+        // The arm64 eval's Tsunami sample (ANT-T0554 E13).
+        let uclibc = elf32(40, EABI5, Some("/lib/ld-uClibc.so.0"), 0x200, 0x200);
+        let text = fail(-2, &uclibc, GuestArch::AARCH64);
+        assert!(
+            text.contains("/lib/ld-uClibc.so.0 (uClibc's dynamic loader)"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "No Antinomie base ships uClibc, so the program cannot start in any of them."
+            ),
+            "{text}"
+        );
     }
 
     #[test]

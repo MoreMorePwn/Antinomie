@@ -96,6 +96,108 @@ def fake_module(release, depends, signed=True):
     return data + (b"sig~Module signature appended~\n" if signed else b"")
 
 
+# A 64-bit little-endian ELF header with no program headers: elf_needs()
+# reads it as a file with no loader and no libraries.
+BARE_ELF = b"\x7fELF\x02\x01\x01" + bytes(57)
+
+
+class BusyBoxBaseTreeTests(unittest.TestCase):
+    """The BusyBox base's root tree from a stand-in of the pinned packages
+    (ANT-T0556): glibc's runtime (A51) and the applets a chmod cannot take
+    the shell down with (A26)."""
+
+    APPLETS = ["[", "cat", "cp", "halt", "ls", "netstat", "poweroff", "reboot", "sh"]
+
+    def setUp(self):
+        self.helpers = image.monitor_helpers()
+
+    def userland(self, root, arch):
+        helpers = self.helpers
+        tree = Path(root) / "packages"
+        owners = {"usr/bin/busybox": "busybox-static"}
+        (tree / "usr/bin").mkdir(parents=True)
+        (tree / "usr/bin/busybox").write_bytes(b"busybox")
+        (tree / "usr/bin/busybox").chmod(0o755)
+        multiarch = helpers.LIBRARY_DIRS[arch][0]
+        loader = Path(helpers.GLIBC_LOADERS[arch]).name
+        for name in helpers.GLIBC_LIBRARIES + (loader,):
+            (tree / multiarch).mkdir(parents=True, exist_ok=True)
+            (tree / multiarch / name).write_bytes(BARE_ELF + name.encode())
+            owners[f"{multiarch}/{name}"] = "libc6"
+        userland = helpers.Userland(tree, [], owners, arch)
+        userland.applets = lambda: self.APPLETS
+        return helpers, userland
+
+    def base_tree(self, arch="x86_64"):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        helpers, userland = self.userland(directory.name, arch)
+        root = Path(directory.name) / "root"
+
+        def install(source, root_, destination, userland_):
+            target = root_ / destination.lstrip("/")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            userland_.installed[destination.lstrip("/")] = "busybox-static"
+
+        with patch.object(helpers, "install_binary", install):
+            interpreters = helpers.base_tree(root, userland=userland)
+        return root, userland, interpreters
+
+    def test_glibcs_loader_and_libraries_are_in_lib_with_their_package(self):
+        root, userland, interpreters = self.base_tree()
+        self.assertEqual(interpreters, ["/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-x86-64.so.2"])
+        self.assertEqual(os.readlink(root / "lib64"), "lib")
+        self.assertTrue((root / "lib64/ld-linux-x86-64.so.2").is_file())
+        for name in ("libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2", "libresolv.so.2",
+                     "libnss_files.so.2", "libnss_dns.so.2"):
+            self.assertTrue((root / "lib" / name).is_file(), name)
+            self.assertEqual(userland.installed[f"lib/{name}"], "libc6")
+        # No multiarch folder, no debugging library, no gconv module.
+        self.assertFalse((root / "lib/x86_64-linux-gnu").exists())
+        self.assertFalse((root / "lib/libc_malloc_debug.so.0").exists())
+        self.assertIn("hosts:          files dns", (root / "etc/nsswitch.conf").read_text())
+
+    def test_an_arm64_base_has_its_loader_in_lib_and_no_lib64(self):
+        root, _, interpreters = self.base_tree("arm64")
+        self.assertEqual(interpreters, ["/lib/ld-linux-aarch64.so.1"])
+        self.assertTrue((root / "lib/ld-linux-aarch64.so.1").is_file())
+        self.assertFalse((root / "lib64").exists())
+
+    def test_a_library_glibcs_runtime_leaves_out_is_refused(self):
+        helpers = self.helpers
+        with patch.object(helpers, "elf_needs", return_value=(["libgcc_s.so.1"], None)), \
+                self.assertRaisesRegex(RuntimeError, "needs libgcc_s.so.1"):
+            self.base_tree()
+        with tempfile.TemporaryDirectory() as name:
+            helpers, userland = self.userland(name, "x86_64")
+            (userland.tree / "usr/lib/x86_64-linux-gnu/libm.so.6").unlink()
+            with self.assertRaisesRegex(RuntimeError, "libm.so.6 .* not in the pinned"):
+                helpers.install_glibc_runtime(Path(name) / "root", userland)
+
+    def test_a_chmod_of_a_disabled_applet_leaves_busybox_and_the_shell_runnable(self):
+        root, userland, _ = self.base_tree()
+        bin_ = root / "bin"
+        inode = lambda name: (bin_ / name).stat().st_ino
+        # The shell and the disabled applets are files of their own; they share
+        # one copy, the shell another, BusyBox a third.
+        self.assertFalse((bin_ / "sh").is_symlink())
+        self.assertEqual({inode(name) for name in ("reboot", "halt", "poweroff", "netstat")},
+                         {inode("reboot")})
+        self.assertEqual(len({inode("busybox"), inode("sh"), inode("reboot")}), 3)
+        for name in ("[", "cat", "cp", "ls"):
+            self.assertEqual(os.readlink(bin_ / name), "busybox", name)
+        for name in ("sh", "reboot", "halt", "poweroff", "netstat"):
+            self.assertEqual(userland.installed[f"bin/{name}"], "busybox-static", name)
+        # What Mirai's killer did: chmod follows a link, so on a base whose
+        # applets all link to /bin/busybox this made BusyBox unrunnable.
+        for name in ("reboot", "halt", "poweroff", "netstat"):
+            os.chmod(bin_ / name, 0)
+        self.assertEqual((bin_ / "busybox").stat().st_mode & 0o777, 0o755)
+        self.assertEqual((bin_ / "sh").stat().st_mode & 0o777, 0o755)
+        self.assertEqual((bin_ / "cp").stat().st_mode & 0o777, 0o755)
+
+
 class InitrdResumeTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("zstd"), "zstd is required")
     def test_resume_goes_into_the_initramfs_as_update_initramfs_copies_it(self):
@@ -563,7 +665,10 @@ class DebianImageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             tree = Path(name) / "root"
             helpers = image.monitor_helpers()
-            with patch.object(helpers, "install_binary"):
+            # The applet links and glibc's runtime: BusyBoxBaseTreeTests.
+            with patch.object(helpers, "install_binary"), \
+                    patch.object(helpers, "busybox_applet_links"), \
+                    patch.object(helpers, "install_glibc_runtime"):
                 helpers.base_tree(tree, userland=StandInUserland())
             self.assertEqual(os.readlink(tree / "var/run"), "../run")
             rcs = (tree / "etc/init.d/rcS").read_text()

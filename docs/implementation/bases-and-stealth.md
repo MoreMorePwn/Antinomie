@@ -144,6 +144,80 @@ The host no longer needs `busybox`, `ldd` or `dpkg-query` for a native
 build (the app's tool checks dropped them); it needs network access to the
 snapshot archive once, as for Debian's kernel packages.
 
+### glibc's runtime and the applet layout in the BusyBox bases (0.9.0, ANT-T0556)
+
+The arm64 and x86-64 evaluation of 0.9.0 (ANT-T0554) found two gaps in the
+BusyBox bases, both fixed in the kit (`build-monitor-image.py`); a base gets
+them when it is rebuilt.
+
+**glibc's runtime.** A BusyBox base had no dynamic loader, so a program linked
+against glibc did not start ("It needs the program interpreter
+/lib64/ld-linux-x86-64.so.2, which is not in this guest's base"): 8 of the 25
+x86-64 samples, every Sliver implant among them, and one arm64 sample. Embedded
+Linux built with Yocto or Buildroot often pairs BusyBox with glibc, so a glibc
+runtime is plausible on such a device; IoT bots built for routers are mostly
+static or use uClibc or musl. `install_glibc_runtime` copies, from the pinned
+`libc6` (the same 2.41-12+deb13u4 the Debian bases install, already among the
+base's published sources):
+
+| File | Why |
+| --- | --- |
+| the loader, `/lib/ld-linux-x86-64.so.2` (reached as `/lib64/...` through `/lib64 -> lib`) or `/lib/ld-linux-aarch64.so.1` | the `PT_INTERP` glibc programs name |
+| `libc.so.6`, `libm.so.6`, `libresolv.so.2` | what programs link against |
+| `libpthread.so.0`, `libdl.so.2`, `librt.so.1`, `libutil.so.1`, `libanl.so.1`, `libnss_files.so.2`, `libnss_dns.so.2` | stubs since glibc 2.34, still named by older programs or loaded by name |
+| `/etc/nsswitch.conf` | `files` for the user and group databases, `files dns` for hosts |
+
+They go into `/lib` as an embedded glibc system lays them out (Buildroot: no
+multiarch folder, `/lib64` a link to `lib`); without an `ld.so.cache` the loader
+searches `/lib` after Debian's multiarch folders, which a trace of the loader
+shows as two failed `openat`s per library. Left out: libmvec, libnsl,
+libBrokenLocale, the debugging and profiling libraries and the gconv modules;
+`libgcc_s` and `libstdc++` are not in `libc6`, so C++ programs and programs that
+need `libgcc_s` for unwinding still do not start. A library of the set that
+needs one outside it fails the build.
+
+`bundle.json` lists the paths that reach the loader in `program_interpreters`
+(`["/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-x86-64.so.2"]`, or
+`["/lib/ld-linux-aarch64.so.1"]`). Auto mode reads it in `prechecks`
+(`stages/loader.rs`): a dynamically linked program whose loader the lane's base
+lacks is refused `unavailable_on_node` before the VM starts, with the loader and
+its C library named (uClibc, musl, Android's bionic, or glibc for another
+architecture, such as a 32-bit ARM program on the arm64 BusyBox base). A base
+without the list (an older BusyBox base, the Debian bases) is not judged there;
+the guest refuses the launch and the host names the loader, its C library and,
+for uClibc, musl and bionic, that no Antinomie base ships them (the Samples page
+says so too).
+
+**Applets a chmod cannot take the shell down with.** Every applet was a
+symbolic link to `/bin/busybox`. `chmod` follows a link, so Mirai's killer
+(`chmod 0000` on `/bin/reboot`, `halt`, `poweroff` and `netstat`) made
+`/bin/busybox` itself unrunnable, and with it `/bin/sh`: every later `sh -c` of
+the sample failed with EACCES and its persistence never ran (ANT-T0554 A26).
+`busybox_applet_links` now gives `/bin/sh` its own copy of BusyBox and the
+applets in `DISABLED_APPLETS` (reboot, halt, poweroff, netstat) another, shared
+by hard links, as BusyBox's hard-link install makes them; every other applet
+stays a link to `/bin/busybox`. The shell runs its applets from its own image
+(Debian's `busybox-static` prefers applets), so `sh -c 'cp ...'` keeps working
+even when a sample chmods `/bin/busybox` or one of its links. A recording shows
+`/bin/sh` as a file of its own (its hash is BusyBox's), and an applet the shell
+runs as `/proc/self/exe` loads `/bin/sh` instead of `/bin/busybox`; the
+recorder and Triage name processes by the path given to `execve` and treat
+`sh` and BusyBox applets alike, so nothing else changes.
+
+| Base (r22 kernel) | `base.qcow2` before | after | of which |
+| --- | --- | --- | --- |
+| BusyBox x86-64 | 3.5 MB (3,538,944 bytes) | 10.9 MB (10,878,976) | glibc 3.4 MB, two BusyBox copies 4.0 MB |
+| BusyBox arm64 | 3.4 MB (3,407,872 bytes) | 9.8 MB (9,764,864) | glibc 3.1 MB, two BusyBox copies 3.9 MB |
+
+What a sample can see: `/lib`, `/lib64` (x86-64), the libraries and
+`/etc/nsswitch.conf` exist, `/bin/sh` and the four tools are regular files
+(link count 1 and 4) where they were links. A glibc system with BusyBox as its
+userland is common on embedded devices, so neither marks a sandbox; the Debian
+multiarch lookups of the loader are Debian's glibc, the same as the Debian bases.
+The benign checks: `tests/monitor/glibc-dynamic-probe.c` (starts only with the
+loader, then uses each library) and `tests/monitor/applet-chmod-probe.c` (the
+killer's chmods, then `sh -c true`, an applet inside the shell and `/bin/ls`).
+
 ## Guest stealth (0.7.0)
 
 Guest series 0046-0050; contract revision 17 unchanged, every guest change
