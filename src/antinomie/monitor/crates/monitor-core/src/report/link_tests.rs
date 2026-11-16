@@ -76,6 +76,7 @@ pub(super) fn bpfdoor() -> Report {
             state: "Stopped by you at 5 min 9 s \u{b7} root exited 0".into(),
             exit: "exit 0".into(),
             stopped_by_user: true,
+            stop_reason: None,
             duration_ms: Some(309_000),
             route: "Tor via the gateway".into(),
             environment: vec![

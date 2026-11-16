@@ -101,7 +101,8 @@ pub fn describe(
             // noticeably longer.
             Some((start, stopped)) => {
                 let mut head = format!(
-                    "Stopped by you at {}",
+                    "{} at {}",
+                    stopped_by(run),
                     crate::time_format::duration_ms(stopped.saturating_sub(start))
                 );
                 if let Some(late) = ended_ms
@@ -115,7 +116,7 @@ pub fn describe(
                 }
                 with_detail(head)
             }
-            None => with_detail(after("Stopped by you")),
+            None => with_detail(after(&stopped_by(run))),
         },
         RunState::Finalized | RunState::Interrupted if ended_by_vm_stop(run) => {
             with_detail(after("Ended by VM stop"))
@@ -163,9 +164,10 @@ pub fn exit_summary(run: &RunSummary) -> String {
                     )
                 })
                 .unwrap_or_default();
+            let head = stopped_by(run);
             match detail(run) {
-                Some(detail) => format!("Stopped by you{at} · {detail}"),
-                None => format!("Stopped by you{at}"),
+                Some(detail) => format!("{head}{at} · {detail}"),
+                None => format!("{head}{at}"),
             }
         }
         _ if ended_by_vm_stop(run) => match detail(run) {
@@ -174,6 +176,14 @@ pub fn exit_summary(run: &RunSummary) -> String {
         },
         _ => exit(),
     }
+}
+
+/// Who stopped the run, as a state line starts: "Stopped by you" for a
+/// person's Stop run, the service's reason otherwise ("Time limit (2 min)
+/// reached"; A06).
+pub fn stopped_by(run: &RunSummary) -> String {
+    run.stop_reason
+        .map_or_else(|| "Stopped by you".to_owned(), |reason| reason.words())
 }
 
 /// Whether the VM stopped (or the app closed) while the run's process tree was
@@ -329,5 +339,61 @@ mod held_tests {
         ended.persisted.as_mut().unwrap().holding = false;
         assert_eq!(held(&ended), None);
         assert!(describe(&ended, 61_000, Some(5_000), None).starts_with("Ran for"));
+    }
+}
+
+#[cfg(test)]
+mod stop_reason_tests {
+    use super::*;
+    use antinomie_monitor_core::StopReason;
+
+    fn stopped_run(reason: Option<StopReason>) -> RunSummary {
+        let mut run: RunSummary = serde_json::from_value(serde_json::json!({
+            "id": "r", "vm_id": "v", "boot_id": "b", "session_id": 1,
+            "root_task_cookie": 7, "pid": 700,
+            "request": antinomie_monitor_core::ExecRequest::default(),
+            "directory": "/runs/r", "terminal_eof": true,
+            "state": "Stopped", "recording_error": null, "started_ms": 1_000,
+            "stopped_at_ms": 121_000,
+        }))
+        .unwrap();
+        run.stopped_by_user = reason.is_none();
+        run.stop_reason = reason;
+        run
+    }
+
+    /// A06: the service's time limit is not "Stopped by you", in the state
+    /// line, the exit summary and the saved summary.
+    #[test]
+    fn a_time_limited_run_names_its_limit_not_the_person() {
+        let run = stopped_run(Some(StopReason::TimeLimit { seconds: 120 }));
+        assert_eq!(
+            describe(&run, 200_000, Some(140_000), None),
+            "Time limit (2 min) reached at 2 min 0 s · tree ended 19 s later"
+        );
+        assert_eq!(
+            exit_summary(&run),
+            "Time limit (2 min) reached at 2 min 0 s"
+        );
+        let saved = serde_json::to_value(&run).unwrap();
+        assert_eq!(
+            saved["stop_reason"],
+            serde_json::json!({"kind": "time_limit", "seconds": 120})
+        );
+        assert!(saved.get("stopped_by_user").is_none());
+        let person = stopped_run(None);
+        assert_eq!(exit_summary(&person), "Stopped by you at 2 min 0 s");
+        assert!(serde_json::to_value(&person)
+            .unwrap()
+            .get("stop_reason")
+            .is_none());
+        assert_eq!(
+            stopped_by(&stopped_run(Some(StopReason::TimeLimit { seconds: 90 }))),
+            "Time limit (1 min 30 s) reached"
+        );
+        assert_eq!(
+            stopped_by(&stopped_run(Some(StopReason::Cancelled))),
+            "Stopped: the run was cancelled"
+        );
     }
 }

@@ -24,6 +24,7 @@ pub mod fuzz {
     pub use super::dns::parse_query as dns_query;
     pub use super::frame::{parse_arp, parse_eth, parse_ipv4, parse_tcp, parse_udp};
 }
+mod budget;
 mod config;
 mod dhcp;
 mod dns;

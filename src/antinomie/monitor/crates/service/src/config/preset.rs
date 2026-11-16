@@ -654,11 +654,15 @@ impl Default for Retry {
         Self {
             max_attempts: 2,
             backoff_s: vec![30, 120],
+            // `analysis_failed` runs `analyse` and `report` again on the
+            // saved recording, not the VM (design 4.7.2; A12: a failure of
+            // the host, out of open files or disk, is often gone by then).
             retry_on: vec![
                 FailureCode::VmStartFailed,
                 FailureCode::GuestUnreachable,
                 FailureCode::UploadFailed,
                 FailureCode::GuestLost,
+                FailureCode::AnalysisFailed,
             ],
         }
     }

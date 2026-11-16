@@ -19,8 +19,10 @@
 //!    `recording_failed` (see [`super::cleanup`]).
 //!
 //! A cancel during step 1 skips the rest of the evidence wait; steps 2 and 3
-//! always run, so the recording is kept. The caller labels the job
-//! `cancelled`.
+//! always run, so the recording is kept. A person's cancel ends the job
+//! `cancelled` as soon as it is seen, with its finish time (A37): steps 2 and
+//! 3 can take as long as a big recording takes to save, and the lane keeps
+//! the job's VM until they are over.
 use super::{LaneStages, Launched, STOP_WAIT, StageStop, cleanup::Stopped};
 use crate::{
     api::{
@@ -188,7 +190,20 @@ impl<E: Engine> LaneStages<'_, E> {
             Stage::Collect,
             "stopping the VM and saving the recording",
         );
-        match self.stop_lane_vm(job, &vm, STOP_WAIT)? {
+        // A person's cancel ends the job now; the lane still stops the VM
+        // and keeps the recording (A37).
+        let ended = cancelled && self.end_cancel_early(job);
+        let stopped = self.stop_lane_vm_with(job, &vm, STOP_WAIT, true)?;
+        if ended || self.end_cancel_early(job) {
+            return Ok(CollectEnd {
+                outcome: Outcome::Cancelled,
+                warnings,
+                pending: left_pending,
+                artifacts,
+                cancelled: true,
+            });
+        }
+        match stopped {
             Stopped::Settled => {}
             Stopped::Killed(how) => {
                 return Err(fail(

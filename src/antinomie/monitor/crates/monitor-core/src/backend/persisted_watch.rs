@@ -54,7 +54,7 @@ impl ProgramRun {
     /// let it end (and leave no `persisted` record when nothing was found).
     fn finish_final_look(&mut self, may_hold: bool) {
         self.persisted.final_look = FinalLook::Done;
-        let stopped = self.summary.stopped_by_user || !may_hold;
+        let stopped = self.summary.stop_requested() || !may_hold;
         let Some(copies) = self.summary.persisted.as_mut() else {
             return;
         };

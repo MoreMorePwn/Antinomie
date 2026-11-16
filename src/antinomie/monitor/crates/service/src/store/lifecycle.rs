@@ -615,8 +615,39 @@ impl Store {
 
     /// Fail queued jobs that waited past `wait_s` for resources, a dependency,
     /// quota or a pending disk layer (5.6). The failure code is the wait's.
+    /// [`Store::expire_waits_with`] with no view of the machine.
     pub fn expire_waits(&self) -> R<Vec<Run>> {
+        self.expire_waits_with(&|_| None)
+    }
+
+    /// [`Store::expire_waits`], counting only the time a wait is the node's
+    /// real limit (A43, decided for 0.9.0; design 5.6 says a job waits up to
+    /// `wait_s`, not which time counts):
+    ///
+    /// - a `resources` or `quota` wait does not run its clock while any run
+    ///   is `running` or `cancelling`: the disk, memory or `max_running`
+    ///   those runs hold comes back when they end, so the waiting runs stay
+    ///   queued however long the queue in front of them is. Their clock
+    ///   starts again (`waiting_since_ms` is now) on every pass;
+    /// - `shortage` says what is short now for a wait: `Some(Some(words))`
+    ///   names the resource and its numbers, as the floors word them;
+    ///   `Some(None)` says nothing is short; `None` that it cannot tell. A
+    ///   `resources` wait whose shortage is gone is not failed: the run
+    ///   starts on the next free lane. A run that is failed carries the
+    ///   words in `failure.detail`.
+    pub fn expire_waits_with(
+        &self,
+        shortage: &dyn Fn(WaitingFor) -> Option<Option<String>>,
+    ) -> R<Vec<Run>> {
         self.write(|tx| {
+            let busy: bool = tx
+                .tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM jobs WHERE state IN ('running', 'cancelling'))",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(db)?;
             let rows: Vec<(String, String, u64, u64)> = {
                 let mut statement = tx
                     .tx
@@ -635,11 +666,32 @@ impl Store {
             };
             let mut failed = Vec::new();
             for (id, wait, since, wait_s) in rows {
+                let wait: WaitingFor = from_name(&wait)?;
+                let restart = |tx: &mut Tx<'_>| {
+                    tx.tx
+                        .execute(
+                            "UPDATE jobs SET waiting_since_ms = ?2 WHERE id = ?1",
+                            rusqlite::params![id, tx.now],
+                        )
+                        .map(|_| ())
+                        .map_err(db)
+                };
+                let held_by_runs =
+                    busy && matches!(wait, WaitingFor::Resources | WaitingFor::Quota);
+                if held_by_runs {
+                    restart(tx)?;
+                    continue;
+                }
                 if tx.now < since.saturating_add(wait_s.saturating_mul(1000)) {
                     continue;
                 }
+                let words = shortage(wait);
+                if wait == WaitingFor::Resources && matches!(words, Some(None)) {
+                    // Short when it was looked at, not any more.
+                    restart(tx)?;
+                    continue;
+                }
                 let id = RunId::try_from(id).map_err(internal)?;
-                let wait: WaitingFor = from_name(&wait)?;
                 let code = match wait {
                     WaitingFor::Dependency => FailureCode::DependencyMissing,
                     WaitingFor::Quota => FailureCode::QuotaExceeded,
@@ -649,8 +701,16 @@ impl Store {
                 let failure = Failure::new(
                     code,
                     Stage::Prechecks,
-                    &format!("waited {wait_s} seconds for {}", name_of(&wait)),
-                    None,
+                    &format!(
+                        "waited {wait_s} seconds for {}{}",
+                        name_of(&wait),
+                        if matches!(wait, WaitingFor::Resources | WaitingFor::Quota) {
+                            " with no run in progress"
+                        } else {
+                            ""
+                        }
+                    ),
+                    words.flatten().as_deref(),
                 );
                 terminate(tx, &id, &cur, Outcome::Failed, Some(failure))?;
                 failed.push(load_job(&tx.tx, id.as_str())?);

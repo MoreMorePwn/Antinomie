@@ -236,6 +236,31 @@
         "stopped_by_user": {
           "type": "boolean"
         },
+        "stop_reason": {
+          "description": "Why the service stopped the run when no person did (absent otherwise)",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "time_limit",
+                "trace_cap",
+                "low_disk",
+                "cancelled"
+              ]
+            },
+            "seconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "mib": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
         "ended_ms": {
           "type": [
             "integer",

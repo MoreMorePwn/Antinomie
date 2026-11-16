@@ -118,11 +118,12 @@ pub const TRANSITION_CANCEL: &str = "command cancelled at snapshot/reconnect bou
 
 /// The guest commands the service sends that the engine refuses during a
 /// guest transition (a subset of monitor-core's `guest_scoped_command`).
-const GUEST_COMMANDS: [&str; 5] = [
+const GUEST_COMMANDS: [&str; 6] = [
     "UploadSample",
     "Execute",
     "AwaitBoot",
     "StopRun",
+    "StopRunFor",
     "TerminalRead",
 ];
 

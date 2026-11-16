@@ -25,7 +25,11 @@ use super::{
     board::{LaneBoard, LaneProfile},
 };
 use crate::{
-    api::{error::ApiError, ids::LaneId, run::Run},
+    api::{
+        error::ApiError,
+        ids::LaneId,
+        run::{Run, WaitingFor},
+    },
     clock::Clock,
     store::{Eligibility, Store},
 };
@@ -80,6 +84,12 @@ pub trait LaneRunner {
     /// How many runs the job's client may have running at once
     /// (`max_running`), as the service reads it now.
     fn running_cap(&self, _job: &Run) -> Option<u32> {
+        None
+    }
+    /// What is short now for a run that waits `wait` (A43), for the wait
+    /// expiry: `Some(Some(words))` the resource and its numbers,
+    /// `Some(None)` nothing, `None` this runner cannot tell.
+    fn shortage(&self, _wait: WaitingFor) -> Option<Option<String>> {
         None
     }
 }
@@ -162,7 +172,8 @@ impl LaneLoop<'_> {
                 next_govern = now + self.periods.govern_ms;
             }
             if self.upkeep && now >= next_expire {
-                if let Err(error) = self.store.expire_waits() {
+                let shortage = |wait| runner.shortage(wait);
+                if let Err(error) = self.store.expire_waits_with(&shortage) {
                     (self.log)(&format!("wait expiry: {error}"));
                 }
                 next_expire = now + self.periods.expire_ms;

@@ -2716,6 +2716,13 @@
         },
         "disk_layer": {
           "$ref": "#/$defs/DiskLayer"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the lane is quarantined: its reason code and words, as the lane\nfile keeps them (A46). Absent for a lane that is not."
         }
       },
       "required": [

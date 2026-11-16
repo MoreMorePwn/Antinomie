@@ -88,6 +88,8 @@ pub struct Floors {
     pub vm_ram_mib: u64,
     /// `capture_quota_size` in GiB (the per-job estimate).
     pub quota_gib: u64,
+    /// `[resources] trace_cap_mib` in bytes; `None` for no cap (A47).
+    pub trace_cap_bytes: Option<u64>,
 }
 
 impl Floors {
@@ -109,6 +111,8 @@ impl Floors {
             disk_paths,
             vm_ram_mib: u64::from(vm_ram_mib),
             quota_gib: quota_bytes.div_ceil(1 << 30),
+            trace_cap_bytes: (config.trace_cap_mib > 0)
+                .then(|| u64::from(config.trace_cap_mib) << 20),
         }
     }
 }
@@ -209,6 +213,10 @@ impl HostChecks for ResourceChecks<'_> {
         self.disk(0).map(|shortage| shortage.words())
     }
 
+    fn trace_cap(&self) -> Option<u64> {
+        self.floors.trace_cap_bytes
+    }
+
     fn admission(&self) -> Option<(WaitingFor, String)> {
         if let Some(shortage) = self.kvm() {
             return Some((WaitingFor::Dependency, shortage.words()));
@@ -234,16 +242,30 @@ pub struct Governor<'a> {
     pub checks: ResourceChecks<'a>,
     pub store: &'a Store,
     low_memory_alert_ms: Option<u64>,
+    /// When `queue_waiting` was last raised, and for what (A43).
+    waiting_alert: Option<(u64, WaitingFor)>,
     /// With several lanes every lane has a governor: they tick one at a time
-    /// through this, which keeps the time of the last `low_memory` alert.
-    shared: Option<std::sync::Arc<std::sync::Mutex<Option<u64>>>>,
+    /// through this, which keeps the time of the last `low_memory` and
+    /// `queue_waiting` alerts.
+    shared: Option<GovernorShare>,
 }
 
 /// What the governors of several lanes share ([`Governor::shared`]).
-pub type GovernorShare = std::sync::Arc<std::sync::Mutex<Option<u64>>>;
+pub type GovernorShare = std::sync::Arc<std::sync::Mutex<AlertTimes>>;
+
+/// The last alerts of the lanes' governors ([`GovernorShare`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AlertTimes {
+    low_memory_ms: Option<u64>,
+    waiting: Option<(u64, WaitingFor)>,
+}
 
 /// `low_memory` is raised at most once an hour.
 pub const LOW_MEMORY_ALERT_EVERY_MS: u64 = 3_600_000;
+
+/// `queue_waiting` is raised when the queue starts waiting for a resource,
+/// and again at most once an hour while it still does (A43).
+pub const QUEUE_WAITING_ALERT_EVERY_MS: u64 = 3_600_000;
 
 impl<'a> Governor<'a> {
     pub fn new(checks: ResourceChecks<'a>, store: &'a Store) -> Self {
@@ -251,6 +273,7 @@ impl<'a> Governor<'a> {
             checks,
             store,
             low_memory_alert_ms: None,
+            waiting_alert: None,
             shared: None,
         }
     }
@@ -291,9 +314,11 @@ impl<'a> Governor<'a> {
             return self.look(now_ms);
         };
         let mut last_alert = crate::store::lock(&share);
-        self.low_memory_alert_ms = *last_alert;
+        self.low_memory_alert_ms = last_alert.low_memory_ms;
+        self.waiting_alert = last_alert.waiting;
         let result = self.look(now_ms);
-        *last_alert = self.low_memory_alert_ms;
+        last_alert.low_memory_ms = self.low_memory_alert_ms;
+        last_alert.waiting = self.waiting_alert;
         result
     }
 
@@ -331,6 +356,38 @@ impl<'a> Governor<'a> {
             }
         } else {
             self.low_memory_alert_ms = None;
+        }
+        self.queue_waiting(now_ms)
+    }
+
+    /// Runs are queued and the machine cannot start any of them: say what
+    /// they wait for, with the numbers (A43). A queue that waits only for a
+    /// free lane raises nothing.
+    fn queue_waiting(&mut self, now_ms: u64) -> Result<(), crate::api::error::ApiError> {
+        let short = self.checks.admission();
+        let queued = match &short {
+            Some(_) => self.store.count_state(crate::api::run::RunState::Queued)?,
+            None => 0,
+        };
+        let Some((wait, words)) = short.filter(|_| queued > 0) else {
+            self.waiting_alert = None;
+            return Ok(());
+        };
+        let due = self.waiting_alert.is_none_or(|(last, before)| {
+            before != wait || now_ms.saturating_sub(last) >= QUEUE_WAITING_ALERT_EVERY_MS
+        });
+        if due {
+            self.waiting_alert = Some((now_ms, wait));
+            self.alert(
+                "queue_waiting",
+                &format!(
+                    "{queued} queued run(s) wait for {}: {words}; they stay queued and start once it is back",
+                    serde_json::to_value(wait)
+                        .ok()
+                        .and_then(|name| name.as_str().map(str::to_owned))
+                        .unwrap_or_default()
+                ),
+            )?;
         }
         Ok(())
     }

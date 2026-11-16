@@ -206,6 +206,16 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     if config.queue.wait_s == 0 {
         sink.error("queue.wait_s", "must be at least 1");
     }
+    let cap = config.resources.trace_cap_mib;
+    if cap != 0 && cap < super::service::MIN_TRACE_CAP_MIB {
+        sink.error(
+            "resources.trace_cap_mib",
+            format!(
+                "must be 0 (no cap) or at least {}",
+                super::service::MIN_TRACE_CAP_MIB
+            ),
+        );
+    }
     if config.safety.unsafe_routes_ack.is_some() {
         sink.error(
             "safety.unsafe_routes_ack",

@@ -789,7 +789,7 @@ fn a_cancel_while_the_program_runs_stops_it_stops_the_vm_and_keeps_the_recording
             "UploadSample",
             "UploadSample",
             "Execute",
-            "StopRun",
+            "StopRunFor",
             "Stop"
         ]
     );
@@ -834,6 +834,64 @@ fn a_cancel_while_collect_waits_for_evidence_still_stops_the_vm() {
     let stored = w.job(&job.id);
     assert_eq!(stored.state, RunState::Cancelled);
     assert_eq!(stored.recording.unwrap().phase, RecordingPhase::Complete);
+    lane_is_free(&w);
+}
+
+/// A37: a big recording takes long to save after the stop. A person's
+/// cancel during `collect` ends the job `cancelled`, with its finish time,
+/// when it is seen; the lane keeps the VM until the recording has settled.
+#[test]
+fn a_cancel_during_collect_ends_the_job_before_a_long_recording_settles() {
+    let mut w = W::new("cancel-collect-long");
+    w.evidence = Box::new(|_| {
+        Ok(Some(RunArtifacts {
+            network_state: RunArtifactState::InProgress,
+            memory_state: RunArtifactState::Disabled,
+            core_state: RunArtifactState::Disabled,
+            ..RunArtifacts::default()
+        }))
+    });
+    let job = w.fx.running(1);
+    let began = crate::clock::Clock::now_ms(&*w.fx.clock);
+    let driven = with_canceller(&w, &job, |cancel| {
+        let mut waiter = w.engine(|fake| {
+            restore_ok(fake);
+            upload_ok(fake);
+            execute_run(fake, Some((5 * SECOND, exited(0))));
+            fake.call_after(40 * SECOND, move || cancel());
+            chatter(fake, 10 * SECOND, 900 * SECOND);
+            fake.on("Stop")
+                .after(SECOND)
+                .then(2 * SECOND, |s| {
+                    s.state = VmState::Stopped;
+                    s.active_vm = None;
+                    s.disk_layers
+                        .push(antinomie_monitor_core::disk_layers::DiskLayer {
+                            vm_id: VM.into(),
+                            boot_id: "b1".into(),
+                            phase: antinomie_monitor_core::disk_layers::LayerPhase::Finalizing,
+                            started_ms: 0,
+                            phase_ms: 0,
+                        });
+                })
+                .ok("VM stopped");
+            // The recording's layer takes ten minutes to finish.
+            fake.after(600 * SECOND, |s| s.disk_layers.clear());
+        });
+        drive(&w, &mut waiter, &job)
+    });
+    let ended = crate::clock::Clock::now_ms(&*w.fx.clock);
+    assert!(matches!(driven, Driven::Cancelled), "{driven:?}");
+    assert!(ended - began >= 600_000, "the lane waited for the layer");
+    let stored = w.job(&job.id);
+    assert_eq!(stored.state, RunState::Cancelled);
+    assert_eq!(stored.outcome, Some(Outcome::Cancelled));
+    let finished = stored.finished_ms.expect("a finish time");
+    assert!(
+        finished - began < 120_000,
+        "the job ended when the cancel was seen, {} s in",
+        (finished - began) / 1000
+    );
     lane_is_free(&w);
 }
 

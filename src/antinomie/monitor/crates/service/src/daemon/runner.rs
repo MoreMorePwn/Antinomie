@@ -160,6 +160,20 @@ impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
         self.env.callers.max_running_now(&job.client_id)
     }
 
+    fn shortage(&self, wait: crate::api::run::WaitingFor) -> Option<Option<String>> {
+        use crate::api::run::WaitingFor;
+        match wait {
+            WaitingFor::Resources | WaitingFor::Dependency => Some(
+                self.env
+                    .host
+                    .admission()
+                    .filter(|(short, _)| *short == wait)
+                    .map(|(_, words)| words),
+            ),
+            _ => None,
+        }
+    }
+
     fn command(&mut self, op: &str, params: Value) -> Result<Value, ApiError> {
         let request: super::lane_ops::LaneParams = super::service::params(params)?;
         let lane = request.lane.unwrap_or_else(|| self.lane.clone());

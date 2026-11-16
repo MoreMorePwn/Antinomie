@@ -1415,6 +1415,60 @@ x86 programs by their own table.
   of BusyBox and reboot, halt, poweroff and netstat another (hard links); the
   shell runs its applets from its own image. About 4 MB more per base; a base
   gets it when it is rebuilt.
+- **A failed analysis is tried again, and says when the disk was full.** The
+  presets' default `retry_on` includes `analysis_failed` (design: the host stages run
+  again on the saved recording, the VM does not); an analysis step that failed on a
+  full disk adds the floor's words to the failure; at start the daemon removes the
+  index temporaries an interrupted scan left in the recordings it resumes.
+- **`queue status` says why a lane is quarantined, and `auto lane reset` waits for
+  a pending disk layer.** Each lane row of `queue status` (and `reason` in its JSON)
+  has the quarantine's reason and words, and the `lane_quarantined` alert names them
+  with the reset command. A reset whose lane VM still saves its last recording
+  (`disk layer pending`, after a daemon restart) waits up to 10 minutes for it before
+  the revert, instead of timing out on the restore, and names the layer when it does
+  not settle.
+- **A cancelled run ends `cancelled` when the cancel is seen.** A run cancelled
+  while its VM was stopping or its big recording was being saved stayed `cancelling`,
+  with no finish time, for as long as the saving took. It now ends `cancelled` at
+  once; the lane keeps the VM until the recording is saved, so no other run starts on
+  it before.
+- **A stop that a big process tree outlasts is reported.** When the program's tree
+  ends 5 s or more after the stop, the run has the warning `stop_overrun` with how
+  long it took and how many processes there were (2,096 processes took 19 s).
+- **A per-run trace cap.** `[resources] trace_cap_mib` (default 2048, 0 for none)
+  bounds what one run's recording takes on disk: at the cap the program is stopped,
+  the run ends `partial` with the warning `trace_cap_reached` (the cap, what was
+  recorded and when) and its report reads "Trace cap (2048 MiB) reached". The
+  engine's per-boot quota is no longer silent either: `trace_reduced` when it
+  switched to keeping only the calls the rules read, `trace_quota_reached` when it
+  stopped recording.
+- **A run the service stopped is not "Stopped by you".** A run that reached its
+  time limit reads "Time limit (2 min) reached at 2 min 0 s" in the report, the
+  Markdown, the run's state line and the window, and its `run.json` and the report's
+  `run` record `stop_reason` (`time_limit`, `trace_cap`, `low_disk` or `cancelled`)
+  instead of `stopped_by_user`; MISP calls it a finished analysis. The engine takes a
+  `StopRunFor` command for a stop with a reason.
+- **A missing optional tool no longer makes a run `partial`.** A static check whose
+  tool is not installed (capa, a rule pack) is the warning `static_check_unavailable`
+  and the run keeps its outcome; list the check in `static_analysis.required_checks`
+  to make it a failure. A check that ran out of time is still `partial`
+  (`static_check_incomplete`).
+- **Queued runs no longer fail together after `[queue] wait_s`.** A run waiting for
+  disk or memory held by the runs in front of it now stays queued: the wait counts
+  only while no run is in progress, a shortage that is gone when the wait is up keeps
+  the run queued, and a run that does fail (`host_resources`) names the resource and
+  its numbers in `failure.detail`. The alert `queue_waiting` says what queued runs
+  wait for, with the numbers, when they start waiting and hourly while they do.
+- **A busy lane no longer runs the daemon out of open files.** Every lane's engine
+  runs in the daemon's process, and a guest that scans the network opened up to 256
+  connections per lane, each holding four or five descriptors; two such runs at once
+  used up a 1,024 limit and failed every analysis in progress with "Too many open
+  files". A guest connection now holds one descriptor (two for a built-in InetSim
+  service), the lanes' gateways together stay below what the open-file limit leaves
+  after 512 for the rest of the process (a connection over it goes unanswered, as one
+  over a lane's own limit), and `auto daemon` and the command line raise their soft
+  open-file limit to the hard limit (at most 65,536) at start and log it. `doctor`
+  has an `open-files` row: a warning when the limit stays below 4,096.
 - **A number in a run request reads back as the same number.** A very long number
   in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
   integer) was read as a floating-point value that, written again by the service,

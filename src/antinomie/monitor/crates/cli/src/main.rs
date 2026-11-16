@@ -36,6 +36,11 @@ fn main() {
     if let Some(code) = serve_worker_roles() {
         std::process::exit(code);
     }
+    // The daemon and the direct mode run engines, gateways and host tools in
+    // this one process: raise the soft open-file limit before any of them
+    // starts (A27). `auto daemon` logs what this did; `doctor` reports a
+    // hard limit too low for it.
+    let _ = antinomie_monitor_core::open_files::raise_at_start();
     let environment = app::Environment::from_process();
     let (exit, rendered) = app::execute(std::env::args_os().collect(), &environment);
     // A closed pipe (`| head`) is not a failure of the command.

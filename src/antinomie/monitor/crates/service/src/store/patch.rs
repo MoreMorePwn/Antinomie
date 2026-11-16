@@ -39,6 +39,29 @@ fn live(id: &RunId, state: RunState, what: &str) -> R<()> {
 impl Store {
     /// Record the sample, VM, run or recording of a running job. No event:
     /// `run.program`, `run.artifact` and the others have their own calls.
+    /// The recording of a job that a cancel ended before its lane had
+    /// saved it is complete now (A37): only `recording.phase` changes, and
+    /// only from `finalizing`, whatever the job's state.
+    pub fn complete_recording(&self, id: &RunId) -> R<()> {
+        self.write(|tx| {
+            let job = load_job(&tx.tx, id.as_str())?;
+            let Some(mut recording) = job.recording else {
+                return Ok(());
+            };
+            if recording.phase != crate::api::run::RecordingPhase::Finalizing {
+                return Ok(());
+            }
+            recording.phase = crate::api::run::RecordingPhase::Complete;
+            tx.tx
+                .execute(
+                    "UPDATE jobs SET recording_json = ?2 WHERE id = ?1",
+                    rusqlite::params![id.as_str(), to_json(&recording)?],
+                )
+                .map_err(db)?;
+            Ok(())
+        })
+    }
+
     pub fn patch(&self, id: &RunId, patch: JobPatch) -> R<Run> {
         self.write(|tx| {
             let cur = current(tx, id)?;

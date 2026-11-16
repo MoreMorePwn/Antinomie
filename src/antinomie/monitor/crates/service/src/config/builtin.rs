@@ -115,7 +115,7 @@ tag_library = false
 [retry]
 max_attempts = 2
 backoff_s = [30, 120]
-retry_on = ["vm_start_failed", "guest_unreachable", "upload_failed", "guest_lost"]
+retry_on = ["vm_start_failed", "guest_unreachable", "upload_failed", "guest_lost", "analysis_failed"]
 "#;
 
 pub const QUICK_LOOK: &str = r#"title = "Quick look"

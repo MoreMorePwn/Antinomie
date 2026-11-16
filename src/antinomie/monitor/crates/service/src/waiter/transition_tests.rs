@@ -163,7 +163,7 @@ fn run_exec_goes_on_through_a_transition_and_stops_the_run_after_it() {
             .after(SECOND)
             .then(SECOND, |s| s.runs.push(live_run()))
             .ok("launched pid 750");
-        fake.on("StopRun").ok("stop requested");
+        fake.on("StopRunFor").ok("stop requested");
         fake.on("Stop")
             .then(SECOND, |s| {
                 s.state = VmState::Stopped;
@@ -215,7 +215,7 @@ fn run_exec_goes_on_through_a_transition_and_stops_the_run_after_it() {
     let stops: Vec<_> = fake
         .sent()
         .into_iter()
-        .filter(|s| s.name == "StopRun")
+        .filter(|s| s.name == "StopRunFor")
         .collect();
     assert_eq!(stops.len(), 1, "{stops:?}");
     assert!(stops[0].at_ms >= 30_000, "{stops:?}");

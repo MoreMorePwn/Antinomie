@@ -72,13 +72,6 @@ pub(crate) enum Stream {
 }
 
 impl Stream {
-    fn try_clone(&self) -> std::io::Result<Stream> {
-        Ok(match self {
-            Stream::Tcp(s) => Stream::Tcp(s.try_clone()?),
-            Stream::Unix(s) => Stream::Unix(s.try_clone()?),
-        })
-    }
-
     fn shutdown(&self, how: Shutdown) {
         let _ = match self {
             Stream::Tcp(s) => s.shutdown(how),
@@ -87,27 +80,40 @@ impl Stream {
     }
 }
 
-impl Read for Stream {
+// The reader and writer threads of a connection share its one descriptor
+// (through `&Stream`) instead of each holding a duplicate: a guest that
+// opens hundreds of connections at once costs the process one descriptor
+// per connection (two for a built-in service), not three or four (A27).
+impl Read for &Stream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        fn from(mut reader: impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
+            reader.read(buf)
+        }
         match self {
-            Stream::Tcp(s) => s.read(buf),
-            Stream::Unix(s) => s.read(buf),
+            Stream::Tcp(s) => from(s, buf),
+            Stream::Unix(s) => from(s, buf),
         }
     }
 }
 
-impl Write for Stream {
+impl Write for &Stream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        fn to(mut writer: impl Write, buf: &[u8]) -> std::io::Result<usize> {
+            writer.write(buf)
+        }
         match self {
-            Stream::Tcp(s) => s.write(buf),
-            Stream::Unix(s) => s.write(buf),
+            Stream::Tcp(s) => to(s, buf),
+            Stream::Unix(s) => to(s, buf),
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
+        fn flushed(mut writer: impl Write) -> std::io::Result<()> {
+            writer.flush()
+        }
         match self {
-            Stream::Tcp(s) => s.flush(),
-            Stream::Unix(s) => s.flush(),
+            Stream::Tcp(s) => flushed(s),
+            Stream::Unix(s) => flushed(s),
         }
     }
 }
@@ -181,7 +187,7 @@ pub(crate) enum Down {
 pub(crate) struct Pipes {
     pub up: SyncSender<UpMsg>,
     pub down: Receiver<Down>,
-    closer: Stream,
+    closer: Arc<Stream>,
 }
 
 impl Drop for Pipes {
@@ -197,9 +203,9 @@ pub(crate) fn start_pipes(
     stream: Stream,
     notify: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<Pipes, String> {
-    let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
-    let closer = stream.try_clone().map_err(|e| e.to_string())?;
-    let mut reader = stream;
+    let closer = Arc::new(stream);
+    let writer = Arc::clone(&closer);
+    let reader = Arc::clone(&closer);
     let (up, up_rx) = sync_channel::<UpMsg>(UP_QUEUE);
     let (down_tx, down) = sync_channel::<Down>(DOWN_QUEUE);
     thread::Builder::new()
@@ -208,7 +214,7 @@ pub(crate) fn start_pipes(
             for message in up_rx {
                 match message {
                     UpMsg::Data(bytes) => {
-                        if writer.write_all(&bytes).is_err() {
+                        if (&*writer).write_all(&bytes).is_err() {
                             break;
                         }
                     }
@@ -225,7 +231,7 @@ pub(crate) fn start_pipes(
         .spawn(move || {
             let mut buffer = vec![0u8; CHUNK];
             loop {
-                let item = match reader.read(&mut buffer) {
+                let item = match (&*reader).read(&mut buffer) {
                     Ok(0) => Down::Eof,
                     Ok(len) => Down::Data(buffer[..len].to_vec()),
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,

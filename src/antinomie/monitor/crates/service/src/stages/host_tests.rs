@@ -248,6 +248,7 @@ pub(super) fn recording(w: &W, sample_sha: &str, telemetry: bool) -> PathBuf {
         boot_wait: None,
         triggers: None,
         stopped_by_user: false,
+        stop_reason: None,
         stopped_at_ms: None,
         persisted: None,
         started_ms: Some(1_792_000_000_000),
@@ -875,9 +876,37 @@ fn analysis_failed_is_repeated_in_place_when_the_policy_retries_it() {
     assert_eq!(analyse.len(), 4, "{analyse:?}");
 }
 
+/// A12: the default policy lists `analysis_failed`: a failed scan is run
+/// once more in place before the job fails.
+#[test]
+fn the_default_policy_runs_a_failed_analysis_once_more() {
+    let mut w = world("host-default-retry");
+    let calls = Arc::new(AtomicU32::new(0));
+    let seen = calls.clone();
+    hook(&mut w, |h| {
+        h.index = Some(Box::new(move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            Err("Too many open files (os error 24)".into())
+        }));
+    });
+    let job = collected(&w, 1);
+    let mut waiter = w.engine(|_| {});
+    assert!(matches!(host(&w, &mut waiter, &job), Hosted::Failed(_)));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "tried twice (max_attempts 2)"
+    );
+    assert!(warnings(&w, &job).contains(&"analysis_retry".to_owned()));
+}
+
 #[test]
 fn without_the_retry_the_first_failure_ends_the_job() {
-    let mut w = world("host-noretry");
+    let mut w = world_with("host-noretry", |p| {
+        p.retry
+            .retry_on
+            .retain(|code| *code != FailureCode::AnalysisFailed)
+    });
     let calls = Arc::new(AtomicU32::new(0));
     let seen = calls.clone();
     hook(&mut w, |h| {
@@ -1301,11 +1330,16 @@ fn a_tool_with_nothing_to_give_is_named_in_its_warning() {
         &[("metadata", "complete"), ("structures", "unavailable")],
     );
     let (w, job, hosted) = analyse_with("host-static-unavailable", false, Vec::new(), report);
-    assert_eq!(finished(hosted).state, RunState::Partial);
+    // A07: a missing optional tool is a warning, not `partial`.
+    assert_eq!(finished(hosted).state, RunState::Succeeded);
     let warnings = w.job(&job.id).warnings;
     assert!(
-        warnings.iter().any(|x| x.code == "static_check_incomplete"
+        warnings.iter().any(|x| x.code == "static_check_unavailable"
             && x.text.contains("the structures check was not available")),
+        "{warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|x| x.code == "static_check_incomplete"),
         "{warnings:?}"
     );
 }

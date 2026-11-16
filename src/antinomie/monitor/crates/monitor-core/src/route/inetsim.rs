@@ -85,8 +85,10 @@ fn content_type(path: &str) -> &'static str {
 }
 
 fn http(stream: UnixStream) -> std::io::Result<()> {
-    let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    // Reads and writes share the one descriptor (A27: no duplicate per
+    // connection).
+    let mut writer = &stream;
+    let mut reader = BufReader::new(&stream);
     for _ in 0..MAX_REQUESTS {
         let Some(request) = line(&mut reader)? else {
             return Ok(());
@@ -148,8 +150,10 @@ fn http(stream: UnixStream) -> std::io::Result<()> {
 }
 
 fn smtp(stream: UnixStream) -> std::io::Result<()> {
-    let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    // Reads and writes share the one descriptor (A27: no duplicate per
+    // connection).
+    let mut writer = &stream;
+    let mut reader = BufReader::new(&stream);
     writer.write_all(b"220 mail.example.com ESMTP ready\r\n")?;
     let mut data = false;
     let mut taken = 0u64;
@@ -209,8 +213,10 @@ fn irc_nick(text: &str) -> String {
 /// the connection is an in-process socket pair, and a channel has no other
 /// member, so a bot's commands are captured and relayed nowhere.
 fn irc(stream: UnixStream) -> std::io::Result<()> {
-    let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    // Reads and writes share the one descriptor (A27: no duplicate per
+    // connection).
+    let mut writer = &stream;
+    let mut reader = BufReader::new(&stream);
     writer.write_all(b":irc.local NOTICE * :*** Looking up your hostname...\r\n")?;
     let (mut nick, mut user, mut welcomed) = (None::<String>, false, false);
     for _ in 0..MAX_IRC_LINES {

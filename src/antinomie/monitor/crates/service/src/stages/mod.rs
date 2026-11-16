@@ -149,6 +149,12 @@ pub trait HostChecks {
     fn admission(&self) -> Option<(WaitingFor, String)> {
         None
     }
+
+    /// The most a run's recording may take on disk, in bytes (`[resources]
+    /// trace_cap_mib`, A47); `None` for no cap.
+    fn trace_cap(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Every check passes.

@@ -96,6 +96,8 @@ pub(crate) struct Conn {
     pub dead: bool,
     /// The route generation it was made under.
     pub generation: u64,
+    /// Its share of the process's connections ([`super::budget`]).
+    slot: Option<super::budget::Slot>,
 }
 
 impl Conn {
@@ -125,7 +127,13 @@ impl Conn {
             down_len: 0,
             dead: false,
             generation: 0,
+            slot: None,
         }
+    }
+
+    /// Keep `slot` until the connection is forgotten.
+    pub fn hold(&mut self, slot: super::budget::Slot) {
+        self.slot = Some(slot);
     }
 
     /// Payload bytes moved since the last call: (from the guest, to the guest).

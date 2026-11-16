@@ -220,7 +220,9 @@ its default is Standard's. The full list is in
   with `enabled = false` none. A check that runs out of its time (2 x its
   expected time, or `time_limit_per_tool_min` when it is above 0, stretched on a
   busy host like the guest waits) or stops short does not fail the run: the run
-  ends `partial` with a `static_check_incomplete` warning that names the check.
+  ends `partial` with a `static_check_incomplete` warning that names the check. A
+  check whose optional tool is not installed (capa, a rule pack) is the warning
+  `static_check_unavailable` and leaves the run's outcome alone.
   List checks in `static_analysis.required_checks` (default none) to make their
   timeout, or their being unavailable, a failure of the `analyse` stage; with
   `required_stages` naming `analyse` that ends the run `failed` with
@@ -407,8 +409,12 @@ starts in a row that did not reach a working guest. Queued runs stay queued with
 
 * `auto lane list` shows whether the lane is quarantined and what keeps it from a
   run;
+* `auto queue status` names the reason on the lane's row (`reason` in its JSON),
+  and so does the `lane_quarantined` alert;
 * `auto lane reset --yes` reverts the VM to its clean snapshot now and lifts the
-  quarantine when that works;
+  quarantine when that works. When the VM's last recording is still being saved
+  (`disk layer pending`, after a daemon restart) it waits up to 10 minutes for that
+  first, and names the layer if it does not settle;
 * `auto lane unquarantine` lifts it without reverting, when the checks pass.
 
 After a base update make a new lane VM with `auto init --replace`.
@@ -546,7 +552,7 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `preset_denied` | submit | no | There is no such preset (`details.preset`); nothing is stored |
 | `limit_exceeded` | submit | no | The priority, the run time or the runs of the last 24 hours are above the caller's limit, or a value is above a node ceiling (`details.field`, `details.limit`, `details.source` `caller` or `node`; `details.next_at_ms` for the daily count); the caller's limits are set in `service.toml` `[limits.local]` and per watch folder `priority_max` |
 | `unavailable_on_node` | submit, prechecks | no | The node does not have it: a live route, keeping the VM after a failure (both arrive with 0.9.1), another lane group, or (prechecks) the dynamic loader a dynamically linked program names, when the lane's base lists its loaders and that one is not among them (`details.what` `program_interpreter./lib/ld-uClibc.so.0`; BusyBox bases built with glibc's runtime list theirs); `details.what` |
-| `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The run waits `queued` for up to `[queue] wait_s` (3600), then fails |
+| `quota_exceeded`, `dependency_missing`, `host_resources` | prechecks | waits | The queue is full, a tool is missing (`doctor`), or the disk, RAM or KVM floor is not met. The run waits `queued` for up to `[queue] wait_s` (3600), then fails; `failure.detail` names what was short and its numbers. A wait for disk, memory or `max_running` does not count while any run is in progress (the runs in front hold what it waits for), and one whose shortage is gone when the time is up stays queued |
 | `no_base`, `no_vm` | provision | no | The lane VM or its base is gone; `auto lane list` says which |
 | `vm_start_failed`, `guest_unreachable` | provision, upload, launch | yes | The VM or its guest did not come up, the guest kernel crashed while it booted (the crash line is the detail), or the guest stopped answering before the program ran and the engine could not get it back in time; three in a row quarantine the lane |
 | `revert_failed`, `lane_changed` | provision | no | The lane is quarantined (see above) |
@@ -554,9 +560,9 @@ is 10 for `failed`, 11 for `partial`, 12 for `cancelled`, 13 for `rejected`.
 | `launch_failed` | launch | depends | The program did not start (not executable for the guest, no terminal) |
 | `guest_lost` | run, collect | once | The guest or QEMU died, or the guest stopped answering (a kernel panic, a hang) and the engine could not get it back by the run limit plus 120 s. A sample that does that twice ends `failed` |
 | `recording_failed` | collect | once | The recording could not be completed |
-| `analysis_failed` | analyse, report | yes | Only when the preset marks the stage required (`required_stages`); otherwise the run is `partial` with a warning. A static check that only timed out or stopped short is not this failure unless it is in `static_analysis.required_checks` (it is a `static_check_incomplete` warning and the run is `partial`) |
+| `analysis_failed` | analyse, report | yes | Only when the preset marks the stage required (`required_stages`); otherwise the run is `partial` with a warning. The default `retry_on` lists it: `analyse` and `report` run once more on the saved recording, not the VM. A step that failed on a full disk says so. A static check that only timed out or stopped short is not this failure unless it is in `static_analysis.required_checks` (it is a `static_check_incomplete` warning and the run is `partial`) |
 | `deadline_exceeded` | analyse, report | no | The host stages passed their deadline (`host_time_factor` x the expected work, see "Time limits"): the running items were stopped (`timed_out`), the queued ones never started; what finished is kept. A busy host or too low a factor; try again later or raise `host_time_factor` |
-| `cancelled` | any | no | Cancelled by request; what was recorded is kept |
+| `cancelled` | any | no | Cancelled by request; what was recorded is kept. The run ends `cancelled` when the cancel is seen, also while its VM stops and its recording is saved (the lane keeps the VM until that is over) |
 | `internal` | any | maybe | A bug, or the watchdog: the whole run ran past `run` plus 30 minutes. `details.log` names the run log |
 
 A retry starts with a full revert. `backoff_s` (30 s, then 120 s) spaces the
@@ -575,11 +581,21 @@ util-linux tshark curl`. Bubblewrap must work: on Ubuntu 24.04 an AppArmor setti
 (`kernel.apparmor_restrict_unprivileged_userns`) can forbid it; the run then stops
 with `dependency_missing` instead of running unsandboxed.
 
+**"Too many open files".** Every lane's engine, its network gateway and the host
+work share the daemon's process. The daemon raises its soft open-file limit to the
+hard limit (at most 65,536) at start and logs it (`open-file limit raised from 1024
+to 65536`); a warning in the log or in `doctor` (`open-files`) means the hard limit
+is too low: raise it (`LimitNOFILE=` in the unit, which the shipped units set to
+65,536, or `ulimit -Hn` before a daemon started by hand). A guest that opens
+connections faster than they close gets no answer past what the limit leaves.
+
 **Runs stay `queued`.** `auto status RUN` shows `waiting_for`: `lane` (busy),
 `resources` (below `min_free_disk_gib` or the RAM floor, the queue pauses),
 `dependency`, `quota`, `queue_paused`, `layer_pending` (the previous run's disk is
 still being saved, which can take minutes after a run that changed many files),
-`backoff` or `lane_quarantined`. A file `<data>/run/PAUSE` pauses admission on
+`backoff` or `lane_quarantined`. The alert `queue_waiting` says what queued runs
+wait for, with the numbers, when they start waiting and hourly while they do. A
+file `<data>/run/PAUSE` pauses admission on
 every lane within five seconds, also while other lanes run runs (a lane running a
 run starts no other until it ends); `auto queue resume` or removing the file
 continues. Low disk and a missing KVM pause every lane the same way.

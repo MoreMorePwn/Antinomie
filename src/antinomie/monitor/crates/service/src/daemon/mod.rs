@@ -528,6 +528,22 @@ impl<E: Engine + Send + 'static> Daemon<E> {
         // They go back to the host work pool in the order they arrived (first
         // come, first served), whatever lane collected them.
         resume.sort_by(|a, b| (a.created_ms, &a.id).cmp(&(b.created_ms, &b.id)));
+        // A scan the dead process left behind kept its index temporaries in
+        // the recording (A12). Nothing scans yet: whatever is there is stale.
+        for job in &resume {
+            if let Some(directory) = job.recording.as_ref().and_then(|r| r.directory.as_ref()) {
+                let removed = antinomie_monitor_core::analysis::detection::remove_stale_temporaries(
+                    std::path::Path::new(directory),
+                    Duration::ZERO,
+                );
+                if removed > 0 {
+                    log(&format!(
+                        "run={} removed {removed} index temporary file(s) an earlier scan left",
+                        job.id
+                    ));
+                }
+            }
+        }
         log(&format!(
             "recovery: {} job(s) back in the queue, {} to resume at analyse",
             recovered.jobs.requeued.len() + recovered.jobs.failed.len(),

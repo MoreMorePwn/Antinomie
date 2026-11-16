@@ -110,6 +110,35 @@ pub fn evaluate(
     (values, missing)
 }
 
+/// The open-file limit row (A27): the soft limit a daemon or a direct-mode
+/// command started now gets (this process raised its own at start), and the
+/// hard limit that bounds it. Below `open_files::LOW` it is a warning, never
+/// a missing tool.
+fn open_files_value(raised: Option<antinomie_monitor_core::open_files::Raised>) -> Value {
+    use antinomie_monitor_core::open_files::{LOW, WANTED};
+    let low = raised.is_some_and(|raised| raised.low());
+    let problem = match raised {
+        None => Some("the open-file limit could not be read or raised".to_owned()),
+        Some(raised) if raised.low() => Some(format!(
+            "{}; a daemon with busy lanes can run out of open files",
+            raised.words()
+        )),
+        Some(_) => None,
+    };
+    json!({
+        "tool": "open-files",
+        "name": "Open-file limit",
+        "ok": problem.is_none(),
+        "required": false,
+        "warning": problem.is_some(),
+        "problem": problem,
+        "hint": format!("raise the hard limit to at least {WANTED} (`ulimit -Hn`, LimitNOFILE= in a systemd unit, /etc/security/limits.conf); below {LOW} is low"),
+        "soft_limit": raised.map(|raised| raised.after),
+        "hard_limit": raised.and_then(|raised| raised.hard),
+        "low": low,
+    })
+}
+
 fn human(values: &[Value]) -> String {
     let rows: Vec<Vec<String>> = values
         .iter()
@@ -130,7 +159,10 @@ pub fn run(arguments: &Doctor, context: &Context) -> Result<Reply, CliError> {
     let explicit = parse_required(&arguments.require)?;
     context.logger.debug("probing runtime dependencies");
     let report = dependencies::check(&context.options);
-    let (values, missing) = evaluate(&report, &explicit);
+    let (mut values, missing) = evaluate(&report, &explicit);
+    values.push(open_files_value(
+        antinomie_monitor_core::open_files::raise_at_start().ok(),
+    ));
     let data_dir = data_dir_value(context.data_dir());
     let mut text = human(&values);
     if let Some(owner) = data_dir["owner"]
@@ -184,6 +216,32 @@ mod tests {
             checks,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_low_open_file_limit_is_a_warning_with_both_numbers() {
+        use antinomie_monitor_core::open_files::Raised;
+        let low = open_files_value(Some(Raised {
+            before: 1024,
+            after: 1024,
+            hard: Some(1024),
+        }));
+        assert_eq!(low["tool"], "open-files");
+        assert_eq!(low["ok"], false);
+        assert_eq!(low["warning"], true);
+        assert_eq!(low["required"], false);
+        assert_eq!(low["soft_limit"], 1024);
+        assert_eq!(low["hard_limit"], 1024);
+        assert!(low["problem"].as_str().unwrap().contains("1024"));
+        let raised = open_files_value(Some(Raised {
+            before: 1024,
+            after: 65_536,
+            hard: Some(524_288),
+        }));
+        assert_eq!(raised["ok"], true);
+        assert_eq!(raised["warning"], false);
+        assert_eq!(raised["soft_limit"], 65_536);
+        assert!(human(&[low]).contains("warning: open-file limit 1024"));
     }
 
     #[test]

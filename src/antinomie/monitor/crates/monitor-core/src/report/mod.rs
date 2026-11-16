@@ -133,6 +133,10 @@ pub struct RunInfo {
     pub exit: String,
     /// The run was ended with Stop run.
     pub stopped_by_user: bool,
+    /// Why the service stopped the run when no person did (A06): its time
+    /// limit, the disk floor, a cancel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<crate::api::StopReason>,
     /// When the run's process tree ended, ms since the epoch, when known.
     pub ended_ms: Option<u64>,
     /// Start to end (or to the Stop press), in ms, when both are known.

@@ -145,8 +145,9 @@ impl<E: Engine> LaneStages<'_, E> {
         self.update_lane(|file| file.checkpoint(Stage::Collect, Checkpoint::Started, now))?;
         let end = match self.collect(job, launched) {
             Ok(mut end) => {
-                // A run stopped for the disk floor is a partial result.
-                if self.floor_stopped(job) {
+                // A run stopped for the disk floor, or at its trace cap
+                // (A47), is a partial result.
+                if self.floor_stopped(job) || self.trace_capped(job) {
                     end.outcome = Outcome::Partial;
                 }
                 end
@@ -170,6 +171,17 @@ impl<E: Engine> LaneStages<'_, E> {
             .end_stage(&job.id, StageStatus::Finished)
             .map_err(|e| self.store_error(Stage::Collect, e))?;
         Ok(end)
+    }
+
+    /// The run was stopped at its trace cap (its `trace_cap_reached`
+    /// warning, A47).
+    pub(super) fn trace_capped(&self, job: &Run) -> bool {
+        self.env.store.get(&job.id).is_ok_and(|stored| {
+            stored
+                .warnings
+                .iter()
+                .any(|w| w.code == "trace_cap_reached")
+        })
     }
 
     /// The run was stopped for the disk floor (its `low_disk` warning, which
@@ -304,8 +316,9 @@ impl<E: Engine> LaneStages<'_, E> {
             && let Ok(stored) = self.env.store.get(&job.id)
             && stored.recording.as_ref().map(|r| r.phase) == Some(RecordingPhase::Finalizing)
         {
-            // The VM is stopped and the recording settled: it is complete.
-            let _ = self.set_recording_phase(job, RecordingPhase::Complete);
+            // The VM is stopped and the recording settled: it is complete,
+            // also for a job a cancel has already ended (A37).
+            let _ = self.env.store.complete_recording(&job.id);
         }
         // The lane's end of work must be written, or the lane stays busy for
         // good: on a full disk it is tried again until it is.
@@ -441,8 +454,14 @@ impl<E: Engine> LaneStages<'_, E> {
     }
 
     fn end_cancelled(&mut self, job: &Run) -> Driven {
+        // A person's cancel ends the job before the lane stops its VM and
+        // saves the recording, which can take long (A37).
+        let ended = self.end_cancel_early(job);
         if let Err(error) = self.leave_lane(job) {
             return Driven::Aborted(error);
+        }
+        if ended {
+            return Driven::Cancelled;
         }
         let store = self.env.store;
         if store.cancel_is_shutdown(&job.id).unwrap_or(false) {

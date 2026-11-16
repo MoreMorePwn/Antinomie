@@ -177,6 +177,17 @@ pub fn run(arguments: &DaemonArgs, context: &Context) -> Result<Reply, CliError>
                 .with_field("log.file")
         })?,
     );
+    // The limit `main` raised (A27): the log says what it is, and warns when
+    // the hard limit kept it low.
+    match antinomie_monitor_core::open_files::raise_at_start() {
+        Ok(raised) if raised.low() => service_log.log(&format!(
+            "warning: {}; a busy lane can run out of open files: raise the hard limit (`ulimit -Hn`, LimitNOFILE= in a systemd unit) to at least {}",
+            raised.words(),
+            antinomie_monitor_core::open_files::WANTED
+        )),
+        Ok(raised) => service_log.log(&raised.words()),
+        Err(error) => service_log.log(&format!("warning: {error}")),
+    }
     let setup = Setup {
         options,
         socket: Some(socket.clone()),

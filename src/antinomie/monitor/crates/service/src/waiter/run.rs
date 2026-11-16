@@ -933,8 +933,11 @@ impl<E: Engine> Waiter<E> {
                 });
             }
             if stop_sent && stop_id.is_none() {
-                stop_id = self.guest_send(Command::StopRun {
+                stop_id = self.guest_send(Command::StopRunFor {
                     run_id: run_id.to_owned(),
+                    reason: antinomie_monitor_core::StopReason::TimeLimit {
+                        seconds: limit_ms / 1000,
+                    },
                 })?;
             }
             if stop_sent && elapsed >= limit_ms + grace_ms {

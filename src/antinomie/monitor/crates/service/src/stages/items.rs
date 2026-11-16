@@ -151,6 +151,8 @@ pub struct JobWork {
     pub problems: Vec<String>,
     /// Static checks that ran out of time or stopped short.
     pub incomplete: Vec<String>,
+    /// Optional static checks whose tool is not there (A07).
+    pub unavailable: Vec<String>,
     pub digest_note: Option<String>,
     /// The report's failure, read by [`LaneStages::end_report`].
     pub report_failure: Option<Failure>,
@@ -167,6 +169,7 @@ impl JobWork {
             outcomes: Arc::new(Vec::new()),
             problems: Vec::new(),
             incomplete: Vec::new(),
+            unavailable: Vec::new(),
             digest_note: None,
             report_failure: None,
             tries: 1,
@@ -179,6 +182,7 @@ impl JobWork {
         self.outcomes = Arc::new(Vec::new());
         self.problems.clear();
         self.incomplete.clear();
+        self.unavailable.clear();
         self.digest_note = None;
         self.report_failure = None;
         self.tries += 1;
@@ -287,12 +291,14 @@ impl<E: Engine> LaneStages<'_, E> {
                 } else {
                     HostItemState::Failed
                 };
+                let note: Vec<String> = words.iter().chain(&outcome.unavailable).cloned().collect();
                 let mut w = lock(work);
                 w.problems.extend(outcome.hard);
                 w.incomplete.extend(outcome.soft);
+                w.unavailable.extend(outcome.unavailable);
                 Ok(ItemEnd {
                     waited_ms,
-                    ..ended(state, (!words.is_empty()).then(|| words.join("; ")))
+                    ..ended(state, (!note.is_empty()).then(|| note.join("; ")))
                 })
             }
             ItemKind::Detection => {
@@ -409,6 +415,15 @@ impl<E: Engine> LaneStages<'_, E> {
     pub fn end_analyse(&mut self, job: &Run, work: &mut JobWork) -> Result<PhaseEnd, StageStop> {
         let store = self.env.store;
         if !work.plan.analyse_skipped() {
+            // A step that failed on a full disk says so, not only "disk I/O
+            // error" (A12).
+            if work.problems.iter().any(|p| {
+                crate::resources::disk_full(p) || p.to_ascii_lowercase().contains("i/o error")
+            }) && let Some(words) = self.env.host.low_disk()
+            {
+                work.problems
+                    .push(format!("the disk is below its floor: {words}"));
+            }
             if !work.problems.is_empty() && work.plan.requires(Stage::Analyse) {
                 let _ = store.end_stage(&job.id, StageStatus::Failed);
                 let failure = Failure::new(
@@ -430,6 +445,10 @@ impl<E: Engine> LaneStages<'_, E> {
             }
             for note in &work.incomplete {
                 self.warn(job, "static_check_incomplete", note);
+            }
+            // A missing optional tool is said, and is not `partial` (A07).
+            for note in &work.unavailable {
+                self.warn(job, "static_check_unavailable", note);
             }
             if !work.problems.is_empty() || !work.incomplete.is_empty() {
                 work.outcome = Outcome::Partial;
@@ -500,7 +519,10 @@ impl<E: Engine> LaneStages<'_, E> {
             work.outcome = Outcome::Partial;
             return Ok(PhaseEnd::Next);
         }
-        self.retry_or_fail(job, work, failure)
+        // Not run again in place: `analyse` has finished in this attempt and
+        // cannot be entered again, and a report that cannot be written (a
+        // full disk) is not cured by building it twice (A12).
+        Err(StageStop::Failed(failure))
     }
 
     /// `cleanup`: the library tags and the end of the job.
