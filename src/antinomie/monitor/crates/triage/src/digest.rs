@@ -44,42 +44,120 @@ fn list(values: &[(&'static str, RowValue)], key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// What the behaviour findings of the scan add up to.
-pub fn behaviour(findings: &[Finding]) -> Behaviour {
-    let mut out = Behaviour::default();
-    let mut best = usize::MAX;
-    for finding in findings {
+/// Evasion checks kept per rule: a rule that fires on every one of a
+/// thousand processes keeps its first few as examples and counts the rest.
+pub const EVASION_EXAMPLES: usize = 8;
+
+/// The behaviour findings of a run added up per rule (ANT-T0556, A28): one
+/// row per rule with the sum of its counts, its highest tier and its first
+/// time, and at most [`EVASION_EXAMPLES`] evasion checks per rule. Fed with
+/// every finding of the run, not the findings table's page, so a rule that
+/// fires once beside two that fire a thousand times each is still listed.
+#[derive(Clone, Debug, Default)]
+pub struct Tally {
+    rules: Vec<BehaviourHit>,
+    at: std::collections::HashMap<String, usize>,
+    evasion: Vec<EvasionCheck>,
+    best: Option<usize>,
+}
+
+impl Tally {
+    pub fn push(&mut self, finding: &Finding) {
         let values = &finding.values;
         let tier = text(values, "finding.tier");
-        if let Some(rank) = rules::Tier::ALL.iter().position(|t| t.tag() == tier) {
-            best = best.min(rank);
+        let rank = rules::Tier::ALL.iter().position(|t| t.tag() == tier);
+        if let Some(rank) = rank {
+            self.best = Some(self.best.map_or(rank, |best| best.min(rank)));
         }
         let rule = text(values, "finding.rule");
-        out.rules.push(BehaviourHit {
-            rule: rule.to_owned(),
-            tier: tier.to_owned(),
-            category: text(values, "finding.category").to_owned(),
-            attack: list(values, "finding.technique"),
-            count: number(values, "finding.count"),
-            first_ns: number(values, "finding.first_ns"),
-        });
+        let count = number(values, "finding.count");
+        let first_ns = number(values, "finding.first_ns");
+        let examples = match self.at.get(rule) {
+            Some(&at) => {
+                let row = &mut self.rules[at];
+                row.count += count;
+                if first_ns != 0 && (row.first_ns == 0 || first_ns < row.first_ns) {
+                    row.first_ns = first_ns;
+                }
+                let known = rules::Tier::ALL.iter().position(|t| t.tag() == row.tier);
+                if rank.is_some() && (known.is_none() || rank < known) {
+                    tier.clone_into(&mut row.tier);
+                }
+                for id in list(values, "finding.technique") {
+                    if !row.attack.contains(&id) {
+                        row.attack.push(id);
+                    }
+                }
+                self.evasion
+                    .iter()
+                    .filter(|check| check.rule == rule)
+                    .count()
+            }
+            None => {
+                self.at.insert(rule.to_owned(), self.rules.len());
+                self.rules.push(BehaviourHit {
+                    rule: rule.to_owned(),
+                    tier: tier.to_owned(),
+                    category: text(values, "finding.category").to_owned(),
+                    attack: list(values, "finding.technique"),
+                    count,
+                    first_ns,
+                });
+                0
+            }
+        };
         if let Some(category) = run_digest::evasion_category(rule) {
-            out.evasion.push(EvasionCheck {
-                category: category.to_owned(),
-                rule: rule.to_owned(),
-                object: text(values, "finding.object").to_owned(),
-                summary: text(values, "finding.summary").to_owned(),
-                process: text(values, "process.exe").to_owned(),
-                count: number(values, "finding.count"),
-                cookie: number(values, "process.cookie"),
-                calls: evidence_calls(values),
-            });
+            if examples < EVASION_EXAMPLES {
+                self.evasion.push(EvasionCheck {
+                    category: category.to_owned(),
+                    rule: rule.to_owned(),
+                    object: text(values, "finding.object").to_owned(),
+                    summary: text(values, "finding.summary").to_owned(),
+                    process: text(values, "process.exe").to_owned(),
+                    count,
+                    cookie: number(values, "process.cookie"),
+                    calls: evidence_calls(values),
+                });
+            } else if let Some(last) = self
+                .evasion
+                .iter_mut()
+                .rev()
+                .find(|check| check.rule == rule)
+            {
+                // The last example kept stands for the ones not kept.
+                last.count += count;
+            }
         }
     }
-    if let Some(tier) = rules::Tier::ALL.get(best) {
-        out.highest = tier.tag().to_owned();
+
+    pub fn finish(self) -> Behaviour {
+        Behaviour {
+            highest: self
+                .best
+                .and_then(|best| rules::Tier::ALL.get(best))
+                .map(|tier| tier.tag().to_owned())
+                .unwrap_or_default(),
+            rules: self.rules,
+            evasion: self.evasion,
+        }
     }
-    out
+}
+
+/// What the behaviour findings of the scan add up to, per rule ([`Tally`]).
+pub fn behaviour(findings: &[Finding]) -> Behaviour {
+    let mut tally = Tally::default();
+    for finding in findings {
+        tally.push(finding);
+    }
+    tally.finish()
+}
+
+/// The behaviour of the whole scan: every finding it made, added up while
+/// the scan ran, or (for a scan made before it kept them) its findings page.
+pub fn behaviour_of(scan: &ArchiveScan) -> Behaviour {
+    scan.behaviour
+        .clone()
+        .unwrap_or_else(|| behaviour(&scan.findings))
 }
 
 /// The calls a finding names as its evidence: its first call, the calls its
@@ -305,7 +383,7 @@ impl Update {
     /// The digest parts of `scan`, with `detections`.
     pub fn of(scan: &ArchiveScan, detections: Option<Vec<DetectionHit>>) -> Self {
         Self {
-            behaviour: behaviour(&scan.findings),
+            behaviour: behaviour_of(scan),
             lineage: lineage_index::index(&scan.process, scan.ioc.as_deref()),
             indicators: scan.ioc.as_deref().map(indicators),
             files: scan.written_files.clone(),
@@ -403,6 +481,108 @@ mod tests {
         assert_eq!(digest.evasion[0].category, "Virtual machine");
         assert_eq!(digest.evasion[0].object, "/sys/class/dmi/id/product_name");
         assert_eq!(behaviour(&[]).highest, "");
+    }
+
+    #[test]
+    fn a_flood_of_two_rules_leaves_room_for_every_other_rule() {
+        // A28, run 3c1b7ab1: 1,021 processes each renamed like a kernel
+        // thread and re-exec'd from a memfd; three rc init scripts, a shell
+        // profile, a TRACEME and a sandbox probe once each.
+        let mut findings = Vec::new();
+        for _ in 0..1021 {
+            findings.push(finding(
+                "evasion.masquerade_kthread",
+                "high",
+                "evasion",
+                &["T1036.005"],
+                "[kworker/u8:1]",
+            ));
+            findings.push(finding(
+                "process.memfd_exec",
+                "high",
+                "execution",
+                &["T1620"],
+                "memfd:libc.so.6",
+            ));
+            findings.push(finding(
+                "evasion.dumpable_off",
+                "low",
+                "evasion",
+                &["T1622"],
+                "prctl",
+            ));
+        }
+        for object in ["/etc/inittab", "/etc/init.d/rcS", "/etc/rc.local"] {
+            findings.push(finding(
+                "persistence.rc_init",
+                "high",
+                "persistence",
+                &["T1037.004"],
+                object,
+            ));
+        }
+        findings.push(finding(
+            "persistence.shell_profile",
+            "medium",
+            "persistence",
+            &["T1546.004"],
+            "/etc/profile",
+        ));
+        findings.push(finding(
+            "evasion.sandbox_probe",
+            "medium",
+            "evasion",
+            &["T1497.001"],
+            "/opt/cowrie",
+        ));
+        let digest = behaviour(&findings);
+        let rules: Vec<(&str, u64)> = digest
+            .rules
+            .iter()
+            .map(|hit| (hit.rule.as_str(), hit.count))
+            .collect();
+        assert_eq!(
+            rules,
+            [
+                ("evasion.masquerade_kthread", 3 * 1021),
+                ("process.memfd_exec", 3 * 1021),
+                ("evasion.dumpable_off", 3 * 1021),
+                ("persistence.rc_init", 9),
+                ("persistence.shell_profile", 3),
+                ("evasion.sandbox_probe", 3),
+            ]
+        );
+        assert_eq!(digest.highest, "high");
+        // The per-process check keeps its first examples and counts the rest.
+        let dumpable: Vec<_> = digest
+            .evasion
+            .iter()
+            .filter(|check| check.rule == "evasion.dumpable_off")
+            .collect();
+        assert_eq!(dumpable.len(), EVASION_EXAMPLES);
+        assert_eq!(dumpable.iter().map(|c| c.count).sum::<u64>(), 3 * 1021);
+        assert!(digest
+            .evasion
+            .iter()
+            .any(|check| check.rule == "evasion.sandbox_probe"));
+        // Written into a digest, it is far under the budget, so nothing is cut.
+        let dir = std::env::temp_dir().join(format!(
+            "ant-digest-flood-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        RunDigest::update(&dir, |d| {
+            d.behaviour = Some(digest.clone());
+            d.coverage = Some(run_digest::Coverage::default());
+        })
+        .unwrap();
+        let read = RunDigest::read(&dir).unwrap();
+        assert_eq!(read.behaviour.unwrap().rules.len(), 6);
+        assert!(!read.coverage.unwrap().budget_reached);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

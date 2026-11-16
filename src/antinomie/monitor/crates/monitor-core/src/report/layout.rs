@@ -144,6 +144,10 @@ impl Builder {
             if !summary.other_families.is_empty() {
                 put("Also named", Cell::plain(summary.other_families.join("; ")));
             }
+            // Technique and generic rules describe the sample, never name it.
+            if !summary.tags.is_empty() {
+                put("Rule tags", Cell::plain(summary.tags.join(", ")));
+            }
         }
         put(
             "Run state",

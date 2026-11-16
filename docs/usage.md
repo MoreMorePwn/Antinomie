@@ -900,6 +900,32 @@ The network capture is the guest's own view on every route.
   `all failed`), with the last error in Details. A non-blocking connect that only
   reports "in progress" is neither a failure nor a success.
   Repeats fold into one row with a count.
+  **Calling home to a hard-coded address** (`network.c2_ip_literal`, Medium): three or
+  more connects, successful or not, to one public address over ten seconds or more,
+  and no DNS answer of the run gave the address (a bot's or an implant's command
+  server built into it); unusual ports are named in Details, at most eight addresses
+  get a row, and the targets a scanning or brute-forcing process retries on the
+  attacked ports do not count. **Encrypted session to a bare address**
+  (`network.tls_ip_literal`, Low): a TLS hello with no server name to a public address
+  no lookup gave. **Lookups over DNS over TLS** (`network.dns_over_tls`, Medium): a
+  connect to a public address on port 853. **Sending exploits that download code**
+  (`lateral.exploit_payload`, High): an HTTP request whose URL or body (after URL
+  decoding, and base64 and `\xNN` escapes in a query value) carries `wget`, `curl`,
+  `tftp`, `ftpget` or `busybox` with a URL, a pipe into a shell or a `chmod`.
+  A shell command that writes a systemd unit, an init script or `rc.local`, a cron
+  table or a shell profile (`echo ... >> /etc/crontab`, `printf ... >
+  /etc/systemd/system/x.service`, `sed -i ... /etc/rc.local`, `echo ... >>
+  ~/.bashrc`, `tee`) is the matching persistence row even when the shell never ran;
+  `systemctl enable` of a unit such a command tried to write is too. A finding from
+  a shell command whose shell exited 127 (not found) or 126 (not runnable) reads
+  `all failed`, with the exit in Details. **System file replaced**
+  (`persistence.binary_replace`, High) is a write, cut, rename or link over a file
+  that was in `/bin`, `/sbin`, `/usr/bin`, a library folder and the like, or a new
+  copy of a well-known program (`sshd`, `ps`, `wget` ...) or a shared library; a new
+  file there is **File added to a system folder** (`persistence.system_dir_add`,
+  Medium). A program that made no system call before the time limit or a Stop ended
+  it is **No call before the stop** (`process.no_calls_before_stop`, Low), not a
+  crash.
 
   The tiers mean: **High**, something ordinary software essentially never does
   and that directly gives control, persistence or privilege, so look at these
@@ -1059,7 +1085,19 @@ The network capture is the guest's own view on every route.
   MassHunt, IoT or Unique, and a rule pack's vendor or author in a rule name such as
   `SEKOIA_` or `ESET_`, are never a family; a family is the one family word of the
   rule, so `SEKOIA_Backdoor_Lin_Bpfdoor` and `MIRAI_OHSHIT_payload` name BPFDoor and
-  Mirai; a family named only by a layer Static analysis unpacked from a packed
+  Mirai; only a rule that names a family gives one: a `family` or Malpedia meta, an
+  Elastic family rule, a known Linux family's name in a curated or community rule, or
+  a curated vendor rule that says it is malware (`DITEKSHEN_MALWARE_Linux_<Family>`),
+  so `Suspicious_Golang_Binary` is no "Binary" and `botnet_Yakuza` no family; a rule
+  that detects a technique or a generic trait (its name says persistence, staging,
+  dropper, packer, fileless, exploit, downloader, suspicious, hunt or "<family>like",
+  as `ELF_Toriilike_persist` and `NSVPS_Mirai_Busybox_Staging` do) names no family
+  even when its meta does and gives behaviour tags ("Torii-like", "persistence",
+  "staging", "Go binary") instead; Malpedia's aliases name one family (Bashlite,
+  Lizkebab and Torlus are Gafgyt; Elastic's Bishopsliver is Sliver); what the run did
+  can name a family too (Prometei's `uplugplay` service and `/cgi-bin/p.cgi` calls),
+  and that outweighs one or two rules naming another family, which are then listed
+  as also named; a family named only by a layer Static analysis unpacked from a packed
   sample says "in the unpacked payload", and a signature fetched for a file you
   imported says "looked up by hash"); and behaviour tags), **Key findings** (the six worst by tier and
   then first time, each with its description on a line below, cut to its first sentence
@@ -2082,8 +2120,11 @@ only, not in the run's notes.
 **Tools > Settings > Network lookup** decides how the public destination
 addresses in the Network tabs get a Country and an Organization. **Address
 lookup** has three choices: **TShark GeoIP only** (the default), **dig and whois
-only**, and **TShark GeoIP, then dig and whois when unavailable**. Local addresses
-are never queried. Below it, **IP geolocation database (TShark)** is about the
+only**, and **TShark GeoIP, then dig and whois when unavailable**. Only the two
+choices that name dig and whois ask another machine; TShark GeoIP reads local
+databases. Local addresses, the documentation ranges (192.0.2.0/24,
+198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32, the lab's InetSim stand-in
+198.51.100.1 among them), 198.18.0.0/15 and 100.64.0.0/10 are never queried. Below it, **IP geolocation database (TShark)** is about the
 first choice: TShark needs `.mmdb` databases to fill Country and Organization.
 Older `GeoIP.dat` files (such as `/usr/share/GeoIP` on Debian) do not work with
 TShark 4. Antinomie hands its databases to its own TShark runs only and never

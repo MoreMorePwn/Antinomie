@@ -208,8 +208,10 @@ mod tests {
             Source::Pcap,
             Seen::default(),
         );
+        // A host name cannot start a formula any more (A42: only host names
+        // are domains); the formula is defused in `cell` below.
         c.domain(
-            "=cmd|' /C calc'!A0.example",
+            "cmd-calc.example",
             super::super::indicator::Via::Dns,
             &[],
             Source::Pcap,
@@ -250,8 +252,9 @@ mod tests {
             private.contains("not checked: private address"),
             "{private}"
         );
-        let formula = lines.iter().find(|l| l.contains("cmd|")).unwrap();
-        assert!(formula.starts_with("domain,'=cmd|"), "{formula}");
+        let domain = lines.iter().find(|l| l.contains("cmd-calc")).unwrap();
+        assert!(domain.starts_with("domain,cmd-calc.example"), "{domain}");
+        assert_eq!(cell("=cmd|' /C calc'!A0"), "'=cmd|' /C calc'!A0");
     }
 
     #[test]

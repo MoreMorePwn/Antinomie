@@ -438,19 +438,27 @@ impl Engine {
 
     /// One row for something the host saw, not a task: VM-wide, from the
     /// gateway's report.
-    /// The run's program died of a signal before its first recorded system call.
+    /// The run's program ended before its first recorded system call:
+    /// `clause` is [`crate::archive_scan::no_call_clause`]'s ("crashed before
+    /// its first system call: SIGBUS", or "made no system call before it was
+    /// stopped (SIGTERM) ..." for a program the time limit or a Stop ended).
     pub fn root_crash(
         &mut self,
-        signal: &str,
+        clause: &str,
         clock: Option<antinomie_monitor_core::HostClockAnchor>,
     ) {
         let at = clock.map_or(0, |clock| clock.guest_ns);
-        self.host_row_as(
-            "process.crashed_at_start",
-            "the sample's program".to_owned(),
-            format!("the sample crashed before its first system call: {signal}"),
-            at,
-            (1, at),
+        let stopped = clause.starts_with(crate::archive_scan::NO_CALLS_BEFORE_STOP);
+        let detail = if stopped {
+            vec![
+                "No system call of the program was recorded before the stop, so there is \
+                 nothing to judge. It did not crash: it was still running when it was stopped."
+                    .into(),
+                "Common causes: a busy loop or a wait before the first call, or calls the \
+                 recorder did not see (another architecture's calls, a missing table entry)."
+                    .into(),
+            ]
+        } else {
             vec![
                 "No system call of the program was recorded, so there is nothing to judge: the \
                  program died while loading or in its first instructions."
@@ -458,7 +466,19 @@ impl Engine {
                 "Common causes: a binary built for another kernel or CPU, an ELF the guest's \
                  loader cannot map, or legacy static code that needs vsyscall."
                     .into(),
-            ],
+            ]
+        };
+        self.host_row_as(
+            if stopped {
+                "process.no_calls_before_stop"
+            } else {
+                "process.crashed_at_start"
+            },
+            "the sample's program".to_owned(),
+            format!("the sample {clause}"),
+            at,
+            (1, at),
+            detail,
             "the run's program (no task was recorded)",
         );
     }

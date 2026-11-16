@@ -402,10 +402,13 @@ pub fn commands(cx: &Ctx, st: &mut State, cmd: &Command, via_shell: bool, out: &
                 found.push("impact.reboot");
             }
             if cmd.has_any(&["enable", "link", "add", "defaults"])
-                && cmd
-                    .operands()
-                    .iter()
-                    .any(|unit| st.written_names.contains(base(unit)))
+                && cmd.operands().iter().any(|unit| {
+                    let unit = base(unit);
+                    let stem = unit.strip_suffix(".service").unwrap_or(unit);
+                    st.written_names.contains(unit)
+                        || st.written_names.contains(&format!("{stem}.service"))
+                        || st.unit_attempts.contains(stem)
+                })
             {
                 found.push(if name == "systemctl" {
                     "persistence.systemd"
@@ -524,6 +527,23 @@ pub fn commands(cx: &Ctx, st: &mut State, cmd: &Command, via_shell: bool, out: &
         "xmrig" | "minerd" | "cpuminer" | "ccminer" | "ethminer" | "nbminer" | "t-rex"
         | "lolminer" | "cgminer" | "bfgminer" | "kdevtmpfsi" => found.push("impact.miner"),
         _ => {}
+    }
+    // A command that writes a persistence file: `echo ... >> /etc/crontab`,
+    // `printf '[Unit]...' > /etc/systemd/system/x.service`, `sed -i ...
+    // /etc/rc.local`, `echo ... >> ~/.bashrc` (A16). The file rules see the
+    // write when it happens; this sees the attempt, also when the shell never
+    // ran (EACCES) and so never wrote.
+    for target in tools::write_targets(cmd) {
+        if let Some(rule) = tools::persistence_target(&target) {
+            if rule == "persistence.systemd" {
+                let unit = base(&target);
+                let stem = unit.strip_suffix(".service").unwrap_or(unit);
+                if st.unit_attempts.len() < 256 {
+                    st.unit_attempts.insert(stem.to_owned());
+                }
+            }
+            found.push(rule);
+        }
     }
     if name != "xmrig" && tools::mining_arguments(cmd) {
         found.push("impact.miner");

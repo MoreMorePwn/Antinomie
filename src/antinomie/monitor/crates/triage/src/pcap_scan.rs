@@ -590,12 +590,13 @@ pub fn scan_pcap_query_observed(
     if use_geoip && identity.file_size <= geoip_fill::SMALL_CAPTURE {
         geoip_fill::fill(inventory, cancel)?;
     }
-    if !matches!(
+    // Only a WHOIS mode asks another machine; `Off` and `Tshark` never do.
+    network::enrich_for_mode(
         request.address_lookup,
-        AddressLookup::Whois | AddressLookup::TsharkThenWhois
-    ) {
-        network::enrich_public(inventory, cancel, &mut index.network_warning)?;
-    }
+        inventory,
+        cancel,
+        &mut index.network_warning,
+    )?;
     let (ips, hosts) = inventory.rows();
     index.counts = Some((extent.packet_count, ips.len() as u64, hosts.len() as u64));
     let (http, http_omitted, http_count) = http_page.finish()?;

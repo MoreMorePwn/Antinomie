@@ -74,6 +74,93 @@ impl Command {
     }
 }
 
+/// The files a command writes: the targets of `>`/`>>` redirections, `tee`
+/// operands, the file of `sed -i`, and the destination of `cp`, `mv`,
+/// `install` and `ln`.
+pub fn write_targets(cmd: &Command) -> Vec<String> {
+    let words = cmd.words();
+    let mut targets = Vec::new();
+    let mut index = 0;
+    while index < words.len() {
+        let word = words[index].as_str();
+        if matches!(word, ">" | ">>" | "1>" | "1>>" | ">|") {
+            if let Some(next) = words.get(index + 1) {
+                targets.push(next.clone());
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(rest) = word
+            .strip_prefix(">>")
+            .or_else(|| word.strip_prefix('>'))
+            .filter(|rest| !rest.is_empty() && !rest.starts_with('&'))
+        {
+            targets.push(rest.to_owned());
+        }
+        index += 1;
+    }
+    // The command's own operands, without the redirections.
+    let operands: Vec<&str> = cmd
+        .operands()
+        .into_iter()
+        .filter(|word| !word.contains('>') && !targets.iter().any(|t| t == word))
+        .collect();
+    match cmd.name() {
+        "tee" => targets.extend(operands.iter().map(|w| (*w).to_owned())),
+        "sed" if cmd.args().iter().any(|arg| arg.starts_with("-i")) => {
+            if let Some(last) = operands.last().filter(|_| operands.len() >= 2) {
+                targets.push((*last).to_owned());
+            }
+        }
+        "cp" | "mv" | "install" | "ln" => {
+            if let Some(last) = operands.last().filter(|_| operands.len() >= 2) {
+                targets.push((*last).to_owned());
+            }
+        }
+        _ => {}
+    }
+    targets
+}
+
+/// The persistence rule a written path stands for, when it is one: a
+/// systemd unit, an init script or `rc.local`, a cron table, a shell profile.
+pub fn persistence_target(path: &str) -> Option<&'static str> {
+    let path = path.trim_matches(|c: char| c == '"' || c == '\'');
+    let name = super::ctx::base(path);
+    if path.contains("/systemd/system/")
+        || path.contains("/systemd/user/")
+        || (path.starts_with("/etc/systemd/") && name.ends_with(".service"))
+    {
+        Some("persistence.systemd")
+    } else if path == "/etc/rc.local"
+        || path.starts_with("/etc/init.d/")
+        || path.starts_with("/etc/rc.d/")
+        || path == "/etc/inittab"
+        || path.strip_prefix("/etc/rc").is_some_and(|rest| {
+            rest.split('/')
+                .next()
+                .is_some_and(|dir| dir.ends_with(".d"))
+        })
+    {
+        Some("persistence.rc_init")
+    } else if path == "/etc/crontab"
+        || path.starts_with("/etc/cron.")
+        || path.starts_with("/var/spool/cron/")
+    {
+        Some("persistence.cron")
+    } else if matches!(
+        name,
+        ".bashrc" | ".bash_profile" | ".profile" | ".bash_login" | ".zshrc" | ".zprofile"
+    ) || path == "/etc/profile"
+        || path.starts_with("/etc/profile.d/")
+        || path == "/etc/bash.bashrc"
+    {
+        Some("persistence.shell_profile")
+    } else {
+        None
+    }
+}
+
 pub fn is_shell(name: &str) -> bool {
     matches!(
         name,

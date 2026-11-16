@@ -296,6 +296,17 @@ pub struct State {
     pub probes: Probes,
     /// Program and perf event descriptors, to tie an attach to its load.
     pub bpf: super::super::BpfFds,
+    /// Unit names a shell command tried to write under a systemd folder,
+    /// without `.service`: a later `systemctl enable` of one is persistence
+    /// even when the write failed (A16).
+    pub unit_attempts: BTreeSet<String>,
+    /// The exit code each task gave `exit`/`exit_group`, by task cookie: a
+    /// shell command's findings say "failed" when its shell exited 126 or 127
+    /// (A40).
+    pub exit_codes: BTreeMap<u64, i64>,
+    /// Connections to public addresses no DNS answer gave, by address
+    /// (`network.c2_ip_literal`, A33/A34).
+    pub hardcoded: BTreeMap<std::net::IpAddr, super::network::Hardcoded>,
 }
 
 impl State {

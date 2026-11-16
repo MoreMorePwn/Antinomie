@@ -151,6 +151,7 @@ pub const SPECS: &[Spec] = &[
     // Execution
     rule("process.exec", 2, T::Info, C::Execution, &[]),
     rule("process.crashed_at_start", 1, T::Low, C::Execution, &[]),
+    rule("process.no_calls_before_stop", 1, T::Low, C::Execution, &[]),
     rule(
         "process.interpreter",
         2,
@@ -400,10 +401,18 @@ pub const SPECS: &[Spec] = &[
     ),
     rule(
         "persistence.binary_replace",
-        1,
+        2,
         T::High,
         C::Persistence,
         &["T1554", "DET0336"],
+    )
+    .allow(PACKAGERS),
+    rule(
+        "persistence.system_dir_add",
+        1,
+        T::Medium,
+        C::Persistence,
+        &["T1036.005", "DET0347"],
     )
     .allow(PACKAGERS),
     rule(
@@ -928,6 +937,21 @@ pub const SPECS: &[Spec] = &[
         &["T1071", "DET0444"],
     ),
     rule(
+        "network.c2_ip_literal",
+        1,
+        T::Medium,
+        C::Command,
+        &["T1071", "DET0444", "T1571", "DET0227"],
+    ),
+    rule("network.tls_ip_literal", 1, T::Low, C::Command, &["T1573"]),
+    rule(
+        "network.dns_over_tls",
+        1,
+        T::Medium,
+        C::Command,
+        &["T1071.004", "DET0400", "T1573"],
+    ),
+    rule(
         "network.proxy_tunnel",
         1,
         T::Medium,
@@ -964,6 +988,13 @@ pub const SPECS: &[Spec] = &[
         &["T1110.001", "DET0551"],
     )
     .signal(),
+    rule(
+        "lateral.exploit_payload",
+        1,
+        T::High,
+        C::Lateral,
+        &["T1210", "DET0118", "T1105"],
+    ),
     rule(
         "lateral.service_exploit",
         1,

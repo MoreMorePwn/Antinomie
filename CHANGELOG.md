@@ -1340,6 +1340,61 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **No address lookup leaves the host unless you chose dig and whois (ANT-T0556,
+  A09).** Triage ran `whois` and `dig -x` for public destinations exactly when
+  the address lookup was **TShark GeoIP only** or off, the opposite of the
+  setting, so a daemon whose `[privacy] address_lookup` is `off` or `tshark` (a
+  "nothing leaves the lab" preset) asked WHOIS and reverse DNS about up to 24
+  sample destinations per run. Only the two dig-and-whois choices look up now,
+  and never for the documentation ranges (the InetSim stand-in 198.51.100.1).
+- **The Auto-mode label reads the family evidence (ANT-T0556, A50, A11).** Runs
+  with a strong family rule (MIRAI_OHSHIT_payload, Gafgyt rules) were
+  `clean_observed`, and one rule's own "high" severity made a low-tier run
+  `malicious`. The default mapping now reads the behaviour tier and the family
+  evidence of the run's own detections and behaviour (`summary.family_evidence`):
+  a strong family rule with medium or high behaviour is `malicious`, any family
+  rule `suspicious`, a rule's severity alone at most `suspicious`. A run whose
+  program made no system call (a crash while loading, or a time-limit stop before
+  the first call) is `inconclusive`, "No behaviour was recorded", with the reason;
+  a program stopped before its first call is "No call before the stop", not a crash.
+  The table is in docs/auto-mode.md.
+- **Families come only from rules that name one (ANT-T0556, A48, A53, A49).**
+  "Binary" (Suspicious_Golang_Binary), "Fileless" and "Yakuza" were families, and
+  technique rules (`ELF_Toriilike_persist`, `NSVPS_Mirai_Busybox_Staging`) named
+  Torii and Mirai for Gafgyt samples. A community rule's name now gives a family
+  only when it carries a known one; technique and generic rules give report tags
+  (`summary.tags`), even when their meta names a family; Malpedia aliases are one
+  family (Bashlite is Gafgyt, Elastic's Bishopsliver is Sliver); and Prometei's
+  `uplugplay` service and `/cgi-bin/p.cgi` calls name Prometei over a Mirai rule,
+  which is then "also named".
+- **A flood of one rule no longer hides the rest (ANT-T0556, A28).** The digest
+  and the report took the behaviour from the findings table's first 2,000 rows, so
+  two rules that fired on 1,000 processes each left out persistence, the sandbox
+  probe and their ATT&CK techniques, STIX and MISP included. The behaviour is now
+  added up per rule over every finding (a count per rule, eight examples per
+  evasion check); a digest list that is still cut keeps the high tiers and says so
+  (`coverage.budget_reached` and a reason).
+- **A scan is one behaviour, not thousands of indicators (ANT-T0556, A36).** A
+  port with 32 or more addresses is a scan: its targets (and the URLs and TLS
+  sessions to them) leave the indicator list and are told once in
+  `summary.scans`, the report's notes, a MISP comment and a STIX note, with the
+  counts and a sample; a target the program came back to three times or more (up
+  to eight per port) or one a dataset matched stays.
+- **New and finer behaviour rules (ANT-T0556, A15, A16, A17, A31, A33, A34, A40).**
+  `network.c2_ip_literal` (repeated connects to a public address no lookup gave),
+  `network.tls_ip_literal` (TLS with no server name to such an address),
+  `network.dns_over_tls` (port 853), `lateral.exploit_payload` (HTTP requests
+  carrying a download command); shell commands that write a systemd unit, an init
+  script, `rc.local`, a cron table or a shell profile are found even when the
+  shell never ran; a shell command whose shell exited 127 or 126 reads "all
+  failed"; `persistence.binary_replace` is now only for replacing a system file,
+  and a new file in a system folder is `persistence.system_dir_add` (Medium).
+- **Domain indicators are host names (ANT-T0556, A42, A14).** An HTTP Host `x`,
+  a single label (`debian`) or an obfuscated string is no domain indicator, and an
+  address as HTTP Host is no domain in `counts.domains`.
+- **MISP `to_ids` of the sample hash follows the evidence (ANT-T0556, A32):** a
+  dataset match, medium or high behaviour, a family a rule or the behaviour named,
+  or a strong YARA match, whatever label a service gives the run.
 - **A number in a run request reads back as the same number.** A very long number
   in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
   integer) was read as a floating-point value that, written again by the service,

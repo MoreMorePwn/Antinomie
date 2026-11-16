@@ -153,7 +153,19 @@ impl Built {
         let bazaar = specimen
             .zip(view.scan_request.data_dir.as_deref())
             .and_then(|(sha256, dir)| antinomie_monitor_core::samples::recorded_info(dir, sha256));
-        let candidates = family::family_candidates(
+        // What the run did that names a family, as the report reads it.
+        let observed: Vec<&str> = scan
+            .ioc
+            .as_ref()
+            .map(|ioc| {
+                ioc.indicators
+                    .iter()
+                    .flat_map(|i| [i.value.as_str(), i.path.as_str()])
+                    .filter(|text| !text.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let candidates = family::family_candidates_seen(
             &hits,
             bazaar
                 .as_ref()
@@ -163,6 +175,7 @@ impl Built {
                     looked_up: info.looked_up,
                 })
                 .unwrap_or_default(),
+            &observed,
         );
         let mut names: Vec<String> = hits.iter().map(|hit| hit.title.clone()).collect();
         names.extend(hits.iter().map(|hit| hit.family.clone()));

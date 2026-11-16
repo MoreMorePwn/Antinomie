@@ -317,7 +317,10 @@ impl Inventory {
         source: &str,
     ) {
         let name = name.trim().trim_end_matches('.').to_lowercase();
-        if name.is_empty() {
+        // An HTTP Host that is an address (with or without its port) is no
+        // name: the Endpoints tab has it, and `counts.domains` counts names
+        // only (A14).
+        if name.is_empty() || ip_literal_host(&name) {
             return;
         }
         if self.hosts.len() >= INVENTORY_LIMIT && !self.hosts.contains_key(&name) {
@@ -904,12 +907,46 @@ impl Inventory {
         (ips, hosts)
     }
 }
+/// Whether `mode` lets Triage ask another machine about an address (`whois`,
+/// `dig -x`). Only the two WHOIS modes do; `Off` and `Tshark` (local GeoIP
+/// databases only) never send a lookup off this host. A daemon never runs
+/// with a WHOIS mode (`EngineSettings::for_daemon`), so a lab-only preset
+/// (`detection.check_online = false`) never sends one either.
+pub fn online_lookup(mode: AddressLookup) -> bool {
+    matches!(mode, AddressLookup::Whois | AddressLookup::TsharkThenWhois)
+}
+
+/// Fill the country and organization of public destinations by asking
+/// another machine, when `mode` allows it ([`online_lookup`]); otherwise do
+/// nothing at all.
+pub fn enrich_for_mode(
+    mode: AddressLookup,
+    inventory: &mut Inventory,
+    cancel: &std::sync::atomic::AtomicBool,
+    warning: &mut Option<String>,
+) -> Result<(), String> {
+    if !online_lookup(mode) {
+        return Ok(());
+    }
+    enrich_public(inventory, cancel, warning)
+}
+
+thread_local! {
+    /// How many outbound address lookups this thread started; tests check
+    /// that none starts when the mode forbids it.
+    pub static ONLINE_LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 pub fn enrich_public(
     inventory: &mut Inventory,
     cancel: &std::sync::atomic::AtomicBool,
     warning: &mut Option<String>,
 ) -> Result<(), String> {
-    let mut pending = inventory.incomplete();
+    let mut pending: Vec<String> = inventory
+        .incomplete()
+        .into_iter()
+        .filter(|ip| !never_queried(ip))
+        .collect();
     if pending.len() > 24 {
         *warning = Some(format!(
             "Address lookup limited to 24 public destinations; {} more were not queried.",
@@ -938,9 +975,10 @@ pub fn lookup_public(ip: &str) -> Result<(String, String), String> {
     let address = ip
         .parse::<std::net::IpAddr>()
         .map_err(|_| "address lookup is only for an IP address".to_owned())?;
-    if local_address(ip) {
-        return Err("local addresses are not queried".into());
+    if never_queried(ip) {
+        return Err("local and documentation addresses are not queried".into());
     }
+    ONLINE_LOOKUPS.with(|count| count.set(count.get() + 1));
     let canonical = address.to_string();
     let whois = command_text("whois", &[&canonical]);
     let (country, mut organization) = whois.as_deref().map(parse_whois).unwrap_or_default();
@@ -1024,6 +1062,43 @@ pub fn available(value: &str) -> &str {
     }
 }
 
+/// Whether an HTTP Host or authority is an address: `1.2.3.4`,
+/// `1.2.3.4:8080`, `[2001:db8::1]:80`, `2001:db8::1`.
+pub fn ip_literal_host(host: &str) -> bool {
+    let host = host.trim();
+    host.parse::<IpAddr>().is_ok()
+        || host.parse::<std::net::SocketAddr>().is_ok()
+        || host
+            .strip_prefix('[')
+            .and_then(|rest| rest.split_once(']'))
+            .is_some_and(|(inner, _)| inner.parse::<IpAddr>().is_ok())
+}
+
+/// Addresses no WHOIS or PTR lookup is ever made for: local ones, and the
+/// documentation, benchmarking and shared (carrier-grade NAT) ranges, which
+/// the lab's stand-ins use (the InetSim answer 198.51.100.1).
+pub fn never_queried(ip: &str) -> bool {
+    if local_address(ip) {
+        return true;
+    }
+    match ip.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(address)) => {
+            let [a, b, c, _] = address.octets();
+            matches!(
+                (a, b, c),
+                (192, 0, 2) | (198, 51, 100) | (203, 0, 113) | (198, 18..=19, _)
+            ) || (a == 100 && (64..=127).contains(&b))
+                || a >= 224
+                || a == 0
+        }
+        Ok(std::net::IpAddr::V6(address)) => {
+            let segments = address.segments();
+            segments[0] == 0x2001 && segments[1] == 0x0db8 || address.is_multicast()
+        }
+        Err(_) => true,
+    }
+}
+
 /// Loopback, link-local, and private ranges are local to the guest or host.
 /// Carrier-grade NAT and public addresses keep their recorded lookup result.
 pub fn local_address(ip: &str) -> bool {
@@ -1073,6 +1148,99 @@ pub fn qtype(text: &str) -> String {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    /// An inventory with public, documentation and private destinations and
+    /// no country or organization yet: every public one is "incomplete".
+    fn unresolved() -> Inventory {
+        let mut inventory = Inventory::default();
+        for ip in [
+            "141.98.10.86",
+            "9.9.9.9",
+            "198.51.100.1",
+            "192.0.2.7",
+            "100.64.0.1",
+            "10.0.2.3",
+            "2001:db8::1",
+        ] {
+            inventory.destination(ip, 1, "", "");
+        }
+        inventory
+    }
+
+    #[test]
+    fn no_lookup_leaves_the_host_unless_a_whois_mode_asks_for_it() {
+        // A09: a lab-only preset runs with `Off` or `Tshark` (a daemon never
+        // has a WHOIS mode); neither may start a single WHOIS or PTR lookup.
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        for mode in [AddressLookup::Off, AddressLookup::Tshark] {
+            assert!(!online_lookup(mode), "{mode:?}");
+            let mut inventory = unresolved();
+            assert!(!inventory.incomplete().is_empty());
+            let mut warning = None;
+            let before = ONLINE_LOOKUPS.with(std::cell::Cell::get);
+            enrich_for_mode(mode, &mut inventory, &cancel, &mut warning).unwrap();
+            assert_eq!(
+                ONLINE_LOOKUPS.with(std::cell::Cell::get),
+                before,
+                "{mode:?} started an outbound lookup"
+            );
+            assert_eq!(warning, None, "{mode:?}");
+            assert!(inventory
+                .ips
+                .values()
+                .all(|(_, c, o, _)| c.is_empty() || c == "-" && o == "local network"));
+        }
+        assert!(online_lookup(AddressLookup::Whois));
+        assert!(online_lookup(AddressLookup::TsharkThenWhois));
+    }
+
+    #[test]
+    fn an_address_as_http_host_is_no_domain_name() {
+        // A14: run 122797288 counted 116 domains with no DNS query: every
+        // HTTP Host was an address.
+        let mut inventory = Inventory::default();
+        for host in [
+            "94.154.43.158",
+            "94.154.43.158:8080",
+            "[2001:db8::1]:80",
+            "2001:db8::2",
+        ] {
+            assert!(ip_literal_host(host), "{host}");
+            inventory.host(host, 1, Some(1), &[], "HTTP Host");
+        }
+        inventory.host("c2.example.net", 2, Some(2), &[], "HTTP Host");
+        assert_eq!(
+            inventory.hosts.keys().collect::<Vec<_>>(),
+            ["c2.example.net"]
+        );
+        assert!(!ip_literal_host("c2.example.net:80"));
+    }
+
+    #[test]
+    fn documentation_and_stand_in_addresses_are_never_queried() {
+        // Even a WHOIS mode never asks about the InetSim stand-in or the
+        // documentation ranges.
+        for ip in [
+            "198.51.100.1",
+            "192.0.2.7",
+            "203.0.113.9",
+            "198.18.0.1",
+            "100.64.0.1",
+            "10.0.2.3",
+            "224.0.0.251",
+            "2001:db8::1",
+            "fe80::1",
+            "not an address",
+        ] {
+            assert!(never_queried(ip), "{ip}");
+            let before = ONLINE_LOOKUPS.with(std::cell::Cell::get);
+            assert!(lookup_public(ip).is_err(), "{ip}");
+            assert_eq!(ONLINE_LOOKUPS.with(std::cell::Cell::get), before, "{ip}");
+        }
+        for ip in ["141.98.10.86", "9.9.9.9", "2a0c:4ac1:4:1eb::a"] {
+            assert!(!never_queried(ip), "{ip}");
+        }
+    }
 
     #[test]
     fn dedicated_capture_keeps_shifted_packets_without_loosening_shared_capture_scope() {

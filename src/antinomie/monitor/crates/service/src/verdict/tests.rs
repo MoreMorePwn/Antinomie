@@ -17,6 +17,7 @@ fn facts() -> Facts {
         counts: Counts::default(),
         detections: Vec::new(),
         families: Vec::new(),
+        family_evidence: Vec::new(),
         techniques: Vec::new(),
         end_reason: Some(EndReason::Exited),
         triage_ran: true,
@@ -190,13 +191,14 @@ fn the_default_mapping_follows_the_table_in_order() {
         v.basis
     );
 
-    // A high or critical YARA hit, even when the assessment is mild.
+    // A high or critical YARA hit is suspicious, never malicious on its own
+    // (A50: one rule's own severity made a low-tier run malicious).
     for severity in ["high", "critical", "HIGH"] {
         let mut f = facts();
         f.assessment = AssessmentKind::ObservedOnly;
         f.detections = vec![hit("YARA", severity)];
         let v = default_label(&f);
-        assert_eq!(v.label, Label::Malicious, "{severity}");
+        assert_eq!(v.label, Label::Suspicious, "{severity}");
         assert!(v.basis.contains("rule_1"));
     }
     // From another engine, or a lower severity, a hit is not enough on its own.
@@ -412,4 +414,337 @@ fn the_assessment_object_carries_the_facts_the_label_and_the_basis() {
         serde_json::from_str::<crate::api::assessment::Assessment>(&json).unwrap(),
         a
     );
+}
+
+// ---- labels from tiers and family evidence (ANT-T0556, A50, A11) --------
+
+/// One row of the label table: the run's behaviour, its YARA hits (as the
+/// 2026-11-16 evaluation recorded them, trimmed), what it did that names a
+/// family, and the label the default mapping must give.
+struct Row {
+    run: &'static str,
+    assessment: AssessmentKind,
+    tier: Tier,
+    /// `(rule, family meta, pack, severity)`.
+    hits: &'static [(&'static str, &'static str, &'static str, &'static str)],
+    observed: &'static [&'static str],
+    label: Label,
+    families: &'static [&'static str],
+}
+
+const HUB: &str = "selection/pack/abuse-ch-yarahub/x.yar";
+const FORGE: &str = "selection/pack/yara-forge-core/x.yar";
+const MASS: (&str, &str, &str, &str) = (
+    "s1072::TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+    "",
+    HUB,
+    "indicator",
+);
+const OHSHIT: (&str, &str, &str, &str) =
+    ("s1::MIRAI_OHSHIT_payload", "MIRAI_OHSHIT", HUB, "indicator");
+const TORII: (&str, &str, &str, &str) = ("s2::ELF_Toriilike_persist", "Torii", HUB, "indicator");
+
+fn label_table() -> Vec<Row> {
+    use AssessmentKind::SuspiciousBehaviour as Behaviour;
+    use AssessmentKind::{Inconclusive as NoBehaviour, NoFindings, ObservedOnly};
+    vec![
+        // A strong family rule and medium or high behaviour: malicious.
+        Row {
+            run: "1bcae1cc-r2",
+            assessment: Behaviour,
+            tier: Tier::High,
+            hits: &[
+                OHSHIT,
+                (
+                    "s3::MIRAI_TELNETCURL_payload",
+                    "MIRAI_TELNETCURL",
+                    HUB,
+                    "indicator",
+                ),
+                MASS,
+            ],
+            observed: &[],
+            label: Label::Malicious,
+            families: &["Mirai"],
+        },
+        Row {
+            run: "28b1b1ad",
+            assessment: Behaviour,
+            tier: Tier::Medium,
+            hits: &[OHSHIT, MASS],
+            observed: &[],
+            label: Label::Malicious,
+            families: &["Mirai"],
+        },
+        // The behaviour names Prometei; the Mirai rule is "also named".
+        Row {
+            run: "21011aed",
+            assessment: Behaviour,
+            tier: Tier::High,
+            hits: &[OHSHIT, ("s885::RANSOMWARE", "", HUB, "indicator"), MASS],
+            observed: &[
+                "/usr/sbin/uplugplay",
+                "GET 177.221.180.26/cgi-bin/p.cgi?r=59&i=4J8",
+            ],
+            label: Label::Malicious,
+            families: &["Prometei", "Mirai"],
+        },
+        // A strong family rule and low behaviour: suspicious, never clean.
+        Row {
+            run: "d0d25b1a",
+            assessment: ObservedOnly,
+            tier: Tier::Low,
+            hits: &[OHSHIT, MASS],
+            observed: &[],
+            label: Label::Suspicious,
+            families: &["Mirai"],
+        },
+        Row {
+            run: "f99021c2",
+            assessment: NoFindings,
+            tier: Tier::None,
+            hits: &[
+                OHSHIT,
+                MASS,
+                ("SEKOIA_Miner_Lin_Xmrig_Strings", "", FORGE, "indicator"),
+                (
+                    "SIGNATURE_BASE_PUA_Crypto_Mining_Commandline_Indicators_Oct21",
+                    "",
+                    FORGE,
+                    "indicator",
+                ),
+            ],
+            observed: &[],
+            label: Label::Suspicious,
+            families: &["Mirai", "XMRig"],
+        },
+        // A "high severity" rule beside a family rule on a low-tier run:
+        // suspicious, no longer malicious.
+        Row {
+            run: "e898ef63",
+            assessment: ObservedOnly,
+            tier: Tier::Low,
+            hits: &[
+                OHSHIT,
+                MASS,
+                ("s1597::focusbot_ddos_botnet", "focusbot", HUB, "high"),
+            ],
+            observed: &[],
+            label: Label::Suspicious,
+            families: &["Mirai", "Focusbot"],
+        },
+        // Family rules of Gafgyt (meta, a known name, a Malpedia alias).
+        Row {
+            run: "14de1483",
+            assessment: ObservedOnly,
+            tier: Tier::Low,
+            hits: &[
+                TORII,
+                MASS,
+                ("botnet_Yakuza", "", HUB, "indicator"),
+                ("botnet_mortem_qbot_gafgyt", "Gafgyt", HUB, "indicator"),
+                ("gafgyt_ansi_beacon", "Gafgyt", HUB, "indicator"),
+            ],
+            observed: &[],
+            label: Label::Suspicious,
+            families: &["Gafgyt"],
+        },
+        Row {
+            run: "938b3bf6",
+            assessment: ObservedOnly,
+            tier: Tier::Low,
+            hits: &[
+                ("ELF_DDoS_Gafgyt_Variant", "", HUB, "indicator"),
+                TORII,
+                MASS,
+                ("botnet_dayzddos", "", HUB, "indicator"),
+            ],
+            observed: &[],
+            label: Label::Suspicious,
+            families: &["Gafgyt"],
+        },
+        Row {
+            run: "d4c93991",
+            assessment: ObservedOnly,
+            tier: Tier::Low,
+            hits: &[
+                ("ELF_IoT_Persistence_Hunt", "", HUB, "indicator"),
+                TORII,
+                (
+                    "LIN_Downloader_Unknown_WgetChmodExecute",
+                    "",
+                    HUB,
+                    "indicator",
+                ),
+                MASS,
+                ("MALPEDIA_Elf_Bashlite_Auto", "", FORGE, "indicator"),
+            ],
+            observed: &[],
+            label: Label::Suspicious,
+            families: &["Gafgyt"],
+        },
+        // A family rule and no recorded behaviour: suspicious, and says so.
+        Row {
+            run: "83ff6b2e-r2",
+            assessment: NoBehaviour,
+            tier: Tier::Low,
+            hits: &[OHSHIT, MASS],
+            observed: &[],
+            label: Label::Suspicious,
+            families: &["Mirai"],
+        },
+        // Technique and generic rules only: no family, the behaviour decides.
+        Row {
+            run: "624cf70d",
+            assessment: ObservedOnly,
+            tier: Tier::Low,
+            hits: &[TORII, MASS],
+            observed: &[],
+            label: Label::CleanObserved,
+            families: &[],
+        },
+        Row {
+            run: "3dc4d1b1-r2",
+            assessment: ObservedOnly,
+            tier: Tier::Low,
+            hits: &[
+                ("DetectEncryptedVariants", "", HUB, "indicator"),
+                ("DetectGoMethodSignatures", "", HUB, "indicator"),
+                ("RANSOMWARE", "", HUB, "indicator"),
+                ("Suspicious_Golang_Binary", "", HUB, "indicator"),
+                MASS,
+            ],
+            observed: &[],
+            label: Label::CleanObserved,
+            families: &[],
+        },
+        Row {
+            run: "791b8d17-r2",
+            assessment: ObservedOnly,
+            tier: Tier::Low,
+            hits: &[
+                ("botnet_Yakuza", "", HUB, "indicator"),
+                ("Sus_CMD_Powershell_Usage", "", HUB, "indicator"),
+                MASS,
+            ],
+            observed: &[],
+            label: Label::CleanObserved,
+            families: &[],
+        },
+        Row {
+            run: "8632f4bb-r2",
+            assessment: NoFindings,
+            tier: Tier::None,
+            hits: &[
+                ("ELF_Packer_Dropper_Fileless_Armhf", "", HUB, "indicator"),
+                MASS,
+            ],
+            observed: &[],
+            label: Label::CleanObserved,
+            families: &[],
+        },
+        Row {
+            run: "56dffc63",
+            assessment: Behaviour,
+            tier: Tier::High,
+            hits: &[
+                ("ELF_IoT_Persistence_Hunt", "", HUB, "indicator"),
+                ("NSVPS_Mirai_Busybox_Staging", "", HUB, "indicator"),
+                MASS,
+            ],
+            observed: &[],
+            label: Label::Suspicious,
+            families: &[],
+        },
+        Row {
+            run: "5bf67d64",
+            assessment: Behaviour,
+            tier: Tier::High,
+            hits: &[("Suspicious_Golang_Binary", "", HUB, "indicator"), MASS],
+            observed: &[],
+            label: Label::Suspicious,
+            families: &[],
+        },
+        // Nothing recorded and no family: inconclusive, not clean.
+        Row {
+            run: "032d50ab-r2",
+            assessment: NoBehaviour,
+            tier: Tier::Low,
+            hits: &[MASS],
+            observed: &[],
+            label: Label::Inconclusive,
+            families: &[],
+        },
+    ]
+}
+
+#[test]
+fn the_label_follows_the_tier_and_the_family_evidence_in_every_evaluation_run() {
+    use antinomie_monitor_core::family::{self, Bazaar};
+    for row in label_table() {
+        let hits: Vec<antinomie_monitor_core::run_digest::DetectionHit> = row
+            .hits
+            .iter()
+            .map(|(rule, meta, source, severity)| {
+                antinomie_monitor_core::run_digest::DetectionHit {
+                    engine: "YARA".into(),
+                    rule_id: (*rule).into(),
+                    title: (*rule).into(),
+                    severity: (*severity).into(),
+                    family: (*meta).into(),
+                    source: (*source).into(),
+                    count: 1,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        let candidates = family::family_candidates_seen(&hits, Bazaar::default(), row.observed);
+        let names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, row.families, "{}: {candidates:?}", row.run);
+        let mut f = facts();
+        f.assessment = row.assessment;
+        f.highest_tier = row.tier;
+        f.families = names.iter().map(|n| (*n).to_owned()).collect();
+        f.family_evidence = family::observed_families(&candidates);
+        f.detections = hits
+            .iter()
+            .map(|h| DetectionHit {
+                engine: h.engine.clone(),
+                rule_id: h.rule_id.clone(),
+                title: h.title.clone(),
+                severity: h.severity.clone(),
+                count: 1,
+            })
+            .collect();
+        let v = default_label(&f);
+        assert_eq!(v.label, row.label, "{}: {}", row.run, v.basis);
+        if !row.families.is_empty() {
+            assert!(
+                v.basis.contains(row.families[0]),
+                "{}: {}",
+                row.run,
+                v.basis
+            );
+        }
+    }
+}
+
+#[test]
+fn a_run_with_no_recorded_behaviour_is_inconclusive_and_says_why() {
+    // A11: a crash before the first call, or a program stopped at the time
+    // limit before its first call, is no "clean" run.
+    let mut f = facts();
+    f.assessment = AssessmentKind::Inconclusive;
+    f.highest_tier = Tier::Low;
+    f.end_reason = Some(EndReason::TimeLimit);
+    f.statement = "Triage observed: no behaviour was recorded: the program made no system call before it was stopped (SIGTERM).".into();
+    let v = default_label(&f);
+    assert_eq!(v.label, Label::Inconclusive);
+    assert!(v.basis.contains("No behaviour was recorded"), "{}", v.basis);
+    assert!(v.basis.contains("SIGTERM"), "{}", v.basis);
+    f.end_reason = Some(EndReason::Signaled);
+    f.statement = "Triage observed: no behaviour was recorded: the program crashed before its first system call: SIGBUS (bus error).".into();
+    let v = default_label(&f);
+    assert_eq!(v.label, Label::Inconclusive);
+    assert!(v.basis.contains("SIGBUS"), "{}", v.basis);
 }

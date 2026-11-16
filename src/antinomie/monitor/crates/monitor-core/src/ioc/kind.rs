@@ -276,9 +276,63 @@ pub fn local_name(name: &str) -> bool {
         .any(|suffix| name.rsplit('.').next() == Some(*suffix))
 }
 
+/// Whether `name` is a host name a domain indicator may hold (ANT-T0556,
+/// A42): at least two labels of letters, digits, `-` and `_`, each 1 to 63
+/// characters and not starting or ending with `-`, a last label that is not
+/// all digits, 253 characters at most. An HTTP Host `x`, a single label such
+/// as `debian` and an obfuscated binary string are not.
+pub fn host_name(name: &str) -> bool {
+    let name = name.trim_end_matches('.');
+    if name.is_empty() || name.len() > 253 {
+        return false;
+    }
+    let labels: Vec<&str> = name.split('.').collect();
+    labels.len() >= 2
+        && labels.iter().all(|label| {
+            (1..=63).contains(&label.len())
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+        })
+        && labels
+            .last()
+            .is_some_and(|tld| tld.bytes().any(|b| b.is_ascii_alphabetic()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_real_host_names_are_host_names() {
+        for good in [
+            "c2.evil.example",
+            "howthisniwqewe.duckdns.org",
+            "stun1.l.google.com",
+            "xn--bcher-kva.example",
+            "_dmarc.example.com",
+            "a.io.",
+        ] {
+            assert!(host_name(good), "{good}");
+        }
+        for bad in [
+            "x",
+            "debian",
+            "",
+            "~~~'khfc|g~hb.org",
+            "1.2.3.4",
+            "-bad.example",
+            "bad-.example",
+            "a..b",
+            "host name.example",
+            "example.123",
+        ] {
+            assert!(!host_name(bad), "{bad}");
+        }
+        assert!(!host_name(&format!("{}.com", "a".repeat(64))));
+    }
 
     #[test]
     fn values_have_one_normal_form() {

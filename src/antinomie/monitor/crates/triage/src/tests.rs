@@ -327,6 +327,11 @@ pub fn caps_keep_two_thousand_rows_per_rule_and_count_the_rest_in_an_overflow_ro
         "the badge counts the capped rows"
     );
     assert_eq!(first.counts.findings_capped, 51);
+    // A28: the digest's behaviour adds up every row, the page's omitted ones
+    // and the overflow row included.
+    let behaviour = crate::digest::behaviour_of(&first);
+    assert_eq!(behaviour.rules.len(), 1, "{:?}", behaviour.rules);
+    assert_eq!(behaviour.rules[0].count, 2051);
     request.offsets[0] = STORED_ROWS;
     request.filters[0] = "finding.rule == \"memory.rwx\" && finding.success == true".into();
     let second = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();

@@ -313,6 +313,35 @@ pub fn root_exit_signal(directory: &Path) -> Option<String> {
     crash_text(&root_exit_status(directory)?)
 }
 
+/// Why the run's program left no call, as a clause after "the sample":
+/// "crashed before its first system call: SIGBUS (bus error)", or, when the
+/// time limit or a Stop ended it (`run.json` has `stopped_by_user` or
+/// `stopped_at_ms`) with SIGTERM or SIGKILL, "made no system call before it
+/// was stopped (SIGTERM) ..." (ANT-T0556, A11): that is no crash.
+pub fn no_call_clause(directory: &Path, signal: &str) -> String {
+    let stopped = std::fs::read(directory.join("run.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|run| {
+            run.get("stopped_by_user")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                || run
+                    .get("stopped_at_ms")
+                    .is_some_and(|value| !value.is_null())
+        });
+    if stopped && (signal.starts_with("SIGTERM") || signal.starts_with("SIGKILL")) {
+        format!(
+            "{NO_CALLS_BEFORE_STOP} ({signal}): it looped or blocked before its first call, or its calls were not recorded"
+        )
+    } else {
+        format!("crashed before its first system call: {signal}")
+    }
+}
+
+/// How [`no_call_clause`] begins for a program stopped before its first call.
+pub const NO_CALLS_BEFORE_STOP: &str = "made no system call before it was stopped";
+
 /// How the run's program ended, from `run.json` (`execution.root_exit`).
 pub fn root_exit_status(directory: &Path) -> Option<antinomie_monitor_core::WaitStatus> {
     let run: serde_json::Value =

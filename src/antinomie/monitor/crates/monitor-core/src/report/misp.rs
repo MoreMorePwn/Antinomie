@@ -227,12 +227,25 @@ pub fn render(report: &Report) -> Result<String, String> {
         .as_ref()
         .map(|summary| summary.families.iter().map(String::as_str).collect())
         .unwrap_or_default();
-    // An observed-only run is not evidence against its sample: the sample's
-    // hash is for blocking only when a dataset matched or a rule named a family.
+    // The sample's hash is for blocking when the report holds evidence
+    // against the sample, whatever label a service later gives the run
+    // (A32): a dataset matched, the behaviour reached tier medium or high, a
+    // rule or the behaviour named a family, or a strong YARA rule matched
+    // (also in a run that crashed before its first call). Weak and generic
+    // rule matches alone are not evidence.
     let not_started = report.not_started();
+    let strong_rule =
+        report.detections.iter().flatten().any(|hit| {
+            hit.engine.eq_ignore_ascii_case("yara") && hit.strength.starts_with("strong")
+        });
     let strong = !not_started
         && (matches!(assessment, "matched_indicators" | "suspicious_behaviour")
-            || !families.is_empty());
+            || !families.is_empty()
+            || report
+                .summary
+                .as_ref()
+                .is_some_and(|summary| !summary.family_evidence.is_empty())
+            || strong_rule);
     let mut attrs = Vec::new();
     let mut objects = Vec::new();
     if let Some(sample) = &report.sample
@@ -289,6 +302,17 @@ pub fn render(report: &Report) -> Result<String, String> {
                 attrs.push(attr);
             }
         }
+    }
+    for scan in report.summary.iter().flat_map(|summary| &summary.scans) {
+        attrs.push(attribute(
+            "comment",
+            "Other",
+            &super::scan::sentence(scan),
+            false,
+            "",
+            &format!("{seed}:scan:{}", scan.port),
+            at,
+        ));
     }
     for hit in report.detections.iter().flatten() {
         attrs.push(attribute(

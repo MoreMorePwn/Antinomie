@@ -54,6 +54,9 @@ pub(super) fn fixture() -> Report {
         key_findings_text: Vec::new(),
         key_findings_total: 0,
         other_families: Vec::new(),
+        family_evidence: Vec::new(),
+        tags: Vec::new(),
+        scans: Vec::new(),
         key_behaviours: vec![Behaviour {
             rule: "exec-from-tmp".into(),
             tier: "high".into(),
@@ -546,6 +549,85 @@ fn pdf_defangs_and_shows_non_latin_text_as_question_marks() {
     let (content, _) = pdf_text(&bytes);
     assert!(content.contains("203[.]0[.]113[.]5:443"));
     assert!(content.contains("caf\\351 ?? \\(x\\) \\\\y"), "{content}");
+}
+
+#[test]
+fn the_sample_hash_is_for_blocking_when_the_report_holds_evidence_against_it() {
+    // A32: run 3b22d6b1 crashed before its first call with YARA hits; the
+    // hash's `to_ids` follows the evidence, not the label.
+    let sample_ids = |report: &Report| -> bool {
+        let value: serde_json::Value =
+            serde_json::from_str(&misp::render(report).unwrap()).unwrap();
+        value["Event"]["Object"][0]["Attribute"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["type"] == "sha256" && a["to_ids"] == true)
+    };
+    let mut report = fixture();
+    let summary = report.summary.as_mut().unwrap();
+    summary.assessment = "no_behaviour".into();
+    summary.families.clear();
+    summary.family_evidence.clear();
+    let yara = |strength: &str| Detection {
+        engine: "YARA".into(),
+        rule_id: "s1::Rule".into(),
+        strength: strength.into(),
+        ..Detection::default()
+    };
+    report.detections = Some(vec![yara("weak")]);
+    assert!(
+        !sample_ids(&report),
+        "a weak or generic match alone is no evidence"
+    );
+    report.detections = Some(vec![yara("weak"), yara("strong")]);
+    assert!(sample_ids(&report), "a strong YARA match is");
+    report.detections = Some(Vec::new());
+    report.summary.as_mut().unwrap().family_evidence = vec![FamilyEvidence {
+        name: "Mirai".into(),
+        strong: false,
+    }];
+    assert!(sample_ids(&report), "a family a rule of the run named is");
+    report.summary.as_mut().unwrap().family_evidence.clear();
+    report.summary.as_mut().unwrap().assessment = "suspicious_behaviour".into();
+    assert!(sample_ids(&report), "medium or high behaviour is");
+}
+
+#[test]
+fn a_scan_is_one_comment_in_misp_and_one_note_in_stix() {
+    // A36: the scan's targets are not indicators; the exports say it once.
+    let mut report = fixture();
+    report.summary.as_mut().unwrap().scans = vec![ScanSummary {
+        port: 23,
+        targets: 9_676,
+        connections: 10_380,
+        requests: 0,
+        sample: vec!["203.0.113.7:23".into()],
+        sample_requests: Vec::new(),
+    }];
+    let event: serde_json::Value = serde_json::from_str(&misp::render(&report).unwrap()).unwrap();
+    let comments: Vec<&str> = event["Event"]["Attribute"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["type"] == "comment")
+        .filter_map(|a| a["value"].as_str())
+        .filter(|v| v.contains("scanned"))
+        .collect();
+    assert_eq!(comments.len(), 1);
+    assert!(
+        comments[0].contains("9676 addresses on port 23"),
+        "{}",
+        comments[0]
+    );
+    let bundle: serde_json::Value = serde_json::from_str(&stix::render(&report).unwrap()).unwrap();
+    let notes = bundle["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| o["type"] == "note" && o["abstract"] == "Network scan on port 23")
+        .count();
+    assert_eq!(notes, 1);
 }
 
 #[test]

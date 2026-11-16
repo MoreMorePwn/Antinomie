@@ -180,6 +180,7 @@ fn summary(
     behaviour: &digest_types::Behaviour,
     indicators: &[(report::Indicator, bool)],
     candidates: &[super::super::family::Candidate],
+    tags: Vec<String>,
     techniques: usize,
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) -> Summary {
@@ -255,7 +256,14 @@ fn summary(
             .then(a.rule.cmp(&b.rule))
     });
     key.truncate(25);
-    let (assessment, basis) = if matched > 0 {
+    let (assessment, basis) = if let Some(why) = &scan.root_crash {
+        // A11: nothing the program did was recorded, so nothing can be
+        // judged from its behaviour; the reason is the statement.
+        (
+            "no_behaviour",
+            format!("no behaviour was recorded: the program {why}"),
+        )
+    } else if matched > 0 {
         (
             "matched_indicators",
             format!("{matched} indicator(s) matched a stored dataset"),
@@ -309,6 +317,9 @@ fn summary(
         families,
         family_sources,
         other_families,
+        family_evidence: super::super::family::observed_families(candidates),
+        tags,
+        scans: Vec::new(),
         tiers: {
             // The app's tier chips count every finding, INFO included; the
             // index lists INFO rows only when asked for them.
@@ -708,10 +719,12 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     let clock = scan.clock_anchor.or(job.clock);
     let mut report = Report::new(job.run.clone(), job.now_ms);
     report.sample = job.sample.clone();
-    let behaviour = digest::behaviour(&scan.findings);
+    let behaviour = digest::behaviour_of(scan);
     // `None` when no detection engine has run for the run (stored with the run).
     let digest_detections = RunDigest::read(&job.archive).and_then(|digest| digest.detections);
-    let indicator_rows = indicators(job, scan);
+    let mut indicator_rows = indicators(job, scan);
+    // A scanned port's targets are one behaviour, not indicators (A36).
+    let scans = antinomie_monitor_core::report::scan::collapse(&mut indicator_rows);
     let techniques = super::super::attack::techniques(
         &behaviour,
         digest_detections.as_deref().unwrap_or_default(),
@@ -724,8 +737,16 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
             .and_then(|(sample, dir)| {
                 antinomie_monitor_core::samples::recorded_info(dir, &sample.sha256)
             });
-        let candidates = super::super::family::family_candidates(
-            digest_detections.as_deref().unwrap_or_default(),
+        // What the run did that names a family (Prometei's `uplugplay`
+        // service): the indicators' values, paths and URLs.
+        let observed: Vec<&str> = indicator_rows
+            .iter()
+            .flat_map(|(i, _)| [i.value.as_str(), i.path.as_str(), i.url.as_str()])
+            .filter(|text| !text.is_empty())
+            .collect();
+        let hits = digest_detections.as_deref().unwrap_or_default();
+        let candidates = super::super::family::family_candidates_seen(
+            hits,
             bazaar
                 .as_ref()
                 .map(|info| super::super::family::Bazaar {
@@ -734,18 +755,28 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
                     looked_up: info.looked_up,
                 })
                 .unwrap_or_default(),
+            &observed,
         );
         report.summary = Some(summary(
             scan,
             &behaviour,
             &indicator_rows,
             &candidates,
+            super::super::family::detection_tags(hits),
             techniques.len(),
             clock,
         ));
+        if let Some(summary) = report.summary.as_mut() {
+            summary.scans.clone_from(&scans);
+        }
     }
     if let Some(note) = schema_gap_note(scan) {
         report.notes.push(note);
+    }
+    for scan in &scans {
+        report
+            .notes
+            .push(antinomie_monitor_core::report::scan::sentence(scan));
     }
     if let Some(note) = suffix_variant_note(&indicator_rows) {
         report.notes.push(note);
@@ -760,7 +791,7 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     }
     if let Some(crash) = &scan.root_crash {
         report.notes.push(format!(
-            "The sample crashed before its first system call: {crash}. No calls of its program were recorded, so the process table, files and findings below are empty because there was nothing to record, not because it did nothing."
+            "The sample {crash}. No calls of its program were recorded, so the process table, files and findings below are empty because there was nothing to record, not because it did nothing."
         ));
     }
     if (choices.has(Part::Summary) || choices.has(Part::Detections)) && digest_detections.is_none()

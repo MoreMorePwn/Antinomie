@@ -197,6 +197,12 @@ impl Engine {
             return;
         }
         super::ioc::observe(&cx, &mut self.state.ioc);
+        if matches!(cx.name, "exit" | "exit_group") && self.state.exit_codes.len() < 65_536 {
+            // The low byte is what the parent's wait sees.
+            self.state
+                .exit_codes
+                .insert(call.task_cookie, (cx.args[0] & 0xff) as i64);
+        }
         let mut hits = collect_hits(&cx, &mut self.state);
         // One call is one occurrence of a rule on an object, however many ways it touched it.
         let mut seen = std::collections::BTreeSet::new();
@@ -426,6 +432,8 @@ impl Engine {
                     && traced.contains(&agg.cookie))
             })
             .collect();
+        shell_exits(&mut aggs, &self.state.exit_codes);
+        super::network::drop_resolved(&mut aggs, &self.state);
         aggs.extend(probes::rows(&self.state, files));
         if self.options.capture_all {
             scope(&mut aggs, &self.state, files);
@@ -497,6 +505,31 @@ impl Engine {
             }
         }
         output
+    }
+}
+
+/// A row a shell command gave (`chattr +i ...` in `sh -c`) says it failed
+/// when its shell exited 126 (not executable) or 127 (not found): the exec of
+/// the shell succeeded, the command did not (A40).
+pub fn shell_exits(aggs: &mut [Agg], exit_codes: &std::collections::BTreeMap<u64, i64>) {
+    for agg in aggs {
+        if !agg.summary.ends_with(" (in a shell command)") || agg.failed == agg.count {
+            continue;
+        }
+        let Some(&code) = exit_codes.get(&agg.cookie) else {
+            continue;
+        };
+        let why = match code {
+            127 => "127: the command was not found",
+            126 => "126: the command could not be run",
+            _ => continue,
+        };
+        agg.failed = agg.count;
+        agg.outcome = format!("the shell exited {why}");
+        let line = format!("The shell that ran this command exited {why}, so it did not happen.");
+        if !agg.detail.contains(&line) {
+            agg.detail.push(line);
+        }
     }
 }
 
