@@ -638,7 +638,7 @@ mod tests {
         a.severity = "low".into();
         a.count = 9;
         a.mitre = vec!["T1105".into()];
-        let mut b = finding("b", "alpha injector", vec![bytes_at(2)]);
+        let mut b = finding("b", "alpha marker", vec![bytes_at(2)]);
         b.severity = "critical".into();
         b.count = 2;
         b.mitre = vec!["T1055.001".into()];
@@ -733,26 +733,26 @@ mod tests {
         let (report, rows) = sorting_report();
         assert_eq!(
             titles(&report, &rows, MatchSort::default()),
-            ["alpha injector", "Mid runner", "Zeta loader"],
+            ["alpha marker", "Mid runner", "Zeta loader"],
             "risk is the default"
         );
         assert_eq!(
             titles(&report, &rows, MatchSort::Name),
-            ["alpha injector", "Mid runner", "Zeta loader"]
+            ["alpha marker", "Mid runner", "Zeta loader"]
         );
         // T1055.001 before T1105; the one with no technique last.
         assert_eq!(
             titles(&report, &rows, MatchSort::Mitre),
-            ["alpha injector", "Zeta loader", "Mid runner"]
+            ["alpha marker", "Zeta loader", "Mid runner"]
         );
         assert_eq!(
             titles(&report, &rows, MatchSort::Hits),
-            ["Zeta loader", "Mid runner", "alpha injector"]
+            ["Zeta loader", "Mid runner", "alpha marker"]
         );
         // Journal event 7 before 40; bytes have no order and come last.
         assert_eq!(
             titles(&report, &rows, MatchSort::FirstHit),
-            ["Mid runner", "alpha injector", "Zeta loader"]
+            ["Mid runner", "alpha marker", "Zeta loader"]
         );
         assert_eq!(titles(&report, &rows, MatchSort::Engine).len(), 3);
     }
@@ -776,11 +776,11 @@ mod tests {
         }
         assert!(y.contains_key("Sort by"), "{:?}", y.keys());
         assert!(y.contains_key("Hit count"), "{:?}", y.keys());
-        for title in ["Zeta loader", "Mid runner", "alpha injector"] {
+        for title in ["Zeta loader", "Mid runner", "alpha marker"] {
             assert!(y.contains_key(title), "{title} not drawn: {:?}", y.keys());
         }
         assert!(y["Zeta loader"] < y["Mid runner"]);
-        assert!(y["Mid runner"] < y["alpha injector"]);
+        assert!(y["Mid runner"] < y["alpha marker"]);
     }
 
     #[test]

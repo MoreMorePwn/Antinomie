@@ -561,8 +561,10 @@ fn a_high_yara_severity_without_a_family_makes_the_job_suspicious_not_malicious(
     let done = finished(host(&w, &mut waiter, &job));
     let a = done.assessment.unwrap();
     assert_eq!(a.label, Some(Label::Suspicious), "{}", a.basis);
-    assert!(a.basis.contains("fixture_rule"), "{}", a.basis);
+    // The rule is kept with the assessment, but its severity alone does not
+    // make the label.
     assert_eq!(a.detections.len(), 1);
+    assert!(format!("{:?}", a.detections).contains("fixture_rule"));
     // Triage kept the digest's detection when no engine ran.
     let digest = antinomie_monitor_core::run_digest::RunDigest::read(&run_dir(&w)).unwrap();
     assert_eq!(digest.detections.unwrap().len(), 1);
