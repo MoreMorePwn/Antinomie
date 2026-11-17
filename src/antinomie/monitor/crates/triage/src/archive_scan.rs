@@ -133,7 +133,8 @@ pub fn scan_archive_query(
 }
 
 /// Terminal requests whose argument only carries the kernel's answer (the
-/// guest decodes them on the terminals it knows by device number).
+/// guest decodes them on any terminal: a file whose ioctl is the tty layer's,
+/// whatever its device number; guest series 0056).
 pub const TTY_ANSWERS: &[(u64, &str)] = &[
     (0x5401, "TCGETS"),
     (0x540f, "TIOCGPGRP"),

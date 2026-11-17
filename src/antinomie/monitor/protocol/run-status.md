@@ -25,7 +25,7 @@ Exactly 64 octets, little endian. No native struct casts.
 | 0 | u64 | Queried root cookie; must match request |
 | 8 | u64 | Monotonic per-run generation; changes on membership/status transitions |
 | 16 | u64 | Live task/thread count at the defined kernel task-exit boundary |
-| 24 | u64 | Outstanding observed async requests; not a proof that unsupported variants have none |
+| 24 | u64 | Outstanding observed async requests; not a proof that unsupported variants have none. From guest series 0092 on, also each file hash the guest queued and has not published yet, and each task of a run that hashes its writes that has left the run but not yet closed its files (below) |
 | 32 | u32 | Flags below |
 | 36 | s32 | Raw Linux root wait status, valid only with ROOT_EXITED |
 | 40 | u64 | Cumulative async observation/staging/publication losses for this run |
@@ -146,6 +146,19 @@ reference lifetime, never an unreferenced PID scan.
 
 TREE_EXITED is task completion at the existing exit observation boundary, not
 proof that all file/task cleanup, async I/O or telemetry delivery finished.
+
+File hashes at the end of a run (guest series 0092, no revision change): a run
+launched with HASH_WRITES hashes a file when its last writer closes it, and an
+exiting task closes its files after it left the run. The guest therefore counts,
+in the pending count at 24, each queued hash job (until its record is published
+or dropped) and each exiting task of such a run (from its exit boundary, under
+the same lock as TREE_EXITED, until its files are closed, after
+`exit_task_work()`). A host that takes "TREE_EXITED and pending 0" as the end
+(the run states above) thus has the hashes of the files the program left open.
+The hash queue's limits bound the wait: at most 16 jobs and 64 MiB are read,
+and at most 64 refusals wait to be published; anything past them is refused or
+dropped at once. An older guest's tree could read as ended before those hashes
+were queued.
 Run payload recording continues until VM stop in this update, avoiding premature
 archive closure; status and archival finalization remain separate. Unknown old
 archives and forced VM termination retain distinct states.

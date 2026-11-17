@@ -1378,6 +1378,56 @@ ms under load).
   base: the fixture writes its cron entry and exits at once (`SECONDS` 0); its
   core must be written and its note must say it was held.
 
+### Guest fixes from the arm64 evaluation (0.9.0, no contract change)
+
+Card ANT-T0557, the guest side of the evaluation audit's A01, A29 and A39
+(`ANT-T0554`; the host side is ANT-T0556's recorder part). Two patches, 91 and
+92, numbered after the 0.10.0 series' 58-90 so that both series carry the same
+files under the same names (0.10.0 keeps 1-57 byte for byte). The contract stays
+at revision 22: no layout or meaning changes, so only the series hash and
+`CONFIG_ANTINOMIE_SOURCE_ID` move.
+
+* **Hashes of files still open at the end (patch 92, A01).** A run launched with
+  HASH_WRITES hashes a file when its last writer lets it go, also at exit, but the
+  exiting task closes its files (`exit_files()` and its task work) after
+  `ant_run_exit()` took it out of the run. When the last task left, RUN_STATUS
+  said TREE_EXITED with nothing pending before those hashes were queued, and the
+  host sealed the run without them ("still open at run end"). Now:
+  * each job queued for the hash worker (a hash, or a refusal the worker
+    publishes) counts in its run's pending count from the moment it is queued
+    (`job_count()`, under the hash lock, before the worker can see it) until the
+    worker has published or dropped its record (`job_free()`);
+  * a task leaving a run that hashes writes counts one pending operation from
+    `ant_run_exit()`, under the lock that may set TREE_EXITED, until
+    `ant_monitor_files_closed()`, a new hook in `do_exit()` after
+    `exit_task_work()`, where the last `fput()` of each of its files has run.
+    io_uring workers have no root cookie and hash nothing, so they are not counted.
+
+  A host waits for TREE_EXITED with no pending work (every host since revision
+  17), so it waits for those hashes with no host change. The wait is bounded by
+  the hash queue's own limits: at most 16 jobs (`ANTC_HASH_QUEUE`) and 64 MiB
+  (`ANTC_HASH_PENDING_MAX`) are read, no file above 16 MiB is, and at most 64
+  refusals wait to be published; a job past them is refused or dropped at once
+  (its record says so). An exit with many open files thus adds at most that much
+  reading to the end of the run. A file a run's task did not close (one held by a
+  process outside the run, a run stopped with the VM) still has no hash.
+* **Where a transfer began (patch 91, A29).** `file.position` took the start as
+  the position the call left less its result. A handler that leaves the position
+  alone (`/proc/self/loginuid` accepts a write only at 0 and stays there) gave a
+  start before 0. `vfs_read()`, `vfs_write()`, `vfs_readv()` and `vfs_writev()`
+  now pass the position they were given, and the start is that position unless
+  the file system moved it elsewhere: an append (O_APPEND, RWF_APPEND) lands at
+  the end of the file, and its start stays the end position less the result. The
+  host reads both: an older guest's negative start is an unknown offset
+  (`triage/src/files.rs`), a newer guest's is the real one.
+* **arm64 consoles (A39): no change needed.** `tty_file_of()` already decides "a
+  terminal" by the file, `f_op->unlocked_ioctl == tty_ioctl` (patch 56), which
+  holds for every tty driver (ttyAMA 204 and hvc 229 on arm64, ttyS 4 on x86-64 and
+  MIPS, ttyAMA on ARM32 virt, ptys, `/dev/console`, `/dev/tty`); the majors are only
+  a fallback for a hung-up tty. The evaluation's TIOCGWINSZ and TCGETS gaps (on
+  x86-64 runs too) were requests on files that are not terminals (ENOTTY, no
+  bytes), which the host no longer counts as schema gaps.
+
 ### arm64 debugger (0.9.0)
 
 Multi-arch plan cards MA-11 and MA-14: the debug engine, the RSP server, the
@@ -2026,7 +2076,8 @@ native calls that succeeded on seekable files (regular files and block devices):
   length, u64 write order) on read, write, pread64, pwrite64, readv, writev, preadv, pwritev,
   preadv2 and pwritev2. `vfs_read()`, `vfs_write()`, `vfs_readv()` and
   `vfs_writev()` report where the transfer left the position, and the record
-  holds where it began (that position less the result). It is the open file's
+  holds where it began (the position the call was given; for an append, the
+  position it left less the result: patch 91). It is the open file's
   real position: a descriptor shared after fork, dup or SCM_RIGHTS moves for
   every task that uses it, and an `O_APPEND` write (or `RWF_APPEND`, or a
   pwrite on an `O_APPEND` file) lands at the end of the file as the write found
