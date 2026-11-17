@@ -570,9 +570,12 @@ impl Collector {
         source: Source,
         seen: Seen,
     ) {
+        // Keyed by the path with `.`, `..` and repeated `/` collapsed, so a
+        // file run as `/tmp/./w.bin` is the one written as `/tmp/w.bin`.
+        let at = crate::path_key::path_key(path);
         let key = match &hashes {
-            Some(hashes) => format!("{} {path}", hashes.sha256),
-            None => format!("- {path}"),
+            Some(hashes) => format!("{} {at}", hashes.sha256),
+            None => format!("- {at}"),
         };
         let value = match &hashes {
             Some(hashes) => hashes.sha256.clone(),
@@ -582,7 +585,9 @@ impl Collector {
             return;
         };
         let indicator = entry.indicator.as_mut().expect("entry holds its indicator");
-        indicator.path = path.to_owned();
+        if indicator.path.is_empty() {
+            indicator.path = path.to_owned();
+        }
         if !indicator.roles.iter().any(|have| have == role) {
             indicator.roles.push(role.to_owned());
         }

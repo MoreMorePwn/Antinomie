@@ -228,7 +228,10 @@ impl FileIndex {
         );
         let group = kernel_records::file_id(call)
             .and_then(|id| self.by_identity.get(&id.key).cloned())
-            .unwrap_or_else(|| displayed_path(call, event, files));
+            .unwrap_or_else(|| {
+                antinomie_monitor_core::path_key::path_key(&displayed_path(call, event, files))
+                    .into_owned()
+            });
         if let Some(change) = self.changes.get_mut(&group) {
             change.record_hash(hash, event.timestamp_ns);
         }
@@ -294,7 +297,12 @@ impl FileIndex {
                 let named = displayed_path(call, event, files);
                 if named != "—" {
                     let mut alias = None;
-                    let group = self.route(id.key, named.clone(), Some(&named), &mut alias);
+                    let group = self.route(
+                        id.key,
+                        antinomie_monitor_core::path_key::path_key(&named).into_owned(),
+                        Some(&named),
+                        &mut alias,
+                    );
                     self.remember_alias(&group, alias);
                     self.bind_description(opened, group);
                 }
@@ -313,7 +321,7 @@ impl FileIndex {
         let path_known = observed != "—";
         // The map key stays unique per task and descriptor. The visible label does not.
         let group = if path_known {
-            observed.clone()
+            antinomie_monitor_core::path_key::path_key(&observed).into_owned()
         } else {
             format!(
                 "\u{0}{}:{}",
@@ -338,7 +346,11 @@ impl FileIndex {
                 .into_iter()
                 .find(|used| used.role == sigma_events::Role::Old)
         }) {
-            Some(old) => (old.name.clone(), old.name, true),
+            Some(old) => (
+                antinomie_monitor_core::path_key::path_key(&old.name).into_owned(),
+                old.name,
+                true,
+            ),
             None => (group, path, path_known),
         };
         let group = match identity {
@@ -1176,6 +1188,32 @@ pub mod tests {
                 .push(captured(key, "", &bytes));
         }
         call
+    }
+
+    #[test]
+    fn a_file_run_as_a_dot_segment_spelling_is_the_file_the_run_wrote() {
+        // No identity recorded: the name is all there is to join on.
+        let calls = [
+            named(1, 2, "open", 3, [0, 0x42, 0, 0, 0, 0], &["/tmp/w.bin"]),
+            named(2, 59, "execve", 0, [0; 6], &["/tmp/./w.bin"]),
+            named(3, 59, "execve", 0, [0; 6], &["/tmp/x/../w.bin"]),
+        ];
+        let activity = activity_of(&calls);
+        let mine: Vec<_> = activity
+            .files
+            .iter()
+            .filter(|file| file.path.ends_with("w.bin"))
+            .collect();
+        assert_eq!(
+            mine.len(),
+            1,
+            "{:?}",
+            activity.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+        // Shown as first recorded.
+        assert_eq!(mine[0].path, "/tmp/w.bin");
+        assert!(mine[0].created || mine[0].changed());
+        assert!(mine[0].events.iter().any(|event| event.kind == Kind::Exec));
     }
 
     fn create(id: u64, path: &str, inode: u64, nlink: u32) -> InvocationSummary {

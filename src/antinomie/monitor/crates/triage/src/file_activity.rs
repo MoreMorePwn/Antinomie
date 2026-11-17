@@ -469,7 +469,10 @@ impl Builder {
         if let Some(id) = &record.identity {
             let key = format!("id:{}:{}:{}", id.key.dev, id.key.ino, id.key.generation);
             if record.path_known && self.current.len() < NAMES_TRACKED {
-                self.current.insert(record.path.to_owned(), key.clone());
+                self.current.insert(
+                    antinomie_monitor_core::path_key::path_key(record.path).into_owned(),
+                    key.clone(),
+                );
             }
             return key;
         }
@@ -482,9 +485,11 @@ impl Builder {
         if record.path_known {
             return self
                 .current
-                .get(record.path)
+                .get(antinomie_monitor_core::path_key::path_key(record.path).as_ref())
                 .cloned()
-                .unwrap_or_else(|| record.path.to_owned());
+                .unwrap_or_else(|| {
+                    antinomie_monitor_core::path_key::path_key(record.path).into_owned()
+                });
         }
         format!(
             "\u{0}{}:{}",
@@ -705,11 +710,15 @@ impl Builder {
         });
         // The names lead to files as the call left them.
         if path_known && (renamed || removed) {
-            self.current.remove(&path);
+            self.current
+                .remove(antinomie_monitor_core::path_key::path_key(&path).as_ref());
         }
         if let Some(name) = new_name.filter(|_| renamed || linked) {
             if self.current.len() < NAMES_TRACKED {
-                self.current.insert(name, key);
+                self.current.insert(
+                    antinomie_monitor_core::path_key::path_key(&name).into_owned(),
+                    key,
+                );
             }
         }
     }
@@ -833,7 +842,13 @@ impl Builder {
         let key = identity
             .map(|id| format!("id:{}:{}:{}", id.dev, id.ino, id.generation))
             .or_else(|| {
-                path.map(|path| self.current.get(path).cloned().unwrap_or(path.to_owned()))
+                path.map(|path| {
+                    let at = antinomie_monitor_core::path_key::path_key(path);
+                    self.current
+                        .get(at.as_ref())
+                        .cloned()
+                        .unwrap_or_else(|| at.into_owned())
+                })
             });
         let Some(file) = key.and_then(|key| self.files.get_mut(&key)) else {
             return;

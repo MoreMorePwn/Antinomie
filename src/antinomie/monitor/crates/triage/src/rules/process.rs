@@ -764,7 +764,7 @@ pub fn credentials(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 let classes = file_location::classify(&image, &[]);
                 let risky = classes.contains(&file_location::Location::Temp)
                     || classes.contains(&file_location::Location::Hidden)
-                    || st.written.contains(&image);
+                    || st.has_written(&image);
                 let mut hit = Hit::new(
                     "privilege.setuid_exec",
                     &image,

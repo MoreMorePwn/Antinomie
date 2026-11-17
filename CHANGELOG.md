@@ -1371,6 +1371,8 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **A file the run wrote and then ran as `/tmp/./w.bin` or `/tmp/x/../w.bin` is the run's file, not base noise (ANT-T0562).** Paths the run wrote and paths it ran or opened are now compared with `.`, `..` and repeated `/` collapsed lexically (never above `/`, no filesystem lookup) in the base-program marking, the file activity and written files, the detection rules, the lineage and the report; the path shown stays as recorded.
+
 - **No address lookup leaves the host unless you chose dig and whois (ANT-T0556,
   A09).** Triage ran `whois` and `dig -x` for public destinations exactly when
   the address lookup was **TShark GeoIP only** or off, the opposite of the

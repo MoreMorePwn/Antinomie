@@ -196,10 +196,13 @@ pub fn dropped(cx: &Ctx, st: &State, path: &str, out: &mut Vec<Hit>) {
     let by_identity = kernel_records::file_id(cx.call)
         .filter(|id| id.regular)
         .is_some_and(|id| st.written_keys.contains(&id.key));
-    if !(by_identity || st.written.contains(path)) {
+    if !(by_identity || st.has_written(path)) {
         return;
     }
-    if st.compiled.contains(path) {
+    if st
+        .compiled
+        .contains(antinomie_monitor_core::path_key::path_key(path).as_ref())
+    {
         out.push(
             Hit::new(
                 "execution.compile_then_run",
@@ -275,7 +278,7 @@ pub fn environment(cx: &Ctx, st: &State, out: &mut Vec<Hit>) {
         };
         if matches!(name, "LD_PRELOAD" | "LD_AUDIT") {
             for library in value.split([':', ' ']).filter(|part| !part.is_empty()) {
-                if st.written.contains(library) {
+                if st.has_written(library) {
                     out.push(
                         Hit::new(
                             "injection.dropped_preload",

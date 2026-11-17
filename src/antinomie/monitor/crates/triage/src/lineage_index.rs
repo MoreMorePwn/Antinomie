@@ -88,29 +88,38 @@ pub fn index(
 ) -> Lineage {
     let mut out = Lineage::default();
     // Hashes the run knows for a path, from the IOC file list.
-    let mut hashes: BTreeMap<&str, &str> = BTreeMap::new();
+    // Keys are lexically normalised paths; the paths shown stay as recorded.
+    let mut hashes: BTreeMap<String, &str> = BTreeMap::new();
     if let Some((path, sha256)) = launch {
-        hashes.insert(path.as_str(), sha256.as_str());
+        hashes.insert(
+            antinomie_monitor_core::path_key::path_key(path).into_owned(),
+            sha256.as_str(),
+        );
     }
     // What the run said of each path's hash: where it came from, or why
     // there is none.
-    let mut notes: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut notes: BTreeMap<String, &str> = BTreeMap::new();
     if let Some(ioc) = ioc {
         for indicator in ioc.indicators.iter().filter(|i| i.ty == Type::File) {
             if let Some(hash) = indicator.hashes.as_ref().filter(|h| !h.sha256.is_empty()) {
-                hashes.insert(indicator.path.as_str(), hash.sha256.as_str());
+                hashes.insert(
+                    antinomie_monitor_core::path_key::path_key(&indicator.path).into_owned(),
+                    hash.sha256.as_str(),
+                );
             }
             if let Some(note) = indicator.hash_note.as_deref() {
                 // A line about a file that was hashed is where the hash came
                 // from; one about a file that was not is the reason.
-                notes.entry(indicator.path.as_str()).or_insert(note);
+                notes
+                    .entry(antinomie_monitor_core::path_key::path_key(&indicator.path).into_owned())
+                    .or_insert(note);
             }
         }
     }
     // "no hash: too large" reads as "too large" under the hash line.
     let note_of = |path: &str| -> String {
         notes
-            .get(path)
+            .get(antinomie_monitor_core::path_key::path_key(path).as_ref())
             .map(|note| note.trim_start_matches("no hash: ").to_owned())
             .unwrap_or_default()
     };
@@ -128,14 +137,14 @@ pub fn index(
             .and_then(|parent| image(parent))
             .unwrap_or("");
         let command = command(&node.argv).unwrap_or_default();
-        executed.insert(path.to_owned());
+        executed.insert(antinomie_monitor_core::path_key::path_key(path).into_owned());
         let entry = execs
             .entry((parent.to_owned(), path.to_owned(), command.clone()))
             .or_insert_with(|| LineageExec {
                 parent: parent.to_owned(),
                 path: path.to_owned(),
                 sha256: hashes
-                    .get(path)
+                    .get(antinomie_monitor_core::path_key::path_key(path).as_ref())
                     .map(|hash| (*hash).to_owned())
                     .unwrap_or_default(),
                 command,
@@ -149,7 +158,8 @@ pub fn index(
     for indicator in ioc.indicators.iter().filter(|i| i.ty == Type::File) {
         let roles: Vec<String> = indicator.roles.clone();
         let sample = roles.iter().any(|role| role == "sample");
-        let ran = executed.contains(indicator.path.as_str())
+        let ran = executed
+            .contains(antinomie_monitor_core::path_key::path_key(&indicator.path).as_ref())
             || roles.iter().any(|role| role == "executed");
         let written = roles.iter().any(|role| {
             matches!(

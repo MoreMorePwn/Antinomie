@@ -315,6 +315,12 @@ pub struct State {
 }
 
 impl State {
+    /// Whether the run wrote `path`, compared by its lexically normalised key.
+    pub fn has_written(&self, path: &str) -> bool {
+        self.written
+            .contains(antinomie_monitor_core::path_key::path_key(path).as_ref())
+    }
+
     pub fn task(&mut self, cx: &Ctx) -> &mut Task {
         let process = u64::from(cx.event.pid);
         if self.tasks.len() >= LIMIT && !self.tasks.contains_key(&process) {
@@ -351,7 +357,10 @@ impl State {
                 })
                 .and_then(|node| node.exec_history.first().cloned());
             if let Some(sample) = self.sample.clone() {
-                self.images.entry(sample).or_default().insert(cookie);
+                self.images
+                    .entry(antinomie_monitor_core::path_key::path_key(&sample).into_owned())
+                    .or_default()
+                    .insert(cookie);
             }
         }
         let task = self.task(cx);
@@ -372,7 +381,10 @@ impl State {
         if cx.is_exec() && cx.ok && !cx.via_async {
             if let Some(path) = cx.exec_path() {
                 if self.images.len() < LIMIT {
-                    self.images.entry(path).or_default().insert(cookie);
+                    self.images
+                        .entry(antinomie_monitor_core::path_key::path_key(&path).into_owned())
+                        .or_default()
+                        .insert(cookie);
                 }
             }
             if let Some(id) = kernel_records::file_id(cx.call) {
@@ -397,7 +409,7 @@ impl State {
                 .split(|c: char| c.is_whitespace() || c == ':')
                 .filter(|part| part.starts_with('/'))
             {
-                if self.written.contains(library) {
+                if self.has_written(library) {
                     out.push(
                         Hit::new(
                             "injection.dropped_preload",
@@ -410,9 +422,12 @@ impl State {
             }
         }
         if touch.op == Op::Created && self.created.len() < LIMIT {
-            self.created.insert(path.to_owned());
+            self.created
+                .insert(antinomie_monitor_core::path_key::path_key(path).into_owned());
         }
-        let fresh = !self.created.contains(path);
+        let fresh = !self
+            .created
+            .contains(antinomie_monitor_core::path_key::path_key(path).as_ref());
         let task = self.task(cx);
         task.active = true;
         if fresh
@@ -431,13 +446,15 @@ impl State {
         if !new_file || self.written.len() >= LIMIT {
             return;
         }
-        self.written.insert(path.to_owned());
+        self.written
+            .insert(antinomie_monitor_core::path_key::path_key(path).into_owned());
         self.written_names.insert(base(path).to_owned());
         if let Some(id) = kernel_records::file_id(cx.call).filter(|id| id.regular) {
             self.written_keys.insert(id.key);
         }
         if is_compiler(cx.image_name()) && !path.starts_with("/proc/") {
-            self.compiled.insert(path.to_owned());
+            self.compiled
+                .insert(antinomie_monitor_core::path_key::path_key(path).into_owned());
         }
     }
 
@@ -446,7 +463,7 @@ impl State {
         let time = cx.time();
         let own = self
             .images
-            .get(path)
+            .get(antinomie_monitor_core::path_key::path_key(path).as_ref())
             .is_some_and(|runners| !runners.is_empty())
             || kernel_records::file_id(cx.call).is_some_and(|id| {
                 self.image_keys
@@ -466,7 +483,7 @@ impl State {
                 .detail("A process is running the file this call removes or moves away."),
             );
         }
-        let made = self.written.contains(path);
+        let made = self.has_written(path);
         let moved_to = cx
             .touches()
             .iter()

@@ -126,9 +126,19 @@ pub fn mark_base_programs(
         .filter_map(sha)
         .collect();
     theirs.extend(sample.iter().map(|sha| sha.to_ascii_lowercase()));
+    // Paths compare lexically normalised (`/tmp/./w.bin` is `/tmp/w.bin`).
+    let theirs_at: BTreeSet<String> = files()
+        .filter(|indicator| !only_ran(indicator))
+        .map(|indicator| antinomie_monitor_core::path_key::path_key(&indicator.path).into_owned())
+        .collect();
     let on_disk = |path: &str| {
+        let path = antinomie_monitor_core::path_key::path_key(path);
         start.iter().find_map(|(at, _, hash)| match hash {
-            StartHash::Hashed { sha256, .. } if at == path => Some(sha256.to_ascii_lowercase()),
+            StartHash::Hashed { sha256, .. }
+                if antinomie_monitor_core::path_key::path_key(at) == path =>
+            {
+                Some(sha256.to_ascii_lowercase())
+            }
             _ => None,
         })
     };
@@ -139,7 +149,11 @@ pub fn mark_base_programs(
             if theirs.contains(&sha) {
                 return None;
             }
-            let path = indicator.path.as_str();
+            let path = antinomie_monitor_core::path_key::path_key(&indicator.path);
+            let path = path.as_ref();
+            if theirs_at.contains(path) {
+                return None;
+            }
             let ours = match on_disk(path) {
                 Some(disk) => disk == sha,
                 None => PROGRAM_DIRECTORIES.iter().any(|dir| path.starts_with(dir)),
@@ -275,22 +289,28 @@ pub fn feed(gathered: &mut Gathered<'_>) {
         );
     }
     // What the starting disk gave for the files the run only read or ran.
-    let from_start: std::collections::BTreeMap<&str, &StartHash> = gathered
+    let from_start: std::collections::BTreeMap<String, &StartHash> = gathered
         .read_hashes
         .files
         .iter()
-        .map(|(path, _, hash)| (path.as_str(), hash))
+        .map(|(path, _, hash)| {
+            (
+                antinomie_monitor_core::path_key::path_key(path).into_owned(),
+                hash,
+            )
+        })
         .collect();
-    let mut start_used = std::collections::BTreeSet::new();
+    let mut start_used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for run in &gathered.log.executed {
         let start = from_start
-            .get(run.path.as_str())
+            .get(antinomie_monitor_core::path_key::path_key(&run.path).as_ref())
             .copied()
             .filter(|_| run.sha256.is_none());
         let (hash, note) = match (&run.sha256, start) {
             (Some(sha), _) => (Some(hashes(sha)), None),
             (None, Some(StartHash::Hashed { sha256, md5, .. })) => {
-                start_used.insert(run.path.as_str());
+                start_used
+                    .insert(antinomie_monitor_core::path_key::path_key(&run.path).into_owned());
                 (
                     Some(Hashes {
                         sha256: sha256.clone(),
@@ -301,7 +321,8 @@ pub fn feed(gathered: &mut Gathered<'_>) {
                 )
             }
             (None, Some(StartHash::Empty)) => {
-                start_used.insert(run.path.as_str());
+                start_used
+                    .insert(antinomie_monitor_core::path_key::path_key(&run.path).into_owned());
                 (
                     None,
                     Some(antinomie_monitor_core::ioc::EMPTY_FILE.to_owned()),
@@ -341,7 +362,9 @@ pub fn feed(gathered: &mut Gathered<'_>) {
     }
     // Other files the run only read, outside the library directories.
     for (path, executed, hash) in &gathered.read_hashes.files {
-        if *executed || start_used.contains(path.as_str()) {
+        if *executed
+            || start_used.contains(antinomie_monitor_core::path_key::path_key(path).as_ref())
+        {
             continue;
         }
         let (hashes, note) = match hash {
@@ -1115,6 +1138,60 @@ pub mod tests {
             noise("/opt/same", &"01".repeat(32)).as_deref(),
             Some(BASE_PROGRAM)
         );
+    }
+
+    #[test]
+    fn dot_segments_do_not_hide_a_written_file_from_the_base_check() {
+        let busybox = "7d93682be37cf6ed46699f6fff546b80bf133cf8ec342c2d04bc23387f78bc34";
+        let mut collector = Collector::default();
+        let mut add = |path: &str, role: &str, sha: &str| {
+            collector.file(
+                path,
+                role,
+                Some(hashes(sha)),
+                Source::Syscall,
+                Seen::default(),
+            );
+        };
+        add("/bin/busybox", "executed", busybox);
+        add("/bin/./busybox", "executed", busybox);
+        // Written at one spelling, run at others, with other bytes at the time
+        // of the exec (the file was rewritten): never the base's.
+        add("/usr/bin/w.bin", "created", &"11".repeat(32));
+        add("/usr/bin/./w.bin", "executed", &"22".repeat(32));
+        add("/usr/bin/x/../w.bin", "executed", &"33".repeat(32));
+        // The same bytes under three spellings are one indicator.
+        add("/tmp/w.bin", "created", &"44".repeat(32));
+        add("/tmp/./w.bin", "executed", &"44".repeat(32));
+        add("/tmp/x/../w.bin", "executed", &"44".repeat(32));
+        let mut indicators = collector.finish();
+        mark_base_programs(&mut indicators, &[], &[]);
+        let noise = |path: &str, sha: &str| {
+            indicators
+                .iter()
+                .find(|i| i.path == path && i.value == sha)
+                .unwrap_or_else(|| panic!("{path} {sha}"))
+                .noise
+                .clone()
+        };
+        assert_eq!(
+            noise("/bin/busybox", busybox).as_deref(),
+            Some(BASE_PROGRAM)
+        );
+        assert_eq!(noise("/usr/bin/w.bin", &"11".repeat(32)), None);
+        assert_eq!(noise("/usr/bin/./w.bin", &"22".repeat(32)), None);
+        assert_eq!(noise("/usr/bin/x/../w.bin", &"33".repeat(32)), None);
+        let same: Vec<_> = indicators
+            .iter()
+            .filter(|i| i.value == "44".repeat(32))
+            .collect();
+        assert_eq!(same.len(), 1);
+        assert_eq!(same[0].path, "/tmp/w.bin");
+        assert!(same[0].roles.iter().any(|role| role == "executed"));
+        assert_eq!(same[0].noise, None);
+        let base: Vec<_> = indicators.iter().filter(|i| i.value == busybox).collect();
+        assert_eq!(base.len(), 1, "/bin/./busybox is /bin/busybox");
+        assert_eq!(base[0].path, "/bin/busybox");
     }
 
     #[test]
