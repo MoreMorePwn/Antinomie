@@ -238,8 +238,16 @@ fn sample(job: &Job, run: &RunSummary) -> Option<SampleInfo> {
 
 /// The size the sample library in `data_dir` records for `sha256`.
 pub(crate) fn library_size(data_dir: Option<&std::path::Path>, sha256: &str) -> Option<u64> {
+    use antinomie_monitor_core::samples;
     let data_dir = data_dir?;
-    let library = antinomie_monitor_core::samples::Library::open(data_dir).ok()?;
+    // Reading a run never makes a library: none there, no size.
+    if !samples::samples_dir(data_dir)
+        .join(samples::DATABASE)
+        .is_file()
+    {
+        return None;
+    }
+    let library = samples::Library::open(data_dir).ok()?;
     library.get(sha256).ok().flatten().map(|record| record.size)
 }
 
@@ -337,6 +345,11 @@ mod tests {
         assert_eq!(super::library_size(Some(&dir), &added.sha256), Some(19));
         assert_eq!(super::library_size(Some(&dir), &"0".repeat(64)), None);
         assert_eq!(super::library_size(None, &added.sha256), None);
+        // A data folder with no library is not given one by a read.
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(super::library_size(Some(&empty), &added.sha256), None);
+        assert!(!antinomie_monitor_core::samples::samples_dir(&empty).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
