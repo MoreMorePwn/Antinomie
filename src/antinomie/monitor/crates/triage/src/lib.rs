@@ -53,6 +53,7 @@ pub mod files;
 pub mod findings;
 pub mod geoip_fill;
 pub mod graph;
+pub mod inetsim;
 pub mod ioc_scan;
 pub mod ioc_view;
 pub mod kernel_records;
@@ -632,6 +633,9 @@ pub struct NewTabs {
     pub tls_omitted: u64,
     /// The URLs tab: the HTTP rows (HTTP/1 and cleartext HTTP/2) with their version and IOC verdict.
     pub urls: Vec<Vec<Cell>>,
+    /// The InetSim tab: what the InetSim route's built-in services saw
+    /// (telnet and FTP sessions, downloads, transfers); empty without them.
+    pub inetsim: Vec<Vec<Cell>>,
 }
 
 pub struct PacketSpool {

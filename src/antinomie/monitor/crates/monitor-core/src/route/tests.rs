@@ -13,6 +13,7 @@ mod config;
 mod filter;
 mod guest;
 mod helpers;
+mod inetsim;
 mod managed;
 mod metadata;
 mod qemu;

@@ -527,8 +527,25 @@ pub struct Report {
     pub detections: Option<Vec<Detection>>,
     pub evidence: Option<Vec<EvidenceRef>>,
     pub custody: Option<Custody>,
+    /// What the InetSim route's built-in services saw: telnet and FTP
+    /// sessions, transfers, and the stand-ins they served (never the
+    /// sample's payload). Empty without them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inetsim: Vec<InetSimNote>,
     /// What the report could not say: omitted rows, missing inputs.
     pub notes: Vec<String>,
+}
+
+/// One thing the InetSim route's built-in services saw, in words.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InetSimNote {
+    /// `telnet-session`, `ftp-session`, `<protocol>-download`, `<protocol>-upload`.
+    pub kind: String,
+    pub summary: String,
+    pub detail: Vec<String>,
+    /// The services answered with a stand-in ("stand-in served by InetSim").
+    pub stand_in: bool,
 }
 
 impl Report {

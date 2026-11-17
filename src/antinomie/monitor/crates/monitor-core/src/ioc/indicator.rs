@@ -70,6 +70,8 @@ pub enum Source {
     Disk,
     /// Strings or hashes of the sample.
     Static,
+    /// The InetSim route's built-in services (their log of the run).
+    Gateway,
 }
 
 impl Source {
@@ -79,6 +81,7 @@ impl Source {
             Source::Syscall => "syscall",
             Source::Disk => "disk",
             Source::Static => "static",
+            Source::Gateway => "InetSim",
         }
     }
 }
@@ -982,6 +985,20 @@ fn describe(indicator: &mut Indicator, entry: &Entry) {
                     }
                 }
             }
+        }
+    }
+    // What the InetSim route's services logged (a download typed into a
+    // fake telnet device, an FTP or TFTP transfer).
+    if let Some(t) = entry.tallies.get(&Source::Gateway) {
+        if indicator.count.is_empty() || indicator.count.starts_with("0 ") {
+            indicator.count = plural(t.count, "sighting", "sightings");
+        }
+        indicator.details.push((
+            Source::Gateway,
+            format!("{} in the InetSim log", plural(t.count, "time", "times")),
+        ));
+        for note in &t.notes {
+            indicator.details.push((Source::Gateway, note.clone()));
         }
     }
 }

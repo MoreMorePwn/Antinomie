@@ -386,6 +386,32 @@ pub fn render(report: &Report) -> Result<String, String> {
         ));
     }
 
+    // What the InetSim route's services saw; a stand-in they served is said
+    // to be theirs, never the sample's payload.
+    for (at_index, note) in report.inetsim.iter().enumerate() {
+        let mut content = note.summary.clone();
+        if !note.detail.is_empty() {
+            content.push_str(". ");
+            content.push_str(&note.detail.join("; "));
+        }
+        objects.push(object_since(
+            "note",
+            &format!("{run}:inetsim:{at_index}:{}", note.summary),
+            &since,
+            &at,
+            json!({
+                "abstract": if note.stand_in {
+                    format!("InetSim {} ({})", note.kind, crate::route::STAND_IN)
+                } else {
+                    format!("InetSim {}", note.kind)
+                },
+                "content": content,
+                "object_refs": [malware_id.clone().unwrap_or_else(|| identity_id.clone())],
+                "created_by_ref": identity_id,
+            }),
+        ));
+    }
+
     // A report ties the bundle together for importers that list reports.
     if let Some(malware) = &malware_id {
         let refs: Vec<String> = objects

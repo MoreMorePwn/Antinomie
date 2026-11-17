@@ -110,6 +110,65 @@ pub enum InetSimMode {
     External,
 }
 
+/// Which telnet logins the built-in fake devices (ports 23 and 2323) take.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TelnetLogins {
+    /// Every user name and password logs in.
+    #[default]
+    Any,
+    /// Only the default logins IoT devices ship with (root/xc3511,
+    /// admin/admin, ...); others get "Login incorrect" and may try again.
+    Defaults,
+}
+
+/// The built-in services' options (InetSim route, Builtin mode). An external
+/// INetSim ignores them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BuiltinServices {
+    /// What the fake telnet devices accept as a login.
+    pub telnet_logins: TelnetLogins,
+    /// A download of a program (HTTP, FTP, TFTP, or a telnet `wget` line)
+    /// gets a small harmless program of Antinomie's own for the guest's
+    /// architecture, and a script a harmless script, so a download, chmod,
+    /// run chain goes on. Off: the services answer with a fake file.
+    pub stand_ins: bool,
+    /// Bytes one telnet or FTP session may send before it is hung up.
+    pub session_bytes: u64,
+    /// Seconds one telnet or FTP session may last.
+    pub session_seconds: u64,
+    /// Telnet and FTP sessions one run may open; later ones are hung up.
+    pub run_sessions: u32,
+}
+
+impl Default for BuiltinServices {
+    fn default() -> Self {
+        Self {
+            telnet_logins: TelnetLogins::Any,
+            stand_ins: true,
+            session_bytes: 1 << 20,
+            session_seconds: 300,
+            run_sessions: 512,
+        }
+    }
+}
+
+impl BuiltinServices {
+    fn validate(&self) -> Result<(), String> {
+        if !(1024..=64 << 20).contains(&self.session_bytes) {
+            return Err("InetSim session byte limit is 1 KiB to 64 MiB".into());
+        }
+        if !(1..=3600).contains(&self.session_seconds) {
+            return Err("InetSim session time limit is 1 to 3600 seconds".into());
+        }
+        if !(1..=10_000).contains(&self.run_sessions) {
+            return Err("InetSim sessions per run are 1 to 10000".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InetSimConfig {
@@ -121,6 +180,9 @@ pub struct InetSimConfig {
     pub port_offset: u16,
     /// The address every DNS name resolves to. It is never connected to.
     pub sinkhole: String,
+    /// Builtin mode: the fake telnet, FTP and TFTP services and the
+    /// stand-in downloads.
+    pub builtin: BuiltinServices,
 }
 
 impl Default for InetSimConfig {
@@ -130,6 +192,7 @@ impl Default for InetSimConfig {
             host: "127.0.0.1".into(),
             port_offset: 10_000,
             sinkhole: "198.51.100.1".into(),
+            builtin: BuiltinServices::default(),
         }
     }
 }
@@ -226,6 +289,8 @@ pub(crate) struct Sink {
     pub address: Ipv4Addr,
     /// External INetSim: host and port offset.
     pub external: Option<(String, u16)>,
+    /// The built-in services' options (unused with an external INetSim).
+    pub builtin: BuiltinServices,
 }
 
 /// Where a route sends the guest's TCP connections.
@@ -401,6 +466,7 @@ impl RouteConfig {
         if self.inetsim.mode == InetSimMode::External {
             check_host(&self.inetsim.host).map_err(|e| format!("InetSim host: {e}"))?;
         }
+        self.inetsim.builtin.validate()?;
         Ok(())
     }
 
@@ -458,7 +524,16 @@ impl RouteConfig {
                         ),
                     ),
                 };
-                spec(Egress::Sink(Sink { address, external }), None, label, None)
+                spec(
+                    Egress::Sink(Sink {
+                        address,
+                        external,
+                        builtin: self.inetsim.builtin.clone(),
+                    }),
+                    None,
+                    label,
+                    None,
+                )
             }
             RouteKind::Tor if self.tor.mode == TorMode::Own => {
                 let binary = find_program("tor", &self.tor.program, data_dir)

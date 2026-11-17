@@ -454,5 +454,6 @@ pub(super) fn source_tone(source: Source) -> Tone {
         Source::Syscall => Tone::Accent,
         Source::Disk => Tone::Good,
         Source::Static => Tone::Neutral,
+        Source::Gateway => Tone::Warn,
     }
 }

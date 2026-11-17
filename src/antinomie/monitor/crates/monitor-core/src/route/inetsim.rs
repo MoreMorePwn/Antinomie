@@ -1,17 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Antinomie's own fake services for the InetSim route: HTTP, SMTP, a minimal
-//! IRC greeting (so IRC bots speak and their commands are captured) and a
-//! catch-all that reads and discards. Each guest connection to a port is
-//! served on a thread of its own over an in-process socket pair, so nothing
-//! listens on the host and nothing can be reached from outside. There is no
-//! TLS: a connection to port 443 (or any other port) is accepted and the
-//! guest's bytes are discarded; run INetSim (External mode) for HTTPS.
+//! IRC greeting (so IRC bots speak and their commands are captured), fake
+//! telnet devices on 23 and 2323, FTP on 21, TFTP on UDP 69, and a catch-all
+//! that reads and discards. Each guest connection to a port is served on a
+//! thread of its own over an in-process socket pair, so nothing listens on
+//! the host and nothing can be reached from outside. A download of a program
+//! or a script gets a harmless stand-in ([`stand_in`]). What the services saw
+//! is the run's InetSim log ([`log`]). There is no TLS: a connection to port
+//! 443 (or any other port) is accepted and the guest's bytes are discarded;
+//! run INetSim (External mode) for HTTPS.
 use std::{
     io::{BufRead, BufReader, Read, Write},
+    net::Ipv4Addr,
     os::unix::net::UnixStream,
+    sync::Arc,
     thread,
     time::Duration,
 };
+
+mod ftp;
+pub mod log;
+mod services;
+pub mod stand_in;
+mod telnet;
+pub(crate) mod tftp;
+
+pub use services::Services;
 
 const IDLE: Duration = Duration::from_secs(20);
 const MAX_LINE: usize = 16 * 1024;
@@ -22,8 +36,34 @@ const MAX_IRC_LINES: usize = 256;
 
 const PAGE: &str = "<html>\n  <head>\n    <title>Antinomie InetSim default page</title>\n  </head>\n  <body>\n    <p>This is the default page of the built-in fake web server.</p>\n  </body>\n</html>\n";
 
-/// Serves one guest connection to `port` on a new thread.
+/// Serves one guest connection to `port` on a new thread, without a log
+/// (a route spec dialed outside a gateway).
 pub(crate) fn spawn(port: u16, stream: UnixStream) -> Result<(), String> {
+    serve_on_thread(None, Ipv4Addr::UNSPECIFIED, port, stream)
+}
+
+impl Services {
+    /// The guest's end of a connection to `ip:port`, which a thread of the
+    /// built-in services serves; a connection to a port an FTP session's
+    /// PASV named goes to that session.
+    pub fn connect(self: &Arc<Self>, ip: Ipv4Addr, port: u16) -> Result<UnixStream, String> {
+        let (guest, service) = UnixStream::pair().map_err(|e| format!("built-in service: {e}"))?;
+        match self.claim_passive(ip, port, service) {
+            Ok(()) => Ok(guest),
+            Err(service) => {
+                serve_on_thread(Some(self.clone()), ip, port, service)?;
+                Ok(guest)
+            }
+        }
+    }
+}
+
+fn serve_on_thread(
+    services: Option<Arc<Services>>,
+    ip: Ipv4Addr,
+    port: u16,
+    stream: UnixStream,
+) -> Result<(), String> {
     stream
         .set_read_timeout(Some(IDLE))
         .and_then(|()| stream.set_write_timeout(Some(IDLE)))
@@ -31,10 +71,18 @@ pub(crate) fn spawn(port: u16, stream: UnixStream) -> Result<(), String> {
     thread::Builder::new()
         .name("route-inetsim".into())
         .spawn(move || {
-            let _ = match port {
-                80 | 8080 => http(stream),
-                25 | 587 => smtp(stream),
-                6665..=6669 | 7000 => irc(stream),
+            let _ = match (port, services) {
+                (80 | 8080, services) => http(stream, services.as_deref(), ip, port),
+                (25 | 587, _) => smtp(stream),
+                (6665..=6669 | 7000, _) => irc(stream),
+                (23 | 2323, Some(services)) => {
+                    telnet::serve(services, stream, format!("{ip}:{port}"));
+                    Ok(())
+                }
+                (21, Some(services)) => {
+                    ftp::serve(services, stream, ip, port);
+                    Ok(())
+                }
                 _ => sink(stream),
             };
         })
@@ -84,7 +132,13 @@ fn content_type(path: &str) -> &'static str {
     }
 }
 
-fn http(stream: UnixStream) -> std::io::Result<()> {
+fn http(
+    stream: UnixStream,
+    services: Option<&Services>,
+    ip: Ipv4Addr,
+    port: u16,
+) -> std::io::Result<()> {
+    let view = services.map(Services::view);
     // Reads and writes share the one descriptor (A27: no duplicate per
     // connection).
     let mut writer = &stream;
@@ -102,6 +156,7 @@ fn http(stream: UnixStream) -> std::io::Result<()> {
             parts.next().unwrap_or("/").to_owned(),
         );
         let mut length = 0u64;
+        let mut host = String::new();
         let mut close = parts.next() == Some("HTTP/1.0");
         loop {
             let Some(header) = line(&mut reader)? else {
@@ -114,6 +169,7 @@ fn http(stream: UnixStream) -> std::io::Result<()> {
                 match name.trim().to_ascii_lowercase().as_str() {
                     "content-length" => length = value.trim().parse().unwrap_or(0),
                     "connection" => close = value.trim().eq_ignore_ascii_case("close"),
+                    "host" => host = value.trim().chars().take(256).collect(),
                     _ => {}
                 }
             }
@@ -127,12 +183,41 @@ fn http(stream: UnixStream) -> std::io::Result<()> {
             "GET" | "POST" | "PUT" | "HEAD" | "DELETE" | "OPTIONS" => ("200 OK", PAGE),
             _ => ("501 Not Implemented", ""),
         };
-        let kind = content_type(&path);
-        let body = if kind == "text/html" || status != "200 OK" {
-            body
+        let mut kind = content_type(&path);
+        let mut body = if kind == "text/html" || status != "200 OK" {
+            body.as_bytes().to_vec()
         } else {
-            "Antinomie fake file\n"
+            stand_in::FAKE_FILE.to_vec()
         };
+        // A program or a script gets its stand-in, and the log says so.
+        if let (Some(services), Some(view)) = (services, &view)
+            && status == "200 OK"
+            && view.options.stand_ins
+            && stand_in::kind_of(&path) != stand_in::Kind::Other
+        {
+            let (served, what) = stand_in::serve(&path, view.arch, true);
+            kind = "application/octet-stream";
+            if method != "HEAD" {
+                let shown = if host.is_empty() { ip.to_string() } else { host.clone() };
+                services.transfer(
+                    view.generation,
+                    log::Transfer {
+                        ms: services::now_ms(),
+                        protocol: "http".into(),
+                        direction: "download".into(),
+                        endpoint: format!("{ip}:{port}"),
+                        url: format!("http://{shown}{path}"),
+                        host: shown,
+                        name: path.clone(),
+                        size: served.len() as u64,
+                        sha256: crate::storage::sha256_hex(&served),
+                        served: what,
+                        ..log::Transfer::default()
+                    },
+                );
+            }
+            body = served;
+        }
         let head = format!(
             "HTTP/1.1 {status}\r\nServer: Apache\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n",
             body.len(),
@@ -140,7 +225,7 @@ fn http(stream: UnixStream) -> std::io::Result<()> {
         );
         writer.write_all(head.as_bytes())?;
         if method != "HEAD" {
-            writer.write_all(body.as_bytes())?;
+            writer.write_all(&body)?;
         }
         if close {
             return Ok(());

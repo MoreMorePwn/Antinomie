@@ -154,7 +154,13 @@ fn indicators(job: &Job, scan: &ArchiveScan) -> Vec<(report::Indicator, bool)> {
                 url: if indicator.ty == antinomie_monitor_core::ioc::indicator::Type::Url
                     && !indicator.path.is_empty()
                 {
-                    format!("http://{}", indicator.path)
+                    // FTP and TFTP requests (from the InetSim log) keep their scheme.
+                    let scheme = match indicator.value.split(' ').next() {
+                        Some("TFTP") => "tftp",
+                        Some("FTP") => "ftp",
+                        _ => "http",
+                    };
+                    format!("{scheme}://{}", indicator.path)
                 } else {
                     String::new()
                 },
@@ -883,6 +889,9 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
             scan,
             super::rows::run_start_ms(clock, run_start(scan)),
         ));
+        if let Some(log) = antinomie_monitor_core::route::read_inetsim_report(&job.archive) {
+            report.inetsim = crate::inetsim::notes(&log);
+        }
     }
     if choices.has(Part::Detections) {
         report.detections = Some(super::build_sources::detections(&job.archive));

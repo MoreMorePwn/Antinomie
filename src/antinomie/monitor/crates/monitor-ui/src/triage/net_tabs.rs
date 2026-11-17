@@ -17,6 +17,9 @@ impl TriageView {
         let Some(scan) = &self.scan else {
             return Count::Unavailable;
         };
+        if which == NewTab::InetSim {
+            return Count::Ready(scan.new_tabs.inetsim.len() as u64);
+        }
         if scan.network_counts.is_none() {
             return Count::Unavailable;
         }
@@ -27,6 +30,7 @@ impl TriageView {
             NewTab::Domains => scan.new_tabs.domains.len() as u64 + scan.new_tabs.domains_omitted,
             NewTab::Urls => scan.http.len() as u64 + scan.http_omitted,
             NewTab::Tls => scan.new_tabs.tls.len() as u64 + scan.new_tabs.tls_omitted,
+            NewTab::InetSim => scan.new_tabs.inetsim.len() as u64,
         })
     }
 
@@ -45,7 +49,15 @@ impl TriageView {
                 (NewTab::Domains, "Domains"),
                 (NewTab::Urls, "URLs"),
                 (NewTab::Tls, "TLS"),
+                (NewTab::InetSim, "InetSim"),
             ] {
+                let inetsim_rows = self
+                    .scan
+                    .as_ref()
+                    .is_some_and(|scan| !scan.new_tabs.inetsim.is_empty());
+                if value == NewTab::InetSim && !inetsim_rows {
+                    continue;
+                }
                 if tab(
                     ui,
                     self.new_tab == value,
@@ -65,6 +77,24 @@ impl TriageView {
                  offset away from its start.",
             );
         }
+        if self.new_tab == NewTab::InetSim {
+            let Some(scan) = &self.scan else {
+                return;
+            };
+            crate::widgets::help(
+                ui,
+                "What the InetSim route's built-in services saw: telnet and FTP sessions \
+                 (logins tried, lines typed), the downloads they asked for and the files sent \
+                 and received. A stand-in is Antinomie's own harmless file, never the payload.",
+            );
+            table(
+                ui,
+                "triage-inetsim",
+                antinomie_triage::inetsim::HEADERS,
+                &scan.new_tabs.inetsim,
+            );
+            return;
+        }
         let (index, fields, example, hint) = match self.new_tab {
             NewTab::Endpoints => (
                 ENDPOINT_SLOT,
@@ -79,7 +109,7 @@ impl TriageView {
                 "DNS names, TLS server names and HTTP Host headers, merged by name.",
             ),
             NewTab::Urls => (3, HTTP_FIELDS, "http.method == GET", ""),
-            NewTab::Tls => (
+            NewTab::Tls | NewTab::InetSim => (
                 TLS_SLOT,
                 network::TLS_FIELDS,
                 "tls.sni contains example",
@@ -97,6 +127,7 @@ impl TriageView {
                 NewTab::Domains => (scan.new_tabs.domains.len(), scan.new_tabs.domains_omitted),
                 NewTab::Urls => (scan.http.len(), scan.http_omitted),
                 NewTab::Tls => (scan.new_tabs.tls.len(), scan.new_tabs.tls_omitted),
+                NewTab::InetSim => (scan.new_tabs.inetsim.len(), 0),
             });
         let capture_missing = self
             .scan
@@ -157,6 +188,7 @@ impl TriageView {
             NewTab::Domains => table(ui, "triage-domains", DOMAIN_HEADERS, &scan.new_tabs.domains),
             NewTab::Urls => table(ui, "triage-http", URL_HEADERS, &scan.new_tabs.urls),
             NewTab::Tls => table(ui, "triage-tls", TLS_HEADERS, &scan.new_tabs.tls),
+            NewTab::InetSim => {}
         }
         if open_ioc {
             self.section = Section::Ioc;

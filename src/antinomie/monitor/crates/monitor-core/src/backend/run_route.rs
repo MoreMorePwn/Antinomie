@@ -130,6 +130,10 @@ impl Session {
             // Best effort: a run without the report only lacks the extra
             // findings; the capture and the calls still show the requests.
             let _ = gateway.write_metadata_report(&owner.directory);
+            // The built-in InetSim services' sessions, transfers and uploads.
+            if let Err(error) = gateway.write_inetsim_report(&owner.directory) {
+                owner.issue(format!("InetSim log: {error}"));
+            }
         }
         crate::route::release_for_run(
             self.process.gateway.as_ref(),

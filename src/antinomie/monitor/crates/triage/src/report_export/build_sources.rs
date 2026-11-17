@@ -23,6 +23,19 @@ pub fn network(scan: &ArchiveScan, run_ms: Option<u64>) -> Vec<NamedTable> {
     for (named, (headers, rows)) in tabs.iter_mut().zip(sources) {
         named.table.data = super::rows::network(&named.name, headers, rows, run_ms);
     }
+    // What the InetSim route's built-in services saw, when they saw anything.
+    if !scan.new_tabs.inetsim.is_empty() {
+        tabs.push(NamedTable {
+            name: "InetSim".into(),
+            table: table(
+                crate::inetsim::HEADERS,
+                &all(crate::inetsim::HEADERS.len()),
+                &scan.new_tabs.inetsim,
+                0,
+                &[(2, IndicatorKind::Endpoint)],
+            ),
+        });
+    }
     tabs
 }
 
