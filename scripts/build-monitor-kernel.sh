@@ -275,7 +275,7 @@ fi
 
 if [[ $profile == minimal || $profile == extra ]]; then
     if [[ ! -f "$build_tree/.config" ]]; then
-        make -C "$source_tree" "${target[@]}" O="$build_tree" "$defconfig"
+        make -C "$source_tree" "${target[@]}" O="$build_tree" "${compiler[@]}" "$defconfig"
     fi
     # The architecture's own devices (consoles, keyboard, RTC, display), and
     # the symbols it turns off (written !NAME).
