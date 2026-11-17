@@ -14,10 +14,12 @@ pub fn opening_and_turning_off_the_watchdog_is_high() {
         open(1, "/dev/watchdog", 2, 3),
         sys(1, 16, "ioctl", [3, WDIOC_SETOPTIONS, 0x1000, 0, 0, 0], 0),
     ]);
-    assert_eq!(
-        tier(&out, "evasion.watchdog_disable").as_deref(),
-        Some("high")
-    );
+    // One row per action, each high.
+    let tiers: Vec<String> = rows(&out, "evasion.watchdog_disable")
+        .iter()
+        .map(|row| text(row, "finding.tier"))
+        .collect();
+    assert_eq!(tiers, ["high", "high"]);
     let summaries: Vec<String> = rows(&out, "evasion.watchdog_disable")
         .iter()
         .map(|row| text(row, "finding.summary"))
