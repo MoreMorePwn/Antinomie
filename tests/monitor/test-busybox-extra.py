@@ -84,7 +84,7 @@ class RecipeTests(unittest.TestCase):
         for word in words:
             self.assertRegex(word, r"^(!?[A-Z0-9_]+|[A-Z0-9_]+=\d+)$")
         for wanted in ("SOFT_WATCHDOG", "MTD_BLOCK2MTD", "MTD_CMDLINE_PARTS", "BLK_DEV_RAM",
-                       "IP_NF_IPTABLES", "IP_NF_NAT", "JFFS2_FS", "!ITCO_WDT"):
+                       "IP_NF_IPTABLES", "IP_NF_NAT", "JFFS2_FS", "!ITCO_WDT", "!MTD_PHYSMAP"):
             self.assertIn(wanted, words)
         script = (REPO / "scripts/build-monitor-kernel.sh").read_text()
         self.assertIn("kconfig/busybox-extra.cfg", script)
@@ -162,9 +162,13 @@ class CameraTreeTests(unittest.TestCase):
         rcs = (root / "etc/init.d/rcS").read_text()
         self.assertIn("echo /dev/ram0,64KiB,hi_sfc > /sys/module/block2mtd/parameters/block2mtd",
                       rcs)
-        self.assertIn("while [ $i -lt 256 ]", rcs)
+        # 64 KiB doubled four times to 1 MiB, copied 16 times: 16 MiB.
+        self.assertIn("for i in $(seq 4); do", rcs)
+        self.assertIn("while [ $i -lt 16 ]", rcs)
         self.assertIn("mount -t jffs2 /dev/mtdblock3 /mnt/mtd", rcs)
-        self.assertLess(rcs.index("block2mtd"), rcs.index('hostname "$(cat /etc/hostname)"'))
+        # The services first: a run may start before the start script ends.
+        self.assertLess(rcs.index("setsid /usr/bin/sonia"), rcs.index("block2mtd"))
+        self.assertLess(rcs.index("block2mtd"), rcs.index("echo 'BusyBox guest ready'"))
         mac = rcs.index("ip link set eth0 address 3c:ef:8c:${mac#*:*:*:}")
         self.assertLess(rcs.index("if ip link show eth0"), mac)
         self.assertLess(mac, rcs.index("    ip link set eth0 up"))

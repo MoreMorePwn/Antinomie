@@ -273,17 +273,12 @@ def extra_tree(root, userland, image, device_name=None, work=None):
     (root / "var/spool/cron/crontabs").chmod(0o700)
     rcs = root / "etc/init.d/rcS"
     erase = flash["erase_kib"]
-    blocks = flash["size_kib"] // erase
-    edit(rcs, 'hostname "$(cat /etc/hostname)"\n', f"""# The device's SPI flash: a RAM disk handed to block2mtd under the flash
-# driver's name, split by the command line's mtdparts=, erased (0xff) as
-# delivered flash reads; the settings partition mounted as on the devices.
-tr '\\000' '\\377' < /dev/zero | head -c {erase * 1024} > /run/.erased
-i=0
-while [ $i -lt {blocks} ]; do cat /run/.erased; i=$((i + 1)); done > /dev/ram0
-rm -f /run/.erased
-echo /dev/ram0,{erase}KiB,{flash['name']} > /sys/module/block2mtd/parameters/block2mtd
-mount -t jffs2 /dev/mtdblock{len(flash['partitions']) - 1} {SETTINGS_MOUNT} 2>/dev/null
-""")
+    # The erased block doubled to the largest power of two up to 1 MiB that
+    # divides the flash, then copied that many times.
+    doublings = 0
+    while erase << (doublings + 1) <= 1024 and flash["size_kib"] % (erase << (doublings + 1)) == 0:
+        doublings += 1
+    copies = flash["size_kib"] // (erase << doublings)
     edit(rcs, "if ip link show eth0 >/dev/null 2>&1; then\n", f"""    # The maker's MAC prefix, as the firmware sets the address at boot.
     mac=$(cat /sys/class/net/eth0/address)
     ip link set eth0 address {device['mac_prefix']}:${{mac#*:*:*:}}
@@ -301,6 +296,18 @@ klogd
 crond
 telnetd -b 0.0.0.0
 setsid {device['program']} </dev/null >/dev/null 2>&1 &
+# The device's SPI flash: a RAM disk handed to block2mtd under the flash
+# driver's name, split by the command line's mtdparts=, erased (0xff) as
+# delivered flash reads; the settings partition mounted as on the devices.
+# The erased image is doubled up to 1 MiB first: few processes, which an
+# emulated CPU starts slowly.
+tr '\\000' '\\377' < /dev/zero | head -c {erase * 1024} > /run/.erased
+for i in $(seq {doublings}); do cat /run/.erased /run/.erased > /run/.erased2; mv /run/.erased2 /run/.erased; done
+i=0
+while [ $i -lt {copies} ]; do cat /run/.erased; i=$((i + 1)); done > /dev/ram0
+rm -f /run/.erased
+echo /dev/ram0,{erase}KiB,{flash['name']} > /sys/module/block2mtd/parameters/block2mtd
+mount -t jffs2 /dev/mtdblock{len(flash['partitions']) - 1} {SETTINGS_MOUNT} 2>/dev/null
 """)
     source = CAMERA_SOURCE.relative_to(REPO).as_posix()
     return {
