@@ -435,8 +435,8 @@ pub fn other_calls(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 )),
                 // FS_IOC_SETFLAGS, FS_IOC32_SETFLAGS
                 0x4008_6602 | 0x4004_6602 => attributes(cx, out),
-                // BLKDISCARD, BLKSECDISCARD, BLKZEROOUT, MEMERASE
-                0x1277 | 0x127d | 0x127f | 0x4008_4d02 => {
+                // BLKDISCARD, BLKSECDISCARD, BLKZEROOUT, MEMERASE, MEMERASE64
+                0x1277 | 0x127d | 0x127f | 0x4008_4d02 | 0x4010_4d14 => {
                     let target = cx
                         .fd_path(cx.args[0])
                         .unwrap_or("a block device")

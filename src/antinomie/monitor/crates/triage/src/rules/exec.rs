@@ -358,11 +358,26 @@ pub fn commands(cx: &Ctx, st: &mut State, cmd: &Command, via_shell: bool, out: &
     let summary = format!("{text}{note}");
     let mut found: Vec<&'static str> = Vec::new();
     match name {
-        "iptables" | "ip6tables" | "iptables-nft" | "iptables-legacy" | "nft" | "ufw"
-        | "firewall-cmd" => {
+        "iptables" | "ip6tables" | "iptables-nft" | "iptables-legacy" | "ip6tables-legacy"
+        | "iptables-restore" | "ip6tables-restore" | "nft" | "ufw" | "firewall-cmd" => {
             let changes = cmd.has_any(&["-F", "--flush", "-X", "flush", "disable", "--delete-all"])
                 || (cmd.has("-P") && cmd.has("ACCEPT"))
-                || cmd.has_any(&["REDIRECT", "DNAT"]);
+                || cmd.has_any(&["REDIRECT", "DNAT"])
+                // A rule added, inserted, deleted or replaced, a chain made or
+                // a policy set (`iptables -A INPUT -p tcp --dport 23 -j DROP`);
+                // a restore loads whole tables. Listing changes nothing.
+                || cmd.has_any(&[
+                    "-A", "--append", "-I", "--insert", "-D", "--delete", "-R", "--replace",
+                    "-N", "--new-chain", "-P", "--policy",
+                ])
+                || name.ends_with("-restore")
+                || (name == "nft" && cmd.has_any(&["add", "insert", "delete", "replace", "-f"]))
+                || (name == "ufw" && cmd.has_any(&["allow", "deny", "reject", "limit", "delete"]))
+                || (name == "firewall-cmd"
+                    && cmd.has_any(&[
+                        "--add-port", "--remove-port", "--add-service", "--remove-service",
+                        "--add-rich-rule", "--add-forward-port", "--set-default-zone",
+                    ]));
             if changes {
                 found.push("evasion.firewall_modify");
             }

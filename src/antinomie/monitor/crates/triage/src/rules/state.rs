@@ -307,6 +307,11 @@ pub struct State {
     /// Connections to public addresses no DNS answer gave, by address
     /// (`network.c2_ip_literal`, A33/A34).
     pub hardcoded: BTreeMap<std::net::IpAddr, super::network::Hardcoded>,
+    /// Processes the run did not start that it sent SIGKILL or SIGTERM, for a
+    /// service port bound soon after (`impact.service_takeover`).
+    pub foreign_kills: Window<u32>,
+    /// Service ports already reported as taken over.
+    pub taken_ports: BTreeSet<u16>,
 }
 
 impl State {

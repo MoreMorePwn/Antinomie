@@ -67,7 +67,7 @@ its README, the VM bundle files and, under `sources/`, the corresponding source
 of every listed base: the Debian `linux` source package each guest kernel is
 built on, the Antinomie patch series and exact kernel configuration of that
 base, the source packages of the BusyBox, glibc and e2fsprogs binaries copied
-into its images, and a package inventory with snapshot.debian.org links for each
+into its images (and iptables in the BusyBox camera base), and a package inventory with snapshot.debian.org links for each
 Debian base
 (<https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/tree/sources>;
 `bases/<identity>/SOURCES.json` there names every file of one base). Nothing in

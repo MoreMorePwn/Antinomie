@@ -209,7 +209,8 @@ kernel revision (`kernels/`), the exact kernel configuration
 bases published before it sit under `kernels/<kernel id>/recipe/`, as their
 SOURCES.json says), the source packages of the host programs the
 image builders copy into BusyBox images and every initrd (BusyBox, glibc,
-e2fsprogs; `userland/`), and for Debian bases the full package inventory with
+e2fsprogs, and iptables in the BusyBox camera base; `userland/`; the camera
+base's vendor program is Antinomie's own GPL-3.0 source, in its `recipe/`), and for Debian bases the full package inventory with
 source package, version and snapshot.debian.org link
 (`bases/<identity>/packages.tsv`). Debian packages keep their own licenses; their
 copyright files are in the images under `/usr/share/doc`. Release notes give the

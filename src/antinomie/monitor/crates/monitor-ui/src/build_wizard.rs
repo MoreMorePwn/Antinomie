@@ -47,7 +47,9 @@ impl Page {
 
 pub fn pages(kind: Kind) -> &'static [Page] {
     match kind {
-        Kind::BusyBox => &[Page::Base, Page::Mode, Page::Hostname, Page::Summary],
+        Kind::BusyBox | Kind::BusyBoxExtra => {
+            &[Page::Base, Page::Mode, Page::Hostname, Page::Summary]
+        }
         Kind::DebianXfce | Kind::DebianMinimal => &[
             Page::Base,
             Page::Mode,
@@ -73,7 +75,7 @@ pub struct BuildWizard {
     page: usize,
     mode: BuildMode,
     /// Answers per `BUILD_PROFILES` entry.
-    options: [BuildOptions; 3],
+    options: [BuildOptions; BUILD_PROFILES.len()],
     search: String,
     /// Show the last build's progress instead of the questions.
     show_status: bool,
@@ -232,6 +234,10 @@ impl BuildWizard {
         for (index, profile) in BUILD_PROFILES.iter().enumerate() {
             let detail = match profile.kind {
                 Kind::BusyBox => "Small console guest, fast to build",
+                Kind::BusyBoxExtra => {
+                    "BusyBox as a camera or DVR: telnet, a web and RTSP service, cron, \
+                     a watchdog, flash and iptables for IoT bots to find"
+                }
                 Kind::DebianMinimal => {
                     "Debian 13 without a desktop: console login, APT and standard tools; \
                      Debian's kernel configuration and its own modules"
@@ -721,8 +727,10 @@ impl BuildWizard {
             });
         ui.add_space(6.0);
         ui.small(match (kind, kernel_cached) {
-            (Kind::BusyBox, true) => "Kernel already built.",
-            (Kind::BusyBox, false) => "Kernel build ~10 min (cached afterwards).",
+            (Kind::BusyBox | Kind::BusyBoxExtra, true) => "Kernel already built.",
+            (Kind::BusyBox | Kind::BusyBoxExtra, false) => {
+                "Kernel build ~10 min (cached afterwards)."
+            }
             (Kind::DebianMinimal, true) => "Kernel already built. Needs about 6 GiB free.",
             (Kind::DebianMinimal, false) => {
                 "Kernel build ~10 min (cached afterwards). Needs about 11 GiB free."

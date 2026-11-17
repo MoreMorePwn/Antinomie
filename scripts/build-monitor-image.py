@@ -404,16 +404,18 @@ def unpack_deb(deb, tree):
     return record, paths
 
 
-def debian_userland(cache, work, proxy="", arch="x86_64", mirror=""):
+def debian_userland(cache, work, proxy="", arch="x86_64", mirror="", extra=()):
     """The pinned packages of the guest architecture arch (verified in cache,
     else downloaded there through the signed index) unpacked under work, as a
-    Userland."""
+    Userland; extra: more (package, version, SHA-256) pins of that archive
+    (the camera base's iptables)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("debian_image",
                                                   REPO / "scripts/build-debian-image.py")
     recipe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(recipe)
     source, packages = USERLANDS[arch]
+    packages = tuple(packages) + tuple(extra)
     debs = recipe.pinned_debs(source, packages, cache, work, proxy,
                               "Debian userland packages", mirror)
     tree = Path(work) / f"userland-{source[2]}"
@@ -837,6 +839,19 @@ exec switch_root /newroot /sbin/init
 """, 0o755)
 
 
+def busybox_extra():
+    """scripts/busybox_extra.py: the camera base's recipe (profile busybox-extra)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("busybox_extra", REPO / "scripts/busybox_extra.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# Image profiles: the BusyBox base, and the BusyBox camera base built on it.
+PROFILES = ("busybox", "busybox-extra")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kernel", type=Path, required=True)
@@ -848,7 +863,13 @@ def main():
     parser.add_argument("--base-size-mib", type=int, default=256)
     parser.add_argument("--allow-unversioned", action="store_true",
                         help="accept a development kernel without a source id")
-    parser.add_argument("--hostname", default="debian")
+    parser.add_argument("--profile", choices=PROFILES, default="busybox",
+                        help="busybox-extra: the BusyBox base as a camera or DVR "
+                             "(scripts/busybox_extra.py)")
+    parser.add_argument("--device", default="",
+                        help="busybox-extra: the device profile (default: the first)")
+    parser.add_argument("--hostname",
+                        help="default: debian, or the device profile's for busybox-extra")
     parser.add_argument("--app-version", help="Antinomie version building this base")
     parser.add_argument("--name", default="", help="display name of the base")
     parser.add_argument("--work", type=Path, default=REPO / "work",
@@ -864,7 +885,14 @@ def main():
                         help="Debian mirror tried first for the pinned packages (checked "
                              "against the pinned snapshot's index; snapshot is the fallback)")
     args = parser.parse_args()
+    extra = busybox_extra() if args.profile == "busybox-extra" else None
     try:
+        if extra is not None:
+            device = extra.device_profile(args.device)[1]
+            args.hostname = args.hostname or device["hostname"]
+        elif args.device:
+            raise RuntimeError("--device is for the busybox-extra profile")
+        args.hostname = args.hostname or "debian"
         valid_hostname(args.hostname)
         name = valid_name(args.name)
     except RuntimeError as error:
@@ -880,7 +908,7 @@ def main():
     args.work.mkdir(parents=True, exist_ok=True)
     try:
         userland = debian_userland(args.package_cache, args.work, args.proxy, args.arch,
-                                 args.mirror)
+                                   args.mirror, extra.PACKAGES[args.arch] if extra else ())
     except (RuntimeError, OSError) as error:
         parser.error(str(error))
     with tempfile.TemporaryDirectory(prefix="monitor-image-", dir=args.work) as temporary:
@@ -888,6 +916,11 @@ def main():
         root = staging / "root"
         root.mkdir()
         interpreters = base_tree(root, args.hostname, userland, CONSOLES[args.arch])
+        additions = {}
+        if extra is not None:
+            import sys
+            additions = extra.extra_tree(root, userland, sys.modules[__name__], args.device,
+                                         staging)
         raw = staging / "base.raw"
         with raw.open("wb") as image:
             image.truncate(args.base_size_mib << 20)
@@ -915,7 +948,8 @@ def main():
     shutil.copy2(args.kernel, args.output / "kernel")
     manifest = {"format": 1, "kernel_version": "6.12.94", "schema_id": 1,
                 "kernel": "kernel", "initrd": "initrd.gz", "base_disk": "base.qcow2",
-                "kernel_append": f"console=tty0 console={CONSOLES[args.arch]} panic=-1",
+                "kernel_append": f"console=tty0 console={CONSOLES[args.arch]} panic=-1"
+                                 + (f" {additions['kernel_append']}" if additions else ""),
                 "sha256": {name: checksum(args.output / name)
                            for name in ("kernel", "initrd.gz", "base.qcow2")}}
     if args.symbols:
@@ -932,6 +966,13 @@ def main():
     # The dynamic loaders a program may name in its PT_INTERP: Auto mode
     # refuses one whose loader the lane's base lacks before the VM starts.
     manifest["program_interpreters"] = interpreters
+    if additions:
+        # The camera base: its device profile and its own services (their
+        # processes, files and traffic are the base's, not a sample's), and
+        # the source of the vendor program it carries.
+        manifest["device"] = additions["device"]
+        manifest["base_services"] = additions["base_services"]
+        manifest["guest_sources"]["programs"] = [additions["program_source"]]
     if name:
         manifest["name"] = name
     manifest["stealth_support"] = stealth_support(args.kernel_config, args.output / "kernel")

@@ -15,6 +15,30 @@ x86 programs by their own table.
 
 ### Host
 
+- **A BusyBox camera base for IoT bots (ANT-T0558).** A new base profile,
+  `busybox-extra` ("BusyBox camera (DVR services)" in Build base, `base build
+  --profile busybox-extra`, job `"profile": "busybox-extra"` for x86-64 and arm64),
+  is the BusyBox base as a lived-in DVR, the device Mirai, Gafgyt and their
+  relatives go for: BusyBox telnetd on 23 with the maker's default root password,
+  a small stand-in vendor program of our own on 80 (a login page), 554 (RTSP that
+  wants a login) and the vendor port 37777, crond, syslogd and klogd to
+  `/var/log/messages`, the DHCP client kept running; softdog's `/dev/watchdog`,
+  16 MiB of flash in `/proc/mtd` and `/dev/mtdN` (boot, kernel, rootfs, config,
+  the config partition mounted as jffs2), and iptables (legacy, from Debian's
+  pinned packages, on the glibc runtime), on its own kernel profile (`extra`: the
+  BusyBox kernel plus those drivers). It reads as a Dahua DH-XVR5104HS-I3: model,
+  firmware and build date in `/etc`, hostname `xvr`, Dahua's MAC prefix.
+  `bundle.json` records the device and the base's own services
+  (`device`, `base_services`). The BusyBox base itself is unchanged.
+- **Triage finds what a bot does to a device (ANT-T0558).** New rules: **Watchdog
+  disabled** (the watchdog opened, turned off, given a new timeout or closed with
+  its magic character) and **Service killed and its port taken** (a service port
+  bound within a minute after the run killed a process it did not start, as
+  Mirai's killer frees and holds telnet). **Firewall rules changed** now also
+  covers a rule added, inserted or deleted (`iptables -A INPUT -p tcp --dport 23
+  -j DROP`), a policy, a restore and a program that replaces an iptables table
+  itself; a flash erase with MEMERASE64 counts as **Block device written or
+  wiped**, as MEMERASE did.
 - **Hover help on the control itself, and far fewer explanations (ANT-T0555).** A control explains itself when you hover it (one helper for the whole app, also on a disabled control, where the hover says why it is disabled), not on a separate **?** icon beside it. Only what the control's word cannot say is kept (a term, a consequence, a unit or range, a risk), in a sentence or two; hover text that repeated the label is gone. A **?** stays only where a section or concept needs a paragraph of its own (the Triage tiers and categories, the terminal's keys, the Device profile's fallbacks). An icon-only button keeps its name on hover. A guard (`scripts/check-control-hover.py`, run in CI) keeps long hover text off controls.
 - **Written files, the process tree and file noise after the arm64 evaluation (ANT-T0556, recorder).**
   - A dropped program keeps its hash when the run changed only its metadata while the guest hashed it (`cp x /bin/.y && chmod 755 /bin/.y`), and `written/` keeps scripts with a `#!` line and any file the run executed, not only ELF files. A program whose bytes were not captured is listed with the reason (a copy of the sample, a kernel copy, still open at the end).

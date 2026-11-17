@@ -35,12 +35,16 @@ and its modules change, which skips installing the desktop. With --ccache, the
 kernel compiler output is cached there, so a new patch series recompiles only
 what it touched.
 
-JOB.json: {"format": 1, "profile": "busybox" | "debian-xfce" | "debian-minimal",
+JOB.json: {"format": 1, "profile": "busybox" | "busybox-extra" | "debian-xfce" | "debian-minimal",
            "options": {...}, "app_version": "0.1.0", "arch": "x86_64" | "arm64"}
            (app_version optional: recorded as built_with; arch optional, x86_64
            by default: the guest architecture the kernel is built for)
 
-debian-xfce is Debian 13 with the desktop its options choose; debian-minimal is
+busybox-extra is the BusyBox base as a lived-in camera or DVR: its device's
+services (telnetd, the camera program, crond, syslogd, ntpd), a watchdog,
+flash and iptables, on its own kernel profile (extra: the minimal one with
+those drivers built in); its options add "device" (the device profile, see
+scripts/busybox_extra.py). debian-xfce is Debian 13 with the desktop its options choose; debian-minimal is
 the console-only Debian 13 base (no desktop). Both run the stock kernel
 profile: Debian's own configuration with the recorder, which loads Debian's own
 modules (from Debian's kernel packages, kept in --inputs and compared with the
@@ -72,6 +76,7 @@ DEBIAN_ANSWERS = {"name", "hostname", "locale", "keyboard_layout", "keyboard_var
 # kernel build and the image build need.
 PROFILES = {
     "busybox": ("minimal", "build-monitor-image.py", {"hostname", "name"}, (5, 2)),
+    "busybox-extra": ("extra", "build-monitor-image.py", {"hostname", "name", "device"}, (5, 2)),
     "debian-xfce": ("stock", "build-debian-image.py", DEBIAN_ANSWERS | {"desktop"}, (8, 20)),
     "debian-minimal": ("stock", "build-debian-image.py", DEBIAN_ANSWERS, (8, 6)),
 }
@@ -82,7 +87,10 @@ CONSOLE_DESKTOP = "none"
 ARCHES = {"x86_64": "KERNEL_BANNER", "arm64": "KERNEL_BANNER_ARM64"}
 # Profiles whose image recipe builds an arm64 base (debian-xfce: the Debian
 # desktops, GNOME included, from 0.9.0).
-ARM64_PROFILES = {"busybox", "debian-minimal", "debian-xfce"}
+ARM64_PROFILES = {"busybox", "busybox-extra", "debian-minimal", "debian-xfce"}
+# Profiles whose image is BusyBox's recipe (no Debian bootstrap, nothing runs
+# under emulation while it is built).
+BUSYBOX_PROFILES = {"busybox", "busybox-extra"}
 # The machine name (uname -m) of each guest architecture: a Debian base of
 # another architecture than the build machine's runs that architecture's
 # maintainer scripts under emulation: in the QEMU builder VM (qemu-user-static's
@@ -92,6 +100,8 @@ MACHINES = {"x86_64": "x86_64", "arm64": "aarch64"}
 # The kernel image of each architecture in the build tree. Only x86-64 bases
 # carry a Volatility symbol table: memory analysis reads x86-64 guests only.
 KERNEL_IMAGES = {"x86_64": "arch/x86/boot/bzImage", "arm64": "arch/arm64/boot/Image"}
+# The extra kernel profile's own symbols (scripts/build-monitor-kernel.sh).
+EXTRA_CONFIG = KIT / "src/antinomie/packaging/kconfig/busybox-extra.cfg"
 
 
 def has_symbols(arch):
@@ -445,7 +455,7 @@ BINFMT_COMMAND = ("docker run --privileged --rm tonistiigi/binfmt@sha256:"
 def foreign(profile, arch):
     """Whether a build of `profile` for `arch` bootstraps another architecture's
     Debian here (its maintainer scripts need a CPU emulator)."""
-    return profile != "busybox" and MACHINES[arch] != os.uname().machine
+    return profile not in BUSYBOX_PROFILES and MACHINES[arch] != os.uname().machine
 
 
 def binfmt_missing(machine, root=None):
@@ -584,6 +594,10 @@ def kernel_identity(kernel_profile, arch="x86_64"):
                 "toolchain": toolchain(kernel_profile, arch)}
     if arch != "x86_64":
         identity["arch"] = arch
+    if kernel_profile == "extra":
+        # Its own symbols are a file of their own (named only for this profile,
+        # so the other profiles' cached kernels keep matching).
+        identity["extra_config_sha256"] = checksum(EXTRA_CONFIG)
     return identity
 
 
@@ -661,10 +675,12 @@ def build_image(profile, values, build, work, output, app_version=None, image_ca
         command += ["--arch", arch]
     if app_version:
         command += ["--app-version", app_version]
-    if profile == "busybox":
+    if profile in BUSYBOX_PROFILES:
+        if profile != "busybox":
+            command += ["--profile", profile]
         # An answer the job leaves out takes the recipe's default, as the app's
         # own defaults (BuildOptions) and the Debian recipe do.
-        for option in ("hostname", "name"):
+        for option in ("hostname", "name", "device"):
             if option in values:
                 command += [f"--{option}", values[option]]
         # BusyBox and the initrd's programs: Debian's pinned packages, kept

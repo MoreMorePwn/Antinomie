@@ -10,6 +10,7 @@ use super::*;
 
 pub mod calls;
 pub mod ctx;
+pub mod device;
 pub mod engine;
 pub mod evasion;
 pub mod exec;
@@ -39,6 +40,7 @@ pub fn collect_hits(cx: &ctx::Ctx, st: &mut state::State) -> Vec<Hit> {
         process::rules(cx, st, &mut hits);
         network::rules(cx, st, &mut hits);
         evasion::rules(cx, st, &mut hits);
+        device::rules(cx, st, &mut hits);
     }
     hits
 }

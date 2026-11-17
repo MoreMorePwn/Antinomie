@@ -73,7 +73,8 @@ pub enum Engine {
 
 #[derive(Args, Debug)]
 pub struct Build {
-    /// What to build: busybox, debian-minimal or debian-xfce.
+    /// What to build: busybox, busybox-extra (BusyBox as a camera or DVR),
+    /// debian-minimal or debian-xfce.
     #[arg(long, default_value = "busybox", value_name = "PROFILE")]
     pub profile: String,
     /// Where the build runs.
@@ -461,7 +462,7 @@ mod tests {
     #[test]
     fn the_build_profiles_are_the_ones_the_help_names() {
         let ids: Vec<&str> = BUILD_PROFILES.iter().map(|profile| profile.id).collect();
-        for id in ["busybox", "debian-minimal", "debian-xfce"] {
+        for id in ["busybox", "busybox-extra", "debian-minimal", "debian-xfce"] {
             assert!(ids.contains(&id), "{id}");
         }
     }

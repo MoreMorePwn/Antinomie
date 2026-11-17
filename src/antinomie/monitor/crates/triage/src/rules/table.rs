@@ -552,11 +552,19 @@ pub const SPECS: &[Spec] = &[
     ),
     rule(
         "evasion.firewall_modify",
-        1,
+        2,
         T::Medium,
         C::Evasion,
         &["T1686", "DET0145"],
     ),
+    rule(
+        "evasion.watchdog_disable",
+        1,
+        T::High,
+        C::Evasion,
+        &["T1490", "DET0329"],
+    )
+    .allow(&["watchdog", "wd_keepalive", "systemd", "wdctl"]),
     rule(
         "evasion.audit_disable",
         1,
@@ -1139,6 +1147,13 @@ pub const SPECS: &[Spec] = &[
         "impact.service_stop",
         1,
         T::Medium,
+        C::Impact,
+        &["T1489", "DET0021"],
+    ),
+    rule(
+        "impact.service_takeover",
+        1,
+        T::High,
         C::Impact,
         &["T1489", "DET0021"],
     ),
