@@ -201,6 +201,9 @@ fn the_summary_and_the_export_agree_on_the_attack_techniques() {
         note("/home/user/c"),
     ])
     .rows;
+    // The scan's per-rule totals came from the fixture's own findings; the
+    // test's findings replace them.
+    scan.behaviour = None;
     let mut sigma = Detected::empty(
         Engine::Sigma,
         Identity {
