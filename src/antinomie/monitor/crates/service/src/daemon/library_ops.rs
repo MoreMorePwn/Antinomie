@@ -158,7 +158,7 @@ impl Service {
             .map(|base| BaseSummary {
                 identity: base.id.clone(),
                 name: base.label.clone(),
-                architecture: Some(base.arch.label().to_owned()),
+                architecture: Some(crate::arch::of_guest(base.arch).to_owned()),
             })
             .collect();
         to_value(&BaseList { bases })

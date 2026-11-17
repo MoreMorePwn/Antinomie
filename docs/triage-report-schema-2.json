@@ -185,6 +185,17 @@
         }
       ]
     },
+    "static_analysis": {
+      "description": "The sample's static analysis (0.9.0): the newest result of each check. Absent when the part was not chosen.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/static_analysis"
+        }
+      ]
+    },
     "notes": {
       "type": "array",
       "items": {
@@ -1166,6 +1177,96 @@
         },
         "attack_refs": {
           "$ref": "#/$defs/refs"
+        }
+      }
+    },
+    "static_analysis": {
+      "type": "object",
+      "required": [
+        "reports",
+        "tools",
+        "checks"
+      ],
+      "properties": {
+        "reports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The analysis reports the checks come from (<data>/analyses/<id>)."
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Each tool with its version (capa 9.4.0)."
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/static_check"
+          }
+        }
+      }
+    },
+    "static_check": {
+      "type": "object",
+      "required": [
+        "check",
+        "title",
+        "state",
+        "summary",
+        "tools",
+        "rows",
+        "omitted"
+      ],
+      "properties": {
+        "check": {
+          "type": "string",
+          "description": "The check's preset name (identification, capabilities, ...)."
+        },
+        "title": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "complete",
+            "partial",
+            "not available",
+            "ran out of time"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "value"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "omitted": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     }

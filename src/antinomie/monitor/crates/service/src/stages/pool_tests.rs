@@ -509,6 +509,7 @@ fn triage_taking(name: &str, expected: u64, took: Duration) -> (HostItemState, u
         sample_bytes: None,
         recording_bytes: Some(((expected - 20) << 20) / 10),
         load: 1.0,
+        tcg: 1.0,
     };
     let time = timing.of(&ItemKind::Triage, &plan, &inputs);
     assert_eq!(time.expected_s, expected);

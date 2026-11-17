@@ -86,10 +86,15 @@ mapping therefore applies to runs too.
   the sample (static tools) or of the recording (the others), or its median over
   the last runs on this host (once it ran three times) when that is larger, else
   the stage's fixed limit. A median never lowers the estimate, so a few small
-  runs do not shrink the limits of a large one. It may take
+  runs do not shrink the limits of a large one. On a node whose lanes run under
+  TCG (no KVM), the code-analysis tools (capa, FLOSS, Ghidra's disassembly and
+  decompilation) share the processors with the emulated lanes, so their estimate
+  is also multiplied by the engine's TCG multiplier (`start.tcg_multiplier`, 10 by
+  default). It may take
   `[daemon] host_time_factor` (2) times that, and at least 30 seconds. A preset that
   sets `static_analysis.time_limit_per_tool_min` above 0 gives every static tool
-  that fixed limit instead. The `online` item has a fixed 300 seconds for the
+  that fixed limit instead. A static item stopped at its limit says why: the limit
+  it had and where it came from. The `online` item has a fixed 300 seconds for the
   whole step, whatever the host's load. Time spent waiting in the queue, for memory or for the engine to take
   a static analysis does not count. A run's host stages as a whole may take the
   factor times the expected work ahead of it when it arrived plus its own, and
@@ -106,6 +111,10 @@ mapping therefore applies to runs too.
   recorded process group of the tool's own sandbox is signalled. Work the daemon
   does in its own process (indexing, the digest, the report) gets its cancel
   flag and stops at its next check.
+* **Checks that do not apply.** capa and FLOSS read x86 and x86-64 programs only.
+  For an ELF of another architecture (an arm64 lane's programs) their items are
+  `skipped` with "not applicable to this architecture" and the reason; they are
+  neither missing nor incomplete, so they make no warning and no `partial` run.
 * **What you see.** `auto status <run>` lists each item with its state
   (`queued`, `running`, `done`, `failed`, `timed_out`, `skipped`), expected time
   and limit; the run's `host_work` member carries the same. `auto status` shows
@@ -337,9 +346,16 @@ the recording is saved without it and the run succeeds; `run.pending` lists
   `vpn[:NAME]`, `socks5[:NAME]`) needs its `route.*` permission and is then refused
   `unavailable_on_node`: no live route is set up for the service before 0.9.1. In a
   preset file, a live route is "not set up on this node" for `config validate`.
-* **Accepted samples.** `[accepts]` of Standard takes ELF x86-64 programs and
-  shell scripts (`types = ["elf", "sh"]`). A script has no architecture, so
-  `arch` applies to ELF files only.
+* **Accepted samples.** `[accepts]` of Standard takes ELF programs of the node's
+  architecture and shell scripts (`types = ["elf", "sh"]`): the five built-in
+  presets take the node's lane group (`[lanes] group`, which `auto init` sets
+  from the lane base's architecture) and, when the group is an architecture
+  (`x86_64`, `arm64`), accept that architecture; another group name keeps
+  `x86_64`. A script has no architecture, so `arch` applies to ELF files only.
+  Architectures are written `x86_64`, `x86`, `arm64`, `arm`, `mips`, `powerpc`,
+  `sparc`, `riscv`, `superh`, `m68k` or `other` (`any` takes every one); the older
+  spellings (`AArch64`, `aarch64`, `ARM`, `x86-64`, `amd64`, ...) are read as
+  these.
 * **Duplicates.** `[duplicates] on_duplicate` is `run` (analyse again; the new run has
   `repeat_of`), `reuse` (return the earlier run) or `reject` (`duplicate_denied`).
   `reuse` returns only a run the caller may see (its own, or any with

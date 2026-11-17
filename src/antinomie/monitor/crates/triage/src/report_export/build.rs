@@ -12,8 +12,8 @@ use antinomie_monitor_core::{
     },
     report::{
         bundle::{self, BundleInput, DroppedFile},
-        Counts, FileRecord, FilesSection, IndicatorColumn, IndicatorKind, NamedTable, Part, Report,
-        Summary, Table,
+        Counts, Fact, FileRecord, FilesSection, IndicatorColumn, IndicatorKind, NamedTable, Part,
+        Report, Summary, Table,
     },
     run_digest::RunDigest,
 };
@@ -886,6 +886,29 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     }
     if choices.has(Part::Detections) {
         report.detections = Some(super::build_sources::detections(&job.archive));
+    }
+    // What the host work really used (ANT-T0556, A22): the run record lists
+    // what was installed when the run started.
+    let used = super::build_sources::scan_packs(&job.archive);
+    if !used.is_empty() {
+        report
+            .run
+            .environment
+            .push(Fact::new("Rule packs used by the scans", used.join("; ")));
+    }
+    let static_analysis = super::build_sources::static_analysis(job);
+    if let Some(tools) = static_analysis
+        .as_ref()
+        .map(|analysis| &analysis.tools)
+        .filter(|tools| !tools.is_empty())
+    {
+        report.run.environment.push(Fact::new(
+            "Tools used by the static analysis",
+            tools.join("; "),
+        ));
+    }
+    if choices.has(Part::StaticAnalysis) {
+        report.static_analysis = static_analysis;
     }
     if choices.has(Part::Evidence) {
         report.evidence = Some(super::build_sources::evidence(&job.archive));

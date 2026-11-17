@@ -143,7 +143,7 @@ pub struct RunSample {
     /// From `samples::detect_type`: `elf`, `sh`, `py`, ... (lower case).
     #[serde(rename = "type")]
     pub kind: String,
-    /// `x86_64`, `AArch64`, ...; null when none.
+    /// `x86_64`, `arm64`, ... (`crate::arch`); null when none.
     pub architecture: Option<String>,
     pub name: String,
 }

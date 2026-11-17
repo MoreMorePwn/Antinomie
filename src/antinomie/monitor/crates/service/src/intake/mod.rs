@@ -80,9 +80,13 @@ fn check_type(preset: &LoadedPreset, kind: &str, arch: Option<&str>) -> Result<(
             format!("preset {name} does not accept type {kind}"),
         ));
     }
-    // A type with no architecture (a script) has nothing to check.
-    if let Some(arch) = arch
-        && !accepts.arch.iter().any(|a| a == "any" || a == arch)
+    // A type with no architecture (a script) has nothing to check. The
+    // preset's words and the sample's are compared in the one spelling.
+    if let Some(arch) = arch.map(crate::arch::normalize)
+        && !accepts
+            .arch
+            .iter()
+            .any(|a| a == "any" || crate::arch::normalize(a) == arch)
     {
         return Err(deny(
             FailureCode::SampleArchDenied,
@@ -144,7 +148,7 @@ impl Intake {
             sha256: sha256.clone(),
             size: record.size,
             kind: record.file_type.clone(),
-            architecture: arch.map(str::to_owned),
+            architecture: arch.map(crate::arch::normalize),
             name: record.name.clone(),
         })
     }
@@ -238,7 +242,7 @@ impl Intake {
                 .map_err(|e| deny(FailureCode::SampleMissing, e.to_string()))?,
             size: record.size,
             kind: kind.to_owned(),
-            architecture: arch.map(str::to_owned),
+            architecture: arch.map(crate::arch::normalize),
             name: record.name,
         })
     }

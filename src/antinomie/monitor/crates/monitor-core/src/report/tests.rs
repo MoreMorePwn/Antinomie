@@ -989,3 +989,99 @@ fn a_long_series_is_thinned_evenly_for_the_bundle_keeping_the_first_and_last() {
     );
     assert_eq!(big[0], 0);
 }
+
+#[test]
+fn the_static_analysis_is_in_every_format() {
+    // ANT-T0556, A08: identification, unpacking, strings, entropy, static
+    // YARA and capa were in no harvested output.
+    let mut report = fixture();
+    report.static_analysis = Some(StaticAnalysis {
+        reports: vec!["rep-1".into(), "rep-2".into()],
+        tools: vec!["Detect It Easy 3.21".into(), "capa 9.4.0".into()],
+        checks: vec![
+            StaticCheck {
+                check: "identification".into(),
+                title: "Compiler and packer identification".into(),
+                state: "complete".into(),
+                summary: "packed with UPX".into(),
+                tools: vec!["Detect It Easy 3.21".into()],
+                rows: vec![Fact::new("Packer", "UPX(4.02)[NRV,brute]")],
+                omitted: 0,
+            },
+            StaticCheck {
+                check: "strings".into(),
+                title: "Strings".into(),
+                state: "partial".into(),
+                summary: "2,148 strings".into(),
+                tools: vec![],
+                rows: vec![Fact::new("ascii", "http://203.0.113.9/bins.sh")],
+                omitted: 2_147,
+            },
+        ],
+    });
+    let document = layout::document(&report, true);
+    let section = document
+        .sections
+        .iter()
+        .find(|s| s.id == "static")
+        .expect("a Static analysis section");
+    assert_eq!(section.title, "Static analysis");
+    let html = html::render(&document);
+    assert!(
+        html.contains("Compiler and packer identification"),
+        "{html}"
+    );
+    assert!(html.contains("UPX(4.02)"));
+    // Read from the file: defanged like any other free text.
+    assert!(!html.contains("http://203.0.113.9/bins.sh"));
+    assert!(html.contains("2,147 more row(s)") || html.contains("2147 more row(s)"));
+    let md = markdown::render(&document);
+    assert!(
+        md.contains("Static analysis") && md.contains("capa 9.4.0"),
+        "{md}"
+    );
+    let json: serde_json::Value = serde_json::from_str(&report.to_json().unwrap()).unwrap();
+    assert_eq!(
+        json["static_analysis"]["checks"][0]["check"],
+        "identification"
+    );
+    assert_eq!(json["static_analysis"]["tools"][1], "capa 9.4.0");
+    let stix: serde_json::Value = serde_json::from_str(&stix::render(&report).unwrap()).unwrap();
+    let objects = stix["objects"].as_array().unwrap();
+    let analysis = objects
+        .iter()
+        .find(|o| o["product"] == "antinomie-static-analysis")
+        .expect("a static malware-analysis");
+    assert_eq!(analysis["modules"][1], "capa 9.4.0");
+    let note = objects
+        .iter()
+        .find(|o| o["type"] == "note" && o["abstract"] == "Static analysis of the sample")
+        .expect("a note");
+    assert!(note["content"].as_str().unwrap().starts_with(
+        "Compiler and packer identification (complete): packed with UPX [Detect It Easy 3.21]"
+    ));
+    let misp: serde_json::Value = serde_json::from_str(&misp::render(&report).unwrap()).unwrap();
+    let event = &misp["Event"];
+    assert!(event["Attribute"].as_array().unwrap().iter().any(|a| {
+        a["value"]
+            .as_str()
+            .unwrap()
+            .starts_with("Static analysis: Strings (partial): 2,148 strings")
+    }));
+    assert!(
+        event["Tag"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "antinomie:static-analysis")
+    );
+    // Without the part, nothing changes in any format.
+    report.static_analysis = None;
+    assert!(
+        !layout::document(&report, true)
+            .sections
+            .iter()
+            .any(|s| s.id == "static")
+    );
+    assert!(!report.to_json().unwrap().contains("static_analysis"));
+}

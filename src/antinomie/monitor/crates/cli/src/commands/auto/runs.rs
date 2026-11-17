@@ -736,24 +736,10 @@ fn local_presets(context: &Context) -> antinomie_service::config::PresetSet {
     .preset_set()
 }
 
-/// `auto preset show`: the preset as JSON, and `table.key = value` lines
-/// for people.
+/// `auto preset show`: the preset as JSON, and for people the TOML of a
+/// preset file, which can be saved as one (ANT-T0556).
 fn preset_reply(preset: Value) -> Reply {
-    let mut human = String::new();
-    for (key, value) in preset.as_object().into_iter().flatten() {
-        match value {
-            Value::Object(table) => {
-                for (name, item) in table {
-                    let item = render::clean(&item.to_string());
-                    human.push_str(&format!("{key}.{name} = {item}\n"));
-                }
-            }
-            other => {
-                let other = render::clean(&other.to_string());
-                human.push_str(&format!("{key} = {other}\n"));
-            }
-        }
-    }
+    let human = render::preset_toml(&preset);
     Reply::value(preset).with_human(human)
 }
 

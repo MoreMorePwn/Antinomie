@@ -2,7 +2,8 @@
 //! `rules list/enable/disable` over the registry the core keeps in the data
 //! directory (`ruleset/registry.rs`): installed packs and custom groups, and
 //! whether each is enabled. Listing reads the registry; changing it takes the
-//! engine lock, so it never races a window or a daemon.
+//! engine lock, so it never races a window or a daemon. `rules catalog`,
+//! `install` and `update` fetch the catalog's packs ([`super::rules_fetch`]).
 use crate::{
     context::Context,
     error::{CliError, ErrorCode},
@@ -27,6 +28,21 @@ pub enum Rules {
     Enable { id: String },
     /// Disable a pack or group.
     Disable { id: String },
+    /// Check the rules catalog and list its packs with the installed version.
+    Catalog,
+    /// Download, check, filter and install catalog packs (their default
+    /// options), as Tools > Rules does: for example yara-forge-core.
+    Install {
+        #[arg(required = true, value_name = "ID")]
+        ids: Vec<String>,
+    },
+    /// Install the catalog's newer version of installed packs (only the
+    /// named ones when ids are given), with the options they were installed
+    /// with.
+    Update {
+        #[arg(value_name = "ID")]
+        ids: Vec<String>,
+    },
 }
 
 pub fn run(rules: &Rules, context: &Context) -> Result<Reply, CliError> {
@@ -34,6 +50,9 @@ pub fn run(rules: &Rules, context: &Context) -> Result<Reply, CliError> {
         Rules::List { engine } => list(engine.as_deref(), context),
         Rules::Enable { id } => set(id, true, context),
         Rules::Disable { id } => set(id, false, context),
+        Rules::Catalog => super::rules_fetch::catalog(context),
+        Rules::Install { ids } => super::rules_fetch::install(ids, context),
+        Rules::Update { ids } => super::rules_fetch::update(ids, context),
     }
 }
 

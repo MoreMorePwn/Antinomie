@@ -1475,6 +1475,47 @@ x86 programs by their own table.
   over a lane's own limit), and `auto daemon` and the command line raise their soft
   open-file limit to the hard limit (at most 65,536) at start and log it. `doctor`
   has an `open-files` row: a warning when the limit stays below 4,096.
+- **`antinomie-cli report` reuses an Auto run's finished report (ANT-T0556, A45).**
+  For a run an Auto job made, the formats are written from the job's JSON report
+  when it is current, instead of reading the whole recording again (over 20
+  minutes for a 2.5 GB run); a missing or stale report, `--evidence-bundle` and
+  `--include-content` index the run as before, and the command says why.
+- **Static analysis in the run report and every export (ANT-T0556, A08).** A new
+  report part, **Static analysis** (`static_analysis`, in `all`), lists the
+  sample's checks (identification, packing and unpacking, strings, entropy, static
+  YARA, capa, ...) with their state, summary, tools and first 100 rows, in HTML,
+  PDF, Markdown and JSON; STIX carries it as a `malware-analysis` of the file and a
+  `note`, MISP as one comment per check. Auto mode's reports had none of it.
+- **The rule packs and tools a run's analysis used (ANT-T0556, A22).** The report's
+  environment adds the rule packs the detection scans used and the tools of the
+  static analysis (the run record lists what was installed when the run started,
+  which was empty for a pack installed later), and a scan's
+  `selection-manifest.json` carries the running app's version (the selection's
+  builder is kept as `selection_app_version`; it said 0.8.3 in 0.9.0 runs).
+- **The command line installs analysis tools and rule packs (ANT-T0556).**
+  `antinomie-cli tools list|install|update` downloads, checks and unpacks capa,
+  FLOSS, Ghidra, Detect It Easy and the other optional tools as Tools > Analysis
+  tools does, and `antinomie-cli rules catalog|install|update` installs and updates
+  the catalog's rule packs as Tools > Detection rules does, with the same code.
+- **capa on arm64 and under emulation (ANT-T0556, A44).** capa and FLOSS read x86
+  programs only: for an ELF of another architecture their Auto item is skipped as
+  "not applicable to this architecture" and no longer makes a warning or a partial
+  run. On a node whose lanes run under TCG, the code-analysis tools' time limit is
+  multiplied by the TCG multiplier, and a static item stopped at its limit says
+  where the limit came from.
+- **Auto mode runs arm64 programs with no preset file (ANT-T0556).** `auto init`
+  sets the lane group from the base's architecture (`arm64` for an arm64 base)
+  and writes it as `[lanes] group` of `service.toml` (a new file, or a table added
+  to one without `[lanes]`); the five built-in presets take the node's lane group
+  and accept its architecture. An architecture has one spelling in
+  `service.toml`, the presets, the CLI and the run API (`x86_64`, `x86`, `arm64`,
+  `arm`, `mips`, ...); `AArch64`, `aarch64`, `ARM`, `x86-64`, `amd64` and the other
+  old spellings are still read. `auto preset show` prints valid TOML that can be
+  saved as a preset file (it printed `static_analysis.limits = {...}` JSON).
+- **A truncated ELF's size in bytes (ANT-T0556, A52).** "This ELF is truncated"
+  said "segments need 0.0 MB, the file has 0.0 MB" for a 20 KB program: sizes
+  under a megabyte are now exact byte counts, and the note gives the gap
+  ("its segments need 20480 bytes, the file has 20208 bytes (272 bytes missing)").
 - **A number in a run request reads back as the same number.** A very long number
   in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
   integer) was read as a floating-point value that, written again by the service,

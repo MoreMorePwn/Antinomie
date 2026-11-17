@@ -32,7 +32,8 @@ pub const CUSTOM: &str = "custom";
 pub struct Accepts {
     /// Values of `samples::detect_type` plus `"any"`.
     pub types: Vec<String>,
-    /// Architectures of `detect_type` plus `"any"`.
+    /// Architectures (`crate::arch`, any old spelling read) plus `"any"`.
+    #[serde(deserialize_with = "crate::arch::deserialize_list")]
     pub arch: Vec<String>,
     /// At most the node ceiling (256 MiB).
     pub max_sample_mib: u32,

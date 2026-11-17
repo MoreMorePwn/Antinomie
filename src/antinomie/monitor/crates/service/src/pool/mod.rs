@@ -201,7 +201,11 @@ impl HostPool {
         };
         let plan = plan::hosted(&frozen.preset);
         let items = items_for(&plan);
-        let inputs = inputs_of(&job, self.env.triage.load_scale());
+        let inputs = inputs_of(
+            &job,
+            self.env.triage.load_scale(),
+            self.env.triage.tcg_factor(),
+        );
         let mut views: Vec<HostItem> = items
             .iter()
             .map(|spec| {

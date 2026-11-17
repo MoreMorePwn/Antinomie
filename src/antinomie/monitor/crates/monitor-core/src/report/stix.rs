@@ -121,6 +121,51 @@ pub(in crate::report) fn relationship_since(
     )
 }
 
+/// The sample's static analysis (ANT-T0556, A08): a `malware-analysis` of
+/// the file with the tools as its modules, and a `note` on it with one line
+/// per check. Nothing when the report has no static analysis.
+fn static_objects(
+    report: &Report,
+    file_id: &str,
+    identity_id: &str,
+    since: &str,
+    at: &str,
+) -> Vec<Value> {
+    let Some(analysis) = report.static_analysis.as_ref() else {
+        return Vec::new();
+    };
+    let lines = super::misp::static_lines(report);
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let seed = format!("{}:static:{file_id}", report.run.run_id);
+    let mut fields = json!({
+        "product": "antinomie-static-analysis",
+        "version": crate::api::APP_VERSION,
+        "result": "unknown",
+        "analysis_engine_version": crate::api::APP_VERSION,
+        "sample_ref": file_id,
+        "created_by_ref": identity_id,
+    });
+    if !analysis.tools.is_empty() {
+        fields["modules"] = json!(analysis.tools);
+    }
+    let static_analysis = object_since("malware-analysis", &seed, since, at, fields);
+    let note = object_since(
+        "note",
+        &seed,
+        since,
+        at,
+        json!({
+            "abstract": "Static analysis of the sample",
+            "content": lines.join("\n"),
+            "object_refs": [id_of(&static_analysis), file_id],
+            "created_by_ref": identity_id,
+        }),
+    );
+    vec![static_analysis, note]
+}
+
 /// The STIX 2.1 bundle of `report`.
 pub fn render(report: &Report) -> Result<String, String> {
     let at = iso(report.generated_ms);
@@ -161,6 +206,7 @@ pub fn render(report: &Report) -> Result<String, String> {
         ));
         let file_id = id_of(&file);
         objects.push(file);
+        objects.extend(static_objects(report, &file_id, &identity_id, &since, &at));
         if report.not_started() {
             // Nothing ran: the sample is a file and a note says why; there is
             // no malware analysis and nothing it was seen doing.

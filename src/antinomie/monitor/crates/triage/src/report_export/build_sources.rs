@@ -230,3 +230,124 @@ pub fn custody(job: &Job) -> Result<Custody, String> {
             .to_owned(),
     })
 }
+
+/// The sample's static analysis for the report (ANT-T0556, A08): the newest
+/// finished result of each check among the sample's analyses (Auto mode
+/// runs one analysis per tool, so a run's checks come from several), from
+/// the data folder and, for a lane's folder, the node's. `None` when the job
+/// has no sample or no data folder.
+pub fn static_analysis(job: &Job) -> Option<antinomie_monitor_core::report::StaticAnalysis> {
+    let sample = job.sample.as_ref()?;
+    let data_dir = job.data_dir.as_deref()?;
+    let mut reports =
+        antinomie_monitor_core::analysis::static_reports_for(data_dir, &sample.sha256);
+    let shared = antinomie_monitor_core::lanes::shared_root(data_dir);
+    if shared != data_dir {
+        reports.extend(antinomie_monitor_core::analysis::static_reports_for(
+            &shared,
+            &sample.sha256,
+        ));
+    }
+    Some(static_of(&reports))
+}
+
+/// [`static_analysis`] from the reports, newest first.
+pub fn static_of(
+    reports: &[antinomie_monitor_core::analysis::AnalysisReport],
+) -> antinomie_monitor_core::report::StaticAnalysis {
+    use antinomie_monitor_core::{
+        analysis::{AnalysisKind, AnalysisSectionState as State},
+        report::{Fact, StaticAnalysis, StaticCheck, STATIC_ROWS},
+    };
+    let mut picked: Vec<(&str, &antinomie_monitor_core::analysis::AnalysisSection)> = Vec::new();
+    for report in reports {
+        for section in &report.sections {
+            if matches!(section.state, State::Pending | State::Running)
+                || picked.iter().any(|(_, s)| s.kind == section.kind)
+            {
+                continue;
+            }
+            picked.push((report.id.as_str(), section));
+        }
+    }
+    let order = |kind: AnalysisKind| {
+        AnalysisKind::TRIAGE
+            .iter()
+            .chain(AnalysisKind::DEEP)
+            .position(|k| *k == kind)
+            .unwrap_or(usize::MAX)
+    };
+    picked.sort_by_key(|(_, section)| order(section.kind));
+    let mut out = StaticAnalysis::default();
+    for (id, section) in picked {
+        if !out.reports.iter().any(|known| known == id) {
+            out.reports.push(id.to_owned());
+        }
+        for tool in &section.tools {
+            if !out.tools.contains(tool) {
+                out.tools.push(tool.clone());
+            }
+        }
+        let clip = |text: &str| -> String {
+            if text.chars().count() > 300 {
+                format!("{}…", text.chars().take(300).collect::<String>())
+            } else {
+                text.to_owned()
+            }
+        };
+        out.checks.push(StaticCheck {
+            check: format!("{:?}", section.kind).to_lowercase(),
+            title: section.kind.label().to_owned(),
+            state: match section.state {
+                State::Complete => "complete",
+                State::Partial => "partial",
+                State::Timeout => "ran out of time",
+                _ => "not available",
+            }
+            .into(),
+            summary: clip(&section.summary),
+            tools: section.tools.clone(),
+            rows: section
+                .entries
+                .iter()
+                .take(STATIC_ROWS)
+                .map(|entry| Fact::new(&clip(&entry.label), clip(&entry.value)))
+                .collect(),
+            omitted: section.entries.len().saturating_sub(STATIC_ROWS) as u64,
+        });
+    }
+    out.tools.sort();
+    out
+}
+
+/// The rule packs the run's detection scans used, "id version", from the
+/// selection manifests the scans keep beside their reports
+/// (`triage-detection/<engine>/selection-manifest.json`). The run record's
+/// packs are the ones installed when the run started; a pack installed
+/// later and used by the scan is only here (ANT-T0556, A22).
+pub fn scan_packs(archive: &Path) -> Vec<String> {
+    let mut packs = Vec::new();
+    for engine in ["yara", "sigma", "ids"] {
+        let path = archive
+            .join("triage-detection")
+            .join(engine)
+            .join("selection-manifest.json");
+        let Some(manifest) = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        else {
+            continue;
+        };
+        for pack in manifest["packs"].as_array().into_iter().flatten() {
+            let (Some(id), Some(version)) = (pack["id"].as_str(), pack["version"].as_str()) else {
+                continue;
+            };
+            let entry = format!("{id} {version}");
+            if !packs.contains(&entry) {
+                packs.push(entry);
+            }
+        }
+    }
+    packs.sort();
+    packs
+}

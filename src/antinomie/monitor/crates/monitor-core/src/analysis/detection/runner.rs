@@ -797,6 +797,19 @@ fn commit_provenance(request: &Request, directory: &Path, mut report: Report) ->
                     .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
             }) {
                 Ok(mut manifest) => {
+                    // The scan's own app stamps it (ANT-T0556, A22): a
+                    // selection built by an older app keeps that version as
+                    // `selection_app_version`.
+                    if let Some(built) = manifest
+                        .get("app_version")
+                        .and_then(|v| v.as_str())
+                        .filter(|built| *built != crate::api::APP_VERSION)
+                        .map(str::to_owned)
+                    {
+                        manifest["selection_app_version"] = serde_json::Value::String(built);
+                    }
+                    manifest["app_version"] =
+                        serde_json::Value::String(crate::api::APP_VERSION.into());
                     manifest["evidence_key"] =
                         serde_json::Value::String(report.evidence_key.clone());
                     manifest["report_engine"] =
@@ -1652,6 +1665,49 @@ mod tests {
         assert!(work.join("selection/kept.yar").is_file());
         assert!(staged.warnings.iter().any(|warning| warning == "kept"));
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn the_scan_stamps_its_own_app_version_on_the_selection_manifest() {
+        // ANT-T0556, A22: a selection an 0.8.3 app built said 0.8.3 in a
+        // 0.9.0 scan's manifest.
+        let root = std::env::temp_dir().join(format!("ant-prov-{}", crate::storage::unique_id()));
+        let profile = root.join("rules/profiles/yara/digest-1");
+        fs::create_dir_all(&profile).unwrap();
+        fs::write(
+            profile.join("manifest.json"),
+            br#"{"schema":1,"digest":"digest-1","app_version":"0.8.3"}"#,
+        )
+        .unwrap();
+        let directory = root.join("run");
+        fs::create_dir_all(&directory).unwrap();
+        let request = Request {
+            engine: Engine::Yara,
+            identity: Identity {
+                vm_id: "vm".into(),
+                boot_id: "boot".into(),
+                run_id: "run".into(),
+                root_cookie: 7,
+            },
+            directory: directory.clone(),
+            settings: Settings {
+                rules_root: root.display().to_string(),
+                evidence_key: "ready:test".into(),
+                ..Default::default()
+            },
+            source_digest: None,
+            frozen: None,
+        };
+        let mut report = Report::empty(Engine::Yara, request.identity.clone());
+        report.selection = "digest-1".into();
+        let committed = commit_provenance(&request, &directory, report);
+        assert_eq!(committed.provenance_saved, Some(true));
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join("selection-manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["app_version"], crate::api::APP_VERSION);
+        assert_eq!(manifest["selection_app_version"], "0.8.3");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

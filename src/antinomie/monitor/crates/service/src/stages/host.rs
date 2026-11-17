@@ -98,6 +98,11 @@ pub trait HostTriage: Send + Sync {
     fn load_scale(&self) -> f64 {
         1.0
     }
+    /// The engine's TCG multiplier when the node's lanes run under TCG, else
+    /// 1: it stretches the code-analysis tools' time (`timing::Inputs::tcg`).
+    fn tcg_factor(&self) -> f64 {
+        1.0
+    }
     /// The key and the sender of Check online ([`super::online`]). The
     /// default has no key, so a fake sends nothing unless it says so.
     fn online_access(&self) -> OnlineAccess {
@@ -113,6 +118,8 @@ pub struct RealTriage {
     /// The engine options of the other lanes (several lanes, ANT-T0455 card
     /// C): a job's run is in the data folder of the lane that ran it.
     pub lanes: Vec<(crate::api::ids::LaneId, BackendOptions)>,
+    /// [`HostTriage::tcg_factor`]: 1 under KVM.
+    pub tcg: f64,
 }
 
 impl RealTriage {
@@ -121,7 +128,27 @@ impl RealTriage {
             options,
             address_lookup: antinomie_monitor_core::settings::AddressLookup::Tshark,
             lanes: Vec::new(),
+            tcg: 1.0,
         }
+    }
+
+    /// The lanes run under TCG: the engine's TCG multiplier of the data
+    /// folder (`settings.json`, Settings > Start; 10 by default).
+    pub fn with_tcg(mut self, tcg: bool) -> Self {
+        self.tcg = if tcg {
+            antinomie_monitor_core::settings::load(&self.options.data_dir)
+                .ok()
+                .flatten()
+                .map_or_else(
+                    || antinomie_monitor_core::StartSettings::default().tcg_multiplier,
+                    |settings| settings.start().tcg_multiplier,
+                )
+                .max(1)
+                .into()
+        } else {
+            1.0
+        };
+        self
     }
 
     pub fn with_lanes(mut self, lanes: Vec<(crate::api::ids::LaneId, BackendOptions)>) -> Self {
@@ -244,6 +271,10 @@ impl HostTriage for RealTriage {
 
     fn load_scale(&self) -> f64 {
         antinomie_monitor_core::accel::host_load_scale()
+    }
+
+    fn tcg_factor(&self) -> f64 {
+        self.tcg
     }
 
     /// The abuse.ch Auth-Key of the node's data directory (lane 1's, where

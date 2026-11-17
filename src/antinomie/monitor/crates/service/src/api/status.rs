@@ -27,7 +27,7 @@ pub struct Sample {
     /// From `detect_type` (lower case, for example `elf`).
     #[serde(rename = "type")]
     pub kind: String,
-    /// `x86_64`, `AArch64`, ...; null when none.
+    /// `x86_64`, `arm64`, ... (`crate::arch`); null when none.
     pub architecture: Option<String>,
     pub name: String,
     pub tags: Vec<Tag>,

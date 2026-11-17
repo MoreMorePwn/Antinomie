@@ -21,10 +21,12 @@ mod query;
 mod recording;
 mod report;
 mod rules;
+mod rules_fetch;
 mod run;
 mod run_read;
 mod sample;
 mod snapshot;
+mod tools;
 mod triage;
 mod vm;
 
@@ -39,9 +41,14 @@ pub enum Command {
     Config(config::Config),
     /// Static analysis of a host file, no VM; takes the engine lock.
     Analyze(analyze::Analyze),
-    /// Rule packs and groups: list, enable, disable.
+    /// Rule packs and groups: list, enable, disable; the catalog's packs:
+    /// catalog, install, update.
     #[command(subcommand)]
     Rules(rules::Rules),
+    /// The optional analysis tools (capa, FLOSS, Ghidra, Detect It Easy, ...):
+    /// list, install, update, as Tools > Analysis tools does. No engine lock.
+    #[command(subcommand)]
+    Tools(tools::Tools),
     /// The abuse.ch IOC datasets: `ioc datasets list`, `update [NAME...]`,
     /// `enable`, `disable`. The window's files; no engine lock, so a daemon
     /// may serve meanwhile. An Auto run's Check online needs them.
@@ -111,6 +118,7 @@ pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
         Command::Config(config) => config::run(config, context),
         Command::Analyze(arguments) => analyze::run(arguments, context),
         Command::Rules(rules) => rules::run(rules, context),
+        Command::Tools(tools) => tools::run(tools, context),
         Command::Ioc(ioc) => ioc::run(ioc, context),
         Command::Base(base) => base::run(base, context),
         Command::Vm(vm) => vm::run(vm, context),

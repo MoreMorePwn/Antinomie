@@ -280,6 +280,11 @@ impl<E: Engine> LaneStages<'_, E> {
                 }
             },
             ItemKind::Static(group) => {
+                // capa and FLOSS read x86 programs only: on another
+                // architecture the item is not applicable, never missing.
+                if let Some(reason) = super::analyse::not_applicable(group, job) {
+                    return Ok(ended(HostItemState::Skipped, Some(reason)));
+                }
                 let (outcome, timed_out, waited_ms) =
                     self.static_item(job, &plan, group, limit, until)?;
                 let words: Vec<String> =

@@ -70,17 +70,10 @@ impl LaneProfile {
     }
 }
 
-/// Whether a guest of `arch` runs an ELF whose architecture `detect_type`
-/// names `sample` (x86-64 runs i386 programs, arm64 32-bit ARM ones).
+/// Whether a guest of `arch` runs an ELF whose architecture is `sample`, in
+/// any spelling (x86-64 runs i386 programs, arm64 32-bit ARM ones).
 pub fn runs(arch: GuestArch, sample: &str) -> bool {
-    match sample {
-        "x86_64" | "x86" => arch == GuestArch::X86_64,
-        "AArch64" => arch == GuestArch::AARCH64,
-        "ARM" => arch == GuestArch::AARCH64 || arch == GuestArch::ARM,
-        "RISC-V" => arch == GuestArch::RISCV64,
-        "MIPS" => arch == GuestArch::MIPS || arch == GuestArch::MIPSEL,
-        _ => false,
-    }
+    crate::arch::guest_runs(arch, sample)
 }
 
 #[derive(Clone, Debug)]

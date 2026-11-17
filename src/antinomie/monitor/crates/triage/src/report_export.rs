@@ -17,6 +17,7 @@ pub mod fixtures;
 pub mod not_started;
 pub mod rows;
 pub mod run_facts;
+pub mod stored;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -556,3 +556,141 @@ fn a_run_with_timed_screenshots_says_so_in_the_report_notes() {
     assert!(unbundled.contains("the evidence bundle includes them"));
     std::fs::remove_dir_all(&run).unwrap();
 }
+
+#[test]
+fn the_static_part_takes_the_newest_result_of_each_check_and_the_scans_name_their_packs() {
+    // ANT-T0556, A08 and A22, from hand-made files shaped like the eval's:
+    // one analysis per tool (Auto mode), the newest first.
+    let report = |id: &str,
+                  sections: serde_json::Value|
+     -> antinomie_monitor_core::analysis::AnalysisReport {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "state": "complete", "source_path": "sample:x", "sections": sections,
+        }))
+        .unwrap()
+    };
+    let newest = report(
+        "rep-new",
+        serde_json::json!([{"kind": "capabilities", "state": "timeout",
+                            "summary": "capa ran out of time", "entries": [],
+                            "tools": ["capa 9.4.0"]}]),
+    );
+    let older = report(
+        "rep-old",
+        serde_json::json!([
+            {"kind": "capabilities", "state": "complete", "summary": "old", "entries": []},
+            {"kind": "identification", "state": "complete", "summary": "packed with UPX",
+             "tools": ["Detect It Easy 3.21"],
+             "entries": (0..105).map(|i| serde_json::json!({"label": format!("row {i}"), "value": "v"})).collect::<Vec<_>>()}
+        ]),
+    );
+    let analysis = build_sources::static_of(&[newest, older]);
+    let checks: Vec<(&str, &str)> = analysis
+        .checks
+        .iter()
+        .map(|c| (c.check.as_str(), c.state.as_str()))
+        .collect();
+    // In the app's order, the newest capa result.
+    assert_eq!(
+        checks,
+        [
+            ("identification", "complete"),
+            ("capabilities", "ran out of time")
+        ]
+    );
+    assert_eq!(analysis.reports, ["rep-old", "rep-new"]);
+    assert_eq!(analysis.tools, ["Detect It Easy 3.21", "capa 9.4.0"]);
+    let identification = &analysis.checks[0];
+    assert_eq!(identification.title, "Compiler and packer identification");
+    assert_eq!(identification.rows.len(), report::STATIC_ROWS);
+    assert_eq!(identification.omitted, 5);
+
+    let dir = std::env::temp_dir().join(format!(
+        "ant-scan-packs-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let yara = dir.join("triage-detection/yara");
+    std::fs::create_dir_all(&yara).unwrap();
+    std::fs::write(
+        yara.join("selection-manifest.json"),
+        serde_json::json!({"engine": "yara", "app_version": "0.9.0", "packs": [
+            {"id": "yara-forge-core", "version": "20261011-d22a80a7f4f3"},
+            {"id": "abuse-ch-yarahub", "version": "snapshot-2026-11-05-6b254e44de46"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        build_sources::scan_packs(&dir),
+        [
+            "abuse-ch-yarahub snapshot-2026-11-05-6b254e44de46",
+            "yara-forge-core 20261011-d22a80a7f4f3"
+        ]
+    );
+    assert!(build_sources::scan_packs(&dir.join("none")).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_current_stored_report_stands_for_a_new_index_and_a_stale_one_says_why() {
+    // ANT-T0556, A45: `antinomie-cli report` re-read a 2.5 GB recording for
+    // STIX and MISP although the Auto job had written the whole report.
+    let (temp, pcap) = fixture();
+    let job = job(&temp, &pcap, json_only());
+    let artifacts = temp.directory.join("job-artifacts");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let now = crate::time_format::now_ms();
+    let mut stored = report::Report::new(job.run.clone(), now + 60_000);
+    stored.summary = Some(Default::default());
+    stored.static_analysis = Some(Default::default());
+    let write = |report: &report::Report| {
+        std::fs::write(
+            artifacts.join("report-abababab.json"),
+            report.to_json().unwrap(),
+        )
+        .unwrap();
+    };
+    write(&stored);
+    // The MISP and STIX files beside it are not the JSON report.
+    std::fs::write(artifacts.join("report-abababab.misp.json"), "{}").unwrap();
+    std::fs::write(artifacts.join("report-abababab.stix.json"), "{}").unwrap();
+    let (found, path) = stored::stored_report(&job, &artifacts).unwrap();
+    assert_eq!(path, artifacts.join("report-abababab.json"));
+    assert_eq!(found, stored);
+    // Only the chosen parts stay.
+    let mut only = job.clone();
+    only.choices.parts = vec![Part::Summary];
+    let kept = stored::chosen(found, &only);
+    assert!(kept.summary.is_some() && kept.static_analysis.is_none());
+
+    // Made before the recording last changed: stale, and said.
+    let mut old = stored.clone();
+    old.generated_ms = 1_000;
+    write(&old);
+    let why = stored::stored_report(&job, &artifacts).unwrap_err();
+    assert!(
+        why.contains("changed after the job's report was made"),
+        "{why}"
+    );
+    // Another app's report, another run's, or none.
+    let mut other = stored.clone();
+    other.app = "Antinomie 0.8.3".into();
+    write(&other);
+    assert!(stored::stored_report(&job, &artifacts)
+        .unwrap_err()
+        .contains("made by Antinomie 0.8.3"));
+    let mut other = stored.clone();
+    other.run.run_id = "another".into();
+    write(&other);
+    assert!(stored::stored_report(&job, &artifacts)
+        .unwrap_err()
+        .contains("another run"));
+    std::fs::remove_file(artifacts.join("report-abababab.json")).unwrap();
+    assert!(stored::stored_report(&job, &artifacts)
+        .unwrap_err()
+        .contains("no JSON report"));
+}

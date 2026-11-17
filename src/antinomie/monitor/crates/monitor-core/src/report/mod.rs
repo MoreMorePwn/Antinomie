@@ -527,9 +527,48 @@ pub struct Report {
     pub detections: Option<Vec<Detection>>,
     pub evidence: Option<Vec<EvidenceRef>>,
     pub custody: Option<Custody>,
+    /// The sample's static analysis (ANT-T0556, A08); absent when the part
+    /// was not chosen, `None` inside when the sample has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub static_analysis: Option<StaticAnalysis>,
     /// What the report could not say: omitted rows, missing inputs.
     pub notes: Vec<String>,
 }
+
+/// The static analysis of the sample (`Command::AnalyzeSample`, Auto mode's
+/// host-side checks or the library's analysis), newest result of each check:
+/// identification, packing and unpacking, strings, entropy, static YARA,
+/// capa and the others the analysis ran.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StaticAnalysis {
+    /// The analysis reports the checks were read from (`<data>/analyses/<id>`).
+    pub reports: Vec<String>,
+    /// Every tool that produced a check, with its version (`capa 9.4.0`).
+    pub tools: Vec<String>,
+    pub checks: Vec<StaticCheck>,
+}
+
+/// One check of the static analysis and the rows it found.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StaticCheck {
+    /// The check's name in the presets (`identification`, `capabilities`).
+    pub check: String,
+    /// The app's label ("Compiler and packer identification").
+    pub title: String,
+    /// `complete`, `partial`, `not available` or `ran out of time`.
+    pub state: String,
+    pub summary: String,
+    pub tools: Vec<String>,
+    /// The first [`STATIC_ROWS`] rows (name and value).
+    pub rows: Vec<Fact>,
+    /// Rows past [`STATIC_ROWS`], left out.
+    pub omitted: u64,
+}
+
+/// Rows of one static check a report keeps.
+pub const STATIC_ROWS: usize = 100;
 
 impl Report {
     /// An empty report for `run`, stamped with the schema and `now_ms`.
@@ -548,6 +587,47 @@ impl Report {
     /// come up): there is a request and a sample, but no behaviour.
     pub fn not_started(&self) -> bool {
         self.run.state.starts_with("Not started")
+    }
+
+    /// Leave out every part not in `parts` (a stored report holds them all).
+    pub fn keep_parts(&mut self, parts: &[Part]) {
+        let has = |part| parts.contains(&part);
+        if !has(Part::Summary) {
+            self.summary = None;
+        }
+        if !has(Part::Indicators) {
+            self.indicators = None;
+        }
+        if !has(Part::Attack) {
+            self.attack = None;
+        }
+        if !has(Part::Processes) {
+            self.processes = None;
+        }
+        if !has(Part::Findings) {
+            self.findings = None;
+        }
+        if !has(Part::Files) {
+            self.files = None;
+        }
+        if !has(Part::FileActivity) {
+            self.file_activity = None;
+        }
+        if !has(Part::Network) {
+            self.network = None;
+        }
+        if !has(Part::Detections) {
+            self.detections = None;
+        }
+        if !has(Part::Evidence) {
+            self.evidence = None;
+        }
+        if !has(Part::Custody) {
+            self.custody = None;
+        }
+        if !has(Part::StaticAnalysis) {
+            self.static_analysis = None;
+        }
     }
 
     /// The versioned machine-readable form.
@@ -571,10 +651,12 @@ pub enum Part {
     Detections,
     Evidence,
     Custody,
+    /// The sample's static analysis (ANT-T0556, A08).
+    StaticAnalysis,
 }
 
 impl Part {
-    pub const ALL: [Part; 11] = [
+    pub const ALL: [Part; 12] = [
         Self::Summary,
         Self::Indicators,
         Self::Attack,
@@ -586,6 +668,7 @@ impl Part {
         Self::Detections,
         Self::Evidence,
         Self::Custody,
+        Self::StaticAnalysis,
     ];
 
     pub fn label(self) -> &'static str {
@@ -601,6 +684,9 @@ impl Part {
             Self::Detections => "Detection engines (YARA, IDS, Sigma)",
             Self::Evidence => "Evidence references",
             Self::Custody => "Custody log head",
+            Self::StaticAnalysis => {
+                "Static analysis (identification, packing, strings, YARA, capa)"
+            }
         }
     }
 }

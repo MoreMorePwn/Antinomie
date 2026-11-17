@@ -76,7 +76,11 @@ comes from the export choices the window keeps in the data directory's
 `settings.json`. The files go to `--out` (default `report-<first 8 characters of
 the run id>` in the current folder), not into the recording. Detections are in
 the report when the run's Detection tab, or `antinomie-cli detect RUN --save`,
-has scanned it.
+has scanned it. For a run an Auto job made, `report` writes the formats from the
+job's finished JSON report instead of indexing the run again, as long as that
+report is current (the same app and schema, and neither the recording, its
+digest nor a detection scan changed since); otherwise, or with
+`--evidence-bundle` or `--include-content`, it indexes the run and says why.
 
 ## What a report holds, in order
 
@@ -104,9 +108,13 @@ has scanned it.
    and no country for private and reserved addresses, Domains, URLs, TLS),
    8. **Detection engines** (one strength vocabulary, the family a rule names,
    and the credits each rule's licence asks for in a table under it),
-   9. **Evidence references**, 10. **Custody log**, 11. **Notes**, and an
+   9. **Static analysis** (the sample's: one row per check with its state,
+   summary and tools, then the first 100 rows of each check; the newest result
+   of each check, so an Auto run's one-analysis-per-tool results read as one),
+   10. **Evidence references**, 11. **Custody log**, 12. **Notes**, and an
    **Appendix: Environment** (rule packs and tools one per row with their full
-   versions).
+   versions: those installed when the run started, and the rule packs the
+   detection scans and the tools the static analysis used).
 
 Times in tables read `+5.463 s · 17:38:21.480`: the time since the run's first
 call, then the time of day; the date and the zone are said once at the top.
@@ -207,7 +215,9 @@ and links (`*_ref`, `*_refs`), and each one names an id of the same file.
   when its ATT&CK galaxy is loaded. URL indicators carry the cleartext scheme
   `http://`, since only cleartext HTTP is indexed as a URL. Each matching
   detection rule is a `comment` attribute that names the rule (without the
-  pack's `sNNN::` number), its author, licence and source.
+  pack's `sNNN::` number), its author, licence and source; each static analysis
+  check is a `comment` ("Static analysis: Strings (partial): ..."), and the event
+  is tagged `antinomie:static-analysis` when it has one.
 - **STIX 2.1** is a bundle: an `identity`, the sample as a `file` and a
   `malware` object, a `malware-analysis` (result `suspicious` when an indicator
   matched or a HIGH or MEDIUM rule fired, else `unknown`), an `indicator` for
@@ -216,7 +226,9 @@ and links (`*_ref`, `*_refs`), and each one names an id of the same file.
   left out), an `attack-pattern` with a `mitre-attack` external reference for
   each technique, and `relationship`s (indicator `indicates` malware, malware
   `uses` attack-pattern), a `note` for each matching detection rule that
-  names the rule's author, licence and source, and a `report` that lists the
+  names the rule's author, licence and source, a second `malware-analysis` of
+  the file (`product` `antinomie-static-analysis`, the tools as its `modules`)
+  with a `note` that has one line per static check, and a `report` that lists the
   objects. When the rules name a family, the `malware` object is that family
   (`is_family` true) and the sample is its `file`. Object ids are version-5
   UUIDs of the content, so a second export of the same run has the same ids;

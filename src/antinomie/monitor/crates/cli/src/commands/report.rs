@@ -4,6 +4,13 @@
 //! (`antinomie_triage::report_export`), so the files are the ones the dialog
 //! writes for the same run and choices. No engine lock: nothing is written
 //! into the recording apart from the index Triage keeps there.
+//!
+//! A run an Auto job made already has its whole report (the job's
+//! `report-<sha8>.json`, built from the index its host work made): when that
+//! report is current, the formats are written from it and the recording is
+//! not read again (ANT-T0556, A45). The evidence bundle and
+//! `--include-content` need the recording, and a missing or stale report is
+//! said and the run indexed as before.
 use super::recording::{RUN_HELP, index, open_saved, run_value};
 use crate::{
     context::Context,
@@ -29,8 +36,9 @@ pub struct Report {
     #[arg(long, value_delimiter = ',', value_name = "LIST")]
     pub formats: Vec<String>,
     /// Parts, comma separated: summary, indicators, attack, processes,
-    /// findings, files, file_activity, network, detections, evidence, custody
-    /// (or all) [default: the export choices, every part unless set].
+    /// findings, files, file_activity, network, detections, evidence, custody,
+    /// static_analysis (or all) [default: the export choices, every part
+    /// unless set].
     #[arg(long, value_delimiter = ',', value_name = "LIST")]
     pub parts: Vec<String>,
     /// Also write the evidence bundle (.zip next to the report): the captures,
@@ -162,10 +170,43 @@ fn short(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
+/// The finished report of the Auto job that made the run, when it can stand
+/// for a new index ([`report_export::stored::stored_report`]); `Err` says why
+/// the run is read again.
+fn stored(
+    context: &Context,
+    saved: &antinomie_triage::SavedRun,
+    job: &report_export::Job,
+) -> Result<(antinomie_monitor_core::report::Report, PathBuf), String> {
+    use antinomie_service::query::JobIndex;
+    if job.choices.bundle {
+        return Err("the evidence bundle reads the run's files".into());
+    }
+    if job.choices.include_content {
+        return Err("--include-content reads what the sample read".into());
+    }
+    let data = antinomie_monitor_core::lanes::shared_root(context.data_dir());
+    let jobs = antinomie_service::store::job_index::StoreJobIndex::open_read_only(&data)
+        .ok_or("no Auto job store in this data directory")?;
+    let made_by = jobs
+        .job_of_run(&saved.run.vm_id, &saved.run.boot_id, &saved.run.id)
+        .ok_or("no Auto job made this run")?;
+    let artifacts = jobs
+        .analysis_directory(&made_by)
+        .ok_or_else(|| format!("job {made_by} has no report folder"))?;
+    report_export::stored::stored_report(job, &artifacts)
+}
+
 pub fn run(arguments: &Report, context: &Context) -> Result<Reply, CliError> {
     let saved = open_saved(context, &arguments.run)?;
     let choices = choices(arguments, context, &saved.run.id)?;
     let job = report_export::Job::for_saved(&saved, choices, time_format::now_ms());
+    match stored(context, &saved, &job) {
+        Ok((report, from)) => return from_stored(context, &saved, &job, report, &from),
+        Err(why) => context.logger.info(&format!(
+            "indexing the whole run: the job's finished report cannot be used ({why})"
+        )),
+    }
     // A large recording is read whole unless an index of it is at hand: say
     // so before the wait (the progress lines follow; Ctrl-C stops it).
     let large = report_export::large_run(&job);
@@ -244,6 +285,61 @@ pub fn run(arguments: &Report, context: &Context) -> Result<Reply, CliError> {
             row["why"].as_str().unwrap_or_default()
         ));
     }
+    Ok(Reply::value(value).with_human(human))
+}
+
+/// `report` from the job's finished report: the chosen parts, written in
+/// the chosen formats; the recording is not read.
+fn from_stored(
+    context: &Context,
+    saved: &antinomie_triage::SavedRun,
+    job: &report_export::Job,
+    report: antinomie_monitor_core::report::Report,
+    from: &std::path::Path,
+) -> Result<Reply, CliError> {
+    context.logger.info(&format!(
+        "using the run's finished analysis ({}); the recording is not read again",
+        from.display()
+    ));
+    let report = report_export::stored::chosen(report, job);
+    let written =
+        antinomie_monitor_core::report::export::write(&report, &job.choices, &job.folder, None)
+            .map_err(|error| {
+                CliError::new(
+                    ErrorCode::Internal,
+                    format!("cannot write the report: {error}"),
+                )
+            })?;
+    let files: Vec<_> = written
+        .files
+        .iter()
+        .map(|(label, path)| json!({"format": label, "path": path}))
+        .collect();
+    let value = json!({
+        "run": run_value(saved),
+        "folder": job.folder,
+        "formats": job.choices.formats.iter().map(|format| format.label()).collect::<Vec<_>>(),
+        "parts": job.choices.parts.iter().map(|part| part_name(*part)).collect::<Vec<_>>(),
+        "defang": job.choices.defang,
+        "bundle": false,
+        "files": files,
+        "not_in_bundle": [],
+        "from_report": from,
+    });
+    let mut human = block(&[
+        ("run", saved.run.id.clone()),
+        ("folder", job.folder.display().to_string()),
+        ("from", from.display().to_string()),
+    ]);
+    human.push('\n');
+    human.push_str(&table(
+        &["FORMAT", "FILE"],
+        &written
+            .files
+            .iter()
+            .map(|(label, path)| vec![label.to_string(), path.display().to_string()])
+            .collect::<Vec<_>>(),
+    ));
     Ok(Reply::value(value).with_human(human))
 }
 
