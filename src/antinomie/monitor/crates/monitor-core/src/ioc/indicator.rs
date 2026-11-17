@@ -280,6 +280,8 @@ pub enum Via {
     Sni,
     HttpHost,
     Sample,
+    /// A download line the InetSim route's services logged.
+    Gateway,
 }
 
 impl Via {
@@ -289,6 +291,7 @@ impl Via {
             Via::Sni => "SNI",
             Via::HttpHost => "HTTP Host",
             Via::Sample => "sample string",
+            Via::Gateway => "InetSim log",
         }
     }
 }

@@ -2,7 +2,7 @@
 //! The built-in services of one gateway: the current run's options and log,
 //! the files the guest uploads (spooled to the gateway's folder until the run
 //! ends), and the FTP data ports waiting for their connection.
-use super::log::{Report, Session, Transfer, Written, MAX_ENTRIES, UPLOADS};
+use super::log::{MAX_ENTRIES, Report, Session, Transfer, UPLOADS, Written};
 use crate::{api::GuestArch, route::config::BuiltinServices};
 use sha2::{Digest, Sha256};
 use std::{
@@ -108,8 +108,10 @@ impl Services {
         state.report = Report {
             version: 1,
             run: run.into(),
-            arch: super::stand_in::program(arch)
-                .map_or_else(|| format!("ELF machine {}", arch.machine), |(_, l)| l.into()),
+            arch: super::stand_in::program(arch).map_or_else(
+                || format!("ELF machine {}", arch.machine),
+                |(_, l)| l.into(),
+            ),
             stand_ins: options.stand_ins,
             telnet_logins: match options.telnet_logins {
                 crate::route::config::TelnetLogins::Any => "any",

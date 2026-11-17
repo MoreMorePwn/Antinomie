@@ -6,7 +6,7 @@
 //! port as TFTP does.
 use super::{
     log::Transfer,
-    services::{now_ms, Services, Upload},
+    services::{Services, Upload, now_ms},
     stand_in,
 };
 use std::{
@@ -113,7 +113,13 @@ impl Server {
             return self.request(services, guest_port, ip, opcode, &payload[2..]);
         }
         let key = (ip, port);
-        let reply = |payload| Some(Reply { from: key, to_port: guest_port, payload });
+        let reply = |payload| {
+            Some(Reply {
+                from: key,
+                to_port: guest_port,
+                payload,
+            })
+        };
         let Some(active) = self.active.get_mut(&key) else {
             return None;
         };
@@ -167,7 +173,9 @@ impl Server {
         opcode: u16,
         rest: &[u8],
     ) -> Option<Reply> {
-        let mut fields = rest.split(|b| *b == 0).map(|f| String::from_utf8_lossy(f).into_owned());
+        let mut fields = rest
+            .split(|b| *b == 0)
+            .map(|f| String::from_utf8_lossy(f).into_owned());
         let name: String = fields.next()?.chars().take(512).collect();
         let _mode = fields.next()?;
         let mut options = Vec::new();
@@ -177,13 +185,25 @@ impl Server {
             }
         }
         // A repeated request from the same port is the same transfer.
-        if let Some((key, active)) = self.active.iter().find(|(k, a)| k.0 == ip && a.guest_port == guest_port && a.block <= 1) {
-            return Some(Reply { from: *key, to_port: guest_port, payload: active.last.clone() });
+        if let Some((key, active)) = self
+            .active
+            .iter()
+            .find(|(k, a)| k.0 == ip && a.guest_port == guest_port && a.block <= 1)
+        {
+            return Some(Reply {
+                from: *key,
+                to_port: guest_port,
+                payload: active.last.clone(),
+            });
         }
         let tid = self.tid(ip);
         let from = (ip, tid);
         if self.active.len() >= MAX_TRANSFERS || !matches!(opcode, RRQ | WRQ) {
-            return Some(Reply { from, to_port: guest_port, payload: error(0, "Server busy") });
+            return Some(Reply {
+                from,
+                to_port: guest_port,
+                payload: error(0, "Server busy"),
+            });
         }
         let view = services.view();
         let block_size = options
@@ -195,15 +215,25 @@ impl Server {
             let (data, served) = stand_in::serve(&name, view.arch, view.options.stand_ins);
             (data, served, None)
         } else {
-            (Vec::new(), String::new(), Some(services.upload(view.generation, &name)))
+            (
+                Vec::new(),
+                String::new(),
+                Some(services.upload(view.generation, &name)),
+            )
         };
         let mut acked = Vec::new();
         if let Some(size) = block_size {
             acked.push(("blksize".to_owned(), size.to_string()));
         }
         if options.iter().any(|(k, _)| k == "tsize") {
-            let size = if opcode == RRQ { data.len().to_string() } else {
-                options.iter().find(|(k, _)| k == "tsize").map(|(_, v)| v.clone()).unwrap_or_default()
+            let size = if opcode == RRQ {
+                data.len().to_string()
+            } else {
+                options
+                    .iter()
+                    .find(|(k, _)| k == "tsize")
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default()
             };
             acked.push(("tsize".to_owned(), size));
         }
@@ -236,7 +266,11 @@ impl Server {
         };
         let payload = active.last.clone();
         self.active.insert(from, active);
-        Some(Reply { from, to_port: guest_port, payload })
+        Some(Reply {
+            from,
+            to_port: guest_port,
+            payload,
+        })
     }
 
     /// A free transfer port on `ip`.

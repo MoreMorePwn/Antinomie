@@ -198,7 +198,11 @@ fn http(
             let (served, what) = stand_in::serve(&path, view.arch, true);
             kind = "application/octet-stream";
             if method != "HEAD" {
-                let shown = if host.is_empty() { ip.to_string() } else { host.clone() };
+                let shown = if host.is_empty() {
+                    ip.to_string()
+                } else {
+                    host.clone()
+                };
                 services.transfer(
                     view.generation,
                     log::Transfer {

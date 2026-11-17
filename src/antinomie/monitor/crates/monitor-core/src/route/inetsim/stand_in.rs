@@ -32,10 +32,9 @@ pub const FAKE_FILE: &[u8] = b"Antinomie fake file\n";
 /// The words bot downloaders name their builds after, as a whole name
 /// (`/mips`) or an extension (`mirai.mpsl`).
 const ARCH_WORDS: &[&str] = &[
-    "x86", "x86_64", "x64", "amd64", "i386", "i486", "i586", "i686", "arm", "arm4", "arm5",
-    "arm6", "arm7", "armv4l", "armv5l", "armv6l", "armv7l", "armhf", "arm64", "aarch64", "mips",
-    "mipsel", "mpsl", "mips64", "ppc", "powerpc", "ppc440", "sh4", "m68k", "spc", "sparc", "arc",
-    "riscv64",
+    "x86", "x86_64", "x64", "amd64", "i386", "i486", "i586", "i686", "arm", "arm4", "arm5", "arm6",
+    "arm7", "armv4l", "armv5l", "armv6l", "armv7l", "armhf", "arm64", "aarch64", "mips", "mipsel",
+    "mpsl", "mips64", "ppc", "powerpc", "ppc440", "sh4", "m68k", "spc", "sparc", "arc", "riscv64",
 ];
 
 /// What `name` (a URL path or a file name) gets: a program, a script or the
@@ -316,7 +315,14 @@ mod tests {
         for name in ["/bins.sh", "update.SH"] {
             assert_eq!(kind_of(name), Kind::Script, "{name}");
         }
-        for name in ["/", "/index.html", "/payload.exe", "/a.txt", "", "/api/check"] {
+        for name in [
+            "/",
+            "/index.html",
+            "/payload.exe",
+            "/a.txt",
+            "",
+            "/api/check",
+        ] {
             assert_eq!(kind_of(name), Kind::Other, "{name}");
         }
     }
@@ -334,12 +340,15 @@ mod tests {
         assert_eq!(x86.1, "x86-64");
         assert_eq!(
             crate::storage::sha256_hex(&x86.0),
-            "cf3dfc4a1a8a5fd67ed2e8c6f7d1e7e8e7d4f08d2c1d1a2d8c2c2b6f6e7a8b90"
+            "87858b6b4d11ebf4caff9c548fb26bd9da6dea051cc22b61006afb180c2793a3"
         );
         assert!(program(arch(183, 2, Endian::Little)).is_some());
         assert!(program(arch(20, 1, Endian::Big)).is_none());
         let (sha, what) = &hashes()[0];
-        assert_eq!(describe(&sha.to_uppercase()).as_deref(), Some(what.as_str()));
+        assert_eq!(
+            describe(&sha.to_uppercase()).as_deref(),
+            Some(what.as_str())
+        );
         assert!(describe("00").is_none());
     }
 
@@ -348,7 +357,10 @@ mod tests {
         let (bytes, what) = serve("/bins/x.x86", GuestArch::X86_64, true);
         assert!(bytes.starts_with(b"\x7fELF") && what.contains("program (x86-64)"));
         let (bytes, what) = serve("/bins.sh", GuestArch::X86_64, true);
-        assert_eq!((bytes.as_slice(), what.as_str()), (SCRIPT, "stand-in served by InetSim: script"));
+        assert_eq!(
+            (bytes.as_slice(), what.as_str()),
+            (SCRIPT, "stand-in served by InetSim: script")
+        );
         let (bytes, what) = serve("/bins/x.x86", GuestArch::X86_64, false);
         assert_eq!((bytes.as_slice(), what.as_str()), (FAKE_FILE, "fake file"));
         let unknown = arch(20, 1, Endian::Big);

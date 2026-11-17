@@ -108,8 +108,7 @@ impl Loop {
     pub(super) fn inetsim_udp(&mut self, ip: &frame::Ipv4<'_>, udp: &frame::Udp<'_>) -> bool {
         self.sync_generation();
         let route = self.shared.current();
-        let builtin =
-            matches!(&route.spec.egress, Egress::Sink(sink) if sink.external.is_none());
+        let builtin = matches!(&route.spec.egress, Egress::Sink(sink) if sink.external.is_none());
         if !builtin || !self.tftp.wants(ip.dst, udp.dst_port) {
             return false;
         }
@@ -120,8 +119,13 @@ impl Loop {
                 .handle(&services, udp.src_port, (ip.dst, udp.dst_port), udp.payload)
         {
             Counters::add(&self.shared.counters.down_len, reply.payload.len() as u64);
-            let datagram =
-                frame::build_udp(reply.from.0, ip.src, reply.from.1, reply.to_port, &reply.payload);
+            let datagram = frame::build_udp(
+                reply.from.0,
+                ip.src,
+                reply.from.1,
+                reply.to_port,
+                &reply.payload,
+            );
             self.frame_to_guest(reply.from.0, ip.src, frame::PROTO_UDP, &datagram);
         }
         true

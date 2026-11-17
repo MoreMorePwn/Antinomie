@@ -33,7 +33,10 @@ fn claim(rig: &Rig, config: &RouteConfig) {
 }
 
 /// Waits until the log holds what `done` looks for.
-fn wait_log(rig: &Rig, done: impl Fn(&crate::route::InetSimReport) -> bool) -> crate::route::InetSimReport {
+fn wait_log(
+    rig: &Rig,
+    done: impl Fn(&crate::route::InetSimReport) -> bool,
+) -> crate::route::InetSimReport {
     let deadline = Instant::now() + WAIT;
     loop {
         let report = rig.gateway.inetsim_report();
@@ -60,7 +63,10 @@ fn a_telnet_device_takes_a_login_answers_the_probe_and_logs_the_loader() {
         &mut rig.guest,
         b"enable\r\nsystem\r\nshell\r\nsh\r\n/bin/busybox ECCHI\r\n",
     );
-    assert!(read_until(&mut tcp, &mut rig.guest, "ECCHI: applet not found", WAIT).contains("ECCHI: applet not found"));
+    assert!(
+        read_until(&mut tcp, &mut rig.guest, "ECCHI: applet not found", WAIT)
+            .contains("ECCHI: applet not found")
+    );
     tcp.send_all(&mut rig.guest, b"cat /proc/cpuinfo; uname -m\r\n");
     assert!(read_until(&mut tcp, &mut rig.guest, "x86_64", WAIT).contains("GenuineIntel"));
     tcp.send_all(
@@ -72,18 +78,35 @@ fn a_telnet_device_takes_a_login_answers_the_probe_and_logs_the_loader() {
     tcp.send_all(&mut rig.guest, b"exit\r\n");
     tcp.read_to_end(&mut rig.guest, WAIT);
     assert!(tcp.fin);
-    let report = wait_log(&rig, |r| r.sessions.first().is_some_and(|s| !s.ended.is_empty()));
+    let report = wait_log(&rig, |r| {
+        r.sessions.first().is_some_and(|s| !s.ended.is_empty())
+    });
     let session = &report.sessions[0];
     assert_eq!(session.service, "telnet");
     assert_eq!(session.endpoint, "203.0.113.7:23");
     assert_eq!(session.logins.len(), 1);
-    assert_eq!((session.logins[0].user.as_str(), session.logins[0].password.as_str()), ("root", "anything"));
+    assert_eq!(
+        (
+            session.logins[0].user.as_str(),
+            session.logins[0].password.as_str()
+        ),
+        ("root", "anything")
+    );
     assert!(session.lines.iter().any(|l| l.text == "/bin/busybox ECCHI"));
     assert_eq!(session.downloads.len(), 2);
-    assert_eq!(session.downloads[0].url, "http://198.51.100.9/bins/sora.x86");
-    assert_eq!(session.downloads[0].served, "stand-in served by InetSim: program (x86-64)");
+    assert_eq!(
+        session.downloads[0].url,
+        "http://198.51.100.9/bins/sora.x86"
+    );
+    assert_eq!(
+        session.downloads[0].served,
+        "stand-in served by InetSim: program (x86-64)"
+    );
     assert_eq!(session.downloads[1].url, "tftp://198.51.100.10/t.arm");
-    assert_eq!(session.executed, vec!["./s telnet.x86 (stand-in served by InetSim: program (x86-64))".to_owned()]);
+    assert_eq!(
+        session.executed,
+        vec!["./s telnet.x86 (stand-in served by InetSim: program (x86-64))".to_owned()]
+    );
     assert_eq!(session.written.len(), 1);
     assert_eq!(session.written[0].size, 4);
     assert_eq!(session.ended, "logged out");
@@ -109,7 +132,9 @@ fn default_logins_refuse_others_and_limits_hang_up() {
     let (mut tcp, _) = Tcp::open(&mut rig.guest, target, 2323, WAIT);
     read_until(&mut tcp, &mut rig.guest, "login: ", WAIT);
     tcp.send_all(&mut rig.guest, b"admin\r\nwrong\r\n");
-    assert!(read_until(&mut tcp, &mut rig.guest, "Login incorrect", WAIT).contains("Login incorrect"));
+    assert!(
+        read_until(&mut tcp, &mut rig.guest, "Login incorrect", WAIT).contains("Login incorrect")
+    );
     tcp.send_all(&mut rig.guest, b"root\r\nxc3511\r\n");
     assert!(read_until(&mut tcp, &mut rig.guest, "# ", WAIT).contains("BusyBox"));
     // Over the byte limit the session is hung up.
@@ -124,18 +149,26 @@ fn default_logins_refuse_others_and_limits_hang_up() {
     assert_eq!(state, Connect::Open);
     let text = String::from_utf8_lossy(&third.read_to_end(&mut rig.guest, WAIT)).into_owned();
     assert!(!text.contains("login"), "{text}");
-    let report = wait_log(&rig, |r| r.sessions_refused == 1 && r.sessions[0].ended == "byte limit");
+    let report = wait_log(&rig, |r| {
+        r.sessions_refused == 1 && r.sessions[0].ended == "byte limit"
+    });
     assert_eq!(report.sessions_refused, 1);
     assert_eq!(report.telnet_logins, "defaults");
     let logins = &report.sessions[0].logins;
-    assert_eq!(logins.iter().map(|l| l.accepted).collect::<Vec<_>>(), vec![false, true]);
+    assert_eq!(
+        logins.iter().map(|l| l.accepted).collect::<Vec<_>>(),
+        vec![false, true]
+    );
     assert_eq!(report.sessions[0].ended, "byte limit");
 }
 
 /// The address and port of a `227 Entering Passive Mode (a,b,c,d,p1,p2)` reply.
 fn passive_port(reply: &str) -> u16 {
     let inside = reply.rsplit('(').next().unwrap().split(')').next().unwrap();
-    let parts: Vec<u16> = inside.split(',').map(|p| p.trim().parse().unwrap()).collect();
+    let parts: Vec<u16> = inside
+        .split(',')
+        .map(|p| p.trim().parse().unwrap())
+        .collect();
     parts[4] * 256 + parts[5]
 }
 
@@ -146,7 +179,10 @@ fn ftp_serves_a_stand_in_and_keeps_an_upload() {
     let server = Ipv4Addr::new(198, 51, 100, 21);
     let (mut control, _) = Tcp::open(&mut rig.guest, server, 21, WAIT);
     read_until(&mut control, &mut rig.guest, "220 ", WAIT);
-    control.send_all(&mut rig.guest, b"USER anonymous\r\nPASS bot@\r\nTYPE I\r\nPASV\r\n");
+    control.send_all(
+        &mut rig.guest,
+        b"USER anonymous\r\nPASS bot@\r\nTYPE I\r\nPASV\r\n",
+    );
     let text = read_until(&mut control, &mut rig.guest, "227 ", WAIT);
     let port = passive_port(text.lines().find(|l| l.starts_with("227")).unwrap());
     let (mut data, state) = Tcp::open(&mut rig.guest, server, port, WAIT);
@@ -159,7 +195,15 @@ fn ftp_serves_a_stand_in_and_keeps_an_upload() {
     control.received.clear();
     control.send_all(&mut rig.guest, b"EPSV\r\n");
     let text = read_until(&mut control, &mut rig.guest, "229 ", WAIT);
-    let port: u16 = text.split("|||").nth(1).unwrap().split('|').next().unwrap().parse().unwrap();
+    let port: u16 = text
+        .split("|||")
+        .nth(1)
+        .unwrap()
+        .split('|')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
     let (mut data, _) = Tcp::open(&mut rig.guest, server, port, WAIT);
     control.received.clear();
     control.send_all(&mut rig.guest, b"STOR loot.txt\r\n");
@@ -172,13 +216,22 @@ fn ftp_serves_a_stand_in_and_keeps_an_upload() {
     assert_eq!(report.sessions[0].service, "ftp");
     assert_eq!(report.sessions[0].logins[0].user, "anonymous");
     let download = &report.transfers[0];
-    assert_eq!((download.direction.as_str(), download.url.as_str()), ("download", "ftp://198.51.100.21/pub/bot.mips"));
-    assert_eq!(download.served, "stand-in served by InetSim: program (x86-64)");
+    assert_eq!(
+        (download.direction.as_str(), download.url.as_str()),
+        ("download", "ftp://198.51.100.21/pub/bot.mips")
+    );
+    assert_eq!(
+        download.served,
+        "stand-in served by InetSim: program (x86-64)"
+    );
     let upload = &report.transfers[1];
     assert_eq!((upload.direction.as_str(), upload.size), ("upload", 12));
     let dir = scratch("inetsim-ftp-report");
     rig.gateway.write_inetsim_report(&dir).unwrap();
-    assert_eq!(std::fs::read(dir.join(&upload.artifact)).unwrap(), b"stolen bytes");
+    assert_eq!(
+        std::fs::read(dir.join(&upload.artifact)).unwrap(),
+        b"stolen bytes"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -189,7 +242,8 @@ fn recv_to(guest: &mut Guest, port: u16, wait: Duration) -> Option<(u16, Vec<u8>
         let Some(eth) = frame::parse_eth(&bytes).filter(|e| e.ethertype == ETHERTYPE_IPV4) else {
             continue;
         };
-        let Some(ip) = frame::parse_ipv4(eth.payload).filter(|ip| ip.protocol == frame::PROTO_UDP) else {
+        let Some(ip) = frame::parse_ipv4(eth.payload).filter(|ip| ip.protocol == frame::PROTO_UDP)
+        else {
             continue;
         };
         if let Some(udp) = frame::parse_udp(ip.payload).filter(|u| u.dst_port == port) {
@@ -205,24 +259,40 @@ fn tftp_reads_a_stand_in_and_writes_an_upload() {
     claim(&rig, &RouteConfig::default());
     let server = Ipv4Addr::new(198, 51, 100, 69);
     // Read: RRQ, DATA 1 (short: the whole file), ACK 1.
-    rig.guest.send_udp(server, 40_001, 69, b"\x00\x01t.arm7\x00octet\x00");
+    rig.guest
+        .send_udp(server, 40_001, 69, b"\x00\x01t.arm7\x00octet\x00");
     let (tid, data) = recv_to(&mut rig.guest, 40_001, WAIT).expect("DATA 1");
     assert_eq!(&data[..4], &[0, 3, 0, 1]);
     assert!(data[4..].starts_with(b"\x7fELF"));
     rig.guest.send_udp(server, 40_001, tid, &[0, 4, 0, 1]);
     // Write with blksize: OACK, DATA 1 (full), DATA 2 (short).
-    rig.guest.send_udp(server, 40_002, 69, b"\x00\x02up.bin\x00octet\x00blksize\x0016\x00");
+    rig.guest.send_udp(
+        server,
+        40_002,
+        69,
+        b"\x00\x02up.bin\x00octet\x00blksize\x0016\x00",
+    );
     let (tid, oack) = recv_to(&mut rig.guest, 40_002, WAIT).expect("OACK");
     assert_eq!(oack, b"\x00\x06blksize\x0016\x00");
     let mut block = vec![0, 3, 0, 1];
     block.extend_from_slice(&[b'x'; 16]);
     rig.guest.send_udp(server, 40_002, tid, &block);
-    assert_eq!(recv_to(&mut rig.guest, 40_002, WAIT).unwrap().1, vec![0, 4, 0, 1]);
-    rig.guest.send_udp(server, 40_002, tid, b"\x00\x03\x00\x02end");
-    assert_eq!(recv_to(&mut rig.guest, 40_002, WAIT).unwrap().1, vec![0, 4, 0, 2]);
+    assert_eq!(
+        recv_to(&mut rig.guest, 40_002, WAIT).unwrap().1,
+        vec![0, 4, 0, 1]
+    );
+    rig.guest
+        .send_udp(server, 40_002, tid, b"\x00\x03\x00\x02end");
+    assert_eq!(
+        recv_to(&mut rig.guest, 40_002, WAIT).unwrap().1,
+        vec![0, 4, 0, 2]
+    );
     let report = wait_log(&rig, |r| r.transfers.len() == 2);
     let (read, write) = (&report.transfers[0], &report.transfers[1]);
-    assert_eq!((read.protocol.as_str(), read.direction.as_str()), ("tftp", "download"));
+    assert_eq!(
+        (read.protocol.as_str(), read.direction.as_str()),
+        ("tftp", "download")
+    );
     assert_eq!(read.url, "tftp://198.51.100.69/t.arm7");
     assert!(read.served.contains("program (x86-64)"));
     assert_eq!((write.direction.as_str(), write.size), ("upload", 19));
@@ -245,10 +315,16 @@ fn http_serves_stand_ins_and_the_switch_turns_them_off() {
         let text = String::from_utf8_lossy(&reply).into_owned();
         let report = rig.gateway.inetsim_report();
         if stand_ins {
-            assert!(text.contains("#!/bin/sh\nexit 0\n") && text.contains("\x7fELF"), "{text}");
+            assert!(
+                text.contains("#!/bin/sh\nexit 0\n") && text.contains("\x7fELF"),
+                "{text}"
+            );
             assert_eq!(report.transfers.len(), 2);
             assert_eq!(report.transfers[1].url, "http://cnc.example/bins/x.x86");
-            assert_eq!(report.transfers[0].served, "stand-in served by InetSim: script");
+            assert_eq!(
+                report.transfers[0].served,
+                "stand-in served by InetSim: script"
+            );
         } else {
             assert_eq!(text.matches("Antinomie fake file").count(), 2, "{text}");
             assert!(report.transfers.is_empty());

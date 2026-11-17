@@ -53,6 +53,7 @@ pub use self::{
     gateway::{Claimed, Gateway, GatewayNet},
     helpers::reap_stale_helpers,
     inetsim::{
+        log as inetsim_log,
         log::{
             REPORT as INETSIM_REPORT, Report as InetSimReport, UPLOADS as INETSIM_UPLOADS,
             read_report as read_inetsim_report,

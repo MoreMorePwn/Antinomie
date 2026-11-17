@@ -4,15 +4,15 @@
 //! is kept for the run. The data connection is the guest's own connection to
 //! the port PASV named, which the gateway hands to this session.
 use super::{
-    log::{printable, Line, Login, Transfer, MAX_LINES},
-    services::{now_ms, Services},
+    log::{Line, Login, MAX_LINES, Transfer, printable},
+    services::{Services, now_ms},
     stand_in,
 };
 use std::{
     io::{BufRead, BufReader, Read, Write},
     net::Ipv4Addr,
     os::unix::net::UnixStream,
-    sync::{mpsc::Receiver, Arc},
+    sync::{Arc, mpsc::Receiver},
     time::{Duration, Instant},
 };
 
@@ -63,7 +63,10 @@ pub(super) fn serve(services: Arc<Services>, stream: UnixStream, ip: Ipv4Addr, p
             if verb != "PASS" {
                 services.update(id, |s| {
                     if s.lines.len() < MAX_LINES {
-                        s.lines.push(Line { ms, text: text.clone() });
+                        s.lines.push(Line {
+                            ms,
+                            text: text.clone(),
+                        });
                     } else {
                         s.lines_omitted += 1;
                     }
@@ -107,7 +110,12 @@ pub(super) fn serve(services: Arc<Services>, stream: UnixStream, ip: Ipv4Addr, p
                     if verb == "PASV" {
                         format!(
                             "227 Entering Passive Mode ({},{},{},{},{},{}).\r\n",
-                            o[0], o[1], o[2], o[3], port >> 8, port & 0xff
+                            o[0],
+                            o[1],
+                            o[2],
+                            o[3],
+                            port >> 8,
+                            port & 0xff
                         )
                     } else {
                         format!("229 Entering Extended Passive Mode (|||{port}|)\r\n")
@@ -138,7 +146,8 @@ pub(super) fn serve(services: Arc<Services>, stream: UnixStream, ip: Ipv4Addr, p
                     };
                     match verb.as_str() {
                         "RETR" => {
-                            let (body, served) = stand_in::serve(&arg, view.arch, view.options.stand_ins);
+                            let (body, served) =
+                                stand_in::serve(&arg, view.arch, view.options.stand_ins);
                             let _ = writer.write_all(
                                 format!(
                                     "150 Opening BINARY mode data connection for {arg} ({} bytes).\r\n",

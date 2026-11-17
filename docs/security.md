@@ -152,6 +152,14 @@ findings. To the gateway a canary is only bytes: on **Internet**, **Tor**,
 on **InetSim** it reaches the fake services. Other network modes get no
 metadata service, and the app lists it as a setting not applied.
 
+The built-in InetSim services (0.9.0) also play fake telnet devices, an FTP and
+a TFTP server. They answer inside Antinomie and dial nothing: a bot that logs
+in and types a loader reaches nobody, and a "download" is answered by
+Antinomie's own harmless stand-in (a program that only exits, or a script that
+does nothing), never by fetching the URL. The URLs the bot typed are kept in
+the run as indicators; uploaded files are kept in the run's folder like
+written files.
+
 Traffic a sample sends over Internet, Tor, VPN, SOCKS5 or NAT leaves under
 your connection, your Tor exit or your provider's, and may reach third parties:
 command-and-control servers, scan targets, spam recipients. You are responsible

