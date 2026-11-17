@@ -23,11 +23,16 @@ pub fn opening_and_turning_off_the_watchdog_is_high() {
         .map(|row| text(row, "finding.summary"))
         .collect();
     assert!(
-        summaries.iter().any(|text| text.contains("WDIOC_SETOPTIONS")),
+        summaries
+            .iter()
+            .any(|text| text.contains("WDIOC_SETOPTIONS")),
         "{summaries:?}"
     );
     assert_eq!(
-        list(rows(&out, "evasion.watchdog_disable")[0], "finding.technique"),
+        list(
+            rows(&out, "evasion.watchdog_disable")[0],
+            "finding.technique"
+        ),
         ["T1490", "DET0329"]
     );
     // The other device names, a new timeout and the magic close.
@@ -106,9 +111,15 @@ pub fn killing_a_service_and_binding_its_port_is_a_takeover() {
         Some("high")
     );
     let summary = text(rows(&out, "impact.service_takeover")[0], "finding.summary");
-    assert!(summary.contains("23") && summary.contains("412"), "{summary}");
+    assert!(
+        summary.contains("23") && summary.contains("412"),
+        "{summary}"
+    );
     assert_eq!(
-        list(rows(&out, "impact.service_takeover")[0], "finding.technique"),
+        list(
+            rows(&out, "impact.service_takeover")[0],
+            "finding.technique"
+        ),
         ["T1489", "DET0021"]
     );
     // A camera maker's vendor port counts too, and so does another task of the run.
@@ -174,7 +185,12 @@ pub fn adding_a_firewall_rule_or_replacing_a_table_is_a_firewall_change() {
             "{script}"
         );
     }
-    for script in ["iptables -L -n", "iptables -S", "nft list ruleset", "ufw status"] {
+    for script in [
+        "iptables -L -n",
+        "iptables -S",
+        "nft list ruleset",
+        "ufw status",
+    ] {
         assert!(
             !has(&run(vec![shell(1, script)]), "evasion.firewall_modify"),
             "{script}"

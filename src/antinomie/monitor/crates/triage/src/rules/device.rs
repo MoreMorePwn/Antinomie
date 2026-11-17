@@ -33,15 +33,20 @@ const SET_REPLACE: u64 = 64;
 
 pub fn is_watchdog(path: &str) -> bool {
     path == "/dev/misc/watchdog"
-        || path.strip_prefix("/dev/watchdog").is_some_and(|rest| {
-            rest.is_empty() || rest.bytes().all(|byte| byte.is_ascii_digit())
-        })
+        || path
+            .strip_prefix("/dev/watchdog")
+            .is_some_and(|rest| rest.is_empty() || rest.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     match cx.name {
         "open" | "openat" | "openat2" if cx.ok && cx.opens_for_write() => {
-            if let Some(path) = cx.touches().iter().map(|touch| touch.path.as_str()).find(|path| is_watchdog(path)) {
+            if let Some(path) = cx
+                .touches()
+                .iter()
+                .map(|touch| touch.path.as_str())
+                .find(|path| is_watchdog(path))
+            {
                 out.push(
                     Hit::new(
                         "evasion.watchdog_disable",
@@ -66,7 +71,11 @@ pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         }
         "bind" => takeover(cx, st, out),
         "setsockopt" if cx.ok && matches!(cx.args[1], 0 | 41) && cx.args[2] == SET_REPLACE => {
-            let family = if cx.args[1] == 0 { "iptables" } else { "ip6tables" };
+            let family = if cx.args[1] == 0 {
+                "iptables"
+            } else {
+                "ip6tables"
+            };
             out.push(Hit::new(
                 "evasion.firewall_modify",
                 family,
@@ -81,7 +90,9 @@ fn watchdog_ioctl(cx: &Ctx, out: &mut Vec<Hit>) {
     let Some(path) = cx.fd_path(cx.args[0]).filter(|path| is_watchdog(path)) else {
         return;
     };
-    let Some((_, name)) = WATCHDOG_IOCTLS.iter().find(|(request, _)| *request == cx.args[1])
+    let Some((_, name)) = WATCHDOG_IOCTLS
+        .iter()
+        .find(|(request, _)| *request == cx.args[1])
     else {
         return;
     };
@@ -115,8 +126,7 @@ fn takeover(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     let stream = cx
         .socket(cx.args[0])
         .is_some_and(|socket| !socket.is_datagram());
-    if !stream || port == 0 || ip.is_loopback() || !(port < 1024 || SERVICE_PORTS.contains(&port))
-    {
+    if !stream || port == 0 || ip.is_loopback() || !(port < 1024 || SERVICE_PORTS.contains(&port)) {
         return;
     }
     let now = cx.time();
