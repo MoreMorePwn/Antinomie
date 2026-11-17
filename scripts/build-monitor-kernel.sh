@@ -3,7 +3,7 @@
 #
 # build-monitor-kernel.sh — build the patched guest kernel for one profile.
 #
-#   usage: scripts/build-monitor-kernel.sh [minimal|stock]
+#   usage: scripts/build-monitor-kernel.sh [minimal|extra|stock]
 #
 # Environment: ANTINOMIE_SOURCE_TREE, ANTINOMIE_BUILD_TREE, ANTINOMIE_DEBIAN_CONFIG
 # and ANTINOMIE_SERIES_DIR replace the repository work-tree defaults.
@@ -26,6 +26,11 @@
 #   built in, with DWARF debug information in vmlinux; output in
 #   work/monitor-build (work/monitor-build-arm64 for arm64). Used by the
 #   BusyBox base.
+# extra: the minimal profile plus src/antinomie/packaging/kconfig/busybox-extra.cfg
+#   (a watchdog device, flash, iptables with NAT), the same for every
+#   architecture; output in work/monitor-build-extra (-extra-arm64). Used by
+#   the BusyBox camera base (busybox-extra). Its kernel is also checked with
+#   scripts/check-kernel-abi.py (the recorder out of the function tracer).
 # stock: the pinned Debian configuration of the architecture (debian/config/config,
 #   then kernelarch-x86/config and amd64/config, or arm64/config) with nothing changed but the
 #   recorder (and the embedded configuration the image builders read): Debian's
@@ -66,8 +71,9 @@ case "$arch" in
 esac
 case "$profile" in
     minimal) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build$tree_suffix"} ;;
+    extra) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build-extra$tree_suffix"} ;;
     stock) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build-stock$tree_suffix"} ;;
-    *) echo "usage: $0 [minimal|stock]" >&2; exit 2 ;;
+    *) echo "usage: $0 [minimal|extra|stock]" >&2; exit 2 ;;
 esac
 # Both profiles compile with Debian 13's own compiler where the host has it
 # (Debian's kernel build names x86_64-linux-gnu-gcc-14, as /proc/version then
@@ -255,7 +261,19 @@ check_banner() {
     fi
 }
 
-if [[ $profile == minimal ]]; then
+# The extra profile's own symbols (busybox-extra.cfg): NAME, !NAME, NAME=VALUE.
+extra_on="" extra_off="" extra_values=""
+if [[ $profile == extra ]]; then
+    for word in $(sed -e 's/#.*//' "$repo/src/antinomie/packaging/kconfig/busybox-extra.cfg"); do
+        case $word in
+            !*) extra_off+=" ${word#!}" ;;
+            *=*) extra_values+=" $word" ;;
+            *) extra_on+=" $word" ;;
+        esac
+    done
+fi
+
+if [[ $profile == minimal || $profile == extra ]]; then
     if [[ ! -f "$build_tree/.config" ]]; then
         make -C "$source_tree" "${target[@]}" O="$build_tree" "$defconfig"
     fi
@@ -278,11 +296,14 @@ if [[ $profile == minimal ]]; then
         INPUT INPUT_EVDEV INPUT_KEYBOARD INPUT_MOUSE \
         VIRTIO_INPUT HID HID_GENERIC USB_SUPPORT USB \
         USB_XHCI_HCD USB_XHCI_PCI USB_HID RTC_CLASS $arch_symbols $DISK_BUSES \
-        $DEBIAN_PARITY $MINIMAL_EXTRA $DEBIAN_SHAPE; do
+        $DEBIAN_PARITY $MINIMAL_EXTRA $DEBIAN_SHAPE $extra_on; do
         "$config" --file "$build_tree/.config" --enable "$symbol"
     done
-    for symbol in IKCONFIG_PROC $DEBIAN_SHAPE_OFF $arch_off; do
+    for symbol in IKCONFIG_PROC $DEBIAN_SHAPE_OFF $arch_off $extra_off; do
         "$config" --file "$build_tree/.config" --disable "$symbol"
+    done
+    for value in $extra_values; do
+        "$config" --file "$build_tree/.config" --set-val "${value%%=*}" "${value#*=}"
     done
     "$config" --file "$build_tree/.config" --set-str LSM "$DEBIAN_LSM"
     # x86's MAXSMP sets its 8192; arm64 names Debian's count itself.
@@ -308,7 +329,15 @@ if [[ $profile == minimal ]]; then
     make -C "$source_tree" "${target[@]}" O="$build_tree" "${compiler[@]}" "$resolve"
     # shellcheck disable=SC2086
     require_symbols ANTINOMIE IKCONFIG DEBUG_INFO $DISK_BUSES $DEBIAN_PARITY $MINIMAL_EXTRA \
-        $DEBIAN_SHAPE
+        $DEBIAN_SHAPE $extra_on
+    for value in $extra_values; do
+        grep -qx "CONFIG_$value" "$build_tree/.config" ||
+            { echo "required CONFIG_$value did not survive $resolve" >&2; exit 1; }
+    done
+    for symbol in $extra_off; do
+        ! grep -qx "CONFIG_$symbol=[ym]" "$build_tree/.config" ||
+            { echo "CONFIG_$symbol must stay off" >&2; exit 1; }
+    done
     require_symbols DEBUG_INFO_BTF DEBUG_INFO_BTF_MODULES ||
         { echo "DEBUG_INFO_BTF takes pahole 1.21 or newer (package dwarves)" >&2; exit 1; }
     grep -qx 'CONFIG_HZ=250' "$build_tree/.config" && grep -qx "CONFIG_NR_CPUS=$nr_cpus" "$build_tree/.config" &&
@@ -337,6 +366,12 @@ if [[ $profile == minimal ]]; then
     # The guest reads this BTF: nothing of the recorder may be in it.
     python3 "$repo/scripts/check-kernel-btf.py" --vmlinux "$build_tree/vmlinux" \
         --system-map "$build_tree/System.map" --modules "$build_tree/modules-install"
+    # The camera base's kernel builds more drivers in: none of the recorder's
+    # functions may be traceable or share a stock function's name.
+    if [[ $profile == extra ]]; then
+        python3 "$repo/scripts/check-kernel-abi.py" --vmlinux "$build_tree/vmlinux" \
+            --system-map "$build_tree/System.map"
+    fi
     # The banner /proc/version shows.
     check_banner
     echo "$build_tree/$image_path"
