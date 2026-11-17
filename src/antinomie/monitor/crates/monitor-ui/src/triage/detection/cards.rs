@@ -776,6 +776,9 @@ mod tests {
         }
         assert!(y.contains_key("Sort by"), "{:?}", y.keys());
         assert!(y.contains_key("Hit count"), "{:?}", y.keys());
+        for title in ["Zeta loader", "Mid runner", "alpha injector"] {
+            assert!(y.contains_key(title), "{title} not drawn: {:?}", y.keys());
+        }
         assert!(y["Zeta loader"] < y["Mid runner"]);
         assert!(y["Mid runner"] < y["alpha injector"]);
     }

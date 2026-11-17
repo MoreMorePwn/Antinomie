@@ -542,7 +542,8 @@ fn tag_library_writes_the_label_and_the_policy_onto_the_sample_and_is_off_by_def
 }
 
 #[test]
-fn a_digest_detection_with_a_high_yara_severity_makes_the_job_malicious() {
+fn a_high_yara_severity_without_a_family_makes_the_job_suspicious_not_malicious() {
+    // A rule's own severity alone is at most suspicious (eval A50).
     let w = world("host-yara");
     let job = collected(&w, 1);
     antinomie_monitor_core::run_digest::RunDigest::update(&run_dir(&w), |digest| {
@@ -559,7 +560,7 @@ fn a_digest_detection_with_a_high_yara_severity_makes_the_job_malicious() {
     let mut waiter = w.engine(|_| {});
     let done = finished(host(&w, &mut waiter, &job));
     let a = done.assessment.unwrap();
-    assert_eq!(a.label, Some(Label::Malicious), "{}", a.basis);
+    assert_eq!(a.label, Some(Label::Suspicious), "{}", a.basis);
     assert!(a.basis.contains("fixture_rule"), "{}", a.basis);
     assert_eq!(a.detections.len(), 1);
     // Triage kept the digest's detection when no engine ran.
