@@ -135,8 +135,8 @@ The **Base images** section in the left sidebar lists installed bases. Use
 - **Download base…**: fetch a published, checksum-verified base.
 - **Import base…**: install a bundle folder you already have.
 - **Build base…**: build one with the app's own build kit. Choose **BusyBox**,
-  **BusyBox camera (DVR services)** (see *The BusyBox camera base* below),
-  **Debian 13 (minimal, console)** or **Debian 13 (desktop)**. A BusyBox base has
+  **Debian 13 (minimal, console)**, **Debian 13 (desktop)** or **BusyBox camera
+  (DVR services)** (see *The BusyBox camera base* below). A BusyBox base has
   BusyBox and glibc's runtime (its loader and libraries in `/lib`, from Debian
   13's `libc6`), so programs linked against glibc start too; an older BusyBox base has
   none (its `bundle.json` lists no `program_interpreters`). No base ships uClibc, musl or Android's bionic:
