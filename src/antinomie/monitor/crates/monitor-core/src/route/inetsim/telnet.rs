@@ -384,14 +384,14 @@ impl Shell<'_> {
             }
             "cp" | "mv" => {
                 let paths: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with('-')).collect();
-                if let [from, to] = paths[..] {
-                    if let Some(file) = self.files.get(&file_name(from)) {
-                        let (bytes, served) = (file.bytes.clone(), file.served.clone());
-                        if name == "mv" {
-                            self.files.remove(&file_name(from));
-                        }
-                        self.store(to, bytes, served, false);
+                if let [from, to] = paths[..]
+                    && let Some(file) = self.files.get(&file_name(from))
+                {
+                    let (bytes, served) = (file.bytes.clone(), file.served.clone());
+                    if name == "mv" {
+                        self.files.remove(&file_name(from));
                     }
+                    self.store(to, bytes, served, false);
                 }
             }
             "echo" => self.echo(&args, command.output),

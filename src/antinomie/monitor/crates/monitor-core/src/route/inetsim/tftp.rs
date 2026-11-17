@@ -120,9 +120,7 @@ impl Server {
                 payload,
             })
         };
-        let Some(active) = self.active.get_mut(&key) else {
-            return None;
-        };
+        let active = self.active.get_mut(&key)?;
         if active.guest_port != guest_port {
             return reply(error(5, "Unknown transfer ID"));
         }
