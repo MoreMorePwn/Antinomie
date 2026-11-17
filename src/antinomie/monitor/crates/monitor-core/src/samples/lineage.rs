@@ -239,7 +239,7 @@ pub fn build(
     let mut raw = Raw::default();
     // Paths ever written in any run: a program that was written is not a
     // base-image binary.
-    let mut written: BTreeSet<&str> = BTreeSet::new();
+    let mut written: BTreeSet<std::borrow::Cow<'_, str>> = BTreeSet::new();
     for run in runs {
         for file in run.lineage.iter().flat_map(|lineage| &lineage.files) {
             if file
@@ -247,7 +247,7 @@ pub fn build(
                 .iter()
                 .any(|role| matches!(role.as_str(), "created" | "written at close" | "changed"))
             {
-                written.insert(file.path.as_str());
+                written.insert(crate::path_key::path_key(&file.path));
             }
         }
     }
@@ -261,7 +261,10 @@ pub fn build(
                 name: found.name,
                 verdict: found.verdict,
             }
-        } else if system_path(path) && !written.contains(path) && options.system.contains(sha) {
+        } else if system_path(path)
+            && !written.contains(crate::path_key::path_key(path).as_ref())
+            && options.system.contains(sha)
+        {
             NodeKind::System
         } else {
             NodeKind::Captured

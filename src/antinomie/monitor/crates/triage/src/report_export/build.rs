@@ -542,7 +542,10 @@ fn findings(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockA
 fn written_paths(scan: &ArchiveScan) -> BTreeSet<String> {
     scan.changed
         .iter()
-        .filter_map(|row| row.get(1).map(|cell| cell.text.clone()))
+        .filter_map(|row| {
+            row.get(1)
+                .map(|cell| antinomie_monitor_core::path_key::path_key(&cell.text).into_owned())
+        })
         .collect()
 }
 
@@ -565,9 +568,9 @@ pub fn transferred(table: &mut Table, include_content: bool, written: &BTreeSet<
         "Transferred".into()
     };
     for row in &mut table.rows {
-        let own = path
-            .and_then(|path| row.get(path))
-            .is_some_and(|path| written.contains(path));
+        let own = path.and_then(|path| row.get(path)).is_some_and(|path| {
+            written.contains(antinomie_monitor_core::path_key::path_key(path).as_ref())
+        });
         let Some(cell) = row.get_mut(at) else {
             continue;
         };

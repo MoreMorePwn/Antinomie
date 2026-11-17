@@ -640,7 +640,12 @@ fn replaces(st: &State, touch: &Touch) -> bool {
         SYSTEM_PROGRAMS.contains(&name) || (name.starts_with("lib") && name.contains(".so"));
     match touch.op {
         Op::Created => well_known,
-        _ => well_known || !st.created.contains(path),
+        _ => {
+            well_known
+                || !st
+                    .created
+                    .contains(antinomie_monitor_core::path_key::path_key(path).as_ref())
+        }
     }
 }
 
@@ -827,7 +832,7 @@ pub fn removed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
     }
     if cx.ok
         && touch.op == Op::Deleted
-        && !st.written.contains(path)
+        && !st.has_written(path)
         && under(
             path,
             &[
@@ -1005,7 +1010,7 @@ pub fn xattr(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) {
 
 /// An executable mapping of a file the run wrote.
 pub fn mapped(cx: &Ctx, st: &State, touch: &Touch, out: &mut Vec<Hit>) {
-    if cx.args[2] & 4 != 0 && cx.name == "mmap" && st.written.contains(&touch.path) {
+    if cx.args[2] & 4 != 0 && cx.name == "mmap" && st.has_written(&touch.path) {
         out.push(Hit::new(
             "execution.dropped_library",
             &touch.path,

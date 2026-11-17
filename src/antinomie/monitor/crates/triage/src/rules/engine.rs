@@ -551,7 +551,7 @@ pub fn scope(aggs: &mut [Agg], state: &State, files: &FdState) {
         let caused = agg
             .image
             .as_deref()
-            .is_some_and(|image| state.written.contains(image));
+            .is_some_and(|image| state.has_written(image));
         if !(seen_created || started_by_exec || caused) {
             agg.flags |= flag::OUTSIDE;
         }
