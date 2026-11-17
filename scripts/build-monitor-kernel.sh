@@ -257,7 +257,10 @@ check_banner() {
 
 if [[ $profile == minimal ]]; then
     if [[ ! -f "$build_tree/.config" ]]; then
-        make -C "$source_tree" "${target[@]}" O="$build_tree" "$defconfig"
+        # With the build's own compiler: the builder container has Debian 13's
+        # versioned cross compiler (aarch64-linux-gnu-gcc-14) and no unversioned
+        # name, which the defconfig run would otherwise look for.
+        make -C "$source_tree" "${target[@]}" O="$build_tree" "${compiler[@]}" "$defconfig"
     fi
     # The architecture's own devices (consoles, keyboard, RTC, display), and
     # the symbols it turns off (written !NAME).
