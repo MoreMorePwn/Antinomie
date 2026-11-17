@@ -430,7 +430,7 @@
             "string",
             "null"
           ],
-          "description": "`x86_64`, `AArch64`, ...; null when none."
+          "description": "`x86_64`, `arm64`, ... (`crate::arch`); null when none."
         },
         "name": {
           "type": "string"
@@ -2548,7 +2548,7 @@
             "string",
             "null"
           ],
-          "description": "`x86_64`, `AArch64`, ...; null when none."
+          "description": "`x86_64`, `arm64`, ... (`crate::arch`); null when none."
         },
         "name": {
           "type": "string"
