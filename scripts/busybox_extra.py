@@ -294,11 +294,12 @@ mount -t jffs2 /dev/mtdblock{len(flash['partitions']) - 1} {SETTINGS_MOUNT} 2>/d
          "udhcpc -i eth0 -s /etc/udhcpc/default.script -n -t 5 -T 1 -p /run/udhcpc.eth0.pid",
          replace=True)
     edit(rcs, "echo 'BusyBox guest ready'\n", f"""# The device's services, as its firmware's start script runs them; the DHCP
-# client above keeps its lease.
+# client above keeps its lease. telnetd on IPv4, as on the devices (a bot
+# finds its port in /proc/net/tcp).
 syslogd
 klogd
 crond
-telnetd
+telnetd -b 0.0.0.0
 setsid {device['program']} </dev/null >/dev/null 2>&1 &
 """)
     source = CAMERA_SOURCE.relative_to(REPO).as_posix()

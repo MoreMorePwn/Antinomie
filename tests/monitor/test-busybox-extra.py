@@ -146,7 +146,7 @@ class CameraTreeTests(unittest.TestCase):
     def test_the_services_start_from_the_start_script_after_the_network(self):
         root, _, additions = self.camera_tree()
         rcs = (root / "etc/init.d/rcS").read_text()
-        services = rcs.index("syslogd\nklogd\ncrond\ntelnetd\n")
+        services = rcs.index("syslogd\nklogd\ncrond\ntelnetd -b 0.0.0.0\n")
         self.assertLess(rcs.index("udhcpc"), services)
         self.assertLess(services, rcs.index("echo 'BusyBox guest ready'"))
         self.assertIn("setsid /usr/bin/sonia </dev/null >/dev/null 2>&1 &", rcs)
