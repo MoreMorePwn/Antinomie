@@ -313,6 +313,26 @@ glibc where most DVRs use uClibc; `eth0`'s address was set by software
 device profile still presents its machine (DMI, CPU, disks) to a program
 that asks.
 
+**Measured** (`stealth-check measure`, desktop preset, x86-64, KVM, the
+extra-kernel test base): 92 checks, 74 pass, 13 info, 5 fail. Four are the
+plain BusyBox base's own (QEMU's fw_cfg port to root, a disk under 60 GiB,
+under 2 GiB of memory, RDTSC around CPUID). The fifth, `dmesg.vm`, is jffs2's
+boot banner ("(C) 2001-2006 Red Hat, Inc"), which the probe's "red hat" word
+(meant for Red Hat's virtio vendor) matches; every device with jffs2 prints
+that line, so it is no new giveaway, and only root reads the kernel log.
+The userland alone (the camera tree on the BusyBox r22 kernel) measured the
+same 4 fails as the plain base. The kernel log (root) also has block2mtd's
+`mtd0: [hi_sfc] erase_size = 64KiB`, which syslogd copies into
+`/var/log/messages`.
+
+**VM probes** (benign, `tests/monitor/{watchdog,flash,cron,takeover}-probe.c`
+and `iptables -A INPUT -p tcp --dport 23 -j DROP`, one run each, as root, on
+the extra-kernel test bases): all pass on x86-64 (KVM) and arm64 (TCG): the
+watchdog opens and turns off, the rule is added, `/proc/mtd` lists the four
+partitions and the kernel partition is erased and written, crond runs the
+crontab's script within a minute, the telnet daemon found through
+`/proc/net/tcp` is killed and port 23 bound.
+
 ## Guest stealth (0.7.0)
 
 Guest series 0046-0050; contract revision 17 unchanged, every guest change
