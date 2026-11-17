@@ -157,6 +157,9 @@ enum NewTab {
     Domains,
     Urls,
     Tls,
+    /// What the InetSim route's built-in services saw (shown when they saw
+    /// anything).
+    InetSim,
 }
 
 /// The time the refresh loop schedules by. Production adds nothing; a test

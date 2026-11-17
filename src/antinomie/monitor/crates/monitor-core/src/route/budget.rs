@@ -124,6 +124,7 @@ mod tests {
         let sink = Egress::Sink(Sink {
             address: Ipv4Addr::new(10, 0, 2, 2),
             external: None,
+            builtin: Default::default(),
         });
         let mut held = Vec::new();
         while let Some(slot) = take() {

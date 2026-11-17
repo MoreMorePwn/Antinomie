@@ -531,6 +531,11 @@ pub struct Report {
     /// was not chosen, `None` inside when the sample has none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub static_analysis: Option<StaticAnalysis>,
+    /// What the InetSim route's built-in services saw: telnet and FTP
+    /// sessions, transfers, and the stand-ins they served (never the
+    /// sample's payload). Empty without them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inetsim: Vec<InetSimNote>,
     /// What the report could not say: omitted rows, missing inputs.
     pub notes: Vec<String>,
 }
@@ -569,6 +574,18 @@ pub struct StaticCheck {
 
 /// Rows of one static check a report keeps.
 pub const STATIC_ROWS: usize = 100;
+
+/// One thing the InetSim route's built-in services saw, in words.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InetSimNote {
+    /// `telnet-session`, `ftp-session`, `<protocol>-download`, `<protocol>-upload`.
+    pub kind: String,
+    pub summary: String,
+    pub detail: Vec<String>,
+    /// The services answered with a stand-in ("stand-in served by InetSim").
+    pub stand_in: bool,
+}
 
 impl Report {
     /// An empty report for `run`, stamped with the schema and `now_ms`.

@@ -543,6 +543,7 @@ pub fn build(
         )
         .collect();
     mark_base_programs(&mut indicators, &gathered.read_hashes.files, &sample);
+    crate::inetsim::mark_stand_ins(&mut indicators);
     let signature = data_dir.map(signature).unwrap_or_default();
     let key = cache_key(&indicators, &signature);
     let scan = match cache.filter(|cache| cache.key == key) {

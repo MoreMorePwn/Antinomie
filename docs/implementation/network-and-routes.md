@@ -198,9 +198,59 @@ The gateway starts on `Drop` (nothing leaves) and a run changes it only through
 |---|---|---|---|
 | Drop | unanswered (counted) | SYN dropped, like a firewall (counted) | dropped, counted |
 | Internet | the host resolver, on a thread | the host connects, public addresses only: not the gateway, the guest network, loopback, link-local or (unless allowed in Settings) RFC 1918 | dropped, counted |
-| InetSim | every A query answers the sinkhole (198.51.100.1), AAAA is empty | any address and port reaches the built-in services (HTTP, SMTP; other ports accept and discard, no TLS) or an external INetSim at `port + offset` | dropped, counted |
+| InetSim | every A query answers the sinkhole (198.51.100.1), AAAA is empty | any address and port reaches the built-in services (HTTP, SMTP, IRC, fake telnet devices on 23 and 2323, FTP on 21; other ports accept and discard, no TLS) or an external INetSim at `port + offset` | built-in: TFTP on port 69 is answered; the rest dropped, counted |
 | Tor, VPN, SOCKS5 | every A query answers a placeholder in 198.18.0.0/16 and the gateway remembers the name; the connection to that address is sent to the proxy as the **name** (SOCKS5 `ATYP 3`), so the proxy resolves it and no lookup leaves the host | SOCKS5 CONNECT through one upstream path (`socks.rs`, RFC 1928 with RFC 1929 login) | dropped, counted |
 
+* **Built-in InetSim services (0.9.0, ANT-T0559).** `route/inetsim/` holds one
+  `Services` object per gateway: the run's options, its log and an upload spool
+  in the gateway's folder. `Gateway::claim` begins a run on it for the built-in
+  InetSim route; when the run lets go of its route, `release_run_route` writes
+  `inetsim.json` (the log) and `inetsim-uploads/` (the uploaded bytes) into the
+  run's folder, beside `cloud-metadata.json`. Every service runs on a thread over
+  an in-process socket pair, so its connection holds one budget slot (A27) like
+  any other.
+  * **Telnet (23, 2323)**, `telnet.rs`: `login:` and `Password:`, then a BusyBox
+    shell that only answers: `busybox WORD` gives `WORD: applet not found` for an
+    applet it lacks (Mirai's probe), `cat /proc/cpuinfo` and `/proc/mounts` and
+    `uname` answer for the guest's architecture, `cat /bin/echo` gives the
+    stand-in program (a loader reads its ELF header for the architecture), `echo
+    -ne` writes go into a fake file system (kept as uploads), and `wget`, `curl`,
+    `tftp` and `ftpget` say they worked without fetching anything; `./x` of a
+    downloaded name is logged as run. Telnet negotiation bytes are dropped; a line
+    ends at CR or LF. Logins: `any` (default) or `defaults` (the default logins of
+    IoT devices, as bot dictionaries list them; ten tries a connection).
+  * **FTP (21)**, `ftp.rs`: any login, `PASV` and `EPSV` (the data port is
+    registered on `Services` and the guest's connection to it is handed to the
+    session), `RETR`, `STOR`/`APPE`, `LIST`/`NLST`; active mode is refused
+    (BusyBox's `ftpget` uses passive mode).
+  * **TFTP (UDP 69)**, `tftp.rs`: on the gateway loop (UDP had only DHCP and DNS),
+    RRQ and WRQ with the `blksize` and `tsize` options, each transfer from a port
+    of its own as TFTP does, at most 64 at once, ended after 30 s without an
+    answer.
+  * **Stand-ins**, `stand_in.rs`: a download whose name is a program (a bot's
+    arch word as the name or extension, `.bin`, `.elf`) gets a static ELF that
+    calls `exit(0)` and nothing else, for the guest's architecture; a `.sh` name
+    gets `#!/bin/sh` `exit 0`. The programs are built in code from their
+    instruction words (x86-64 and arm64, plus 32-bit x86, ARM and MIPS rows for
+    the 0.10.0 guests): no toolchain and no binary file in the repository, the
+    same bytes in every build, fixed SHA-256 values that Triage marks as "stand-in
+    served by InetSim", never an indicator or the sample's payload. Off
+    (`stand_ins: false`), every download gets the fake file as before.
+  * **Limits**: `session_bytes` (1 MiB), `session_seconds` (300) per telnet or FTP
+    session, `run_sessions` (512) per run (later sessions are hung up and
+    counted), uploads within the recorder's written-content limits (64 MiB a
+    file, 1 GiB a run), 2,000 lines a session and 4,096 sessions and transfers a
+    run in the log. Nothing is dialed: there is no path off the host.
+  * **Triage** (`triage/src/inetsim.rs`) reads the log: findings
+    `network.inetsim_telnet_login`, `network.inetsim_loader`,
+    `network.inetsim_download` and `network.inetsim_upload` (VM-wide, the logins
+    and lines in Details); URL, endpoint and domain indicators for the download
+    lines and the FTP and TFTP transfers (indicator source "InetSim"); the
+    Network view's InetSim tab; the report's InetSim table and `inetsim` notes,
+    one STIX note and one MISP comment each. A stand-in the guest saved keeps its
+    label by hash: its file indicators are noise, its Type in the Files view and
+    the `c2.elf_download` summary name it. An FTP login (`USER name`, one
+    parameter) is not taken for IRC's `USER` (four parameters).
 * **One upstream SOCKS5 path.** Tor is either Antinomie's own tor (`TorMode::Own`,
   the default; see below) or a SOCKS address the analyst gives (`TorMode::Socks`,
   default 127.0.0.1:9050, nothing started). VPN is

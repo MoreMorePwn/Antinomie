@@ -46,12 +46,23 @@ mod upstream;
 
 pub use self::{
     config::{
-        InetSimConfig, InetSimMode, RouteConfig, RouteSpec, Socks5Config, TorConfig, TorMode,
-        VpnConfig, load_config, save_config, tool_on_path,
+        BuiltinServices, InetSimConfig, InetSimMode, RouteConfig, RouteSpec, Socks5Config,
+        TelnetLogins, TorConfig, TorMode, VpnConfig, load_config, save_config, tool_on_path,
     },
     filter::{EgressFilter, MAIL_PORTS},
     gateway::{Claimed, Gateway, GatewayNet},
     helpers::reap_stale_helpers,
+    inetsim::{
+        log as inetsim_log,
+        log::{
+            REPORT as INETSIM_REPORT, Report as InetSimReport, UPLOADS as INETSIM_UPLOADS,
+            read_report as read_inetsim_report,
+        },
+        stand_in::{
+            STAND_IN, describe as stand_in_described, hashes as stand_in_hashes,
+            program as stand_in_program,
+        },
+    },
     metadata::{
         REPORT as METADATA_REPORT, Report as MetadataReport, Service as MetadataService,
         read_report as read_metadata_report,

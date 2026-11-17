@@ -542,7 +542,8 @@ impl Scan {
             change_page.push(change.row(clock_anchor))?;
         }
         let (read, read_omitted, _) = read_page.finish()?;
-        let (changed, changed_omitted, _) = change_page.finish()?;
+        let (mut changed, changed_omitted, _) = change_page.finish()?;
+        crate::inetsim::label_stand_in_files(&mut changed);
         let (opened, file_tabs) = tabs.finish()?;
         let FileRows {
             rows: opened,
@@ -731,6 +732,14 @@ impl Scan {
             antinomie_monitor_core::route::read_metadata_report(&recording.directory)
         {
             engine.cloud_report(&report, clock_anchor);
+        }
+        // The InetSim route's built-in services logged their sessions and transfers.
+        if let Some(report) =
+            antinomie_monitor_core::route::read_inetsim_report(&recording.directory)
+        {
+            engine.inetsim_report(&report, clock_anchor);
+            crate::inetsim::feed(&mut network.ioc, &report);
+            network.new_tabs.inetsim = crate::inetsim::rows(&report);
         }
         // The host found copies of the program running outside the tree.
         if let Some(copies) = persisted_copies(&recording.directory) {

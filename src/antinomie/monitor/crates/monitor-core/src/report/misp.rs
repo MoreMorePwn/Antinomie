@@ -335,6 +335,27 @@ pub fn render(report: &Report) -> Result<String, String> {
             at,
         ));
     }
+    // What the InetSim route's services saw; a stand-in is said to be theirs.
+    for (index, note) in report.inetsim.iter().enumerate() {
+        let mut text = note.summary.clone();
+        if !note.detail.is_empty() {
+            text.push_str(". ");
+            text.push_str(&note.detail.join("; "));
+        }
+        attrs.push(attribute(
+            "comment",
+            "Other",
+            &text,
+            false,
+            &if note.stand_in {
+                format!("InetSim {}; {}", note.kind, crate::route::STAND_IN)
+            } else {
+                format!("InetSim {}", note.kind)
+            },
+            &format!("{seed}:inetsim:{index}"),
+            at,
+        ));
+    }
     for hit in report.detections.iter().flatten() {
         attrs.push(attribute(
             "comment",

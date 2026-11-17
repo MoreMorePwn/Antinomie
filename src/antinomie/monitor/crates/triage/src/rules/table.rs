@@ -856,6 +856,35 @@ pub const SPECS: &[Spec] = &[
     ),
     rule("c2.bind_shell", 1, T::High, C::Command, &["T1059.004"]),
     rule("network.listen_any", 1, T::Medium, C::Command, &[]),
+    // The InetSim route's built-in services (inetsim.json).
+    rule(
+        "network.inetsim_telnet_login",
+        1,
+        T::Medium,
+        C::Lateral,
+        &["T1110.001", "T1078.001"],
+    ),
+    rule(
+        "network.inetsim_loader",
+        1,
+        T::High,
+        C::Lateral,
+        &["T1105", "T1059.004"],
+    ),
+    rule(
+        "network.inetsim_download",
+        1,
+        T::Medium,
+        C::Command,
+        &["T1105"],
+    ),
+    rule(
+        "network.inetsim_upload",
+        1,
+        T::Medium,
+        C::Exfiltration,
+        &["T1048.003"],
+    ),
     // The failing is the signal: every call of the row failed.
     rule("network.dead_c2", 1, T::Medium, C::Command, &[]).signal(),
     rule(

@@ -103,6 +103,34 @@ impl Loop {
         // The slot is freed when the answer is handled.
     }
 
+    /// A datagram for the built-in services' TFTP (InetSim route, Builtin
+    /// mode); false when it is not theirs.
+    pub(super) fn inetsim_udp(&mut self, ip: &frame::Ipv4<'_>, udp: &frame::Udp<'_>) -> bool {
+        self.sync_generation();
+        let route = self.shared.current();
+        let builtin = matches!(&route.spec.egress, Egress::Sink(sink) if sink.external.is_none());
+        if !builtin || !self.tftp.wants(ip.dst, udp.dst_port) {
+            return false;
+        }
+        Counters::add(&self.shared.counters.up_len, udp.payload.len() as u64);
+        let services = self.services.clone();
+        if let Some(reply) =
+            self.tftp
+                .handle(&services, udp.src_port, (ip.dst, udp.dst_port), udp.payload)
+        {
+            Counters::add(&self.shared.counters.down_len, reply.payload.len() as u64);
+            let datagram = frame::build_udp(
+                reply.from.0,
+                ip.src,
+                reply.from.1,
+                reply.to_port,
+                &reply.payload,
+            );
+            self.frame_to_guest(reply.from.0, ip.src, frame::PROTO_UDP, &datagram);
+        }
+        true
+    }
+
     pub(super) fn tcp(&mut self, ip: &frame::Ipv4<'_>, tcp: &frame::Tcp<'_>) {
         let flow = Flow {
             guest_ip: ip.src,
@@ -206,6 +234,10 @@ impl Loop {
             return;
         };
         let sink = matches!(egress, Egress::Sink(_)) || metadata.is_some();
+        // The built-in services log what they see for the run.
+        let services = matches!(&egress, Egress::Sink(sink) if sink.external.is_none())
+            .then(|| self.services.clone())
+            .filter(|_| metadata.is_none());
         // The router's own addresses and the guest's network are never
         // connected to (QEMU's NAT would reach the host's loopback there).
         if !sink && (self.net.is_local(flow.dst_ip) || self.net.contains(flow.dst_ip)) {
@@ -252,9 +284,12 @@ impl Loop {
         let spawned = thread::Builder::new()
             .name("route-dial".into())
             .spawn(move || {
-                let dialed = match &metadata {
-                    Some(metadata) => metadata.connect().map(upstream::Stream::Unix),
-                    None => upstream::dial(&egress, &dest),
+                let dialed = match (&metadata, &services) {
+                    (Some(metadata), _) => metadata.connect().map(upstream::Stream::Unix),
+                    (None, Some(services)) => services
+                        .connect(flow.dst_ip, flow.dst_port)
+                        .map(upstream::Stream::Unix),
+                    (None, None) => upstream::dial(&egress, &dest),
                 };
                 let result = dialed.and_then(|stream| upstream::start_pipes(stream, notify));
                 let _ = tx.send(Event::Dialed(id, result));
@@ -351,6 +386,8 @@ impl Loop {
 
     pub(super) fn tick(&mut self, now: Instant) {
         let generation = self.sync_generation();
+        let services = self.services.clone();
+        self.tftp.sweep(&services, now);
         self.swept_generation = generation;
         let flows: Vec<Flow> = self.conns.keys().copied().collect();
         let route = self.shared.current();

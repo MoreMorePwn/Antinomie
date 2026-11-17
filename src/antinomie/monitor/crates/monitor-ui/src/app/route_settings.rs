@@ -14,7 +14,7 @@ use crate::{
 };
 use antinomie_monitor_core::{
     analysis_tools::ToolStatus,
-    route::{self, InetSimMode, RouteConfig, RouteKind, TorMode},
+    route::{self, InetSimMode, RouteConfig, RouteKind, TelnetLogins, TorMode},
 };
 use std::{
     path::{Path, PathBuf},
@@ -513,7 +513,7 @@ impl MonitorApp {
                 ui.radio_value(
                     &mut draft.inetsim.mode,
                     InetSimMode::Builtin,
-                    "Built-in (DNS, HTTP, SMTP; other ports accept and discard)",
+                    "Built-in (DNS, HTTP, SMTP, telnet, FTP, TFTP; other ports accept and discard)",
                 );
                 ui.radio_value(
                     &mut draft.inetsim.mode,
@@ -522,6 +522,17 @@ impl MonitorApp {
                 );
             });
             ui.end_row();
+            if draft.inetsim.mode == InetSimMode::Builtin {
+                ui.label("Telnet logins");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut draft.inetsim.builtin.telnet_logins, TelnetLogins::Any, "Any");
+                    crate::widgets::hover_help(ui, "Only the logins IoT devices ship with (root/xc3511, admin/admin, ...); a bot tries its list.", |ui| ui.radio_value(&mut draft.inetsim.builtin.telnet_logins, TelnetLogins::Defaults, "IoT default logins"));
+                });
+                ui.end_row();
+                ui.label("Downloads");
+                crate::widgets::hover_help(ui, "A program or script a download asks for is Antinomie's own harmless one, so download, chmod and run go on. Off: the fake file.", |ui| ui.checkbox(&mut draft.inetsim.builtin.stand_ins, "Serve harmless stand-ins"));
+                ui.end_row();
+            }
             if draft.inetsim.mode == InetSimMode::External {
                 ui.label("INetSim host");
                 ui.add(text_field(&mut draft.inetsim.host).desired_width(crate::theme::edit_width(260.0)));

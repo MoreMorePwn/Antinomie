@@ -12,6 +12,7 @@ use super::{
     dns,
     filter::{EgressFilter, FilterState},
     frame::{self, BROADCAST, ETHERTYPE_ARP, ETHERTYPE_IPV4, Mac, TcpOut},
+    inetsim::{self, Services},
     managed::{self, Managed},
     metadata::Service as Metadata,
     names::FakeIps,
@@ -187,6 +188,8 @@ pub struct Claimed {
 pub struct Gateway {
     shared: Arc<Shared>,
     metadata: Option<Arc<Metadata>>,
+    /// The built-in InetSim services and their log of the current run.
+    services: Arc<Services>,
     thread: Option<JoinHandle<()>>,
     socket: PathBuf,
     work_dir: PathBuf,
@@ -232,13 +235,13 @@ impl Gateway {
             probe_guest: AtomicBool::new(false),
         });
         let (events_tx, events) = channel();
+        let services = Arc::new(Services::new(dir));
         let state = Loop::new(
             shared.clone(),
             net,
-            events,
-            events_tx,
+            (events, events_tx),
             wake_rx,
-            metadata.clone(),
+            (metadata.clone(), services.clone()),
         );
         let thread = thread::Builder::new()
             .name("route-gateway".into())
@@ -247,6 +250,7 @@ impl Gateway {
         Ok(Gateway {
             shared,
             metadata,
+            services,
             thread: Some(thread),
             socket,
             work_dir: dir.to_path_buf(),
@@ -259,6 +263,13 @@ impl Gateway {
     /// finds the consensus, descriptors and guards of the earlier ones.
     pub fn with_tor_slot(mut self, slot: &str) -> Self {
         self.tor_slot = Some(slot.to_owned());
+        self
+    }
+
+    /// The guest's architecture, for the stand-in programs the built-in
+    /// InetSim services hand out.
+    pub fn with_guest_arch(self, arch: crate::api::GuestArch) -> Self {
+        self.services.set_arch(arch);
         self
     }
 
@@ -379,6 +390,11 @@ impl Gateway {
         if let Some(metadata) = &self.metadata {
             metadata.begin_run(run);
         }
+        if let Egress::Sink(sink) = &spec.egress
+            && sink.external.is_none()
+        {
+            self.services.begin_run(run, &sink.builtin);
+        }
         let checked_ms = unix_ms();
         self.shared.install(Active::new(spec, managed));
         claims.runs.push(run.to_owned());
@@ -392,6 +408,18 @@ impl Gateway {
         self.metadata
             .as_ref()
             .map_or(Ok(false), |metadata| metadata.write_report(directory))
+    }
+
+    /// Writes what the built-in InetSim services saw during the run (its
+    /// sessions, transfers and uploaded files) into the run's folder; false
+    /// when they saw nothing.
+    pub fn write_inetsim_report(&self, directory: &Path) -> Result<bool, String> {
+        self.services.write_report(directory)
+    }
+
+    /// The built-in InetSim services' log of the current run.
+    pub fn inetsim_report(&self) -> inetsim::log::Report {
+        self.services.report()
     }
 
     /// Run `run` no longer needs its route; the last one out puts the
@@ -524,16 +552,17 @@ struct Loop {
     dns_in_flight: Arc<AtomicUsize>,
     seed: std::collections::hash_map::RandomState,
     metadata: Option<Arc<Metadata>>,
+    services: Arc<Services>,
+    tftp: inetsim::tftp::Server,
 }
 
 impl Loop {
     fn new(
         shared: Arc<Shared>,
         net: GatewayNet,
-        events: Receiver<Event>,
-        events_tx: Sender<Event>,
+        (events, events_tx): (Receiver<Event>, Sender<Event>),
         wake_rx: UnixStream,
-        metadata: Option<Arc<Metadata>>,
+        (metadata, services): (Option<Arc<Metadata>>, Arc<Services>),
     ) -> Self {
         Loop {
             shared,
@@ -559,6 +588,8 @@ impl Loop {
             dns_in_flight: Arc::new(AtomicUsize::new(0)),
             seed: Default::default(),
             metadata,
+            services,
+            tftp: inetsim::tftp::Server::default(),
         }
     }
 
@@ -570,6 +601,7 @@ impl Loop {
         if generation != self.seen_generation {
             self.seen_generation = generation;
             self.fake.clear();
+            self.tftp.clear();
         }
         generation
     }
@@ -851,6 +883,8 @@ impl Loop {
                     }
                 } else if udp.dst_port == 53 {
                     self.dns_query(&ip, &udp);
+                } else if self.inetsim_udp(&ip, &udp) {
+                    // The built-in services' TFTP answered.
                 } else {
                     self.count(&self.shared.counters.udp_dropped);
                 }

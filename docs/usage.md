@@ -689,7 +689,7 @@ user: no root, no firewall rules, no VPN client on the computer.
 |---|---|
 | **None (drop)** | Nothing leaves. Connections and DNS go unanswered; the attempts are still captured. |
 | **Internet** | Connect to public addresses through this computer's connection. It cannot reach this computer or your local network unless you allow private addresses. |
-| **InetSim (fake services)** | Every name resolves to a fake address and every connection reaches a fake service (HTTP, SMTP, a minimal IRC greeting on ports 6665 to 6669 and 7000; other ports accept and discard). Nothing leaves. |
+| **InetSim (fake services)** | Every name resolves to a fake address and every connection reaches a fake service (HTTP, SMTP, a minimal IRC greeting on ports 6665 to 6669 and 7000, fake telnet devices on 23 and 2323, FTP on 21 and TFTP on UDP 69; other ports accept and discard). Nothing leaves. |
 | **Tor** | Connect through Tor, which Antinomie starts for the run (or through a SOCKS address of your own Tor); Tor resolves the names. |
 | **VPN (WireGuard)** | Connect through a WireGuard tunnel run by wireproxy (userspace, no root). |
 | **SOCKS5 proxy** | Connect through a SOCKS5 proxy you give (optional user name and password). |
@@ -738,6 +738,28 @@ Pick the route in the Run form (**Network > Route**); the default comes from
   welcome after NICK and USER, PONG, JOIN) lets IRC bots speak so their commands
   are captured; it talks to nobody. Since every name has the one fake address,
   Triage tells the processes' lookups apart by time, not by address.
+* **Fake telnet devices, FTP and TFTP (built-in services, 0.9.0).** A
+  connection to port 23 or 2323 at any address meets a BusyBox device's login.
+  It accepts any login (or, set `telnet_logins` to `defaults`, only the default
+  logins IoT devices ship with) and gives a shell that answers what IoT bots type
+  (the `/bin/busybox` probe, `cat /proc/cpuinfo`, `uname`, `echo -ne`) and says
+  yes to `wget`, `curl`, `tftp` and `ftpget` without fetching anything. FTP (any
+  login, passive mode) and TFTP let `ftpget`, `tftp -g` and uploads complete.
+  A download of a program gets a small harmless program of Antinomie's own for
+  the VM's architecture (it only exits), and a script a harmless script, so a
+  download, `chmod`, run chain goes on; everything else gets the fake file. Every
+  session (address, logins tried, every line) and transfer (name, direction,
+  size, hash) goes into the run: `inetsim.json` and the uploaded files under
+  `inetsim-uploads/` in the run's folder, findings, URL and host indicators, the
+  Network view's **InetSim** tab, the report, STIX and MISP. A served stand-in is
+  labelled "stand-in served by InetSim" everywhere and its hash is never an
+  indicator. **Settings > Network routes > InetSim** sets the login policy and
+  turns the stand-ins off; all the options are in `network/routes.json` under
+  `inetsim.builtin`:
+  `telnet_logins` (`any` or `defaults`), `stand_ins` (`true`; `false` serves the
+  fake file for every download), `session_bytes` (1 MiB), `session_seconds`
+  (300) and `run_sessions` (512). An INetSim of your own (External mode) is not
+  affected.
 * A **Test** button for each route brings it up the way a run would and says
   whether it answers.
 
