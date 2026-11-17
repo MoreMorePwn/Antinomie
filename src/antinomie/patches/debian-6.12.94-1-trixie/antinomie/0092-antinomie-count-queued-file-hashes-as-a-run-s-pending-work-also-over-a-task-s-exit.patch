@@ -1,0 +1,187 @@
+Description: antinomie: count queued file hashes as a run's pending work, also over a task's exit
+ A run that hashes its writes (EXEC flag HASH_WRITES) hashes a file when
+ its last writer lets it go, also at exit: the task closes its files in
+ exit_files() and its task work, after ant_run_exit() has taken it out of
+ the run. When the last task left, the run read as ended with nothing
+ pending (TREE_EXITED and ASYNC_COMPLETE in RUN_STATUS) before those
+ hashes were even queued, so a host that seals the run then had files
+ the program left open with no hash ("still open at run end") and could
+ not keep their bytes.
+ .
+ Each job queued for the hash worker (a hash, or a refusal the worker
+ publishes) now counts in its run's pending asynchronous work from the
+ moment it is queued until the worker has published or dropped its
+ record. A task that leaves a run that hashes writes counts one pending
+ operation from ant_run_exit(), under the same lock that may set
+ TREE_EXITED, until its files are closed: a new hook in do_exit()
+ (kernel/exit.c) after exit_task_work(), where the last fput of each of
+ its files has run. A host that waits for the tree to end with nothing
+ pending (every host since revision 17) therefore waits for those hashes,
+ with no host change. io_uring workers have no root cookie and hash
+ nothing, so they are not counted.
+ .
+ The wait is bounded by the hash queue's existing limits: at most
+ ANTC_HASH_QUEUE (16) jobs and ANTC_HASH_PENDING_MAX (64 MiB) are read,
+ files above ANTC_HASH_FILE_MAX (16 MiB) are not, and at most 64
+ refusals wait to be published; a job past them is refused or dropped at
+ once. An exit with many open files therefore adds at most that much
+ reading to the run's end.
+ .
+ No contract change: RUN_STATUS keeps its layout, and its pending count
+ was already "outstanding observed async work". The objects that change
+ are kernel/exit.o, kernel/antinomie/run.o and kernel/antinomie/hash.o.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-17
+
+---
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index 04583ead6..c1b1f921b 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -178,6 +178,7 @@ bool ant_monitor_core_pending(struct task_struct *task);
+ bool ant_monitor_core_exit(int wait_status, const struct kernel_siginfo *siginfo);
+ void ant_monitor_core_unavailable(int wait_status);
+ void ant_monitor_task_exit(bool group_dead);
++void ant_monitor_files_closed(void);
+ /* Who sent the signal that ends a thread group (kernel/signal.c, with the
+  * target's siglock held), and the OOM killer's victim (mm/oom_kill.c).
+  */
+@@ -307,6 +308,7 @@ static inline bool ant_monitor_core_exit(int wait_status,
+ }
+ static inline void ant_monitor_core_unavailable(int wait_status) {}
+ static inline void ant_monitor_task_exit(bool group_dead) {}
++static inline void ant_monitor_files_closed(void) {}
+ static inline void ant_monitor_signal_sent(int sig, struct kernel_siginfo *info,
+ 					   struct task_struct *t) {}
+ static inline void ant_monitor_fatal_signal(int sig,
+diff --git a/kernel/antinomie/hash.c b/kernel/antinomie/hash.c
+index 01d3a768d..d5872dbec 100644
+--- a/kernel/antinomie/hash.c
++++ b/kernel/antinomie/hash.c
+@@ -97,6 +97,8 @@ struct ant_hash_job {
+ 	bool unlinking;
+ 	/* Outside a traced call: even a refusal is published by the worker. */
+ 	bool deferred;
++	/* Counted in its run's pending work until it is freed (job_count()). */
++	bool counted;
+ };
+ 
+ /* Digests of recently hashed files, so an exec storm of one program reads it
+@@ -131,6 +133,8 @@ static DECLARE_WORK(hash_work, hash_run);
+ 
+ static void job_free(struct ant_hash_job *job)
+ {
++	if (job->counted)
++		ant_run_async_finish(job->event.root_cookie);
+ 	if (job->path.dentry)
+ 		path_put(&job->path);
+ 	put_task_struct(job->event.origin);
+@@ -280,6 +284,22 @@ static const char *layout_of(const struct ant_hash_job *job)
+ 	return job->kind == ANTC_HASH_WRITE ? ANT_HASH_WRITE_LAYOUT : ANT_HASH_LAYOUT;
+ }
+ 
++/* A job queued for the worker counts as pending work of its run (RUN_STATUS
++ * async count) until the worker has published or dropped its record, so the
++ * host waits for the hashes of the files a run's last tasks closed at their
++ * exit. The queue limits bound that wait: at most ANTC_HASH_QUEUE jobs and
++ * ANTC_HASH_PENDING_MAX bytes are read, and at most ANT_HASH_REPORTS refusals
++ * wait to be published; anything past them is refused or dropped at once.
++ * Called with hash_lock held, before the worker can see the job.
++ */
++static void job_count(struct ant_hash_job *job)
++{
++	if (!job->event.root_cookie)
++		return;
++	job->counted = true;
++	ant_run_async_start(job->event.root_cookie);
++}
++
+ /* An outcome decided in the traced task: nothing is read. */
+ static void report_now(struct ant_hash_job *job, u8 status)
+ {
+@@ -312,6 +332,7 @@ static void report_now(struct ant_hash_job *job, u8 status)
+ 	}
+ 	pending_reports++;
+ 	list_add_tail(&job->node, &hash_reports);
++	job_count(job);
+ 	kick = !scheduled;
+ 	scheduled = true;
+ 	spin_unlock(&hash_lock);
+@@ -336,6 +357,7 @@ static void submit(struct ant_hash_job *job)
+ 			job->reserved = job->size;
+ 			pending_bytes += job->reserved;
+ 			list_add_tail(&job->node, &hash_jobs);
++			job_count(job);
+ 			kick = !scheduled;
+ 			scheduled = true;
+ 		}
+diff --git a/kernel/antinomie/run.c b/kernel/antinomie/run.c
+index 107ae027a..fb3d8a12e 100644
+--- a/kernel/antinomie/run.c
++++ b/kernel/antinomie/run.c
+@@ -226,11 +226,36 @@ bool ant_run_exit(struct task_struct *task, bool group_dead)
+ 	}
+ 	if (!--run->live_count)
+ 		run->flags |= ANTC_RUN_TREE_EXITED;
++	/* The task closes its files after this (exit_files() and its task
++	 * work), and the last close of a file it wrote queues the file's hash
++	 * (hash.c), which counts as pending work of the run. Until then the
++	 * run counts one pending operation for the task, so it never reads as
++	 * ended with nothing pending (TREE_EXITED, ASYNC_COMPLETE) before those
++	 * hashes are queued. A task without a root cookie (an io_uring worker)
++	 * hashes nothing.
++	 */
++	if ((run->hash_flags & ANTC_EXEC_HASH_WRITES) && ant_state(task)->root_cookie) {
++		run->async_count++;
++		ant_state(task)->files_closing = true;
++	}
+ 	run->generation++;
+ 	spin_unlock_irqrestore(&run_lock, irqflags);
+ 	return true;
+ }
+ 
++/* do_exit() after exit_task_work(): the exiting task's files are closed and
++ * the hashes their last close queued are counted; its own count goes.
++ */
++void ant_monitor_files_closed(void)
++{
++	struct ant_task_state *state = ant_state(current);
++
++	if (!state->files_closing)
++		return;
++	state->files_closing = false;
++	ant_run_async_finish(state->root_cookie);
++}
++
+ int ant_monitor_run_status(u64 root_cookie, void *out)
+ {
+ 	struct ant_run *run;
+diff --git a/kernel/antinomie/state.h b/kernel/antinomie/state.h
+index c0e2d7e65..0b5b58fd3 100644
+--- a/kernel/antinomie/state.h
++++ b/kernel/antinomie/state.h
+@@ -64,6 +64,10 @@ struct ant_task_state {
+ 	bool counted;
+ 	/* The process's exit was offered to the dump trigger's hold (exit_hold.c). */
+ 	bool exit_held;
++	/* The task left its run and its files are still to be closed: the run
++	 * counts one pending operation for it (run.c, ant_run_exit()).
++	 */
++	bool files_closing;
+ };
+ 
+ extern int ant_task_state_offset;
+diff --git a/kernel/exit.c b/kernel/exit.c
+index 5a1435efd..5204a5fe9 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -955,6 +955,7 @@ void __noreturn do_exit(long code)
+ 		disassociate_ctty(1);
+ 	exit_task_namespaces(tsk);
+ 	exit_task_work(tsk);
++	ant_monitor_files_closed();
+ 	exit_thread(tsk);
+ 
+ 	sched_autogroup_exit_task(tsk);

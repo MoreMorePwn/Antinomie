@@ -405,10 +405,12 @@ impl FileIndex {
         // inference above is not: a shared descriptor, an append.
         let kernel_position = kernel_records::file_position(call).filter(|_| reading || writing);
         if let Some(position) = kernel_position {
-            // The guest records the position the call left less what it moved.
-            // A file whose handler does not move the position
-            // (`/proc/self/loginuid` takes its 10 bytes and stays at 0) gives a
-            // negative start: the offset is not known, not 2^64 - 10.
+            // A guest from guest series 0091 on records the position the call
+            // was given (the end less the result for an append). An older guest
+            // recorded the position the call left less what it moved, so a file
+            // whose handler does not move the position (`/proc/self/loginuid`
+            // takes its 10 bytes and stays at 0) gave a negative start: that
+            // offset is not known, not 2^64 - 10.
             offset = (position.offset <= i64::MAX as u64
                 && position.offset.checked_add(position.len).is_some())
             .then_some(position.offset);
@@ -2191,6 +2193,19 @@ pub mod tests {
         let counts = map.counts();
         assert!(counts.total() <= 10, "{counts:?}");
         assert_eq!(counts.unknown + counts.mapping, map.size());
+    }
+
+    #[test]
+    fn a_newer_guest_places_a_write_that_leaves_the_position_where_it_began() {
+        // Guest series 0091 records the position the call was given: the same
+        // loginuid write starts at 0.
+        let mut write = operation(2, 1, "write", 10, [3, 0, 10, 0, 0, 0], b"4294967295");
+        write.exit.as_mut().unwrap().fields.push(position(0, 10));
+        let activity = activity_of(&[open(0x1), write]);
+        let file = file(&activity, "/tmp/file");
+        let event = file.events.iter().find(|e| e.kind == Kind::Write).unwrap();
+        assert_eq!(event.offset, Some(0));
+        assert_eq!(file.writes.tally.offset_unknown, 0);
     }
 
     fn position(offset: u64, len: u64) -> antinomie_monitor_core::api::FieldSummary {

@@ -96,3 +96,8 @@
 0055-antinomie-hold-an-exiting-process-of-a-dump-trigger-run-until-the-host-has-judged-it.patch
 0056-antinomie-capture-the-compat-structures-the-aarch32-evaluation-found-recorded-by-address-only.patch
 0057-antinomie-read-non-resident-pages-into-a-live-core-on-request-and-count-what-a-core-lacks.patch
+# Fixes from the 0.9.0 evaluation (no contract change; numbered after 0.10.0's 0058-0090 so
+# both series keep one name per patch): where a read or write began, queued file hashes as a
+# run's pending work
+0091-antinomie-record-where-a-read-or-write-began-from-the-position-the-call-was-given.patch
+0092-antinomie-count-queued-file-hashes-as-a-run-s-pending-work-also-over-a-task-s-exit.patch

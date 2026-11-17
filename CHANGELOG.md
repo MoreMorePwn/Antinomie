@@ -1669,6 +1669,21 @@ x86 programs by their own table.
   sends 50 ms, scaled by 8 under TCG); a `CORE_CAPTURE` of its identity makes it write its own
   core with the exit core's writer (core flag `EXIT_HELD` 0x200, read as a manual
   core), `EXIT_HOLD` RELEASE lets it go. No stock kernel file changes.
+- Patch 92 (no contract change; ANT-T0557, from the arm64 evaluation): files a
+  program still had open when it exited get their hash. A queued file hash counts
+  in its run's pending work (RUN_STATUS) until the guest has published it, and a
+  task leaving a run that hashes its writes counts one pending operation until its
+  files are closed (a hook after `exit_task_work()` in `do_exit()`), so the run no
+  longer reads as ended before the hashes of the files its exit closed are even
+  queued. The hash queue's limits bound the wait (16 files, 64 MiB). Every host
+  waits for it unchanged. `kernel/exit.o`, `run.o` and `hash.o` change.
+- Patch 91 (no contract change; ANT-T0557): a read's or write's recorded start is
+  the position the call was given (the end less the result only for an append), so
+  a write to a file whose handler leaves the position alone (`/proc/self/loginuid`)
+  starts at 0 instead of before it. `fs/read_write.o` and `fileops.o` change.
+- The arm64 consoles (ttyAMA, hvc) already decode TIOCGWINSZ and TCGETS since
+  patch 56; the evaluation's terminal-request gaps were requests on files that are
+  not terminals, which the host no longer counts as gaps (ANT-T0557, ANT-T0556).
 
 ## 0.8.3 — 2026-11-08
 
