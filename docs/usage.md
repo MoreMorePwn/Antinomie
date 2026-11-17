@@ -135,6 +135,7 @@ The **Base images** section in the left sidebar lists installed bases. Use
 - **Download base…**: fetch a published, checksum-verified base.
 - **Import base…**: install a bundle folder you already have.
 - **Build base…**: build one with the app's own build kit. Choose **BusyBox**,
+  **BusyBox camera (DVR services)** (see *The BusyBox camera base* below),
   **Debian 13 (minimal, console)** or **Debian 13 (desktop)**. A BusyBox base has
   BusyBox and glibc's runtime (its loader and libraries in `/lib`, from Debian
   13's `libc6`), so programs linked against glibc start too; an older BusyBox base has
@@ -193,6 +194,42 @@ checked against it. A failing source is retried up to five times (5, 15, 45 and
 has a line for every retry and fallback naming the file; the build fails only
 when every source has failed, naming them. A kernel that built is kept in the
 cache even if a later stage fails.
+
+### The BusyBox camera base
+
+IoT bots (Mirai, Gafgyt and their relatives) act on what a device has: they
+kill the services on 23 and 80 and take those ports, disable the watchdog,
+block telnet with iptables, add cron jobs, wipe logs or flash. On the plain
+BusyBox base that code finds nothing. The **BusyBox camera** base (profile
+`busybox-extra`, x86-64 and arm64) is the BusyBox base as a lived-in DVR:
+
+| Part | What the guest has |
+| --- | --- |
+| Services | BusyBox `telnetd` on 23 (root's password is the maker's default, `vizxv`); the vendor program `/usr/bin/sonia`, a small stand-in of ours, on 80 (a login page), 554 (RTSP answers that want a login) and 37777 (silent); `crond` (`/var/spool/cron/crontabs`); `syslogd` and `klogd` to `/var/log/messages`; the DHCP client stays and renews its lease |
+| Watchdog | softdog's `/dev/watchdog`; it only logs when it fires, so a sample that arms it does not reset the VM |
+| Flash | 16 MiB in `/proc/mtd` as `boot`, `kernel`, `rootfs` and `config` (`/dev/mtd0`-`3`, `/dev/mtdblock0`-`3`), erased at boot, the config partition mounted as jffs2 on `/mnt/mtd`; it lives in the guest's memory, so writes are gone after a restart |
+| Firewall | `iptables`, `ip6tables` and their `-save`/`-restore` (legacy, Debian's 1.8.11) with NAT |
+| Identity | a Dahua DH-XVR5104HS-I3: firmware and build date in `/etc/version`, `/etc/model`, `/etc/build_date`, hostname `xvr`, Dahua's MAC prefix (3c:ef:8c) on `eth0` |
+
+Build it with **Build base… → BusyBox camera (DVR services)**, `antinomie-cli
+base build --profile busybox-extra`, or the kit with
+`{"format":1,"profile":"busybox-extra","arch":"arm64"}` (add `"options":
+{"device": "dahua-xvr"}` to name the device profile; it is the only one so far).
+It has its own kernel (the BusyBox kernel plus the watchdog, flash and
+iptables drivers), so the first build compiles one. Everything else is the
+BusyBox base's: glibc's runtime, the shell copy, the console.
+
+The base's own services are the base's: they run before a run starts and are
+not part of its process tree. What a sample does to them is the sample's:
+Triage reports **Service killed and its port taken**, **Watchdog disabled**,
+**Firewall rules changed**, **Block device written or wiped** (the flash) and
+**Cron job installed**. Still visible: `uname` shows the base's 6.12 kernel
+(a real DVR runs 3.x or 4.x; an older release shown comes with 0.10.0's device
+profiles), the flash is memory behind `block2mtd` (`/sys/class/mtd/mtd0/type`
+says `ram`, the kernel log names the driver), `/proc/cmdline` has
+`softdog.soft_noboot=1`, the C library is glibc where most DVRs use uClibc, and
+the VM's device profile still presents its own machine (DMI, CPU) to a program
+that looks.
 
 Bases are read-only templates. Right-click a base to make a **New VM from this
 base** or to **Delete base**. Deleting is refused while any VM still uses it.
@@ -2360,7 +2397,7 @@ install to a daemon is [above](#command-line-and-automation-090). The web layer 
 - **Bases.** `base list` lists the installed bases (`--remote` fetches and lists the
   catalog's; needs `config set outbound_catalog true`, exit 5 otherwise). `base install
   DIR` installs a boot-bundle folder. `base download ID [--wait]` fetches one from the
-  catalog and `base build [--profile busybox|debian-minimal|debian-xfce] [--engine
+  catalog and `base build [--profile busybox|busybox-extra|debian-minimal|debian-xfce] [--engine
   automatic|native|podman|docker|qemu] [--name N]` builds one here; both wait for the
   end in direct mode, because leaving would cancel them. `base delete ID --yes` removes a
   base no VM uses. A base is named by its identity, the start of it (4 characters or

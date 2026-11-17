@@ -218,6 +218,101 @@ The benign checks: `tests/monitor/glibc-dynamic-probe.c` (starts only with the
 loader, then uses each library) and `tests/monitor/applet-chmod-probe.c` (the
 killer's chmods, then `sh -c true`, an applet inside the shell and `/bin/ls`).
 
+### The BusyBox camera base (0.9.0, ANT-T0558)
+
+A second BusyBox profile, `busybox-extra`, for the device IoT bots target most:
+a camera or DVR. The kit builds it for every architecture the release has
+(x86-64 and arm64 in 0.9.0; the recipe names nothing architecture-specific
+but the Debian pins and the vendor program's compiler, so armhf and MIPS add
+those at the 0.10.0 merge).
+
+| Piece | Where | How |
+| --- | --- | --- |
+| Profile | `scripts/build-base.py` | `PROFILES["busybox-extra"] = ("extra", "build-monitor-image.py", {hostname, name, device}, ...)`, in `ARM64_PROFILES` and `BUSYBOX_PROFILES` (no Debian bootstrap, nothing runs under emulation); the extra fragment's SHA-256 is in that kernel's cache identity |
+| Kernel | `scripts/build-monitor-kernel.sh` profile `extra`, `src/antinomie/packaging/kconfig/busybox-extra.cfg` | the minimal profile plus the fragment (NAME, !NAME, NAME=VALUE): softdog, MTD with command-line partitions, block2mtd and jffs2, a 16 MiB RAM disk, the legacy iptables tables with NAT and the usual matches; no QEMU hardware watchdog (q35's TCO, i6300esb reset the VM); `check-kernel-abi.py` checks the recorder stays out of the function tracer |
+| Recipe | `scripts/busybox_extra.py` (`extra_tree`), called by `build-monitor-image.py --profile busybox-extra` after the BusyBox base's own `base_tree` | services, flash, MAC prefix and DHCP client edited into `/etc/init.d/rcS` by anchors; root's MD5-crypt hash in `/etc/passwd`; identity files; iptables |
+| Vendor program | `src/antinomie/packaging/busybox-extra/camera.c` | freestanding C (no C library: raw system calls, `_start` per architecture), static, about 9 KB on x86-64 and 2 KB on arm64; listens on 80, 554 and the profile's vendor port, answers a login page, RTSP OPTIONS/401 and silence; nothing else |
+| Device profiles | `DEVICE_PROFILES` in the recipe | one so far, `dahua-xvr`; the first is the default; the job's `device` option names another |
+
+**The device.** `dahua-xvr` is a Dahua DH-XVR5104HS-I3 4-channel DVR:
+firmware V4.001.0000000.4.R built 2022-06-14 (`/etc/version`, `/etc/model`,
+`/etc/build_date`), hostname `xvr`, MAC prefix 3c:ef:8c (Dahua's IEEE
+registration) set on `eth0` before DHCP with the VM's own last three bytes,
+vendor program `/usr/bin/sonia` on 37777, root password `vizxv` (the Dahua
+entry of the published default-credential lists Mirai carries), flash driver
+name `hi_sfc` (HiSilicon's SPI flash controller). The card asked for port
+34567 (Xiongmai's); Xiongmai has no IEEE MAC registration, so the first
+profile is Dahua's and its own port; a Xiongmai profile can add 34567.
+
+**Flash.** No guest patch: `mtdram` names its device "mtdram test device",
+which `mtdparts=` would have to repeat on the command line. Instead rcS fills
+`/dev/ram0` (brd) with 0xff and writes `/dev/ram0,64KiB,hi_sfc` to
+`/sys/module/block2mtd/parameters/block2mtd` (block2mtd's label option, a
+runtime parameter, so no block2mtd shows on the command line); the bundle's
+`kernel_append` carries `mtdparts=hi_sfc:256k(boot),2048k(kernel),12288k(rootfs),-(config)`,
+which `cmdlinepart` applies when block2mtd registers. Without
+`MTD_PARTITIONED_MASTER` only the four partitions show. The config
+partition is mounted as jffs2 on `/mnt/mtd` (jffs2 takes erased flash as
+empty). Unlike 0.10.0's router facade (patch 0065, read-only flash with no
+memory behind it) this flash is writable, so a sample's write or erase
+happens and is recorded.
+
+**Watchdog.** softdog without NOWAYOUT is `/dev/watchdog`. Nothing in the
+base opens it, so it is idle until a sample does. `softdog.soft_noboot=1` in
+`kernel_append`: a sample that arms it and exits does not reset the VM in the
+middle of a run (softdog logs "Triggered - Reboot ignored" instead).
+
+**Services.** rcS starts `syslogd`, `klogd`, `crond`, `telnetd` (BusyBox,
+`/bin/login` with root's hash from `/etc/passwd`) and `setsid /usr/bin/sonia`
+after the network; `udhcpc` loses `-f -q`, so it goes to the background with
+its lease and renews it. Debian's `busybox-static` has no `ntpd` applet, so
+the base runs no time client (the guest clock comes from the host). The
+services start before any run and are not in a run's process tree, so their
+processes, files and traffic are not the sample's; `bundle.json`
+`base_services` lists them (name, program, user, ports, files) for a later
+Triage base-noise step. What a sample does to them is the sample's, and
+Triage has rules for it (`crates/triage/src/rules/device.rs`):
+
+| Rule | Fires on |
+| --- | --- |
+| `evasion.watchdog_disable` (High, T1490) | `/dev/watchdog`, `/dev/watchdogN` or `/dev/misc/watchdog` opened for writing; `WDIOC_SETOPTIONS`, `WDIOC_SETTIMEOUT`, `WDIOC_SETPRETIMEOUT` on it; `V` written to it. Lowered for watchdog daemons |
+| `impact.service_takeover` (High, T1489) | a successful TCP `bind` of a port below 1024 or a device port (2323, 5555, 7547, 8000, 8080, 8081, 8443, 8888, 9000, 9527, 34567, 37777) within 60 s after the run sent SIGKILL or SIGTERM to a process it did not start; once per port |
+| `evasion.firewall_modify` (version 2) | as before, plus iptables `-A/-I/-D/-R/-N/-P`, `*-restore`, nft add/insert/delete, ufw allow/deny/reject/limit/delete, firewall-cmd port, service and rule changes, and `setsockopt(SOL_IP or SOL_IPV6, IPT_SO_SET_REPLACE)` by any program (iptables-legacy's commit) |
+| `impact.block_device_write` | `/dev/mtd*` was already a block device; `MEMERASE64` joins `MEMERASE` |
+
+**iptables.** `iptables`, `libxtables12`, `libip4tc2` and `libip6tc2`
+1.8.11-2 are pinned per architecture (the kit's snapshot); they join the
+base's `guest_sources.packages`. `xtables-legacy-multi` goes to `/usr/sbin`
+with the iptables names, its libraries to `/lib` beside glibc's runtime (the
+loader finds them without a cache), the extensions to
+`/usr/lib/<multiarch>/xtables` (libxtables' compiled-in path) when every
+library they need is in the base (104 on x86-64, 98 on arm64; ebtables and
+arptables ones are left out).
+
+**bundle.json** adds `device` (profile, kind, maker, model, firmware, build
+date, MAC prefix, the kernel release the device would show, watchdog, flash
+layout, firewall), `base_services` and `guest_sources.programs` (the vendor
+program's source path, SHA-256 and licence; `publish-base-sources.py` copies
+the recipe, the fragment and the source into the published recipe).
+
+**Waits for the 0.10.0 merge.** An older kernel release in `uname` (the
+profile records 3.18.20): 0.10.0's router facade (`antinomie_funame`, guest
+patch 0065, `CONFIG_ANTINOMIE_ROUTER`) is not in 0.9.0's series; the camera
+profile can name it once x86-64 and arm64 build that file. armhf, MIPS and
+MIPSel camera bases: their Debian pins, their compiler names and the vendor
+program's system-call glue.
+
+**What a sample can see** (beyond the BusyBox base's): the services and
+their ports, the files above, `/proc/mtd`, `/dev/watchdog`, iptables. Still
+visible: the 6.12 kernel in `uname`; `/sys/class/mtd/mtdN/type` reads `ram`
+(block2mtd), not `nor`, and the kernel log (root) names block2mtd and brd
+(`/dev/ram0`, also in `/proc/partitions`); `softdog.soft_noboot=1` and
+`mtdparts=` on the command line (the latter is what real devices have);
+glibc where most DVRs use uClibc; `eth0`'s address was set by software
+(`addr_assign_type` 3) and its permanent address is the VM's; the VM's
+device profile still presents its machine (DMI, CPU, disks) to a program
+that asks.
+
 ## Guest stealth (0.7.0)
 
 Guest series 0046-0050; contract revision 17 unchanged, every guest change
