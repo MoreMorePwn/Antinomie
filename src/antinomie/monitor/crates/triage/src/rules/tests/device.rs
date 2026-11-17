@@ -218,8 +218,9 @@ pub fn writing_or_erasing_flash_is_a_block_device_write() {
     }
     // MEMERASE and MEMERASE64.
     for request in [0x4008_4d02u64, 0x4010_4d14] {
+        // Opened read-only here, so the row is the erase's alone.
         let out = run(vec![
-            open(1, "/dev/mtd0", 2, 3),
+            open(1, "/dev/mtd0", 0, 3),
             sys(1, 16, "ioctl", [3, request, 0x1000, 0, 0, 0], 0),
         ]);
         assert!(

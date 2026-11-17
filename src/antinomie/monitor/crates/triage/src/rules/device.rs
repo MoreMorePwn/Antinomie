@@ -38,6 +38,7 @@ pub fn is_watchdog(path: &str) -> bool {
             .is_some_and(|rest| rest.is_empty() || rest.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+/// Each action on the watchdog (open, ioctl, magic close) is a row of its own.
 pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     match cx.name {
         "open" | "openat" | "openat2" if cx.ok && cx.opens_for_write() => {
@@ -64,7 +65,7 @@ pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
             {
                 out.push(Hit::new(
                     "evasion.watchdog_disable",
-                    path,
+                    format!("{path} magic close"),
                     format!("write of the magic close character V to {path}"),
                 ));
             }
@@ -103,7 +104,7 @@ fn watchdog_ioctl(cx: &Ctx, out: &mut Vec<Hit>) {
     };
     out.push(Hit::new(
         "evasion.watchdog_disable",
-        path,
+        format!("{path} {name}"),
         format!("ioctl {name} on {path} {what}"),
     ));
 }
