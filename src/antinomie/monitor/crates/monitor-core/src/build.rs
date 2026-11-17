@@ -62,11 +62,6 @@ pub const BUILD_PROFILES: &[BuildProfile] = &[
         kind: Kind::BusyBox,
     },
     BuildProfile {
-        id: "busybox-extra",
-        label: "BusyBox camera (DVR services)",
-        kind: Kind::BusyBoxExtra,
-    },
-    BuildProfile {
         id: "debian-minimal",
         label: "Debian 13 (minimal, console)",
         kind: Kind::DebianMinimal,
@@ -75,6 +70,11 @@ pub const BUILD_PROFILES: &[BuildProfile] = &[
         id: "debian-xfce",
         label: "Debian 13 (desktop)",
         kind: Kind::DebianXfce,
+    },
+    BuildProfile {
+        id: "busybox-extra",
+        label: "BusyBox camera (DVR services)",
+        kind: Kind::BusyBoxExtra,
     },
 ];
 

@@ -75,7 +75,7 @@ pub struct BuildWizard {
     page: usize,
     mode: BuildMode,
     /// Answers per `BUILD_PROFILES` entry.
-    options: [BuildOptions; 3],
+    options: [BuildOptions; BUILD_PROFILES.len()],
     search: String,
     /// Show the last build's progress instead of the questions.
     show_status: bool,
