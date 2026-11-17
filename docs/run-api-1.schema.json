@@ -957,7 +957,15 @@
         "processes": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Processes, not their threads."
+        },
+        "threads": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Threads other than each process's main one.",
+          "default": 0
         },
         "findings": {
           "type": "integer",

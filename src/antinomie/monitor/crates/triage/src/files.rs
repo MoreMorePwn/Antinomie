@@ -19,6 +19,7 @@ pub mod order;
 pub mod shape;
 pub mod view;
 
+pub use change::{counted_file, pseudo_file};
 pub use ioc::IocFile;
 
 pub const READ_NAMES: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
@@ -81,6 +82,14 @@ pub struct Change {
     pub existed: Option<u64>,
     /// Change attempts the kernel refused. They are not changes.
     pub failed: u32,
+    /// The name is a directory: `mkdir` made it, or the guest said so.
+    pub directory: bool,
+    /// Guest time of the call [`Self::hash`] came with.
+    pub hash_ns: u64,
+    /// The guest marked [`Self::hash`] as taken of a file that changed while
+    /// it was read, and only the file's metadata changed then (`cp x y &&
+    /// chmod 755 y`): the digest is the bytes.
+    pub hash_settled: bool,
     /// Last mode a successful chmod set, to tell a new `+x` from a repeat.
     pub mode: Option<u64>,
     pub locations: Vec<Location>,
@@ -204,7 +213,7 @@ impl FileIndex {
                 .get(&file.key)
                 .and_then(|group| self.changes.get_mut(group))
             {
-                change.record_hash(hash);
+                change.record_hash(hash, event.timestamp_ns);
             }
         }
         let Some(hash) = kernel_records::file_hash(call, HashKind::Delete) else {
@@ -221,7 +230,7 @@ impl FileIndex {
             .and_then(|id| self.by_identity.get(&id.key).cloned())
             .unwrap_or_else(|| displayed_path(call, event, files));
         if let Some(change) = self.changes.get_mut(&group) {
-            change.record_hash(hash);
+            change.record_hash(hash, event.timestamp_ns);
         }
     }
 
@@ -396,7 +405,13 @@ impl FileIndex {
         // inference above is not: a shared descriptor, an append.
         let kernel_position = kernel_records::file_position(call).filter(|_| reading || writing);
         if let Some(position) = kernel_position {
-            offset = Some(position.offset);
+            // The guest records the position the call left less what it moved.
+            // A file whose handler does not move the position
+            // (`/proc/self/loginuid` takes its 10 bytes and stays at 0) gives a
+            // negative start: the offset is not known, not 2^64 - 10.
+            offset = (position.offset <= i64::MAX as u64
+                && position.offset.checked_add(position.len).is_some())
+            .then_some(position.offset);
         }
         let copy = kernel_records::file_copy(call).filter(|_| success && changed);
         let copied = copy
@@ -618,6 +633,7 @@ impl FileIndex {
     pub fn finish_all(mut self) -> (Vec<Change>, file_activity::Activity) {
         let mut existing: Vec<(Option<FileKey>, String)> = Vec::new();
         for change in self.changes.values_mut() {
+            change.settle_hash();
             if change.existed.is_some() {
                 change.settle();
                 existing.push((change.identity, change.path.clone()));
@@ -633,13 +649,39 @@ impl FileIndex {
             .values()
             .filter_map(|change| change.identity.map(|key| (key, change)))
             .collect();
-        let activity = self.activity.finish(|file| {
+        let change_of = |file: &file_activity::FileActivity| {
             file.identity
                 .and_then(|key| by_identity.get(&key))
                 .or_else(|| by_path.get(file.path.as_str()))
-                .map(|change| change.contents())
+                .copied()
+        };
+        let mut settled: Vec<(String, Option<FileKey>, String)> = Vec::new();
+        let activity = self.activity.finish(|file| {
+            let change = change_of(file)?;
+            if change.hash_settled
+                && let Some(sha) = change.hash.as_ref().and_then(FileHash::sha256_hex)
+            {
+                settled.push((file.path.clone(), file.identity, sha));
+            }
+            Some(change.contents())
         });
         let mut activity = activity;
+        // The same decision for the file activity's own notes of the hash.
+        for file in &mut activity.files {
+            let Some((.., sha)) = settled.iter().find(|(path, key, _)| {
+                key.is_some() && *key == file.identity || *path == file.path
+            }) else {
+                continue;
+            };
+            for note in file
+                .hashes
+                .iter_mut()
+                .filter(|note| note.sha256.as_deref() == Some(sha.as_str()))
+            {
+                note.changed = false;
+                note.skipped = None;
+            }
+        }
         for file in &mut activity.files {
             let proved = existing
                 .iter()
@@ -688,9 +730,26 @@ pub fn unavailable_descriptor(fd: Option<u64>) -> String {
 pub fn result_label(ret: Option<i64>) -> String {
     match ret {
         Some(ret) if ret >= 0 => format!("Success ({ret})"),
-        Some(ret) => format!("Failed ({ret})"),
+        Some(ret) => failure_label(ret),
         None => "Exit unavailable".into(),
     }
+}
+
+/// A failed call's result in words: the errno's name, and a restart code
+/// that leaked to the exit (a signal interrupted the call) as "Interrupted".
+pub fn failure_label(ret: i64) -> String {
+    let errno = ret.unsigned_abs();
+    match crate::values::errno_name(errno) {
+        Some(name) if interrupted(errno) => format!("Interrupted ({name})"),
+        Some(name) => format!("Failed ({name})"),
+        None => format!("Failed ({ret})"),
+    }
+}
+
+/// ERESTARTSYS, ERESTARTNOINTR, ERESTARTNOHAND, ERESTART_RESTARTBLOCK: a
+/// signal interrupted the call, which the kernel restarts or ends with EINTR.
+pub fn interrupted(errno: u64) -> bool {
+    matches!(errno, 512..=514 | 516)
 }
 
 pub fn change_operation(call: &InvocationSummary, event: &EventSummary) -> bool {
@@ -1296,6 +1355,82 @@ pub mod tests {
         index
     }
 
+    fn timed(mut call: InvocationSummary, ns: u64) -> InvocationSummary {
+        for event in call
+            .entry
+            .iter_mut()
+            .chain(call.exit.iter_mut())
+            .chain(call.kernel_notes.iter_mut())
+        {
+            event.timestamp_ns = ns;
+        }
+        call
+    }
+
+    /// A write hash the guest marked "changed while it was read", read 50 ms
+    /// after the close.
+    fn changed_write_hash(call: InvocationSummary, inode: u64) -> InvocationSummary {
+        let mut call = with_write_hash(call, inode, 0);
+        let field = &mut call.kernel_notes[0].fields[0];
+        field.preview[3] |= 2;
+        field.preview[64..68].copy_from_slice(&50_000u32.to_le_bytes());
+        call
+    }
+
+    #[test]
+    fn a_chmod_while_the_guest_hashed_the_file_keeps_its_hash() {
+        const MS: u64 = 1_000_000;
+        let run = |after: InvocationSummary| {
+            let calls = [
+                timed(create(2, "/bin/.klogd", 40, 1), MS),
+                timed(
+                    operation(3, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"hello"),
+                    2 * MS,
+                ),
+                timed(
+                    changed_write_hash(operation(4, 3, "close", 0, [3, 0, 0, 0, 0, 0], b""), 40),
+                    3 * MS,
+                ),
+                after,
+            ];
+            let (changes, activity) = index_with_hashes(&calls, &[]).finish_all();
+            let change = changes
+                .into_iter()
+                .find(|c| c.path == "/bin/.klogd")
+                .unwrap();
+            let note_changed = activity
+                .files
+                .iter()
+                .find(|f| f.path == "/bin/.klogd")
+                .unwrap()
+                .hashes[0]
+                .changed;
+            (change.guest_hash(), note_changed)
+        };
+        let chmod = |ns: u64| {
+            timed(
+                named(5, 90, "chmod", 0, [0, 0o755, 0, 0, 0, 0], &["/bin/.klogd"]),
+                ns,
+            )
+        };
+        // cp … && chmod 755 …: the chmod lands while the worker reads.
+        let ((sha, why), changed) = run(chmod(17 * MS));
+        assert_eq!(sha.as_deref(), Some("cd".repeat(32).as_str()));
+        assert_eq!(why, None);
+        assert!(!changed);
+        // An open for writing in the same window may have changed the bytes.
+        let ((sha, why), changed) = run(timed(reopen(5, "/bin/.klogd", 40, 1), 17 * MS));
+        assert_eq!(sha, None);
+        assert_eq!(
+            why.as_deref(),
+            Some("the file changed while it was being read")
+        );
+        assert!(changed);
+        // A chmod long after the worker finished explains nothing.
+        let ((sha, _), _) = run(chmod(500 * MS));
+        assert_eq!(sha, None);
+    }
+
     #[test]
     fn a_written_file_shows_the_hash_of_its_last_close() {
         let calls = [
@@ -1412,6 +1547,90 @@ pub mod tests {
                     activity.files.iter().map(|f| &f.path).collect::<Vec<_>>()
                 )
             })
+    }
+
+    /// One run's files of every sort: a refused chmod, writes to /proc and
+    /// /dev, a directory and one real file.
+    fn mixed_run() -> Vec<InvocationSummary> {
+        vec![
+            named(1, 90, "chmod", -2, [0, 0, 0, 0, 0, 0], &["/sbin/reboot"]),
+            named(
+                2,
+                2,
+                "open",
+                3,
+                [0, 0x241, 0, 0, 0, 0],
+                &["/proc/self/loginuid"],
+            ),
+            operation(3, 1, "write", 10, [3, 0, 10, 0, 0, 0], b"4294967295"),
+            named(4, 2, "open", 4, [0, 0x1, 0, 0, 0, 0], &["/dev/null"]),
+            operation(5, 1, "write", 2, [4, 0, 2, 0, 0, 0], b"hi"),
+            named(6, 83, "mkdir", 0, [0, 0o755, 0, 0, 0, 0], &["/tmp/spoof"]),
+            named(7, 2, "open", 5, [0, 0x41, 0, 0, 0, 0], &["/tmp/.x"]),
+            operation(8, 1, "write", 3, [5, 0, 3, 0, 0, 0], b"abc"),
+            named(9, 2, "open", 6, [0, 0x41, 0, 0, 0, 0], &["/dev/shm/.y"]),
+            operation(10, 1, "write", 1, [6, 0, 1, 0, 0, 0], b"y"),
+        ]
+    }
+
+    #[test]
+    fn only_files_a_call_really_changed_are_changed_files_or_indicators() {
+        let changes = build(&mixed_run()).0.finish();
+        let change = |path: &str| changes.iter().find(|change| change.path == path);
+        let counted: Vec<&str> = changes
+            .iter()
+            .filter(|change| change.counted())
+            .map(|change| change.path.as_str())
+            .collect();
+        assert_eq!(counted, ["/dev/shm/.y", "/tmp/.x"], "{counted:?}");
+        let iocs: Vec<String> = changes
+            .iter()
+            .filter_map(Change::ioc_file)
+            .map(|file| file.path)
+            .collect();
+        assert_eq!(iocs, ["/dev/shm/.y", "/tmp/.x"]);
+        // The refused chmod is an attempt only.
+        let reboot = change("/sbin/reboot").unwrap();
+        assert!(!reboot.counted() && reboot.failed == 1);
+        assert!(reboot.written_file().is_none());
+        // The directory is a directory created, never a written file's hash.
+        let spoof = change("/tmp/spoof").unwrap();
+        assert!(spoof.directory && !spoof.counted());
+        assert_eq!(
+            spoof.written_file().map(|file| file.state).as_deref(),
+            Some(ioc::DIRECTORY_CREATED)
+        );
+        for pseudo in ["/proc/self/loginuid", "/dev/null"] {
+            assert!(change(pseudo).is_none_or(|c| !c.counted()), "{pseudo}");
+            assert!(change(pseudo).and_then(Change::written_file).is_none());
+        }
+        // The file activity the report lists agrees.
+        let activity = activity_of(&mixed_run());
+        let listed: Vec<&str> = activity
+            .files
+            .iter()
+            .filter(|file| file.counted())
+            .map(|file| file.path.as_str())
+            .collect();
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert!(listed.contains(&"/tmp/.x") && listed.contains(&"/dev/shm/.y"));
+        assert!(file(&activity, "/tmp/spoof").directory());
+    }
+
+    #[test]
+    fn devices_proc_and_sys_are_not_files_a_run_leaves() {
+        for path in [
+            "/dev/null",
+            "/dev/tty1",
+            "/proc/self/oom_score_adj",
+            "/proc",
+            "/sys/kernel/x",
+        ] {
+            assert!(pseudo_file(path), "{path}");
+        }
+        for path in ["/dev/shm/.x", "/tmp/x", "/device", "/proceed", "/system/x"] {
+            assert!(!pseudo_file(path), "{path}");
+        }
     }
 
     fn kinds(file: &FileActivity) -> Vec<Kind> {
@@ -1930,6 +2149,48 @@ pub mod tests {
         let activity = activity_of(&calls);
         let file = file(&activity, "/tmp/file");
         assert_eq!(file.writes.read(8, 3).unwrap(), b"xyz");
+    }
+
+    #[test]
+    fn a_failed_result_is_named_and_a_restart_code_reads_as_interrupted() {
+        assert_eq!(result_label(Some(-512)), "Interrupted (ERESTARTSYS)");
+        assert_eq!(
+            result_label(Some(-516)),
+            "Interrupted (ERESTART_RESTARTBLOCK)"
+        );
+        assert_eq!(result_label(Some(-2)), "Failed (ENOENT)");
+        assert_eq!(result_label(Some(-4000)), "Failed (-4000)");
+        assert_eq!(result_label(Some(3)), "Success (3)");
+        assert_eq!(
+            crate::file_category::Outcome::Failed(-512).label(),
+            "Interrupted (ERESTARTSYS)"
+        );
+    }
+
+    #[test]
+    fn a_write_that_leaves_the_position_where_it_was_has_no_offset_not_a_wrapped_one() {
+        // /proc/self/loginuid: 10 bytes taken, the position stays 0, so the
+        // guest's start (position less result) is -10.
+        let mut write = operation(2, 1, "write", 10, [3, 0, 10, 0, 0, 0], b"4294967295");
+        write
+            .exit
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(position(0u64.wrapping_sub(10), 10));
+        let activity = activity_of(&[open(0x1), write]);
+        let file = file(&activity, "/tmp/file");
+        let event = file.events.iter().find(|e| e.kind == Kind::Write).unwrap();
+        assert_eq!(event.offset, None);
+        assert_eq!(file.writes.tally.offset_unknown, 10);
+        let mut map = antinomie_monitor_core::file_reconstruct::Reconstruction::new(
+            crate::file_activity::start_of(file),
+            &file.timeline,
+        );
+        map.goto(file.timeline.steps().len());
+        let counts = map.counts();
+        assert!(counts.total() <= 10, "{counts:?}");
+        assert_eq!(counts.unknown + counts.mapping, map.size());
     }
 
     fn position(offset: u64, len: u64) -> antinomie_monitor_core::api::FieldSummary {

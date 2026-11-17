@@ -373,6 +373,8 @@ pub struct Update {
     /// The run's file activity, for the programs it wrote (see
     /// [`crate::written_export`]); kept beside the run with the digest.
     activity: Arc<crate::file_activity::Activity>,
+    /// The guest's SHA-256 of the launched program, for the written files.
+    sample: Option<String>,
     /// The scan read the whole finished run.
     finished: bool,
     partial: bool,
@@ -384,11 +386,16 @@ impl Update {
     pub fn of(scan: &ArchiveScan, detections: Option<Vec<DetectionHit>>) -> Self {
         Self {
             behaviour: behaviour_of(scan),
-            lineage: lineage_index::index(&scan.process, scan.ioc.as_deref()),
+            lineage: lineage_index::index(
+                &scan.process,
+                scan.ioc.as_deref(),
+                scan.launch_image.as_ref(),
+            ),
             indicators: scan.ioc.as_deref().map(indicators),
             files: scan.written_files.clone(),
             detections,
             activity: scan.file_activity.clone(),
+            sample: scan.launch_image.as_ref().map(|(_, sha)| sha.clone()),
             finished: scan.whole_run,
             partial: scan.partial,
             coverage: coverage_of(scan),
@@ -400,7 +407,12 @@ impl Update {
         // The programs and libraries the run wrote go beside the run for the
         // YARA scan, best effort: without them the scan says it had none.
         if self.finished {
-            let _ = crate::written_export::export(directory, &self.activity, self.partial);
+            let _ = crate::written_export::export(
+                directory,
+                &self.activity,
+                self.partial,
+                self.sample.as_deref(),
+            );
         }
         let mut coverage = self.coverage;
         coverage.source = run_digest::source_stamp(directory);

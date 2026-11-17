@@ -570,6 +570,7 @@ pub(super) fn bpfdoor() -> Report {
         }],
         counts: Counts {
             processes: 2,
+            threads: 0,
             findings: 7,
             indicators: 3,
             indicators_matched: 1,

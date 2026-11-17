@@ -528,15 +528,13 @@ pub fn inherit_fork_images(nodes: &mut std::collections::BTreeMap<TaskKey, TaskN
             .iter()
             .filter(|(_, node)| node.comm == "?" && !node.exec_unnamed)
             .filter_map(|(key, node)| node.parent.map(|parent| (*key, parent)))
-            .filter(|(key, parent)| {
-                parent != key && nodes.get(parent).is_some_and(|node| node.comm != "?")
-            })
+            .filter(|(key, parent)| parent != key && image_holder(nodes, *parent).is_some())
             .collect();
         if todo.is_empty() {
             return;
         }
         for (key, parent) in todo {
-            let Some(image) = nodes.get(&parent).map(|node| {
+            let Some(image) = image_holder(nodes, parent).map(|node| {
                 (
                     node.comm.clone(),
                     node.argv.clone(),
@@ -552,6 +550,35 @@ pub fn inherit_fork_images(nodes: &mut std::collections::BTreeMap<TaskKey, TaskN
             }
         }
     }
+}
+
+/// The task whose image a child of `key` inherits: `key` itself when its
+/// image is named, else its thread group leader. A worker thread runs its
+/// process's program and never names it (it has no exec of its own), so a
+/// child it forks takes the image and argv of the process.
+pub fn image_holder(
+    nodes: &std::collections::BTreeMap<TaskKey, TaskNode>,
+    key: TaskKey,
+) -> Option<&TaskNode> {
+    let node = nodes.get(&key)?;
+    if node.comm != "?" {
+        return Some(node);
+    }
+    if node.tid == 0 || node.tid == key.pid {
+        return None;
+    }
+    nodes
+        .range(
+            TaskKey {
+                pid: key.pid,
+                cookie: 0,
+            }..=TaskKey {
+                pid: key.pid,
+                cookie: u64::MAX,
+            },
+        )
+        .map(|(_, leader)| leader)
+        .find(|leader| (leader.tid == 0 || leader.tid == key.pid) && leader.comm != "?")
 }
 
 /// Identity is `(task_cookie, pid)` when the cookie is non-zero. A fork child
@@ -633,17 +660,14 @@ pub fn link_child(
     if child_pid == 0 || child_pid == parent.pid {
         return;
     }
-    let inherited = nodes
-        .get(&parent)
-        .filter(|node| node.comm != "?")
-        .map(|node| {
-            (
-                node.comm.clone(),
-                node.argv.clone(),
-                node.command_line.clone(),
-                node.proctitle.clone(),
-            )
-        });
+    let inherited = image_holder(nodes, parent).map(|node| {
+        (
+            node.comm.clone(),
+            node.argv.clone(),
+            node.command_line.clone(),
+            node.proctitle.clone(),
+        )
+    });
     let mut candidates: Vec<TaskKey> = nodes
         .iter()
         .filter(|(key, node)| key.pid == child_pid && **key != parent && node.parent.is_none())
@@ -814,8 +838,19 @@ pub fn process_label(node: &ProcessNode) -> String {
         format!("{ids}  thread")
     } else {
         let name = match node.comm.as_str() {
-            "?" | "" => "unknown",
-            comm => process_cells::file_name(comm),
+            "?" | "" => "unknown".to_owned(),
+            // A program run again through /proc/self/exe (BusyBox choosing
+            // an applet) is named by the argv[0] it chose.
+            comm if super::rules::process::proc_exe(comm) => match node
+                .argv
+                .first()
+                .map(|argv0| process_cells::called(argv0))
+                .filter(|called| !called.is_empty())
+            {
+                Some(called) => format!("{called} via {comm}"),
+                None => process_cells::file_name(comm).to_owned(),
+            },
+            comm => process_cells::file_name(comm).to_owned(),
         };
         format!("{name} {ids}")
     };
@@ -926,19 +961,30 @@ pub fn exec_argv(invocation: &InvocationSummary, event: &EventSummary) -> Vec<St
 /// The text a captured buffer argument held, up to its first NUL or newline.
 pub fn argument_text(invocation: &InvocationSummary, index: usize) -> Option<String> {
     let prefix = format!("arg{index}.");
-    let field = invocation
+    // The entry's field, or the exit's when the guest read the input again
+    // as the call returned (it was not in memory at entry).
+    invocation
         .entry
         .iter()
         .chain(invocation.exit.iter())
         .flat_map(|event| &event.fields)
-        .find(|field| field.key.starts_with(&prefix) && !field.key.contains('['))?;
-    let bytes = trace::covered_preview(field);
+        .filter(|field| field.key.starts_with(&prefix) && !field.key.contains('['))
+        .map(|field| text_bytes(trace::covered_preview(field), &[0, b'\n']))
+        .map(|text| text.trim().to_owned())
+        .find(|text| !text.is_empty())
+}
+
+/// Captured bytes as text, up to the first of `stops`: UTF-8 as it is, other
+/// bytes escaped (`\xff`) so a name that is not text still shows.
+pub fn text_bytes(bytes: &[u8], stops: &[u8]) -> String {
     let end = bytes
         .iter()
-        .position(|byte| *byte == 0 || *byte == b'\n')
+        .position(|byte| stops.contains(byte))
         .unwrap_or(bytes.len());
-    let text = std::str::from_utf8(&bytes[..end]).ok()?.trim();
-    (!text.is_empty()).then(|| text.to_owned())
+    match std::str::from_utf8(&bytes[..end]) {
+        Ok(text) => text.to_owned(),
+        Err(_) => bytes[..end].escape_ascii().to_string(),
+    }
 }
 
 /// A name the task gave itself: `prctl(PR_SET_NAME)`, or a write to a `comm`
@@ -1024,6 +1070,19 @@ pub fn state_text(
 /// The exec history, then the names the task took after the last exec.
 pub fn history_text(node: &ProcessNode) -> String {
     let mut text = process_cells::exec_chain(&node.exec_history);
+    // An exec the kernel refused left the task running its old program:
+    // `exec of /bin/sh failed (EACCES)`.
+    for (path, error) in &node.record.failed_execs {
+        if !text.is_empty() {
+            text.push_str("; ");
+        }
+        text.push_str(&format!(
+            "exec of {path} {}",
+            crate::files::failure_label(*error)
+                .replacen("Failed", "failed", 1)
+                .replacen("Interrupted", "interrupted", 1)
+        ));
+    }
     for name in &node.renames {
         if !text.is_empty() {
             text.push_str("; ");

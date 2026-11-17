@@ -260,6 +260,9 @@ pub fn open_scan(
     if let Some(named) = named {
         name_launched(&mut files.process_images, named, request.root_cookie);
     }
+    files.journal.launch_image = named
+        .and_then(|named| named.path.clone())
+        .zip(launch.as_ref().and_then(launch_sha256));
     if let Some(launch) = &launch {
         if let (Some(writer), Some(first)) = (&mut event_journal, root_call) {
             let evidence = antinomie_monitor_core::analysis::detection::Evidence::Call {
@@ -508,9 +511,17 @@ impl Scan {
             .iter()
             .filter_map(files::Change::ioc_file)
             .collect();
-        counts.changed = all_changes.iter().filter(|change| change.real()).count() as u64;
+        counts.changed = all_changes.iter().filter(|change| change.counted()).count() as u64;
+        // The Changed files tab lists the files `counted` means, the refused
+        // attempts at such files when failures are shown, and standard I/O
+        // when it is not hidden; devices, `/proc`, `/sys`, directories and
+        // unnamed descriptors are not files the run changed.
         let file_changes: Vec<_> = all_changes
             .into_iter()
+            .filter(|change| {
+                change.standard_io
+                    || files::counted_file(&change.path, change.path_known, false, change.directory)
+            })
             .filter(|change| {
                 let row = change.row(clock_anchor);
                 counts.visibility[file_visibility::visibility_slot(FileTab::Changed)]
@@ -834,6 +845,11 @@ impl Scan {
                 capture: capture_state,
                 frames: network.counts.map(|counts| counts.0),
                 disk: Default::default(),
+                sample_sha256: files
+                    .journal
+                    .launch_image
+                    .as_ref()
+                    .map(|(_, sha)| sha.clone()),
             },
             request.data_dir.as_deref(),
             &recording.directory,
@@ -1039,6 +1055,7 @@ impl Scan {
             attribution: network.attribution.take(),
             new_tabs: network.new_tabs,
             ioc: Some(Arc::new(ioc)),
+            launch_image: files.journal.launch_image.clone(),
             network_warning: network.network_warning,
             root_crash,
             last_failed_step: last_failed.map(|step| step.text),
@@ -1055,6 +1072,22 @@ impl Scan {
             },
         }))
     }
+}
+
+/// The guest's SHA-256 of the launched program's image, from the launch's own
+/// hash record: none for a script's interpreter or a file that changed while
+/// it was read.
+pub(crate) fn launch_sha256(
+    launch: &antinomie_monitor_core::recording::LaunchRecord,
+) -> Option<String> {
+    use antinomie_monitor_core::kernel_notes::{self, HashKind};
+    launch
+        .notes
+        .iter()
+        .filter_map(kernel_notes::file_hash)
+        .find(|hash| hash.kind == HashKind::Exec)
+        .filter(|hash| hash.skipped().is_none())
+        .and_then(|hash| hash.sha256_hex())
 }
 
 /// A program that died of a signal before its first recorded call has a

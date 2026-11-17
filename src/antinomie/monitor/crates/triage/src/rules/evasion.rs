@@ -79,8 +79,9 @@ pub fn exec_name(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     };
     let before = out.len();
     process::masquerade(argv0, base(&path), "exec argv[0]", out);
-    // A kernel-thread or daemon name has its own rule above.
-    if out.len() == before && cx.ok {
+    // A kernel-thread or daemon name has its own rule above; BusyBox choosing
+    // an applet by argv[0] is not a disguise.
+    if out.len() == before && cx.ok && !process::busybox_dispatch(cx, &path, argv0) {
         argv_masquerade(&path, cx.argv(), out);
     }
 }

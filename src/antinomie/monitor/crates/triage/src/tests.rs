@@ -388,6 +388,18 @@ pub fn repeats_of_one_task_are_one_row_with_a_count_and_a_time_span() {
 }
 
 #[test]
+pub fn a_relative_path_under_the_root_directory_has_one_slash() {
+    let start = path_call(1, 80, "chdir", 0, "/");
+    let mut opened = path_call(1, 257, "openat", 4, "note");
+    opened.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0, 0, 0, 0]);
+    let rows = file_rows(&[start, opened], OPEN_NAMES);
+    assert_eq!(
+        rows.rows[0][0].text,
+        "/note (lexical cwd path; symlinks unknown)"
+    );
+}
+
+#[test]
 pub fn relative_chdir_retains_symlink_components_and_unknown_fchdir_invalidates_cwd() {
     let start = path_call(1, 80, "chdir", 0, "/tmp/link");
     let relative = path_call(1, 80, "chdir", 0, "../child");
@@ -1504,4 +1516,28 @@ pub fn bpf_rows_without_an_image_each_have_their_own_key() {
             "row {at} shares its key"
         );
     }
+}
+
+#[test]
+pub fn a_failed_terminal_request_on_a_file_that_is_not_a_terminal_is_no_schema_gap() {
+    let ioctl = |request: u64, result: i64| {
+        let mut row = call(1, 16, "ioctl", result);
+        row.entry.as_mut().unwrap().args = Some([1, request, 0x7ff0, 0, 0, 0]);
+        let mut gap = captured("arg2.ioctl", "", b"");
+        gap.status = Some(4);
+        row.entry.as_mut().unwrap().fields.push(gap);
+        row
+    };
+    let mut gaps = std::collections::BTreeMap::new();
+    for row in [ioctl(0x5413, -25), ioctl(0x5413, 0), ioctl(0x5421, -25)] {
+        let event = trace::representative(&row).unwrap().clone();
+        archive_scan::note_schema_gaps(&mut gaps, &row, &event);
+    }
+    assert_eq!(
+        gaps.into_iter().collect::<Vec<_>>(),
+        [
+            ("ioctl TIOCGWINSZ (0x5413, arg2.ioctl)".to_owned(), 1),
+            ("ioctl request 0x5421 (arg2.ioctl)".to_owned(), 1),
+        ]
+    );
 }

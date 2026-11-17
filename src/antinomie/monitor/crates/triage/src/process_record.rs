@@ -39,6 +39,8 @@ pub struct ProcessRecord {
     pub sent: Vec<(i64, u8)>,
     /// The process that sent the fatal signal, when a recorded call did.
     pub killed_by: Option<u32>,
+    /// Each exec the kernel refused: the program asked for and the error.
+    pub failed_execs: Vec<(String, i64)>,
 }
 
 impl ProcessRecord {
@@ -70,6 +72,18 @@ impl ProcessRecord {
             }
             ("tgkill", Some(args)) if succeeded => {
                 self.sent(i64::from(args[1] as u32 as i32), args[2]);
+            }
+            ("execve" | "execveat", _) if !succeeded => {
+                let error = invocation
+                    .exit
+                    .as_ref()
+                    .and_then(|exit| exit.result)
+                    .unwrap_or_default();
+                let path = program_name(invocation.entry.as_ref(), invocation.exit.as_ref())
+                    .unwrap_or_else(|| "a program not recorded".into());
+                if self.failed_execs.len() < EXEC_LIMIT {
+                    self.failed_execs.push((path, error));
+                }
             }
             _ => {}
         }

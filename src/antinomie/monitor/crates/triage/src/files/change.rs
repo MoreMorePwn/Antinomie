@@ -31,6 +31,70 @@ impl Change {
     pub fn real(&self) -> bool {
         self.changes
     }
+    /// Decide whether a write hash the guest marked "changed while it was
+    /// read" still gives the file's bytes: the guest compares the file's size,
+    /// times and change counter before and after reading, so a `chmod` the
+    /// run made while the file was being hashed marks it too. When the run's
+    /// calls on the file between the close and the end of the hashing were
+    /// metadata only (and at least one was), the bytes did not change.
+    pub fn settle_hash(&mut self) {
+        let Some(hash) = self.hash.as_ref() else {
+            return;
+        };
+        if hash.kind != HashKind::Write
+            || !hash.changed
+            || hash.interpreter
+            || hash.sha256.is_none()
+            || hash.status != antinomie_monitor_core::kernel_notes::HashStatus::Ok
+        {
+            return;
+        }
+        // The worker read the file within its queue and hashing time of the
+        // close; a millisecond more for the clocks.
+        let end = self
+            .hash_ns
+            .saturating_add((u64::from(hash.queue_us) + u64::from(hash.hash_us) + 1_000) * 1_000);
+        let window: Vec<&Operation> = self
+            .operations
+            .iter()
+            .filter(|operation| operation.time > self.hash_ns && operation.time <= end)
+            .collect();
+        let metadata = |name: &str| {
+            let name = name.split(' ').next().unwrap_or(name);
+            METADATA_NAMES.contains(&name)
+        };
+        self.hash_settled = !window.is_empty()
+            && window.iter().all(|operation| metadata(&operation.name))
+            // The list stops at its cap: a later write may be missing.
+            && self.operations.len() < TIMELINE_ROWS;
+    }
+    /// The guest's SHA-256 of the file, or why it has none.
+    pub fn guest_hash(&self) -> (Option<String>, Option<String>) {
+        match &self.hash {
+            Some(hash) if self.hash_settled => (hash.sha256_hex(), None),
+            Some(hash) => {
+                // A hash the guest could not take, or took of a script's
+                // interpreter or a file that changed meanwhile, is not this file's.
+                let why = hash.skipped();
+                (why.is_none().then(|| hash.sha256_hex()).flatten(), why)
+            }
+            None => (None, None),
+        }
+    }
+    /// A file the run changed, as every list and count of changed files
+    /// means it (the Changed files tab, `counts.files_changed`, the report's
+    /// Written or changed table, the digest's written files, file IOCs and the
+    /// programs kept for YARA): see [`counted_file`]. A change the kernel
+    /// refused is an attempt, not a change.
+    pub fn counted(&self) -> bool {
+        self.changes
+            && counted_file(
+                &self.path,
+                self.path_known,
+                self.standard_io,
+                self.directory,
+            )
+    }
     /// A write, cut, copy into the file or shared mapping of it succeeded.
     pub fn wrote(&self) -> bool {
         ["Written", "Truncated / resized", "Copied", "Mapped"]
@@ -108,6 +172,7 @@ impl Change {
     /// identity, how many links it has left and a new name for it.
     pub fn note_identity(&mut self, id: FileId, name: Option<&str>) {
         self.identity.get_or_insert(id.key);
+        self.directory |= id.directory;
         if !matches!(id.kind, FileIdKind::Issue | FileIdKind::Exec) {
             self.links = Some(id.nlink);
         }
@@ -119,7 +184,9 @@ impl Change {
     }
     /// The guest hashed the file: it says what the file held then, or why it
     /// has no digest.
-    pub fn record_hash(&mut self, hash: FileHash) {
+    pub fn record_hash(&mut self, hash: FileHash, at_ns: u64) {
+        self.hash_ns = at_ns;
+        self.hash_settled = false;
         let wrote = self.wrote();
         if hash.kind == HashKind::Write
             && !wrote
@@ -228,3 +295,50 @@ impl Change {
         evidence_key(&self.row(None))
     }
 }
+
+/// What can be a changed file: a regular file or memfd the run reached by a
+/// known name. Not standard input or output, not a directory (those are
+/// "directories created"), and not a device, `/proc` or `/sys` entry (a
+/// write to `/proc/self/oom_score_adj` is behaviour the rules read from the
+/// calls, never a file the run left). `/dev/shm` is a RAM disk for files.
+pub fn counted_file(path: &str, path_known: bool, standard_io: bool, directory: bool) -> bool {
+    path_known && !standard_io && !directory && !pseudo_file(path)
+}
+
+/// A device node, or a `/proc` or `/sys` entry.
+pub fn pseudo_file(path: &str) -> bool {
+    let under = |root: &str| {
+        path == root
+            || path
+                .strip_prefix(root)
+                .is_some_and(|rest| rest.starts_with('/'))
+    };
+    (under("/dev") && !under("/dev/shm")) || under("/proc") || under("/sys")
+}
+
+/// Calls that change a file's metadata or names, never its bytes.
+pub const METADATA_NAMES: &[&str] = &[
+    "chmod",
+    "fchmod",
+    "fchmodat",
+    "fchmodat2",
+    "chown",
+    "fchown",
+    "lchown",
+    "fchownat",
+    "utime",
+    "utimes",
+    "utimensat",
+    "futimesat",
+    "setxattr",
+    "lsetxattr",
+    "fsetxattr",
+    "removexattr",
+    "lremovexattr",
+    "fremovexattr",
+    "rename",
+    "renameat",
+    "renameat2",
+    "link",
+    "linkat",
+];

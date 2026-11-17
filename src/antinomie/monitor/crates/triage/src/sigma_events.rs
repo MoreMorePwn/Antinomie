@@ -82,6 +82,9 @@ pub struct State {
     pub dns: BTreeMap<String, Vec<(Option<u64>, String)>>,
     /// Working directory the root process was launched in.
     pub launch_cwd: Option<String>,
+    /// The launched program's path and the guest's SHA-256 of its image (the
+    /// launch's own hash record), when it has a usable one.
+    pub launch_image: Option<(String, String)>,
     pub root_cookie: u64,
     pub seeded: bool,
     /// Credentials in effect for each task, by task cookie.

@@ -76,6 +76,85 @@ pub struct Gathered<'a> {
     pub frames: Option<u64>,
     /// SHA-256 and MD5 of files, from a saved disk dump of the machine.
     pub disk: std::collections::BTreeMap<String, Hashes>,
+    /// The guest's SHA-256 of the launched program's image.
+    pub sample_sha256: Option<String>,
+}
+
+/// Why an executed program's hash is not an indicator.
+pub const BASE_PROGRAM: &str =
+    "a program of the base image (its own BusyBox or system tool), which the run did not write";
+
+/// Where a base image keeps its programs.
+const PROGRAM_DIRECTORIES: &[&str] = &[
+    "/bin/",
+    "/sbin/",
+    "/usr/bin/",
+    "/usr/sbin/",
+    "/usr/libexec/",
+    "/usr/lib/",
+    "/usr/lib64/",
+    "/lib/",
+    "/lib64/",
+];
+
+/// Mark the base image's own programs among the file indicators as base
+/// noise, so no report lists their hash as an indicator: a program the run
+/// only ran (never created, wrote, changed or deleted) whose hash is the one
+/// its path had on the starting disk, or that sits where the base keeps its
+/// programs; and every other path that ran the same bytes (BusyBox running an
+/// applet through `/proc/self/exe`). The sample's hash and the hash of any
+/// file the run wrote are never the base's.
+pub fn mark_base_programs(
+    indicators: &mut [Indicator],
+    start: &[(String, bool, StartHash)],
+    sample: &[&str],
+) {
+    use std::collections::BTreeSet;
+    let sha = |indicator: &Indicator| -> Option<String> {
+        indicator
+            .hashes
+            .as_ref()
+            .map(|hashes| hashes.sha256.to_ascii_lowercase())
+            .filter(|sha| sha.len() == 64)
+    };
+    let only_ran = |indicator: &Indicator| {
+        !indicator.roles.is_empty() && indicator.roles.iter().all(|role| role == "executed")
+    };
+    let files = || indicators.iter().filter(|i| i.ty == Type::File);
+    let mut theirs: BTreeSet<String> = files()
+        .filter(|indicator| !only_ran(indicator))
+        .filter_map(sha)
+        .collect();
+    theirs.extend(sample.iter().map(|sha| sha.to_ascii_lowercase()));
+    let on_disk = |path: &str| {
+        start.iter().find_map(|(at, _, hash)| match hash {
+            StartHash::Hashed { sha256, .. } if at == path => Some(sha256.to_ascii_lowercase()),
+            _ => None,
+        })
+    };
+    let base: BTreeSet<String> = files()
+        .filter(|indicator| only_ran(indicator))
+        .filter_map(|indicator| {
+            let sha = sha(indicator)?;
+            if theirs.contains(&sha) {
+                return None;
+            }
+            let path = indicator.path.as_str();
+            let ours = match on_disk(path) {
+                Some(disk) => disk == sha,
+                None => PROGRAM_DIRECTORIES.iter().any(|dir| path.starts_with(dir)),
+            };
+            ours.then_some(sha)
+        })
+        .collect();
+    for indicator in indicators.iter_mut().filter(|i| i.ty == Type::File) {
+        if indicator.noise.is_none()
+            && only_ran(indicator)
+            && sha(indicator).is_some_and(|sha| base.contains(&sha))
+        {
+            indicator.noise = Some(BASE_PROGRAM.into());
+        }
+    }
 }
 
 /// A line that says which datasets were read: feed ids with fetch time and switch.
@@ -452,7 +531,18 @@ pub fn build(
     let omitted = gathered.collector.omitted + gathered.log.omitted;
     let capture = gathered.capture;
     let frames = gathered.frames;
-    let indicators = gathered.collector.finish();
+    let mut indicators = gathered.collector.finish();
+    let sample: Vec<&str> = gathered
+        .sample_sha256
+        .as_deref()
+        .into_iter()
+        .chain(
+            gathered
+                .report
+                .and_then(|report| report.specimen_sha256.as_deref()),
+        )
+        .collect();
+    mark_base_programs(&mut indicators, &gathered.read_hashes.files, &sample);
     let signature = data_dir.map(signature).unwrap_or_default();
     let key = cache_key(&indicators, &signature);
     let scan = match cache.filter(|cache| cache.key == key) {
@@ -939,10 +1029,92 @@ pub mod tests {
             capture: Capture::Off,
             frames: None,
             disk,
+            sample_sha256: None,
         }
     }
 
     const SHA: &str = "f66025c51e65b02ffdaf55ea9460656a0b79598cb7db1514dc7a23a81b4cf1aa";
+
+    #[test]
+    fn the_base_images_busybox_is_never_an_indicator_but_the_samples_copies_are() {
+        let busybox = "7d93682be37cf6ed46699f6fff546b80bf133cf8ec342c2d04bc23387f78bc34";
+        let sample = "1bcae1cc9e696bf47265291c7a94519b011d988e35289c39023a9b58b5f31b5a";
+        let dropped = "ab".repeat(32);
+        let mut collector = Collector::default();
+        let mut add = |path: &str, role: &str, sha: &str| {
+            collector.file(
+                path,
+                role,
+                Some(hashes(sha)),
+                Source::Syscall,
+                Seen::default(),
+            );
+        };
+        add("/bin/sh", "executed", busybox);
+        add("/proc/self/exe", "executed", busybox);
+        add("/bin/crontab", "executed", busybox);
+        // The sample runs itself again, and a copy it wrote.
+        add("/proc/self/exe", "executed", sample);
+        add("/usr/bin/.syslogd", "created", sample);
+        add("/usr/bin/.syslogd", "executed", sample);
+        // A program the run dropped into /usr/bin and ran.
+        add("/usr/bin/sysd", "written at close", &dropped);
+        add("/usr/bin/sysd", "executed", &dropped);
+        // A program in /tmp the run did not write: not where a base keeps
+        // its programs, so not the base's without the starting disk saying so.
+        add("/tmp/.kd", "executed", &"cd".repeat(32));
+        // /opt/tool: the starting disk had other bytes at that path.
+        add("/opt/tool", "executed", &"ef".repeat(32));
+        add("/opt/same", "executed", &"01".repeat(32));
+        let mut indicators = collector.finish();
+        let start = vec![
+            (
+                "/opt/tool".to_owned(),
+                true,
+                StartHash::Hashed {
+                    sha256: "99".repeat(32),
+                    md5: String::new(),
+                    size: 1,
+                },
+            ),
+            (
+                "/opt/same".to_owned(),
+                true,
+                StartHash::Hashed {
+                    sha256: "01".repeat(32),
+                    md5: String::new(),
+                    size: 1,
+                },
+            ),
+        ];
+        mark_base_programs(&mut indicators, &start, &[sample]);
+        let noise = |path: &str, sha: &str| {
+            indicators
+                .iter()
+                .find(|i| i.path == path && i.value == sha)
+                .unwrap_or_else(|| panic!("{path} {sha}"))
+                .noise
+                .clone()
+        };
+        assert_eq!(noise("/bin/sh", busybox).as_deref(), Some(BASE_PROGRAM));
+        assert_eq!(
+            noise("/proc/self/exe", busybox).as_deref(),
+            Some(BASE_PROGRAM)
+        );
+        assert_eq!(
+            noise("/bin/crontab", busybox).as_deref(),
+            Some(BASE_PROGRAM)
+        );
+        assert_eq!(noise("/proc/self/exe", sample), None);
+        assert_eq!(noise("/usr/bin/.syslogd", sample), None);
+        assert_eq!(noise("/usr/bin/sysd", &dropped), None);
+        assert_eq!(noise("/tmp/.kd", &"cd".repeat(32)), None);
+        assert_eq!(noise("/opt/tool", &"ef".repeat(32)), None);
+        assert_eq!(
+            noise("/opt/same", &"01".repeat(32)).as_deref(),
+            Some(BASE_PROGRAM)
+        );
+    }
 
     #[test]
     fn calls_the_sample_strings_and_files_become_indicators() {

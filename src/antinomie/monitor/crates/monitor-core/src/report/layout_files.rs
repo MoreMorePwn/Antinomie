@@ -172,6 +172,24 @@ impl Builder {
             }
             _ => {}
         }
+        if !report.directories_created.is_empty() {
+            blocks.push(Block::Sub {
+                title: format!(
+                    "Directories created ({})",
+                    thousands(report.directories_created.len() as u64)
+                ),
+                id: "files-directories".into(),
+            });
+            blocks.push(Block::Table(DocTable {
+                columns: vec!["Path".into()],
+                rows: report
+                    .directories_created
+                    .iter()
+                    .take(DOCUMENT_ROWS)
+                    .map(|path| vec![Cell::plain(path.clone())])
+                    .collect(),
+            }));
+        }
         let merged = report.file_activity.as_ref().is_some_and(|r| !r.is_empty());
         for named in tabs {
             if named.name == "Changed files" && merged {

@@ -322,9 +322,9 @@ impl Builder {
         }
         if noisy > 0 {
             blocks.push(Block::Note(format!(
-                "{noisy} more are the base image's own traffic (clock sync, DHCP, package \
-                 indexes, the guest's resolver), not the sample's. They are in the JSON export \
-                 under base_noise."
+                "{noisy} more are the base image's own traffic and programs (clock sync, DHCP, \
+                 package indexes, the guest's resolver, its BusyBox), not the sample's. They are \
+                 in the JSON export under base_noise."
             )));
         }
         self.section("indicators", "Indicators of compromise", blocks);

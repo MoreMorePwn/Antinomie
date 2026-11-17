@@ -252,6 +252,9 @@ impl FileIndex {
             change.tid = event.tid;
         }
         change.changes |= changed && !failed;
+        if matches!(name, "mkdir" | "mkdirat") && success {
+            change.directory = true;
+        }
         if changed && failed {
             change.failed = change.failed.saturating_add(1);
         } else if changed && !success {

@@ -195,7 +195,10 @@ pub struct Behaviour {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Counts {
+    /// Processes, not their threads.
     pub processes: u64,
+    /// Threads other than each process's main one.
+    pub threads: u64,
     pub findings: u64,
     pub indicators: u64,
     pub indicators_matched: u64,
@@ -336,8 +339,9 @@ pub struct Indicator {
     pub sha256: String,
     pub md5: String,
     pub sha1: String,
-    /// Why this is the base image's own traffic (clock sync, DHCP, apt) and not
-    /// the sample's; empty for the run's indicators. Such rows are listed in the
+    /// Why this is the base image's own traffic (clock sync, DHCP, apt) or
+    /// program (its BusyBox) and not the sample's; empty for the run's
+    /// indicators. Such rows are listed in the
     /// JSON only, not in the document tables, MISP or STIX.
     pub base_noise: String,
     /// For an endpoint on the Tor gateway's stand-in range: the name the
@@ -516,6 +520,9 @@ pub struct Report {
     pub findings: Option<Table>,
     pub files: Option<FilesSection>,
     pub file_activity: Option<Vec<FileRecord>>,
+    /// Directories the run made (`mkdir`): not files it wrote.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub directories_created: Vec<String>,
     pub network: Option<Vec<NamedTable>>,
     pub detections: Option<Vec<Detection>>,
     pub evidence: Option<Vec<EvidenceRef>>,

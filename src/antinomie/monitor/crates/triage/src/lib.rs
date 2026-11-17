@@ -602,6 +602,8 @@ pub struct ScanData {
     pub new_tabs: NewTabs,
     /// The IOC window's list of the run and the datasets' answer.
     pub ioc: Option<Arc<ioc_scan::IocScan>>,
+    /// The launched program's path and the guest's SHA-256 of its image.
+    pub launch_image: Option<(String, String)>,
     /// The run's network calls and the capture's DNS names, to say which
     /// process made a packet (the Packets list's Source column).
     pub attribution: Option<Arc<net_attr::NetAttribution>>,

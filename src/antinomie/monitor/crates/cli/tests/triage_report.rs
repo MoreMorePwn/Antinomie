@@ -369,7 +369,7 @@ fn builder_counts(fixture: &Data) -> Value {
     let (_, built) = report_export::build_report(&job, &scan).unwrap();
     let counts = built.report.summary.unwrap().counts;
     serde_json::json!({
-        "processes": counts.processes, "findings": counts.findings,
+        "processes": counts.processes, "threads": counts.threads, "findings": counts.findings,
         "indicators": counts.indicators, "indicators_matched": counts.indicators_matched,
         "techniques": counts.techniques, "files_changed": counts.files_changed,
         "files_opened": counts.files_opened, "endpoints": counts.endpoints,

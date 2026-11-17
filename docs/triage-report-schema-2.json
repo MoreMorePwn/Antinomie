@@ -129,6 +129,13 @@
         }
       ]
     },
+    "directories_created": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Directories the run made (mkdir); left out when there are none."
+    },
     "network": {
       "oneOf": [
         {

@@ -66,6 +66,16 @@ pub fn the_same_note_in_three_directories_is_a_ransom_note() {
         ]),
         "impact.ransom_note"
     ));
+    // Notes the kernel refused (ENOENT: no such directory) were never made.
+    let refused = |dir: &str| open_write(1, &format!("{dir}/.state"), -2);
+    assert!(!has(
+        &run(vec![
+            refused("/mnt/mtd/.syscache"),
+            refused("/mnt/app/.syscache"),
+            refused("/tmp/.syscache"),
+        ]),
+        "impact.ransom_note"
+    ));
 }
 
 #[test]
