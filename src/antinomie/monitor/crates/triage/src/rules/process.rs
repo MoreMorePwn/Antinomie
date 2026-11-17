@@ -630,6 +630,9 @@ pub fn kill(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         return;
     }
     let time = cx.time();
+    if cx.ok {
+        super::device::killed(st, time, pid);
+    }
     let image = cx.image_name();
     let task = st.task(cx);
     // Mirai-style killer: scan /proc, then SIGKILL what was found.

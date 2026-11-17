@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Drive one base build through the backend, as the "Build base" wizard does.
 //!
-//! usage: build-base DATA_DIR busybox|debian-minimal|debian-xfce automatic|native|podman|docker|qemu [OPTIONS_JSON]
+//! usage: build-base DATA_DIR busybox|busybox-extra|debian-minimal|debian-xfce automatic|native|podman|docker|qemu [OPTIONS_JSON]
 //!
 //! OPTIONS_JSON overrides fields of the profile's default answers, for example
 //! '{"hostname":"lab","timezone":"Europe/Berlin"}'. ANTINOMIE_BUILD_ARCH=arm64
@@ -29,7 +29,7 @@ fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !(3..=4).contains(&args.len()) {
         return Err(
-            "usage: build-base DATA_DIR busybox|debian-minimal|debian-xfce automatic|native|podman|docker|qemu [OPTIONS_JSON]"
+            "usage: build-base DATA_DIR busybox|busybox-extra|debian-minimal|debian-xfce automatic|native|podman|docker|qemu [OPTIONS_JSON]"
                 .into(),
         );
     }

@@ -7,6 +7,8 @@ pub mod columns;
 #[cfg(test)]
 pub mod credential;
 #[cfg(test)]
+pub mod device;
+#[cfg(test)]
 pub mod discovery;
 #[cfg(test)]
 pub mod evasion;

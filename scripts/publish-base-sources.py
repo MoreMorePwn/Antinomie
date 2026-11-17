@@ -52,7 +52,10 @@ ADAPTER = "src/antinomie/packaging/debian-6.12.94-1-trixie"
 # app commit, not the patch series, so bases of one series may hold different ones.
 RECIPE = ("scripts/build-monitor-kernel.sh", "scripts/build-base.py", "scripts/bootstrap.sh",
           "scripts/fetch-inputs.sh", "scripts/verify-inputs.sh", "scripts/commit.sh",
-          ADAPTER + "/adapter.conf", ADAPTER + "/series.fence")
+          ADAPTER + "/adapter.conf", ADAPTER + "/series.fence",
+          # The camera base's kernel symbols, recipe and vendor program.
+          "src/antinomie/packaging/kconfig/busybox-extra.cfg", "scripts/busybox_extra.py",
+          "src/antinomie/packaging/busybox-extra/camera.c")
 PACKAGE_FIELDS = ("package", "version", "architecture", "source_package", "source_version")
 # Archives snapshot.debian.org lists; the debug mirrors hold the same files.
 ARCHIVE_ORDER = ("debian", "debian-security", "debian-ports")

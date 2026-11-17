@@ -280,9 +280,10 @@ exit 0
         self.assertNotIn("localhost", commands[0])
         self.assertEqual(commands[1][-4:], ("--hostname", "lab", "--name", "Lab"))
         recipe = (REPO / "scripts/build-monitor-image.py").read_text()
-        self.assertIn('parser.add_argument("--hostname", default="debian")', recipe)
+        # The camera base (busybox-extra) takes its device profile's hostname.
+        self.assertIn('args.hostname = args.hostname or "debian"', recipe)
         app = (REPO / "src/antinomie/monitor/crates/monitor-core/src/build.rs").read_text()
-        self.assertIn('hostname: "debian".into()', app)
+        self.assertIn('} else {\n                "debian".into()\n            },', app)
 
     def test_debian_minimal_is_the_console_recipe_on_the_stock_kernel(self):
         self.assertEqual(base.PROFILES["debian-minimal"][:2], ("stock", "build-debian-image.py"))

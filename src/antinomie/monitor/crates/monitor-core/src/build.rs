@@ -28,6 +28,9 @@ pub use crate::build_choices::{KEYBOARD_LAYOUTS, KEYBOARD_VARIANTS, LOCALES, TIM
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     BusyBox,
+    /// The BusyBox base as a lived-in camera or DVR (`busybox-extra`): the
+    /// device's services, a watchdog, flash and iptables, on its own kernel.
+    BusyBoxExtra,
     /// Debian 13 with the installer desktop its options choose.
     DebianXfce,
     /// Debian 13 without a desktop: console login, APT and standard tools.
@@ -37,6 +40,10 @@ impl Kind {
     /// Built from Debian packages with mmdebstrap (the installer-style answers apply).
     pub fn is_debian(self) -> bool {
         matches!(self, Self::DebianXfce | Self::DebianMinimal)
+    }
+    /// Built by BusyBox's image recipe (no Debian bootstrap).
+    pub fn is_busybox(self) -> bool {
+        matches!(self, Self::BusyBox | Self::BusyBoxExtra)
     }
 }
 
@@ -53,6 +60,11 @@ pub const BUILD_PROFILES: &[BuildProfile] = &[
         id: "busybox",
         label: "BusyBox (minimal)",
         kind: Kind::BusyBox,
+    },
+    BuildProfile {
+        id: "busybox-extra",
+        label: "BusyBox camera (DVR services)",
+        kind: Kind::BusyBoxExtra,
     },
     BuildProfile {
         id: "debian-minimal",
@@ -217,7 +229,13 @@ impl BuildOptions {
             desktop: host.desktop.unwrap_or_else(default_desktop),
             // The Debian installer's own default: common on real machines,
             // unlike "localhost" or a sandbox's name.
-            hostname: "debian".into(),
+            // The camera base takes its device profile's own name (the first
+            // of scripts/busybox_extra.py's DEVICE_PROFILES).
+            hostname: if kind == Kind::BusyBoxExtra {
+                "xvr".into()
+            } else {
+                "debian".into()
+            },
             locale: host.locale.unwrap_or_else(|| "en_US.UTF-8".into()),
             keyboard_layout: host.layout.clone().unwrap_or_else(|| "us".into()),
             keyboard_variant: host.layout.and(host.variant).unwrap_or_default(),
@@ -233,7 +251,7 @@ impl BuildOptions {
     pub fn validate(&self, kind: Kind) -> Result<(), String> {
         valid_base_name(&self.name)?;
         valid_hostname(&self.hostname)?;
-        if kind == Kind::BusyBox {
+        if kind.is_busybox() {
             return Ok(());
         }
         if kind == Kind::DebianXfce && !DESKTOPS.iter().any(|desktop| desktop.id == self.desktop) {
@@ -273,7 +291,7 @@ impl BuildOptions {
     /// The orchestrator's job options for a profile (only the options it offers).
     pub(crate) fn job_options(&self, kind: Kind) -> serde_json::Value {
         match kind {
-            Kind::BusyBox => serde_json::json!({
+            Kind::BusyBox | Kind::BusyBoxExtra => serde_json::json!({
                 "name": self.name.trim(),
                 "hostname": self.hostname,
             }),
@@ -300,7 +318,7 @@ impl BuildOptions {
     /// name), for the Debian kinds.
     pub(crate) fn rootfs_cache_name(&self, kind: Kind) -> Option<&str> {
         match kind {
-            Kind::BusyBox => None,
+            Kind::BusyBox | Kind::BusyBoxExtra => None,
             Kind::DebianXfce => Some(&self.desktop),
             Kind::DebianMinimal => Some("minimal"),
         }
@@ -335,6 +353,7 @@ pub fn automatic_base_name_for(kind: Kind, desktop: &str, arch: crate::api::Gues
 fn automatic_x86_name(kind: Kind, desktop: &str) -> String {
     match kind {
         Kind::BusyBox => "BusyBox".into(),
+        Kind::BusyBoxExtra => "BusyBox camera".into(),
         Kind::DebianMinimal => "Debian 13 (Minimal)".into(),
         Kind::DebianXfce => format!(
             "Debian 13 ({})",
@@ -533,6 +552,7 @@ pub fn series_short() -> String {
 pub(crate) fn kernel_profile(kind: Kind) -> &'static str {
     match kind {
         Kind::BusyBox => "minimal",
+        Kind::BusyBoxExtra => "extra",
         Kind::DebianMinimal | Kind::DebianXfce => "stock",
     }
 }
@@ -591,7 +611,7 @@ fn arch_mode_with(
         return Err(format!("no {} bases can be built", arch.label()));
     }
     match kind {
-        Kind::BusyBox => resolve_mode(kind, requested),
+        Kind::BusyBox | Kind::BusyBoxExtra => resolve_mode(kind, requested),
         Kind::DebianMinimal | Kind::DebianXfce if std::env::consts::ARCH == "aarch64" => {
             resolve_mode(kind, requested)
         }
@@ -763,7 +783,7 @@ pub fn tools(kind: Kind, mode: BuildMode) -> Vec<ToolSpec> {
                 KERNEL_TOOLS.to_vec()
             };
             all.extend_from_slice(match kind {
-                Kind::BusyBox => BUSYBOX_TOOLS,
+                Kind::BusyBox | Kind::BusyBoxExtra => BUSYBOX_TOOLS,
                 Kind::DebianXfce | Kind::DebianMinimal => DEBIAN_TOOLS,
             });
             all
