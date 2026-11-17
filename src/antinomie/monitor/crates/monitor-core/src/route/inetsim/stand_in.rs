@@ -240,7 +240,7 @@ fn target_for(arch: GuestArch) -> Option<&'static Target> {
 
 /// The stand-in program for `arch` and the architecture's name; `None` for an
 /// architecture the table lacks.
-pub(crate) fn program(arch: GuestArch) -> Option<(Vec<u8>, &'static str)> {
+pub fn program(arch: GuestArch) -> Option<(Vec<u8>, &'static str)> {
     target_for(arch).map(|target| (build(target), target.label))
 }
 
@@ -281,11 +281,12 @@ pub fn hashes() -> Vec<(String, String)> {
 
 /// What a file with SHA-256 `sha256` is, when it is one of the stand-ins.
 pub fn describe(sha256: &str) -> Option<String> {
-    let sha256 = sha256.to_ascii_lowercase();
-    hashes()
-        .into_iter()
-        .find(|(hash, _)| *hash == sha256)
-        .map(|(_, what)| what)
+    static KNOWN: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    KNOWN
+        .get_or_init(hashes)
+        .iter()
+        .find(|(hash, _)| hash.eq_ignore_ascii_case(sha256))
+        .map(|(_, what)| what.clone())
 }
 
 #[cfg(test)]

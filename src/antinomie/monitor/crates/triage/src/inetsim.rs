@@ -154,6 +154,36 @@ pub fn mark_stand_ins(indicators: &mut [Indicator]) {
     }
 }
 
+/// Labels the changed files whose bytes are a stand-in the services served
+/// (the guest saved a download): their Type says it is InetSim's harmless
+/// file, not the sample's payload.
+pub fn label_stand_in_files(rows: &mut [Vec<Cell>]) {
+    let column = |name: &str| {
+        crate::file_tabs::CHANGED_HEADERS
+            .iter()
+            .position(|header| *header == name)
+    };
+    let (Some(kind), Some(sha)) = (column("Type"), column("SHA-256")) else {
+        return;
+    };
+    for row in rows.iter_mut() {
+        let Some(what) = row
+            .get(sha)
+            .filter(|cell| cell.text.len() == 64)
+            .and_then(|cell| antinomie_monitor_core::route::stand_in_described(&cell.text))
+        else {
+            continue;
+        };
+        if let Some(cell) = row.get_mut(kind) {
+            cell.text = if cell.text.is_empty() {
+                what
+            } else {
+                format!("{} · {what}", cell.text)
+            };
+        }
+    }
+}
+
 /// One row of the InetSim tab.
 fn row(
     ms: u64,

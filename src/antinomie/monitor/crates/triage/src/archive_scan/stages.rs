@@ -542,7 +542,8 @@ impl Scan {
             change_page.push(change.row(clock_anchor))?;
         }
         let (read, read_omitted, _) = read_page.finish()?;
-        let (changed, changed_omitted, _) = change_page.finish()?;
+        let (mut changed, changed_omitted, _) = change_page.finish()?;
+        crate::inetsim::label_stand_in_files(&mut changed);
         let (opened, file_tabs) = tabs.finish()?;
         let FileRows {
             rows: opened,

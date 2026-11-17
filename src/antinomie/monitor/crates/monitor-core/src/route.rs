@@ -58,7 +58,10 @@ pub use self::{
             REPORT as INETSIM_REPORT, Report as InetSimReport, UPLOADS as INETSIM_UPLOADS,
             read_report as read_inetsim_report,
         },
-        stand_in::{STAND_IN, describe as stand_in_described, hashes as stand_in_hashes},
+        stand_in::{
+            STAND_IN, describe as stand_in_described, hashes as stand_in_hashes,
+            program as stand_in_program,
+        },
     },
     metadata::{
         REPORT as METADATA_REPORT, Report as MetadataReport, Service as MetadataService,

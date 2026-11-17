@@ -161,6 +161,29 @@ pub fn tor_irc_and_proxy_tools_are_medium() {
         run(calls)
     };
     assert!(has(&nick, "network.irc_c2"));
+    // IRC's USER has four parameters; FTP's (an `ftpget` login) has one.
+    let user = |line: &[u8]| {
+        let mut calls = tcp_to([203, 0, 113, 9], 21);
+        calls.push(with_entry(
+            sys(
+                1,
+                1,
+                "write",
+                [3, 0, line.len() as u64, 0, 0, 0],
+                line.len() as i64,
+            ),
+            "arg1.data",
+            line,
+        ));
+        run(calls)
+    };
+    assert!(has(&user(b"USER bot 0 * :bot\r\n"), "network.irc_c2"));
+    assert!(has(&user(b"USER bot bot bot bot\r\n"), "network.irc_c2"));
+    assert!(!has(&user(b"USER anonymous\r\n"), "network.irc_c2"));
+    assert!(!has(
+        &user(b"USER anonymous\r\nPASS x\r\n"),
+        "network.irc_c2"
+    ));
     for argv in [
         vec!["ssh", "-N", "-R", "8080:localhost:80", "host"],
         vec!["ssh", "-D", "1080", "host"],
@@ -199,6 +222,25 @@ pub fn an_elf_received_from_the_network_and_saved_is_high() {
         write(1, 4, b"<html>hello</html>"),
     ]);
     assert!(!has(&page, "c2.elf_download"));
+    // InetSim's stand-in, saved by the guest: the summary says whose it is.
+    let (stand_in, _) =
+        antinomie_monitor_core::route::stand_in_program(antinomie_monitor_core::GuestArch::X86_64)
+            .unwrap();
+    let out = run(vec![
+        socket(1, 2, 1, 3),
+        connect(1, 3, [198, 51, 100, 9], 80),
+        read(1, 3, &stand_in),
+        open_write(1, "/tmp/w.bin", 4),
+        write(1, 4, &stand_in),
+    ]);
+    let found = rows(&out, "c2.elf_download");
+    assert_eq!(found.len(), 1);
+    assert!(
+        text(found[0], "finding.summary")
+            .contains("stand-in served by InetSim: program (x86-64), not the sample's payload"),
+        "{}",
+        text(found[0], "finding.summary")
+    );
 }
 
 #[test]

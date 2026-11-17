@@ -570,6 +570,18 @@ pub fn traffic(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     }
 }
 
+/// IRC's `USER name mode unused :real name` (four parameters, the last one
+/// often after a colon). FTP's `USER name` (one parameter, a BusyBox
+/// `ftpget` on the InetSim route's FTP server) is not IRC.
+fn irc_user(lower: &str) -> bool {
+    let Some(rest) = lower.strip_prefix("user ") else {
+        return false;
+    };
+    let line = rest.split(['\r', '\n']).next().unwrap_or("");
+    let params = line.split_whitespace().count();
+    params >= 4 || (params >= 3 && line.contains(" :"))
+}
+
 /// What a payload sent to a server says about the program.
 pub fn content(bytes: &[u8], socket: &Socket, out: &mut Vec<Hit>) {
     let text = String::from_utf8_lossy(&bytes[..bytes.len().min(2048)]).into_owned();
@@ -577,9 +589,10 @@ pub fn content(bytes: &[u8], socket: &Socket, out: &mut Vec<Hit>) {
     let endpoint = socket
         .peer
         .map_or_else(|| "a socket".into(), |(ip, port)| format!("{ip}:{port}"));
-    if ["nick ", "user ", "join #", "privmsg "]
+    if ["nick ", "join #", "privmsg "]
         .iter()
         .any(|word| lower.starts_with(word))
+        || irc_user(&lower)
     {
         out.push(Hit::new(
             "network.irc_c2",
@@ -611,12 +624,20 @@ pub fn elf_to_file(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     let Some(path) = cx.fd_path(cx.args[0]).filter(|path| path.starts_with('/')) else {
         return;
     };
-    if cx.payload(false).starts_with(b"\x7fELF") {
+    let payload = cx.payload(false);
+    if payload.starts_with(b"\x7fELF") {
         st.task(cx).net_elf = false;
+        // The InetSim route's built-in services answer a download with a
+        // harmless stand-in of their own: the summary says so.
+        let stand_in = antinomie_monitor_core::route::stand_in_described(
+            &antinomie_monitor_core::storage::sha256_hex(&payload),
+        )
+        .map(|what| format!(" (the {what}, not the sample's payload)"))
+        .unwrap_or_default();
         out.push(Hit::new(
             "c2.elf_download",
             path,
-            format!("an ELF image received from the network is written to {path}"),
+            format!("an ELF image received from the network is written to {path}{stand_in}"),
         ));
     }
 }

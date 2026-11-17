@@ -247,7 +247,10 @@ The gateway starts on `Drop` (nothing leaves) and a run changes it only through
     and lines in Details); URL, endpoint and domain indicators for the download
     lines and the FTP and TFTP transfers (indicator source "InetSim"); the
     Network view's InetSim tab; the report's InetSim table and `inetsim` notes,
-    one STIX note and one MISP comment each.
+    one STIX note and one MISP comment each. A stand-in the guest saved keeps its
+    label by hash: its file indicators are noise, its Type in the Files view and
+    the `c2.elf_download` summary name it. An FTP login (`USER name`, one
+    parameter) is not taken for IRC's `USER` (four parameters).
 * **One upstream SOCKS5 path.** Tor is either Antinomie's own tor (`TorMode::Own`,
   the default; see below) or a SOCKS address the analyst gives (`TorMode::Socks`,
   default 127.0.0.1:9050, nothing started). VPN is

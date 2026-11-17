@@ -863,7 +863,13 @@ pub const SPECS: &[Spec] = &[
         C::Lateral,
         &["T1105", "T1059.004"],
     ),
-    rule("network.inetsim_download", 1, T::Medium, C::Command, &["T1105"]),
+    rule(
+        "network.inetsim_download",
+        1,
+        T::Medium,
+        C::Command,
+        &["T1105"],
+    ),
     rule(
         "network.inetsim_upload",
         1,
