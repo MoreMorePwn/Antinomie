@@ -302,7 +302,7 @@ impl Server {
         let transfer = match active.upload {
             Some(upload) => {
                 let done = upload.finish();
-                services.uploaded(active.generation, done.kept);
+                services.uploaded(active.generation, &done);
                 Transfer {
                     direction: "upload".into(),
                     size: done.size,

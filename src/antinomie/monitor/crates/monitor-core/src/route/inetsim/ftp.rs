@@ -172,14 +172,21 @@ pub(super) fn serve(services: Arc<Services>, stream: UnixStream, ip: Ipv4Addr, p
                             let _ = writer.write_all(b"150 Ok to send data.\r\n");
                             let mut upload = services.upload(view.generation, &arg);
                             let mut chunk = [0u8; 16 * 1024];
-                            while let Ok(n) = (&channel).read(&mut chunk) {
-                                if n == 0 {
+                            // The session's time limit holds during an upload
+                            // too (its bytes are capped by the upload limits).
+                            loop {
+                                let left = deadline.saturating_duration_since(Instant::now());
+                                if left.is_zero() {
                                     break;
                                 }
-                                upload.write(&chunk[..n]);
+                                let _ = channel.set_read_timeout(Some(left.min(IDLE)));
+                                match (&channel).read(&mut chunk) {
+                                    Ok(0) | Err(_) => break,
+                                    Ok(n) => upload.write(&chunk[..n]),
+                                }
                             }
                             let done = upload.finish();
-                            services.uploaded(view.generation, done.kept);
+                            services.uploaded(view.generation, &done);
                             services.transfer(
                                 view.generation,
                                 Transfer {

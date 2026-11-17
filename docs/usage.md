@@ -716,7 +716,9 @@ Pick the route in the Run form (**Network > Route**); the default comes from
   `inetsim-uploads/` in the run's folder, findings, URL and host indicators, the
   Network view's **InetSim** tab, the report, STIX and MISP. A served stand-in is
   labelled "stand-in served by InetSim" everywhere and its hash is never an
-  indicator. The options are in `network/routes.json` under `inetsim.builtin`:
+  indicator. **Settings > Network routes > InetSim** sets the login policy and
+  turns the stand-ins off; all the options are in `network/routes.json` under
+  `inetsim.builtin`:
   `telnet_logins` (`any` or `defaults`), `stand_ins` (`true`; `false` serves the
   fake file for every download), `session_bytes` (1 MiB), `session_seconds`
   (300) and `run_sessions` (512). An INetSim of your own (External mode) is not

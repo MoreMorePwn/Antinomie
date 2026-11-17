@@ -206,8 +206,15 @@ impl Services {
     /// A spool file for an upload named `name`, within the run's limits.
     pub(crate) fn upload(&self, generation: u64, name: &str) -> Upload {
         let mut state = self.lock();
-        let room = UPLOAD_RUN.saturating_sub(state.uploaded).min(UPLOAD_FILE);
         let current = state.generation == generation;
+        // The room is reserved now, so uploads at once stay within the run's
+        // limit; `uploaded` gives back what was not kept.
+        let room = if current {
+            UPLOAD_RUN.saturating_sub(state.uploaded).min(UPLOAD_FILE)
+        } else {
+            0
+        };
+        state.uploaded += room;
         state.next_upload += 1;
         let file_name = format!(
             "{:04}-{}",
@@ -215,7 +222,7 @@ impl Services {
             safe_name(name).chars().take(80).collect::<String>()
         );
         drop(state);
-        let file = (current && room > 0)
+        let file = (room > 0)
             .then(|| {
                 crate::storage::private_dir(&self.spool).ok()?;
                 File::create(self.spool.join(&file_name)).ok()
@@ -231,11 +238,14 @@ impl Services {
         }
     }
 
-    /// Counts what an upload kept against the run's limit.
-    pub(crate) fn uploaded(&self, generation: u64, kept: u64) {
+    /// Counts what an upload kept against the run's limit, giving back the
+    /// rest of its reserved room.
+    pub(crate) fn uploaded(&self, generation: u64, done: &Uploaded) {
         let mut state = self.lock();
         if state.generation == generation {
-            state.uploaded += kept;
+            state.uploaded = state
+                .uploaded
+                .saturating_sub(done.reserved.saturating_sub(done.kept));
         }
     }
 
@@ -244,7 +254,7 @@ impl Services {
         let mut upload = self.upload(generation, name);
         upload.write(bytes);
         let done = upload.finish();
-        self.uploaded(generation, done.kept);
+        self.uploaded(generation, &done);
         Written {
             name: name.into(),
             size: bytes.len() as u64,
@@ -363,6 +373,8 @@ pub(crate) struct Uploaded {
     /// `inetsim-uploads/<file>`, or empty when nothing was kept.
     pub artifact: String,
     pub truncated: bool,
+    /// The run's room it had reserved.
+    reserved: u64,
 }
 
 impl Upload {
@@ -392,6 +404,41 @@ impl Upload {
                 String::new()
             },
             truncated: self.kept < self.size,
+            reserved: self.room,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uploads_at_once_reserve_their_room_and_give_back_the_rest() {
+        let dir = crate::route::tests::scratch("inetsim-upload-room");
+        let services = Services::new(&dir);
+        services.begin_run("run-1", &BuiltinServices::default());
+        let generation = services.view().generation;
+        let mut first = services.upload(generation, "a.bin");
+        let second = services.upload(generation, "b.bin");
+        // Both hold a file's room until they end.
+        assert_eq!(services.lock().uploaded, 2 * UPLOAD_FILE);
+        first.write(b"0123456789");
+        let done = first.finish();
+        services.uploaded(generation, &done);
+        assert_eq!(services.lock().uploaded, UPLOAD_FILE + 10);
+        let done = second.finish();
+        services.uploaded(generation, &done);
+        assert_eq!(services.lock().uploaded, 10);
+        // An upload of an older run reserves nothing and keeps nothing.
+        services.begin_run("run-2", &BuiltinServices::default());
+        let mut stale = services.upload(generation, "c.bin");
+        stale.write(b"late");
+        let done = stale.finish();
+        assert!(done.artifact.is_empty() && done.truncated);
+        services.uploaded(generation, &done);
+        assert_eq!(services.lock().uploaded, 0);
+        drop(services);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
