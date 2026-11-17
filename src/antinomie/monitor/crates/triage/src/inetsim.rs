@@ -385,10 +385,15 @@ impl rules::Engine {
                     (
                         session.endpoint.clone(),
                         format!(
-                            "logged into the fake telnet device at {} as {} after {} tries",
+                            "logged into the fake telnet device at {} as {} after {} {}",
                             session.endpoint,
                             login.user,
-                            session.logins.len()
+                            session.logins.len(),
+                            if session.logins.len() == 1 {
+                                "try"
+                            } else {
+                                "tries"
+                            }
                         ),
                     ),
                     (at, 1, end),
