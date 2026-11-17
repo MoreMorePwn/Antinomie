@@ -1,0 +1,167 @@
+Description: antinomie: record where a read or write began from the position the call was given
+ The file position record (file.position) took the transfer's start as
+ the position the call left less its result. A write handler that does
+ not move the position, such as /proc/self/loginuid's, which accepts a
+ write only at offset 0 and leaves the position there, then gave a start
+ before 0, which a host read as an unsigned offset near 2^64 (a
+ "16777216 TiB" offset in a report).
+ .
+ vfs_read(), vfs_write(), vfs_readv() and vfs_writev() (fs/read_write.c)
+ now note the position they were given and pass it to the hook, which
+ takes it as the start unless the file system moved the position
+ somewhere else: an O_APPEND or RWF_APPEND write lands at the end of the
+ file as the write found it, and its start stays the end position less
+ the result. A transfer that moved the position by its result, the usual
+ case, records the same offset as before.
+ .
+ No contract change: the record's layout and meaning ("the file offset
+ where the transfer began") are unchanged. The objects that change are
+ fs/read_write.o and kernel/antinomie/fileops.o.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-17
+
+---
+diff --git a/fs/read_write.c b/fs/read_write.c
+index b82220cfa..ef029ebcf 100644
+--- a/fs/read_write.c
++++ b/fs/read_write.c
+@@ -549,6 +549,7 @@ EXPORT_SYMBOL(kernel_read);
+ 
+ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+ {
++	loff_t start = pos ? *pos : 0;
+ 	ssize_t ret;
+ 
+ 	if (!(file->f_mode & FMODE_READ))
+@@ -575,7 +576,7 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+ 		add_rchar(current, ret);
+ 	}
+ 	inc_syscr(current);
+-	ant_monitor_file_pos(file, pos, ret);
++	ant_monitor_file_pos(file, start, pos, ret);
+ 	return ret;
+ }
+ 
+@@ -664,6 +665,7 @@ EXPORT_SYMBOL(kernel_write);
+ 
+ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
+ {
++	loff_t start = pos ? *pos : 0;
+ 	ssize_t ret;
+ 
+ 	if (!(file->f_mode & FMODE_WRITE))
+@@ -691,7 +693,7 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
+ 	}
+ 	inc_syscw(current);
+ 	file_end_write(file);
+-	ant_monitor_file_pos(file, pos, ret);
++	ant_monitor_file_pos(file, start, pos, ret);
+ 	return ret;
+ }
+ 
+@@ -1005,6 +1007,7 @@ static ssize_t vfs_readv(struct file *file, const struct iovec __user *vec,
+ 	struct iov_iter iter;
+ 	size_t tot_len;
+ 	ssize_t ret = 0;
++	loff_t start = pos ? *pos : 0;
+ 
+ 	if (!(file->f_mode & FMODE_READ))
+ 		return -EBADF;
+@@ -1032,7 +1035,7 @@ static ssize_t vfs_readv(struct file *file, const struct iovec __user *vec,
+ 	if (ret >= 0)
+ 		fsnotify_access(file);
+ 	kfree(iov);
+-	ant_monitor_file_pos(file, pos, ret);
++	ant_monitor_file_pos(file, start, pos, ret);
+ 	return ret;
+ }
+ 
+@@ -1044,6 +1047,7 @@ static ssize_t vfs_writev(struct file *file, const struct iovec __user *vec,
+ 	struct iov_iter iter;
+ 	size_t tot_len;
+ 	ssize_t ret = 0;
++	loff_t start = pos ? *pos : 0;
+ 
+ 	if (!(file->f_mode & FMODE_WRITE))
+ 		return -EBADF;
+@@ -1073,7 +1077,7 @@ static ssize_t vfs_writev(struct file *file, const struct iovec __user *vec,
+ 	file_end_write(file);
+ out:
+ 	kfree(iov);
+-	ant_monitor_file_pos(file, pos, ret);
++	ant_monitor_file_pos(file, start, pos, ret);
+ 	return ret;
+ }
+ 
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index f56c92221..04583ead6 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -242,7 +242,7 @@ void ant_monitor_aio_exit(struct mm_struct *mm);
+ void ant_monitor_aio_ctx_free(const void *ioctx);
+ void ant_monitor_operand(u8 arg, const char *key, const char *layout, const void *data,
+ 			 size_t size);
+-void ant_monitor_file_pos(struct file *file, const loff_t *pos, ssize_t ret);
++void ant_monitor_file_pos(struct file *file, loff_t start, const loff_t *pos, ssize_t ret);
+ void ant_monitor_write_order(void);
+ void ant_monitor_copy_begin(u8 kind, struct file *in, struct file *out, size_t count);
+ void ant_monitor_copy_data(const struct bio_vec *bvec, unsigned int segs, size_t len);
+@@ -383,7 +383,8 @@ static inline void ant_monitor_aio_ctx_free(const void *ioctx) {}
+ static inline void ant_monitor_aio_exit(struct mm_struct *mm) {}
+ static inline void ant_monitor_operand(u8 arg, const char *key, const char *layout,
+ 				       const void *data, size_t size) {}
+-static inline void ant_monitor_file_pos(struct file *file, const loff_t *pos, ssize_t ret) {}
++static inline void ant_monitor_file_pos(struct file *file, loff_t start, const loff_t *pos,
++					ssize_t ret) {}
+ static inline void ant_monitor_write_order(void) {}
+ static inline void ant_monitor_copy_begin(u8 kind, struct file *in, struct file *out,
+ 					  size_t count) {}
+diff --git a/kernel/antinomie/fileops.c b/kernel/antinomie/fileops.c
+index 988d8bff9..434b94c8f 100644
+--- a/kernel/antinomie/fileops.c
++++ b/kernel/antinomie/fileops.c
+@@ -5,8 +5,9 @@
+  * the host cannot follow: a descriptor shared after fork or dup moves for
+  * every task that uses it, and an O_APPEND write lands at the end of the file
+  * as it is when the write takes the inode lock, whatever the position was.
+- * The file system leaves the position where the transfer ended, so the record
+- * carries where it began and its length (file.position).
++ * The record carries where the transfer began and its length (file.position):
++ * the position the call was given or, when the file system moved it elsewhere
++ * (an append), where the transfer ended less its length.
+  *
+  * An in-kernel copy (sendfile, splice, copy_file_range, a reflink clone)
+  * moves bytes the program never holds, and fallocate changes a range without
+@@ -95,10 +96,16 @@ void ant_fileops_reset(struct ant_fileops *ops)
+ 	memset(ops, 0, sizeof(*ops));
+ }
+ 
+-/* vfs_read(), vfs_write(), vfs_readv(), vfs_writev(): @pos is where the
+- * transfer of @ret bytes left the position (NULL for a stream).
++/* vfs_read(), vfs_write(), vfs_readv(), vfs_writev(): the call was given the
++ * position @start, and @pos is where the transfer of @ret bytes left it (NULL
++ * for a stream). The transfer began at @start unless the file system moved
++ * the position somewhere else: an O_APPEND or RWF_APPEND write lands at the
++ * end of the file as the write found it, so it began @ret bytes before where
++ * it left the position. A handler that leaves the position alone (a /proc
++ * file such as loginuid) wrote at @start; the position less the result would
++ * be before it, or negative.
+  */
+-void ant_monitor_file_pos(struct file *file, const loff_t *pos, ssize_t ret)
++void ant_monitor_file_pos(struct file *file, loff_t start, const loff_t *pos, ssize_t ret)
+ {
+ 	struct ant_fileops *ops;
+ 	u64 nr;
+@@ -108,7 +115,9 @@ void ant_monitor_file_pos(struct file *file, const loff_t *pos, ssize_t ret)
+ 	ops = ant_monitor_fileops(&nr);
+ 	if (!ops || !rw_call(nr))
+ 		return;
+-	put_unaligned_le64(*pos - ret, ops->position);
++	if (*pos != start && *pos >= ret)
++		start = *pos - ret;
++	put_unaligned_le64(start, ops->position);
+ 	put_unaligned_le64(ret, ops->position + 8);
+ 	put_unaligned_le64(ops->order, ops->position + 16);
+ 	ops->position_set = true;
