@@ -294,6 +294,7 @@ impl Machine {
             min_app_version: None,
             name: None,
             uefi: Default::default(),
+            extra: Default::default(),
         }
         .install(&worker.options)
         .unwrap();

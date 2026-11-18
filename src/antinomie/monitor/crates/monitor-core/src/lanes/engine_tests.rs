@@ -46,6 +46,7 @@ fn install_base(tree: &Tree) -> String {
         symbols: None,
         stealth_support: Vec::new(),
         uefi: Default::default(),
+        extra: Default::default(),
     }
     .install(&tree.options(None))
     .unwrap();

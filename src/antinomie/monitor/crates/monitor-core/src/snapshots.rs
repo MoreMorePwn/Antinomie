@@ -1016,6 +1016,7 @@ mod tests {
                 min_app_version: None,
                 name: None,
                 uefi: Default::default(),
+                extra: Default::default(),
             }
             .install(&options)
             .unwrap();
