@@ -15,6 +15,7 @@ x86 programs by their own table.
 
 ### Host
 
+- **Importing a base keeps every `bundle.json` field (ANT-T0564).** Installing a base (import or catalog) and copying it into a VM used to drop fields the app does not model, so an installed BusyBox base lost `program_interpreters` (auto mode's pre-VM loader check), `device` and `base_services`; they and any unknown field are now kept as they are.
 - **A BusyBox camera base for IoT bots (ANT-T0558).** A new base profile,
   `busybox-extra` ("BusyBox camera (DVR services)" in Build base, `base build
   --profile busybox-extra`, job `"profile": "busybox-extra"` for x86-64 and arm64),

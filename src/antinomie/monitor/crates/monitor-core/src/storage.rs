@@ -425,6 +425,11 @@ pub struct Bundle {
     /// UEFI disk (`crate::uefi_disk`).
     #[serde(flatten)]
     pub uefi: crate::uefi_disk::UefiFiles,
+    /// Every other `bundle.json` field, kept as it is: fields the app does not
+    /// model (`program_interpreters`, `device`, `base_services`, and whatever
+    /// a newer builder writes) survive an import, a rename and a copy.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -735,6 +740,7 @@ impl Bundle {
                             .map(|_| staging.join(crate::uefi_disk::LAYOUT_FILE)),
                         uefi_disk: None,
                     },
+                    extra: self.extra.clone(),
                 };
                 if copied.identity()? != identity {
                     return Err("bundle changed during import; copies rejected".into());
@@ -786,6 +792,7 @@ impl Bundle {
                     .map(|_| target.join(crate::uefi_disk::LAYOUT_FILE)),
                 uefi_disk: None,
             },
+            extra: self.extra,
         };
         installed.verify_installed()?;
         // Recorded relative to the folder, so the data folder can move.
@@ -1095,6 +1102,7 @@ mod tests {
             symbols: None,
             stealth_support: Vec::new(),
             uefi: Default::default(),
+            extra: Default::default(),
         }
         .install(&options)
         .unwrap();
@@ -1231,6 +1239,49 @@ mod tests {
             Bundle::load(&root).unwrap().identity().unwrap(),
             vector["identity_without_uefi"].as_str().unwrap()
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn install_and_vm_copies_keep_every_bundle_field() {
+        let (root, options, bundle, _) = guest_fixture();
+        let source = bundle.kernel.parent().unwrap().to_path_buf();
+        let mut manifest = serde_json::to_value(&bundle).unwrap();
+        manifest["kernel"] = "kernel".into();
+        manifest["base_disk"] = "base.qcow2".into();
+        let extras = serde_json::json!({
+            "program_interpreters": ["/lib64/ld-linux-x86-64.so.2"],
+            "device": {"kind": "camera", "ports": [554, 80]},
+            "base_services": [{"name": "rtsp", "port": 554, "protocol": "tcp"}],
+            "future_field": {"nested": [1, null, "x"]},
+        });
+        manifest
+            .as_object_mut()
+            .unwrap()
+            .extend(extras.as_object().unwrap().clone());
+        fs::write(
+            source.join("bundle.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let installed = Bundle::load(&source).unwrap().install(&options).unwrap();
+        let directory = installed.kernel.parent().unwrap().to_path_buf();
+        let recorded: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join("bundle.json")).unwrap()).unwrap();
+        for (key, value) in extras.as_object().unwrap() {
+            assert_eq!(&recorded[key], value, "{key} on the installed base");
+            assert_eq!(&installed.extra[key], value, "{key} in memory");
+        }
+        // The same record is still a valid bundle: known fields stay known.
+        assert_eq!(recorded["kernel"], "kernel");
+        let reloaded = Bundle::load(&directory).unwrap();
+        assert_eq!(reloaded.extra, installed.extra);
+        assert!(!reloaded.extra.contains_key("kernel"));
+        assert!(!reloaded.extra.contains_key("uefi_root"));
+        // Reinstalling the installed base (a catalog install loads the staged
+        // download and installs it the same way) changes nothing.
+        let again = reloaded.install(&options).unwrap();
+        assert_eq!(again.extra, installed.extra);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1486,6 +1537,7 @@ mod tests {
             symbols: None,
             stealth_support: Vec::new(),
             uefi: Default::default(),
+            extra: Default::default(),
         };
         bundle.base_identity = Some(bundle.identity().unwrap());
         let vm = source.join("vms/old-id");
@@ -1722,6 +1774,7 @@ mod tests {
             symbols: None,
             stealth_support: Vec::new(),
             uefi: Default::default(),
+            extra: Default::default(),
         };
         let options = BackendOptions {
             data_dir: directory.join("data"),

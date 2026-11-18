@@ -51,6 +51,7 @@ fn data_folder(root: &Path) -> (BackendOptions, Bundle) {
         symbols: None,
         stealth_support: Vec::new(),
         uefi: Default::default(),
+        extra: Default::default(),
     }
     .install(&options)
     .unwrap();
