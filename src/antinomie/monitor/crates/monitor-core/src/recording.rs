@@ -26,6 +26,9 @@ pub const PROCESS_TREE_LIMIT: usize = 262_144;
 mod async_page;
 mod call_reader;
 mod index_cache;
+mod index_lock;
+use index_lock::retry_index_busy;
+pub use index_lock::with_index_wait;
 mod issues;
 use issues::push_issue;
 mod launch;
@@ -246,30 +249,6 @@ fn archive_index(
     })
 }
 
-fn retry_index_busy<T>(
-    cancel: &AtomicBool,
-    mut read: impl FnMut() -> Result<T, RecordingError>,
-) -> Result<T, RecordingError> {
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(RecordingError::Limit("archive read cancelled"));
-        }
-        match read() {
-            Err(RecordingError::Index(error))
-                if matches!(
-                    error.sqlite_error_code(),
-                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
-                ) =>
-            {
-                // Index builds and queries share this cache. Only lock contention
-                // is transient; retain real I/O, corruption and quota failures.
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            result => return result,
-        }
-    }
-}
-
 fn index_damaged(error: &rusqlite::Error) -> bool {
     matches!(
         error.sqlite_error_code(),
@@ -366,12 +345,23 @@ fn index_archive(
     // stale, so its writes are not synced to disk: building it must not wait
     // for the disk behind a recording that is being saved.
     connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA synchronous=OFF; CREATE TABLE IF NOT EXISTS indexed(identity TEXT NOT NULL, length INTEGER NOT NULL, writer INTEGER);")?;
+    // A reader of the index waits for a builder's commit; see `index_lock`.
+    let ready = |connection: rusqlite::Connection, identity: String| {
+        connection.busy_timeout(index_lock::READ_BUSY)?;
+        index_cache::used(&index_path);
+        Ok::<_, RecordingError>((connection, identity))
+    };
     let mut chunks = 0;
     loop {
+        // A current index is opened without the writer reservation: even an
+        // empty write transaction needs the file to itself to end, and so
+        // would wait for every reader of the index (ANT-T0575).
+        if let Some(identity) = index_lock::current_index(&mut connection, directory, &raw)? {
+            return ready(connection, identity);
+        }
         // Own the writer reservation before reading the resume cursor.
         let transaction =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        // An index written before the `writer` stamp existed has no such column.
         let stamped: i64 = transaction.query_row(
             "SELECT COUNT(*) FROM pragma_table_info('indexed') WHERE name='writer'",
             [],
@@ -390,28 +380,9 @@ fn index_archive(
             .ok_or(RecordingError::Limit("archive index budget overflow"))?
             .min(16 * 1024 * 1024 * 1024);
         transaction.pragma_update(None, "max_page_count", (budget / 4096) as i64)?;
-        let cached: Option<(String, i64, Option<i64>)> = transaction
-            .query_row(
-                "SELECT identity,length,writer FROM indexed LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
         // Go on from where the index stopped, unless the archive is another
         // file (or, impossibly for an append-only archive, shorter).
-        let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        let resume = cached
-            .filter(|(cached, indexed, writer)| {
-                // An older build resumes any index without looking at its
-                // layout and appends rows of its own kind; it also rewrites
-                // the cursor row without the writer stamp, so such an index is
-                // rebuilt.
-                *cached == identity
-                    && *indexed as u64 <= length
-                    && version == INDEX_VERSION
-                    && *writer == Some(INDEX_VERSION)
-            })
-            .map(|(_, indexed, _)| indexed as u64);
+        let resume = index_lock::resume_point(&transaction, &identity, length)?;
         let Some(start) = resume else {
             // Rebuilt from scratch: an index from an older version has another
             // schema. The secondary indexes are built once the rows are in:
@@ -434,9 +405,10 @@ fn index_archive(
             continue;
         };
         if start == length {
-            transaction.commit()?;
-            index_cache::used(&index_path);
-            return Ok((connection, identity));
+            // Another builder finished it meanwhile. Nothing was written:
+            // dropping the transaction ends it without the exclusive lock.
+            drop(transaction);
+            return ready(connection, identity);
         }
         let mut indexed = start;
         let mut reported = start;
@@ -502,6 +474,11 @@ fn index_archive(
                 }
             }
         }
+        if finished && indexed == start && index_lock::finished_build(&transaction)? {
+            // Nothing to add (the archive ends inside a packet): no write.
+            drop(transaction);
+            return ready(connection, identity);
+        }
         if finished {
             transaction.execute_batch(
                 "CREATE INDEX IF NOT EXISTS invocation_order ON invocations(first_offset); \
@@ -523,8 +500,7 @@ fn index_archive(
         )?;
         transaction.commit()?;
         if finished {
-            index_cache::used(&index_path);
-            return Ok((connection, identity));
+            return ready(connection, identity);
         }
         chunks += 1;
         if chunks >= max_chunks {
@@ -1196,6 +1172,7 @@ mod tests {
     use std::io::Write;
     mod async_browse;
     mod index_concurrency;
+    mod index_starvation;
     mod unreadable_run;
     fn facts_for_health(
         health: serde_json::Value,

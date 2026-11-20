@@ -50,13 +50,93 @@ pub(super) fn indexed_boundary(connection: &rusqlite::Connection) -> Result<u64,
     u64::try_from(boundary).map_err(|_| RecordingError::Limit("negative indexed boundary"))
 }
 
-pub(super) fn call_rows(
-    connection: &rusqlite::Connection,
-) -> Result<rusqlite::Statement<'_>, RecordingError> {
-    Ok(connection.prepare(
-        "SELECT key,first_offset FROM invocations WHERE first_offset>=?1 AND first_offset<?2 \
-         AND (?3 IS NULL OR pid=?3) ORDER BY first_offset",
-    )?)
+/// Calls read per statement of a long walk.
+const CALL_BATCH: i64 = 4096;
+
+/// The calls of the indexed prefix in raw-file order, read in batches of
+/// [`CALL_BATCH`]. Each batch is a statement of its own, so a walk over a
+/// million calls (the window's count, a filter that matches little) holds the
+/// index only while one batch is read, and a builder of the index commits
+/// between two batches instead of waiting for the walk's end (ANT-T0575).
+pub(super) struct CallRows {
+    /// The first offset the next batch may start at.
+    from: i64,
+    boundary: i64,
+    pid: Option<u32>,
+    identity: String,
+    batch: std::collections::VecDeque<(Vec<u8>, u64)>,
+    done: bool,
+}
+
+impl CallRows {
+    pub(super) fn new(
+        from: u64,
+        boundary: u64,
+        pid: Option<u32>,
+        identity: &str,
+    ) -> Result<Self, RecordingError> {
+        let offset = |value: u64| {
+            i64::try_from(value).map_err(|_| RecordingError::Limit("cursor too large"))
+        };
+        Ok(Self {
+            from: offset(from)?,
+            boundary: offset(boundary)?,
+            pid,
+            identity: identity.to_owned(),
+            batch: Default::default(),
+            done: false,
+        })
+    }
+
+    /// The next call's key and first offset, or `None` after the last one.
+    pub(super) fn next(
+        &mut self,
+        connection: &rusqlite::Connection,
+        cancel: &AtomicBool,
+    ) -> Result<Option<(Vec<u8>, u64)>, RecordingError> {
+        if self.batch.is_empty() && !self.done {
+            let batch = retry_index_busy(cancel, || self.read(connection))?;
+            self.done = (batch.len() as i64) < CALL_BATCH;
+            if let Some((_, last)) = batch.last() {
+                self.from = *last as i64 + 1;
+            }
+            self.batch = batch.into();
+        }
+        Ok(self.batch.pop_front())
+    }
+
+    fn read(
+        &self,
+        connection: &rusqlite::Connection,
+    ) -> Result<Vec<(Vec<u8>, u64)>, RecordingError> {
+        // The rows below the boundary are still the ones counted from: an
+        // index another build of the app started again has not got back to them.
+        let (identity, length): (String, i64) =
+            connection.query_row("SELECT identity,length FROM indexed LIMIT 1", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?;
+        if identity != self.identity || length < self.boundary {
+            return Err(RecordingError::Limit(
+                "the archive index was rebuilt while being read; open it again",
+            ));
+        }
+        let mut statement = connection.prepare_cached(
+            "SELECT key,first_offset FROM invocations WHERE first_offset>=?1 AND first_offset<?2 \
+             AND (?3 IS NULL OR pid=?3) ORDER BY first_offset LIMIT ?4",
+        )?;
+        let rows = statement.query_map(
+            rusqlite::params![self.from, self.boundary, self.pid, CALL_BATCH],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        let mut batch = Vec::new();
+        for row in rows {
+            let (key, first_offset) = row?;
+            let first_offset = u64::try_from(first_offset)
+                .map_err(|_| RecordingError::Limit("negative cached invocation offset"))?;
+            batch.push((key, first_offset));
+        }
+        Ok(batch)
+    }
 }
 
 impl Recording {
@@ -146,22 +226,14 @@ impl Recording {
         }
         let mut reader =
             CallReader::open(&self.directory, &connection, boundary, self.guest_arch())?;
-        let mut query = call_rows(&connection)?;
-        let mut rows = query.query(rusqlite::params![
-            i64::try_from(offset).map_err(|_| RecordingError::Limit("cursor too large"))?,
-            boundary as i64,
-            pid
-        ])?;
+        let mut calls = CallRows::new(offset, boundary, pid, &identity)?;
         let mut invocations = Vec::with_capacity(limit);
         let mut next_offset = None;
         let mut page_preview_size = 0_usize;
-        while let Some(row) = rows.next()? {
+        while let Some((key, first_offset)) = calls.next(&connection, cancel)? {
             if cancel.load(Ordering::Relaxed) {
                 return Err(RecordingError::Limit("archive read cancelled"));
             }
-            let key: Vec<u8> = row.get(0)?;
-            let first_offset = u64::try_from(row.get::<_, i64>(1)?)
-                .map_err(|_| RecordingError::Limit("negative cached invocation offset"))?;
             let Some(invocation) = reader.call(&key, cancel)? else {
                 continue;
             };
@@ -205,7 +277,6 @@ impl Recording {
         if invocations.iter().any(|call| call.async_omitted() > 0) {
             push_issue(&mut issues, ASYNC_PARTIAL.into());
         }
-        drop(rows);
         let (after_identity, after_size) = raw_identity(&path)?;
         if after_identity != identity || after_size < boundary {
             return Err(RecordingError::Limit(
@@ -241,14 +312,12 @@ impl Recording {
         let boundary = indexed_boundary(&connection)?;
         let mut reader =
             CallReader::open(&self.directory, &connection, boundary, self.guest_arch())?;
-        let mut query = call_rows(&connection)?;
-        let mut rows = query.query(rusqlite::params![0_i64, boundary as i64, pid])?;
+        let mut calls = CallRows::new(0, boundary, pid, &identity)?;
         let (mut total, mut source_total) = (0_u64, 0_u64);
-        while let Some(row) = rows.next()? {
+        while let Some((key, _)) = calls.next(&connection, cancel)? {
             if cancel.load(Ordering::Relaxed) {
                 return Err(RecordingError::Limit("archive read cancelled"));
             }
-            let key: Vec<u8> = row.get(0)?;
             let Some(invocation) = reader.call(&key, cancel)? else {
                 continue;
             };
@@ -261,7 +330,6 @@ impl Recording {
                     .ok_or(RecordingError::Limit("matching invocation count overflow"))?;
             }
         }
-        drop(rows);
         let (after_identity, after_size) = raw_identity(&path)?;
         if after_identity != identity || after_size < boundary {
             return Err(RecordingError::Limit(
