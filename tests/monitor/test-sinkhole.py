@@ -127,11 +127,14 @@ class Parsers(unittest.TestCase):
 
 class Registry(unittest.TestCase):
     def test_expected_rule_ids_exist_in_the_rules_table(self):
-        table = set(re.findall(r'rule\(\s*"([a-z_]+\.[a-z_]+)"', RULES_TABLE.read_text()))
+        # The table is table.rs plus its parts under table/.
+        parts = [RULES_TABLE, *sorted(RULES_TABLE.with_suffix("").glob("*.rs"))]
+        text = "".join(part.read_text() for part in parts)
+        table = set(re.findall(r'rule\(\s*"([a-z0-9_]+\.[a-z0-9_]+)"', text))
         self.assertGreater(len(table), 100)
         start = REGISTRY.index("static const struct module modules[]")
         end = REGISTRY.index("#define MODULE_COUNT")
-        used = set(re.findall(r'\b((?:[a-z]+)\.(?:[a-z_]+))(?=[,"])', REGISTRY[start:end]))
+        used = set(re.findall(r'\b((?:[a-z]+)\.(?:[a-z0-9_]+))(?=[,"])', REGISTRY[start:end]))
         prefixes = {rule.split(".")[0] for rule in table}
         used = {name for name in used if name.split(".")[0] in prefixes}
         self.assertGreater(len(used), 80)

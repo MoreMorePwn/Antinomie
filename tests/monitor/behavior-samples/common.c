@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -284,6 +285,26 @@ int sample_in_child(int (*body)(void *context), void *context, int limit_ms)
 int sample_noop(const char *mode)
 {
     char self[512];
+    if (!strcmp(mode, "rename")) {
+        // The applet-renamed stand-in: a new comm, then exit.
+        const char *name = getenv("SAMPLE_NOOP_NAME");
+        if (name && *name)
+            prctl(PR_SET_NAME, name, 0, 0, 0);
+        return 0;
+    }
+    if (!strcmp(mode, "linger")) {
+        // The persisted copy: stays a bounded while (at most 20 s), then exits.
+        const char *text = getenv("SAMPLE_NOOP_SECONDS");
+        int seconds = text ? atoi(text) : 0;
+        if (seconds < 0)
+            seconds = 0;
+        if (seconds > 20)
+            seconds = 20;
+        struct timespec pause = {.tv_sec = seconds, .tv_nsec = 0};
+        while (nanosleep(&pause, &pause) != 0 && errno == EINTR)
+            ;
+        return 0;
+    }
     const char *target = getenv("SAMPLE_NOOP_OUT");
     if (!target || !*target || sample_self_path(self, sizeof self) != 0)
         return 0;

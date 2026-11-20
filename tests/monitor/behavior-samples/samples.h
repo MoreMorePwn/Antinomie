@@ -73,6 +73,7 @@
 #define SAMPLE_MAX_DELAY_MS 10000
 #define SAMPLE_MAX_GAP_MS 5000
 #define SAMPLE_MAX_EVADE_SLEEP_MS 5000
+#define SAMPLE_MAX_SCREEN_SECONDS 120
 
 struct options {
     int rounds;
@@ -100,6 +101,11 @@ struct options {
     const char *ignore;
     const char *test_root;
     int evade_sleep_ms;
+    // 0.9.0 opt-ins: --screen-seconds N prints a changing console line every
+    // second for N seconds (screen-ticker); --long keeps rule-matching work
+    // going for about 150 s (live-scan).
+    int screen_seconds;
+    int long_run;
 };
 
 // One scenario of the registry. `expect` is the comma-separated list of rule
@@ -114,6 +120,9 @@ struct module {
     // NULL, or the option that must be given for the scenario to run.
     const char *requires;
     int (*run)(const struct options *options);
+    // NULL, or the named set the scenario belongs to ("0.9.0": the scenarios
+    // of the 0.9.0 analysis features, built alone as demo-090).
+    const char *set;
 };
 
 long sample_scaled(const struct options *options, long light);
@@ -170,7 +179,9 @@ int sample_spawn_capture(const char *path, char *const argv[], char *const extra
 int sample_spoof(char *const argv[], char *const extra_env[]);
 // What a helper child does for SAMPLE_NOOP=mode: "exit" nothing; "selfdelete"
 // removes its own file when SAMPLE_NOOP_OUT names exactly that file; "compile"
-// copies itself to SAMPLE_NOOP_OUT (the stand-in compiler).
+// copies itself to SAMPLE_NOOP_OUT (the stand-in compiler); "rename" sets its
+// own name to SAMPLE_NOOP_NAME (prctl PR_SET_NAME); "linger" sleeps
+// SAMPLE_NOOP_SECONDS (at most 20) and exits.
 int sample_noop(const char *mode);
 // True for 10/8, 172.16/12, 192.168/16, 127/8 and 169.254/16 literals.
 int sample_is_private(const char *address);
@@ -250,6 +261,20 @@ SCENARIO(rule_markers);
 SCENARIO(real_path_probes);
 SCENARIO(evasive);
 SCENARIO(net_wide);
+// The 0.9.0 set (iot.c, process-tricks.c).
+SCENARIO(odd_exec_paths);
+SCENARIO(quick_exit);
+SCENARIO(persisted_copy);
+SCENARIO(preload_lib);
+SCENARIO(pid_hide_killer);
+SCENARIO(dead_c2);
+SCENARIO(inetsim_iot);
+SCENARIO(iot_device);
+SCENARIO(signal_sender);
+SCENARIO(decoders);
+SCENARIO(fork_debug);
+SCENARIO(screen_ticker);
+SCENARIO(live_scan);
 
 
 #endif

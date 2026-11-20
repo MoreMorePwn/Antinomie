@@ -4,8 +4,9 @@
 // main.c — options, scenario registry, result lines and scorecard.
 //
 // Built with -DSINGLE_SCENARIO="name" the program is that one behavior
-// sample (demo-<name>); without it, it is demo-all and runs every
-// scenario in order.
+// sample (demo-<name>); with -DSCENARIO_SET="0.9.0" it runs only the
+// scenarios of that set (demo-090); without either, it is demo-all and runs
+// every scenario in order.
 //
 // Output contract (one record per line, stable, easy to grep):
 //   == <scenario>: <summary> (...)       scenario header
@@ -28,6 +29,10 @@
 
 #define REAL_PATHS "--real-paths"
 #define WIDE "--wide"
+#define SCREEN_SECONDS "--screen-seconds"
+#define LONG_RUN "--long"
+// The scenarios of the 0.9.0 analysis features (demo-090).
+#define SET_090 "0.9.0"
 // Runs only when named (--only, or as its own binary); a bare run leaves it out.
 #define ONLY_SELECTED "only"
 
@@ -38,45 +43,51 @@ static const struct module modules[] = {
     {"recon", "recon", "host fingerprint, os-release read, staging file and an exfil POST",
      "discovery.system_info,network.ip_literal",
      "network.ip_literal is a capture rule: it needs the sinkhole (or a NAT guest) and a capture",
-     NULL, scenario_recon},
+     NULL, scenario_recon, NULL},
     {"discovery", "recon",
      "user, network, process and file discovery, security-software probes, stand-in tools",
      "discovery.user_enum,discovery.system_info,discovery.network_config,discovery.process_enum,"
      "discovery.file_search,discovery.security_software,discovery.network_scan",
      "network_scan here is the nmap stand-in (exec shape); the connect-based form is lateral-sim",
-     NULL, scenario_discovery},
+     NULL, scenario_discovery, NULL},
     {"sandbox-probe", "recon",
      "VM and sandbox checks: DMI, cpuinfo, MAC, uptime, clock loop, containers, then exit",
      "evasion.sandbox_probe,evasion.probe_then_exit,evasion.container_check,"
      "evasion.debugger_check,evasion.traceme,discovery.system_info,discovery.network_config",
      "probe_then_exit needs an answer that would show a VM (true in a QEMU guest); "
      "sandbox_probe is MEDIUM only when two or more kinds of check are made",
-     NULL, scenario_sandbox_probe},
+     NULL, scenario_sandbox_probe, NULL},
     {"ptrace-antidebug", "recon", "TracerPid, instrumented mappings and a TRACEME check",
-     "evasion.debugger_check,evasion.traceme", NULL, NULL, scenario_ptrace_antidebug},
+     "evasion.debugger_check,evasion.traceme", NULL, NULL, scenario_ptrace_antidebug, NULL},
     {"sleep-evasion", "recon", "sleeps of a minute or more, cut short, and a stalling task",
      "evasion.long_sleep", "MEDIUM because each sleeper is a fresh task that did nothing before",
-     NULL, scenario_sleep_evasion},
+     NULL, scenario_sleep_evasion, NULL},
     {"cred-read", "-", "decoy credential files and presence checks of standard paths",
      "credential.history_read,credential.wallet,credential.kerberos_ccache,"
      "credential.cloud_tokens,credential.ssh_keys,credential.browser_store,network.ip_literal",
      "history_read, wallet, kerberos_ccache, the service-account token (cloud_tokens) and the "
      "private-key header read (ssh_keys) fire from the work directory; browser_store and the "
      "~/.aws, ~/.kube, ~/.ssh and ~/.bitcoin paths need --cred-home",
-     NULL, scenario_cred_read},
+     NULL, scenario_cred_read, NULL},
     {"download", "download",
      "GET a hello-world script, check its pinned SHA-256, write, chmod and run it two ways",
      "execution.dropped_exec,execution.chmod_exec_temp,execution.temp_exec,"
      "execution.download_cradle,process.interpreter,process.exec,network.ip_literal",
      "runs only when the SHA-256 matches; any other server gets a NOTE and no execution; "
      "process.exec is INFO and is counted for every program a scenario starts",
-     NULL, scenario_download},
+     NULL, scenario_download, NULL},
     {"download-elf", "download",
      "GET a tiny hello-world ELF (pinned), write, chmod and run it; a stand-in compiler",
      "c2.elf_download,execution.dropped_exec,execution.chmod_exec_temp,execution.temp_exec,"
      "execution.compile_then_run,network.ip_literal",
      "runs only when the SHA-256 matches; compile_then_run is a copy of this binary named cc",
-     NULL, scenario_download_elf},
+     NULL, scenario_download_elf, NULL},
+    {"odd-exec-paths", "download",
+     "a dropped copy run as <dir>/./w.bin, <dir>/x/../w.bin and <dir>//w.bin",
+     "execution.dropped_exec,execution.temp_exec,execution.chmod_exec_temp",
+     "0.9.0 (ANT-T0562): the written path and the run path differ only by ., .. and //, and "
+     "Triage still ties them to one file the run wrote (not base noise)",
+     NULL, scenario_odd_exec_paths, SET_090},
     {"persistence", "persistence",
      "autostart, systemd user unit, shell profile, authorized_keys, PAM lookalikes and stand-ins",
      "persistence.systemd,persistence.xdg_autostart,persistence.shell_profile,"
@@ -85,25 +96,57 @@ static const struct module modules[] = {
      "persistence.module,execution.chmod_exec_temp",
      "files are lookalikes under the work directory; cron/at/account/rc_init are exec "
      "stand-ins; persistence.module is a finit_module on an invalid descriptor",
-     NULL, scenario_persistence},
+     NULL, scenario_persistence, NULL},
+    {"quick-exit", "persistence",
+     "children that write a systemd unit lookalike or run a crontab stand-in, then exit at once",
+     "persistence.systemd,persistence.cron",
+     "0.9.0 (ANT-T0342, T0344): each child exits within milliseconds of its match; with Dump on "
+     "suspicious activity (core) on a revision-22 base it is held at its exit and its core taken; "
+     "demo-quick-exit itself ends within a second, for the launch-reply hash of static analysis",
+     NULL, scenario_quick_exit, SET_090},
+    {"persisted-copy", "persistence",
+     "a copy of this binary in the work directory, run by a detached grandchild for 12 s",
+     "persistence.copy_running,execution.dropped_exec,execution.temp_exec",
+     "0.9.0 (ANT-T0433): copy_running needs a process outside the recorded tree; the guest records "
+     "a detached grandchild, so expect only the notes unless cron or a service started the copy; "
+     "the scenario waits for the copy to exit (at most 20 s)",
+     NULL, scenario_persisted_copy, SET_090},
     {"privesc-sim", "escalation",
      "setuid bit on a decoy, user namespace, namespace and socket probes, pwnkit and dirty-pipe shapes",
      "privilege.setid_bit,privilege.userns,privilege.container_escape,privilege.pwnkit,"
      "privilege.dirty_pipe,privilege.drop,execution.temp_exec",
      "container_escape from setns needs root to open /proc/1/ns; privilege.drop needs root; "
      "the rest also run unprivileged",
-     NULL, scenario_privesc_sim},
+     NULL, scenario_privesc_sim, NULL},
     {"memfd-exec", "hide/inject", "anonymous memfd, RWX mapping, self re-exec and fileless exec",
      "process.memfd,execution.memfd_elf,process.memfd_exec,memory.rwx,memory.wx_transition,"
      "memory.rwx_attempt,execution.fileless_exec,execution.dropped_library",
-     NULL, NULL, scenario_memfd_exec},
+     NULL, NULL, scenario_memfd_exec, NULL},
     {"inject-sim", "hide/inject",
      "ptrace and /proc/PID/mem against the sample's own child, LD_PRELOAD in an environment",
      "injection.ptrace_attach,injection.ptrace_poke,process.ptrace,injection.vm_write,"
      "injection.proc_mem_write,credential.proc_mem_read,injection.ld_preload_env,evasion.traceme",
      "the target is always a child this sample forked; a Yama or seccomp policy that refuses "
      "ptrace turns the rows into failed attempts",
-     NULL, scenario_inject_sim},
+     NULL, scenario_inject_sim, NULL},
+    {"preload-lib", "hide/inject",
+     "a small library written to the work directory, loaded into a dynamic child by LD_PRELOAD and LD_AUDIT",
+     "injection.dropped_preload,injection.ld_preload_env,execution.dropped_exec,execution.temp_exec,"
+     "execution.chmod_exec_temp",
+     "0.9.0 (ANT-T0398): the child and the library are dynamic and need the guest's own loader "
+     "(BusyBox x86-64 and arm64 bases carry one; a 32-bit build usually has none and says so); "
+     "the lookalike ld.so.preload is in the work directory and fires nothing by itself",
+     NULL, scenario_preload_lib, SET_090},
+    {"pid-hide-killer", "hide/inject",
+     "open_tree/move_mount over /proc/<own child> (refused), a /proc-scanning killer of its own "
+     "children, a BusyBox-style applet rename",
+     "evasion.process_rename,discovery.process_enum,execution.dropped_exec,execution.temp_exec",
+     "0.9.0 (ANT-T0436): proc_hide_mount needs a move_mount the kernel accepts and process_killer "
+     "SIGKILLs to processes the run did not start; neither is done here (refused arguments, own "
+     "children only), so read those calls in the Syscall Trace; the sh stand-in renamed to the "
+     "applet it was asked to run (rm) is no finding, the one renamed to an applet it was not asked "
+     "to run is evasion.process_rename",
+     NULL, scenario_pid_hide_killer, SET_090},
     {"evasion-misc", "hide/inject",
      "masquerading, dumpable, seccomp, history and log clearing, timestomp, hidden entries, stand-ins",
      "evasion.masquerade_kthread,evasion.masquerade_daemon,evasion.dumpable_off,"
@@ -114,65 +157,102 @@ static const struct module modules[] = {
      "execution.dropped_exec,execution.temp_exec,execution.chmod_exec_temp",
      "the dangerous calls are made on invalid arguments (EINVAL, ENOENT, EBADF) or as "
      "exec stand-ins; immutable_attr is HIGH on the decoy path",
-     NULL, scenario_evasion_misc},
+     NULL, scenario_evasion_misc, NULL},
     {"http-beacon", "C2", "periodic HTTP check-ins with a browser User-Agent",
      "network.ip_literal", "a capture rule; the rows are VM-wide unless the sample's own connect is seen",
-     NULL, scenario_http_beacon},
+     NULL, scenario_http_beacon, NULL},
     {"beacon-loop", "C2", "nine requests at a steady pace to one host",
      "network.beacon,network.ip_literal", "needs at least 8 requests with a regular gap",
-     NULL, scenario_beacon_loop},
+     NULL, scenario_beacon_loop, NULL},
     {"dns-tunnel", "C2", "encoded labels over 40 characters and a burst of TXT questions",
      "network.dns_tunnel", "two rows: long labels, and 20 TXT questions within a minute",
-     NULL, scenario_dns_tunnel},
+     NULL, scenario_dns_tunnel, NULL},
     {"dga", "C2", "random-looking names looked up against the sinkhole resolver, mostly NXDOMAIN",
      "network.dga_nxdomain",
      "needs a resolver that answers one name and refuses the rest (the sinkhole does)",
-     NULL, scenario_dga},
+     NULL, scenario_dga, NULL},
     {"tls-sni", "C2", "TLS ClientHello with a SNI name that looks like a C2 domain",
      "", "no rule fires by design; read the SNI in the Network tab and the IOC window",
-     NULL, scenario_tls_sni},
+     NULL, scenario_tls_sni, NULL},
     {"udp-beacon", "C2", "JSON check-in datagrams to a callback port",
      "", "no rule fires by design; read the datagrams in the Network tab and the IOC window",
-     NULL, scenario_udp_beacon},
+     NULL, scenario_udp_beacon, NULL},
     {"c2-misc", "C2",
      "off-port HTTP/TLS/SSH, IRC, Tor, web-service names, metadata host header, Stratum text, tunnel stand-ins",
      "network.nonstandard_port,network.irc_c2,network.tor,network.web_service,"
      "credential.cloud_metadata,impact.miner,network.proxy_tunnel,network.ip_literal",
      "names appear only inside payloads sent to the sinkhole; the Tor connect goes to loopback 9050",
-     NULL, scenario_c2_misc},
+     NULL, scenario_c2_misc, NULL},
     {"shell-sim", "C2",
      "reverse and bind shell shapes on local sockets, raw socket, socket filter, bpf program",
      "c2.reverse_shell,c2.bind_shell,network.listen_any,network.raw_socket,bpf.socket_filter,"
      "c2.bpf_backdoor,process.interpreter",
      "the shell runs a fixed echo and exits; raw_socket and bpf_backdoor need root, "
      "bpf.socket_filter also fires from a UDP socket",
-     NULL, scenario_shell_sim},
+     NULL, scenario_shell_sim, NULL},
+    {"dead-c2", "C2", "twelve connects to a refused command-server port, each bounded, never succeeding",
+     "network.dead_c2",
+     "0.9.0 (ANT-T0399, T0436): dead_c2 counts only public addresses; a private --host gives the "
+     "retry calls and no row, --wide adds twelve tries toward 203.0.113.7 (they fail fast on an "
+     "isolated or disconnected guest)",
+     NULL, scenario_dead_c2, SET_090},
     {"exfil-sim", "C2", "sendfile of a decoy to a socket, archive staging, scp and curl -T stand-ins",
      "exfil.file_to_socket,collection.archive_staging,lateral.tool_transfer,network.ip_literal",
-     NULL, NULL, scenario_exfil_sim},
+     NULL, NULL, scenario_exfil_sim, NULL},
     {"collection-sim", "-",
      "clipboard, screen and audio stand-ins, TIOCSTI on a file, a document sweep",
      "collection.clipboard,collection.screen_capture,collection.av_capture,"
      "collection.tty_inject,collection.local_sweep",
      "screen/av/clipboard are exec stand-ins; keylog is in real-path-probes; "
      "local_sweep needs --workdir under /home or /root",
-     NULL, scenario_collection_sim},
+     NULL, scenario_collection_sim, NULL},
     {"lateral-sim", "spread",
      "port sweep and login-port bursts against --host (private addresses only), ssh stand-ins",
      "discovery.network_scan,lateral.bruteforce,lateral.ssh_spread",
      "refused for a non-private --host; service_exploit needs several hosts (net-wide)",
-     NULL, scenario_lateral_sim},
+     NULL, scenario_lateral_sim, NULL},
+    {"inetsim-iot", "spread",
+     "telnet to --host:23 with a default IoT login and a loader line, an FTP RETR and a TFTP RRQ",
+     "network.inetsim_telnet_login,network.inetsim_loader,network.inetsim_download",
+     "0.9.0 (ANT-T0559): the rows come from the InetSim route's built-in services (a Routed VM "
+     "with InetSim); elsewhere the attempts are refused; private or TEST-NET --host only; the "
+     "loader line names a .invalid host and writes to standard output only; nothing fetched is run",
+     NULL, scenario_inetsim_iot, SET_090},
     {"impact-sim", "impact",
      "fork storm, rename-to-.locked bursts, notes, miner and shutdown stand-ins, a UDP burst",
      "impact.fork_bomb,impact.ransom_rewrite,impact.ransom_note,impact.inhibit_recovery,"
      "impact.service_stop,impact.reboot,impact.miner,impact.miner_tuning,impact.ddos_flood,"
      "impact.block_device_write",
      "ddos_flood is refused for a non-private --host; nothing outside the work directory is deleted",
-     NULL, scenario_impact_sim},
+     NULL, scenario_impact_sim, NULL},
+    {"iot-device", "impact",
+     "iptables, watchdog and flash-erase stand-ins, stats of /dev/watchdog and /dev/mtd0, MEMERASE on a work file",
+     "evasion.firewall_modify,impact.block_device_write",
+     "0.9.0 (ANT-T0558): /dev/watchdog is never opened (opening arms it) and no process the run "
+     "did not start is killed, so watchdog_disable and service_takeover are not expected; the "
+     "MEMERASE ioctls go to a regular file in the work directory and are refused (ENOTTY)",
+     NULL, scenario_iot_device, SET_090},
     {"rule-markers", "-", "technique and Sigma tag strings plus benign discovery commands",
      "discovery.system_info,discovery.user_enum",
      "the strings are for YARA/Sigma and the Files tab, not for Suspicious activity",
-     NULL, scenario_rule_markers},
+     NULL, scenario_rule_markers, NULL},
+    {"signal-sender", "-", "one child sends SIGTERM and SIGKILL to two of its sibling children",
+     "",
+     "0.9.0 (ANT-T0278): Triage's note on killed processes names the sibling that sent each "
+     "signal (revision-21 bases and newer); no rule fires by design",
+     NULL, scenario_signal_sender, SET_090},
+    {"decoders", "-",
+     "FIONREAD/FIONBIO on a socket and a pipe, arch_prctl (x86), PR_SET_NAME, one io_uring and one AIO read",
+     "evasion.io_uring_usage,evasion.process_rename",
+     "0.9.0 (ANT-T0256, T0302, T0461): read the decoded arguments in the Syscall Trace (no "
+     "schema gaps); io_uring needs a kernel that allows it",
+     NULL, scenario_decoders, SET_090},
+    {"fork-debug", "-",
+     "demo_fork_breakpoint() called before and after a fork, in the parent and in the child",
+     "",
+     "0.9.0 (x86-64 debugger): break on demo_fork_breakpoint; the child the debugger does not "
+     "follow runs its own code instead of meeting the INT3",
+     NULL, scenario_fork_debug, SET_090},
     {"evasive", "-",
      "checks first (debugger, VM, container, sandbox); evades if any trips, else the whole chain",
      "evasion.sandbox_probe,evasion.probe_then_exit,evasion.debugger_check,"
@@ -185,7 +265,7 @@ static const struct module modules[] = {
      "evade path: the check rows, evasion.probe_then_exit (needs an answer that shows a VM) and "
      "nothing else; proceed path: the check rows plus the chain's rows (recon, download, "
      "persistence, beacon-loop, one exfil POST)",
-     ONLY_SELECTED, scenario_evasive},
+     ONLY_SELECTED, scenario_evasive, NULL},
     {"real-path-probes", "-",
      "opens real system paths that cannot be changed or read: absent names, no create, no read",
      "persistence.cron,persistence.at_job,persistence.systemd,persistence.rc_init,"
@@ -197,18 +277,40 @@ static const struct module modules[] = {
      "collection.screen_capture,collection.av_capture",
      "failed opens: each row is one tier down and marked failed; the read-only opens "
      "(shadow, input, fb0, video, snd) succeed only where the node exists and is readable",
-     REAL_PATHS, scenario_real_path_probes},
+     REAL_PATHS, scenario_real_path_probes, NULL},
     {"net-wide", "spread",
      "a few packets to documentation addresses (203.0.113.0/24): service ports, a sweep, a 1.1 MiB UDP upload",
      "lateral.service_exploit,discovery.network_scan,exfil.large_upload",
      "the packets leave the guest toward an unroutable block and are dropped",
-     WIDE, scenario_net_wide},
+     WIDE, scenario_net_wide, NULL},
+    {"screen-ticker", "-",
+     "a changing console line every second for --screen-seconds N (at most 120)",
+     "", "0.9.0 (ANT-T0487): for Timed screenshots; the line also goes to /dev/console when it opens",
+     SCREEN_SECONDS, scenario_screen_ticker, SET_090},
+    {"live-scan", "-",
+     "rule-matching work every 10 s for about 150 s: markers, stand-ins, discovery commands, a check-in",
+     "persistence.cron,discovery.system_info,discovery.user_enum",
+     "0.9.0 (ANT-T0460): long enough for the live detection scan (every 2 min) to run while it "
+     "goes; YARA, Sigma and IDS hits depend on the rule packs",
+     LONG_RUN, scenario_live_scan, SET_090},
 };
 #define MODULE_COUNT (sizeof modules / sizeof modules[0])
 
 struct tally {
     unsigned pass, note, unavailable, fail, skip;
 };
+
+// --set NAME (demo-all) or -DSCENARIO_SET (demo-090): only that set's scenarios.
+#ifdef SCENARIO_SET
+static const char *set_filter = SCENARIO_SET;
+#else
+static const char *set_filter = NULL;
+#endif
+
+static int in_set(const struct module *module)
+{
+    return !set_filter || (module->set && !strcmp(module->set, set_filter));
+}
 
 static struct tally totals;
 static struct tally per[MODULE_COUNT];
@@ -258,8 +360,10 @@ RESULT(sample_skip, "SKIP", skip)
 static void usage(const char *self, FILE *out)
 {
     fprintf(out, "usage: %s [options]%s\n\n", self,
-#ifdef SINGLE_SCENARIO
+#if defined(SINGLE_SCENARIO)
            ""
+#elif defined(SCENARIO_SET)
+           "   (a bare run is every scenario of the " SCENARIO_SET " set; --only a,b selects some)"
 #else
            "   (a bare run is every scenario; --only a,b selects some)"
 #endif
@@ -281,29 +385,36 @@ static void usage(const char *self, FILE *out)
            "  --why             print every environment check and its answer\n"
            "  --ignore LIST     skip check categories: debugger,vm,container,sandbox\n"
            "  --evade-sleep MS  the evading sleep (0-%d, default 3000-4500)\n"
+           "  --screen-seconds N  allow screen-ticker: a changing console line every second for N s (1-%d)\n"
+           "  --long            allow live-scan: rule-matching work for about 150 s\n"
            "  --list            print the registry (name, phase, expected rules) and exit\n"
 #ifndef SINGLE_SCENARIO
            "  --all | --only a,b  run every scenario, or a comma-separated subset\n"
+#ifndef SCENARIO_SET
+           "  --set 0.9.0       only the scenarios of the 0.9.0 features (what demo-090 runs)\n"
+#endif
 #endif
            "  --help            this text\n\n",
            SAMPLE_MAX_ROUNDS, SAMPLE_MAX_DELAY_MS, SAMPLE_REMOTE_ADDR, SAMPLE_DNS_ADDR, SAMPLE_MAX_GAP_MS,
-            SAMPLE_MAX_EVADE_SLEEP_MS);
+            SAMPLE_MAX_EVADE_SLEEP_MS, SAMPLE_MAX_SCREEN_SECONDS);
     fprintf(out, "Default ports: HTTP %d, TLS %d, UDP %d. Start the sinkhole on the host with\n"
            "  python3 tests/monitor/sinkhole.py\n"
            "and pass the --host it prints. Endpoints are numeric IPv4 only; nothing is resolved.\n"
            "Downloaded content runs only if it matches a pinned hash of the bundled payload.\n"
-           "Writes stay in the work directory. Scenarios needing --wide or --real-paths are\n"
-           "skipped (with a SKIP line) unless the option is given.\n",
+           "Writes stay in the work directory. Scenarios needing --wide, --real-paths,\n"
+           "--screen-seconds or --long are skipped (with a SKIP line) unless it is given.\n",
            SAMPLE_HTTP_PORT, SAMPLE_TLS_PORT, SAMPLE_UDP_PORT);
 }
 
 static void list_modules(void)
 {
-    printf("# name\tphase\trequires\texpected-rule-ids\tsummary\n");
+    printf("# name\tphase\trequires\texpected-rule-ids\tsummary\tset\n");
     for (size_t m = 0; m < MODULE_COUNT; m++)
-        printf("%s\t%s\t%s\t%s\t%s\n", modules[m].name, modules[m].phase,
-               modules[m].requires ? modules[m].requires : "-",
-               modules[m].expect[0] ? modules[m].expect : "-", modules[m].summary);
+        if (in_set(&modules[m]))
+            printf("%s\t%s\t%s\t%s\t%s\t%s\n", modules[m].name, modules[m].phase,
+                   modules[m].requires ? modules[m].requires : "-",
+                   modules[m].expect[0] ? modules[m].expect : "-", modules[m].summary,
+                   modules[m].set ? modules[m].set : "-");
 }
 
 static void remove_tree(const char *path)
@@ -333,17 +444,32 @@ static void remove_tree(const char *path)
     rmdir(path);
 }
 
+// Whether the option an opt-in scenario needs was given.
+static int enabled(const char *requires, const struct options *options)
+{
+    if (!requires || !strcmp(requires, ONLY_SELECTED))
+        return 1;
+    if (!strcmp(requires, WIDE))
+        return options->wide;
+    if (!strcmp(requires, REAL_PATHS))
+        return options->real_paths;
+    if (!strcmp(requires, SCREEN_SECONDS))
+        return options->screen_seconds > 0;
+    if (!strcmp(requires, LONG_RUN))
+        return options->long_run;
+    return 0;
+}
+
 static int run_module(const struct module *module, const struct options *base)
 {
     struct options options = *base;
     current_name = module->name;
-    if (module->requires && strcmp(module->requires, ONLY_SELECTED) != 0 &&
-        !((!strcmp(module->requires, WIDE) && base->wide) ||
-          (!strcmp(module->requires, REAL_PATHS) && base->real_paths))) {
+    if (!enabled(module->requires, base)) {
         printf("== %s: %s (phase %s)\n", module->name, module->summary, module->phase);
         printf("%-11s %-17s %s\n", "EXPECT", module->name,
                module->expect[0] ? module->expect : "-");
-        sample_skip(module->name, "not run: pass %s to enable it (%s)", module->requires,
+        sample_skip(module->name, "not run: pass %s%s to enable it (%s)", module->requires,
+                 !strcmp(module->requires, SCREEN_SECONDS) ? " N" : "",
                  module->notes ? module->notes : "opt-in scenario");
         current_name = NULL;
         return 0;
@@ -530,7 +656,7 @@ static int check_only(const char *self, const char *only)
     for (char *name = strtok(copy, ","); name; name = strtok(NULL, ",")) {
         int found = 0;
         for (size_t m = 0; m < MODULE_COUNT; m++)
-            found |= !strcmp(modules[m].name, name);
+            found |= !strcmp(modules[m].name, name) && in_set(&modules[m]);
         if (!found) {
             fprintf(stderr, "%s: unknown scenario \"%s\"; --list shows the names\n", self, name);
             return -1;
@@ -598,6 +724,12 @@ int main(int argc, char **argv)
             options.wide = 1;
         } else if (!strcmp(arg, "--real-paths")) {
             options.real_paths = 1;
+        } else if (!strcmp(arg, "--long")) {
+            options.long_run = 1;
+        } else if (!strcmp(arg, "--screen-seconds") && has_value) {
+            if (parse_number(self, arg, argv[++i], 1, SAMPLE_MAX_SCREEN_SECONDS,
+                             &options.screen_seconds) != 0)
+                return 2;
         } else if (!strcmp(arg, "--evade")) {
             options.evade = 1;
         } else if (!strcmp(arg, "--why")) {
@@ -618,8 +750,14 @@ int main(int argc, char **argv)
             // The default: every scenario.
         } else if (!strcmp(arg, "--only") && has_value) {
             only = argv[++i];
-            if (check_only(self, only) != 0)
+#ifndef SCENARIO_SET
+        } else if (!strcmp(arg, "--set") && has_value) {
+            set_filter = argv[++i];
+            if (strcmp(set_filter, SET_090) != 0) {
+                fprintf(stderr, "%s: --set takes %s, not \"%s\"\n", self, SET_090, set_filter);
                 return 2;
+            }
+#endif
 #endif
         } else if (!strcmp(arg, "--rounds") && has_value) {
             if (parse_number(self, arg, argv[++i], 1, SAMPLE_MAX_ROUNDS, &options.rounds) != 0)
@@ -660,6 +798,11 @@ int main(int argc, char **argv)
         list_modules();
         return 0;
     }
+#ifndef SINGLE_SCENARIO
+    // Checked once every option is read, so --set may follow --only.
+    if (only && check_only(self, only) != 0)
+        return 2;
+#endif
     if (options.dns_port)
         sample_dns_port = options.dns_port;
     // The listener is usually one machine: --host moves the resolver with it.
@@ -687,7 +830,7 @@ int main(int argc, char **argv)
 #else
     int first = 1;
     for (size_t m = 0; m < MODULE_COUNT && !evaded; m++) {
-        if (only && !wanted(only, modules[m].name))
+        if (!in_set(&modules[m]) || (only && !wanted(only, modules[m].name)))
             continue;
         // The evasive scenario is its own binary, or named with --only.
         if (!only && modules[m].requires && !strcmp(modules[m].requires, ONLY_SELECTED))
