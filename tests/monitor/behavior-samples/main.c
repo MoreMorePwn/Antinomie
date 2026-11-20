@@ -190,11 +190,12 @@ static const struct module modules[] = {
      "the shell runs a fixed echo and exits; raw_socket and bpf_backdoor need root, "
      "bpf.socket_filter also fires from a UDP socket",
      NULL, scenario_shell_sim, NULL},
-    {"dead-c2", "C2", "twelve connects to a refused command-server port, each bounded, never succeeding",
+    {"dead-c2", "C2", "repeated connects to a command-server port that never answers, each bounded",
      "network.dead_c2",
-     "0.9.0 (ANT-T0399, T0436): dead_c2 counts only public addresses; a private --host gives the "
-     "retry calls and no row, --wide adds twelve tries toward 203.0.113.7 (they fail fast on an "
-     "isolated or disconnected guest)",
+     "0.9.0 (ANT-T0399, T0436): dead_c2 counts only public addresses whose connects are refused, "
+     "time out or are unreachable: a private --host gets four tries and no row, a TEST-NET --host "
+     "or --wide (203.0.113.7) twelve; InetSim accepts every port, so use the Drop route or a "
+     "disconnected VM",
      NULL, scenario_dead_c2, SET_090},
     {"exfil-sim", "C2", "sendfile of a decoy to a socket, archive staging, scp and curl -T stand-ins",
      "exfil.file_to_socket,collection.archive_staging,lateral.tool_transfer,network.ip_literal",

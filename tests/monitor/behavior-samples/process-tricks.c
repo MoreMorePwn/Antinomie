@@ -175,7 +175,7 @@ SCENARIO(persisted_copy)
 {
     const char *name = "persisted-copy";
     char directory[600], copy[700];
-    if (work_subdir(options, ".cache/.persist", directory, sizeof directory) != 0 ||
+    if (work_subdir(options, ".persist", directory, sizeof directory) != 0 ||
         sample_path(copy, sizeof copy, directory, "xvr-update") != 0 || copy_self(copy) != 0) {
         sample_fail(name, "work directory: %s", strerror(errno));
         return 1;
@@ -324,7 +324,7 @@ SCENARIO(preload_lib)
     size_t lib_size = (size_t)(sample_preload_lib_end - sample_preload_lib);
     size_t child_size = (size_t)(sample_preload_child_end - sample_preload_child);
     char directory[600], library[700], child[700], etc[600], preload_list[700];
-    if (work_subdir(options, ".cache", directory, sizeof directory) != 0 ||
+    if (work_subdir(options, ".lib", directory, sizeof directory) != 0 ||
         sample_path(library, sizeof library, directory, "libdemo-preload.so") != 0 ||
         sample_path(child, sizeof child, directory, "preload-child") != 0 ||
         sample_write_bytes(library, sample_preload_lib, lib_size, 0600) != 0 ||

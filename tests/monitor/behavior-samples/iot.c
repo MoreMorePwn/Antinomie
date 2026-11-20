@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <mtd/mtd-abi.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -206,8 +207,10 @@ static void on_alarm(int signal)
     (void)signal;
 }
 
-// A blocking connect (so the failure is the connect's own result), cut off
-// after limit_ms by an interval timer: EINTR then.
+// A blocking connect (so the failure is the connect's own result) that sends
+// its SYN twice at most (TCP_SYNCNT 1): a server that never answers gives
+// ETIMEDOUT after about 3 s. An interval timer cuts it off after limit_ms
+// whatever happens (EINTR then).
 static int blocking_connect(const char *host, int port, int limit_ms)
 {
     struct sockaddr_in address;
@@ -221,6 +224,8 @@ static int blocking_connect(const char *host, int port, int limit_ms)
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0)
         return -1;
+    int syn_retries = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_SYNCNT, &syn_retries, sizeof syn_retries);
     struct sigaction action, previous;
     memset(&action, 0, sizeof action);
     action.sa_handler = on_alarm; // no SA_RESTART: the connect returns EINTR
@@ -239,11 +244,11 @@ static int blocking_connect(const char *host, int port, int limit_ms)
     return result;
 }
 
-static void retry_dead(const char *name, const char *host, int port)
+static void retry_dead(const char *name, const char *host, int port, int count)
 {
     int refused = 0, timed_out = 0, unreachable = 0, cut = 0, other = 0, tries = 0;
-    for (; tries < DEAD_TRIES; tries++) {
-        if (blocking_connect(host, port, 1500) == 0) {
+    for (; tries < count; tries++) {
+        if (blocking_connect(host, port, 4000) == 0) {
             tries++;
             sample_note(name, "%s:%d accepted try %d: a live server, so this is no dead one "
                            "(no more tries)", host, port, tries);
@@ -269,7 +274,7 @@ static void retry_dead(const char *name, const char *host, int port)
         pause_ms(250);
     }
     sample_pass(name, "%d connects to %s:%d: %d refused, %d timed out, %d unreachable, %d cut off "
-                   "after 1.5 s (EINTR, not counted by the rule), %d other",
+                   "after 4 s (EINTR, not counted by the rule), %d other",
              tries, host, port, refused, timed_out, unreachable, cut, other);
 }
 
@@ -278,12 +283,14 @@ SCENARIO(dead_c2)
     const char *name = "dead-c2";
     const char *host = sample_host(options);
     int port = sample_port(options, DEAD_PORT);
-    retry_dead(name, host, port);
+    // A private address is never counted by the rule: a few tries show the
+    // shape; a public (TEST-NET) --host gets the full count.
+    retry_dead(name, host, port, sample_is_private(host) ? 4 : DEAD_TRIES);
     if (sample_is_private(host))
         sample_note(name, "%s is a private address: network.dead_c2 counts public ones only%s", host,
                  options->wide ? "" : " (pass --wide to also try 203.0.113.7)");
     if (options->wide)
-        retry_dead(name, SAMPLE_TESTNET_PREFIX "7", port);
+        retry_dead(name, SAMPLE_TESTNET_PREFIX "7", port, DEAD_TRIES);
     else
         sample_skip(name, "the public retry toward 203.0.113.7 needs --wide");
     return 0;
@@ -517,7 +524,7 @@ SCENARIO(inetsim_iot)
         return 0;
     }
     char directory[600], ftp_file[700], tftp_file[700];
-    if (sample_path(directory, sizeof directory, options->workdir, ".cache") != 0 ||
+    if (sample_path(directory, sizeof directory, options->workdir, ".dl") != 0 ||
         sample_mkdir_p(directory) != 0 ||
         sample_path(ftp_file, sizeof ftp_file, directory, "ftp-demo.x86") != 0 ||
         sample_path(tftp_file, sizeof tftp_file, directory, "tftp-demo.mips") != 0) {
@@ -577,7 +584,7 @@ SCENARIO(iot_device)
         {"evasion.firewall_modify",
          {"iptables", "-D", "INPUT", "-p", "tcp", "--dport", "2323", "-j", "ACCEPT", NULL}},
         {"evasion.firewall_modify", {"iptables", "-P", "INPUT", "DROP", NULL}},
-        {"-", {"watchdog", "-T", "3600", "-F", "/dev/watchdog", NULL}},
+        {"-", {"busybox", "watchdog", "-T", "3600", "-F", "/dev/watchdog", NULL}},
         {"-", {"flash_erase", "/dev/mtd0", "0", "0", NULL}},
         {"-", {"flash_eraseall", "-j", "/dev/mtd3", NULL}},
         {"-", {"mtd", "erase", "config", NULL}},
