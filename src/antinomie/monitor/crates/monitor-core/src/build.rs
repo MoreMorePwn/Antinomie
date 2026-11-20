@@ -353,7 +353,7 @@ pub fn automatic_base_name_for(kind: Kind, desktop: &str, arch: crate::api::Gues
 fn automatic_x86_name(kind: Kind, desktop: &str) -> String {
     match kind {
         Kind::BusyBox => "BusyBox".into(),
-        Kind::BusyBoxExtra => "BusyBox camera".into(),
+        Kind::BusyBoxExtra => crate::storage::CAMERA_BASE_NAME.into(),
         Kind::DebianMinimal => "Debian 13 (Minimal)".into(),
         Kind::DebianXfce => format!(
             "Debian 13 ({})",

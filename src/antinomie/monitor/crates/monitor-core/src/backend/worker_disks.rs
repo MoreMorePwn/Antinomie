@@ -281,7 +281,7 @@ impl Worker {
         layer_digests: bool,
     ) -> Result<DumpPlan, String> {
         let bundle: Bundle = storage::read_json(&dir.join("bundle.json"))?;
-        let system = match &bundle.name {
+        let system = match bundle.shown_name() {
             Some(name) => format!("Linux {} · {name}", bundle.kernel_version),
             None => format!("Linux {}", bundle.kernel_version),
         };

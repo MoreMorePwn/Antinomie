@@ -394,6 +394,12 @@ fn installed_base(directory: &std::path::Path) -> Result<Option<BaseSummary>, St
         return Ok(None);
     }
     let min_ram_mib = bundle.min_ram_mib();
+    let label = bundle.shown_name().unwrap_or_else(|| {
+        bundle
+            .guest
+            .as_ref()
+            .map_or_else(|| "BusyBox".into(), |guest| guest.label.clone())
+    });
     let id = bundle
         .base_identity
         .ok_or("installed bundle missing identity")?;
@@ -402,12 +408,7 @@ fn installed_base(directory: &std::path::Path) -> Result<Option<BaseSummary>, St
     }
     Ok(Some(BaseSummary {
         id,
-        label: bundle.name.clone().unwrap_or_else(|| {
-            bundle
-                .guest
-                .as_ref()
-                .map_or_else(|| "BusyBox".into(), |guest| guest.label.clone())
-        }),
+        label,
         directory: directory.to_path_buf(),
         min_ram_mib,
         min_disk_gib: bundle.guest.as_ref().map_or(1, |guest| guest.min_disk_gib),

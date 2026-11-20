@@ -369,6 +369,10 @@ impl BundleBuildProvenance {
     }
 }
 
+/// Short name of the BusyBox camera/DVR base (agrees with its catalog label
+/// and `build::automatic_base_name`).
+pub const CAMERA_BASE_NAME: &str = "BusyBox camera";
+
 /// File name of a base's Volatility symbol table.
 pub const SYMBOLS_FILE: &str = "symbols.json.xz";
 
@@ -490,6 +494,20 @@ pub(crate) fn resolve_in_bundle(root: &Path, recorded: &Path) -> Result<PathBuf,
 }
 
 impl Bundle {
+    /// The name of a base that carries none of its own: "BusyBox camera" for
+    /// the camera/DVR profile, which `bundle.json` marks only by its `device`
+    /// record. `None` for every other base.
+    pub fn derived_name(&self) -> Option<&'static str> {
+        (self.name.is_none() && self.guest.is_none() && self.extra.contains_key("device"))
+            .then_some(CAMERA_BASE_NAME)
+    }
+    /// The name shown for the base where it has one: the name chosen at
+    /// build time, else the derived camera name.
+    pub fn shown_name(&self) -> Option<String> {
+        self.name
+            .clone()
+            .or_else(|| self.derived_name().map(str::to_owned))
+    }
     /// The least RAM a VM on this base needs: the guest profile's minimum
     /// (256 MiB for a base without one), and for an arm64 base never less than
     /// the machine's floor, whatever its `bundle.json` says.
@@ -1282,6 +1300,42 @@ mod tests {
         // download and installs it the same way) changes nothing.
         let again = reloaded.install(&options).unwrap();
         assert_eq!(again.extra, installed.extra);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_camera_base_has_its_own_short_name_from_a_folder_install() {
+        let (root, options, mut bundle, _) = guest_fixture();
+        bundle.guest = None;
+        bundle.extra.insert(
+            "device".into(),
+            serde_json::json!({"profile": "dahua-xvr", "kind": "dvr"}),
+        );
+        let source = bundle.kernel.parent().unwrap().to_path_buf();
+        let write = |bundle: &Bundle| {
+            let mut manifest = serde_json::to_value(bundle).unwrap();
+            manifest["kernel"] = "kernel".into();
+            manifest["base_disk"] = "base.qcow2".into();
+            fs::write(
+                source.join("bundle.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+        };
+        write(&bundle);
+        assert_eq!(bundle.derived_name(), Some("BusyBox camera"));
+        Bundle::load(&source).unwrap().install(&options).unwrap();
+        let bases = crate::locations::installed_bases(&options).unwrap();
+        assert_eq!(bases.len(), 1);
+        assert_eq!(bases[0].label, "BusyBox camera");
+        assert_eq!(bases[0].name_and_arch(), "BusyBox camera \u{b7} x86-64");
+        // A base without a device record stays plain BusyBox, and a chosen
+        // name wins over the derived one.
+        bundle.extra.clear();
+        assert_eq!(bundle.derived_name(), None);
+        bundle.extra.insert("device".into(), serde_json::json!({}));
+        bundle.name = Some("Lab".into());
+        assert_eq!(bundle.shown_name().as_deref(), Some("Lab"));
         let _ = fs::remove_dir_all(&root);
     }
 
