@@ -109,6 +109,27 @@ pub fn scan_archive_query(
     if let Some(done) = &request.reuse {
         return Ok(done.clone());
     }
+    // A read that waits for the run's index (another reader or a build of it
+    // holds it) says so instead of freezing on its count (ANT-T0575).
+    match &request.progress {
+        Some(progress) => {
+            let progress = Arc::clone(progress);
+            antinomie_monitor_core::recording::with_index_wait(
+                move |waiting| progress.set_waiting(waiting),
+                || scan_with_progress(directory, pcap, pcap_open, cancel, request),
+            )
+        }
+        None => scan_with_progress(directory, pcap, pcap_open, cancel, request),
+    }
+}
+
+fn scan_with_progress(
+    directory: &Path,
+    pcap: Option<&Path>,
+    pcap_open: bool,
+    cancel: &Arc<AtomicBool>,
+    request: &ScanRequest,
+) -> Result<ArchiveScan, String> {
     // The index of a large recording is built on this thread, in the first
     // call that counts the calls: it tells the request's progress as it goes.
     let opened = match &request.progress {

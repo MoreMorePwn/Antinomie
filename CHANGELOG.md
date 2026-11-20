@@ -780,6 +780,8 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **The digest of a large run no longer stalls while the run is open (ANT-T0575).** With a big run selected, the background digest could sit at "Reading the calls, pass 1 of 2: 1,024 of …" until the window had finished counting the run's calls (minutes for a million calls), and an index left half-built after the app was killed waited the same way. Opening the run's index no longer waits for the other readers of it, and the window's count reads the calls in short batches, so the digest, the count and an index that is still being finished all go on together. A digest that does have to wait for the index now says "Waiting for the run's index".
+
 - **A file the run wrote and then ran as `/tmp/./w.bin` or `/tmp/x/../w.bin` is the run's file, not base noise (ANT-T0562).** Paths the run wrote and paths it ran or opened are now compared with `.`, `..` and repeated `/` collapsed lexically (never above `/`, no filesystem lookup) in the base-program marking, the file activity and written files, the detection rules, the lineage and the report; the path shown stays as recorded.
 
 - **No address lookup leaves the host unless you chose dig and whois (ANT-T0556,

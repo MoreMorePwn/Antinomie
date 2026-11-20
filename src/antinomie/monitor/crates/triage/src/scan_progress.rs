@@ -3,7 +3,7 @@
 //! dialog): the phase and how far it has got. The worker writes it with plain
 //! atomics; the screen reads it every frame. A large recording takes minutes,
 //! and "Working" with a spinner says nothing about whether it is alive.
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -36,6 +36,9 @@ pub struct ScanProgress {
     phase: AtomicU8,
     done: AtomicU64,
     total: AtomicU64,
+    /// A read is waiting for the run's index (another reader or a build of
+    /// it holds the index).
+    waiting: AtomicBool,
 }
 
 impl ScanProgress {
@@ -71,6 +74,11 @@ impl ScanProgress {
         )
     }
 
+    /// A read of the run's index is waiting (`true`) or got in (`false`).
+    pub fn set_waiting(&self, waiting: bool) {
+        self.waiting.store(waiting, Ordering::Relaxed);
+    }
+
     pub fn phase(&self) -> Phase {
         Phase::of(self.phase.load(Ordering::Relaxed))
     }
@@ -85,6 +93,9 @@ impl ScanProgress {
                 .and_then(|scaled| scaled.checked_div(total))
                 .map_or_else(String::new, |percent| format!(" ({percent}%)"))
         };
+        if self.phase() != Phase::Idle && self.waiting.load(Ordering::Relaxed) {
+            return Some("Waiting for the run's index".into());
+        }
         match self.phase() {
             Phase::Idle => None,
             Phase::Indexing if total > 0 => Some(format!(
@@ -205,6 +216,20 @@ mod tests {
             .starts_with("Reading the files, pass 2 of 2: 0 of 1,200,000"));
         progress.begin(Phase::Settling, 0);
         assert!(progress.text().unwrap().contains("settling"));
+    }
+
+    #[test]
+    fn a_read_waiting_for_the_index_says_so_instead_of_its_count() {
+        let progress = ScanProgress::default();
+        progress.begin(Phase::Reading, 1_527_986);
+        progress.advance(1_024);
+        progress.set_waiting(true);
+        assert_eq!(progress.text().unwrap(), "Waiting for the run's index");
+        progress.set_waiting(false);
+        assert_eq!(
+            progress.text().unwrap(),
+            "Reading the calls, pass 1 of 2: 1,024 of 1,527,986 (0%)"
+        );
     }
 
     #[test]
