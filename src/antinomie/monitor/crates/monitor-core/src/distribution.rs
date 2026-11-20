@@ -849,6 +849,27 @@ mod tests {
     }
 
     #[test]
+    fn a_camera_catalog_entry_keeps_its_own_name_apart_from_busybox() {
+        use crate::api::GuestArch;
+        let files = serde_json::json!([{"name": "kernel", "size": 1, "sha256": "c".repeat(64)}]);
+        let text = serde_json::json!({"schema": 1, "bases": [
+            {"identity": "1".repeat(64), "label": "BusyBox", "kind": "busybox",
+             "antinomie_revision": 22, "antinomie_source": "a".repeat(64), "files": files, "created": "2026-11-11T21:29:00Z"},
+            {"identity": "5".repeat(64), "label": "BusyBox camera", "kind": "busybox-extra",
+             "antinomie_revision": 22, "antinomie_source": "a".repeat(64), "files": files, "created": "2026-11-11T21:30:00Z"},
+        ]});
+        let catalog = parse_catalog(text.to_string().as_bytes()).unwrap();
+        let camera = newest_base(&catalog.bases, "busybox-extra", GuestArch::X86_64).unwrap();
+        let plain = newest_base(&catalog.bases, "busybox", GuestArch::X86_64).unwrap();
+        let shown = crate::api::RemoteBase::from(camera).label;
+        assert_eq!(crate::api::base_label_plain(&shown), "BusyBox camera");
+        // The label the catalog shows is the one an installed camera base
+        // gets (the Download window matches an update by it).
+        assert_eq!(shown, crate::storage::CAMERA_BASE_NAME);
+        assert_ne!(shown, crate::api::RemoteBase::from(plain).label);
+    }
+
+    #[test]
     fn an_arm64_catalog_entry_shows_at_least_the_arm64_minimum() {
         let catalog = fixture_catalog();
         let remote: Vec<_> = catalog

@@ -73,7 +73,7 @@ impl Worker {
         let recording =
             crate::locations::locations(&self.options, &session.vm.id)?.recording_directory;
         let bundle = &session.bundle;
-        let system = match &bundle.name {
+        let system = match bundle.shown_name() {
             Some(name) => format!("Linux {} · {name}", bundle.kernel_version),
             None => format!("Linux {}", bundle.kernel_version),
         };

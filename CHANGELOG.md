@@ -780,6 +780,8 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **The BusyBox camera base has its own name, not "BusyBox" (ANT-T0576).** A base whose `bundle.json` has no name but carries a `device` record (the camera/DVR base) is now named "BusyBox camera" in the base list, pickers, run details, reports and memory dumps, matching its catalog label; bases already installed show it after the update, with no re-download.
+
 - **A file the run wrote and then ran as `/tmp/./w.bin` or `/tmp/x/../w.bin` is the run's file, not base noise (ANT-T0562).** Paths the run wrote and paths it ran or opened are now compared with `.`, `..` and repeated `/` collapsed lexically (never above `/`, no filesystem lookup) in the base-program marking, the file activity and written files, the detection rules, the lineage and the report; the path shown stays as recorded.
 
 - **No address lookup leaves the host unless you chose dig and whois (ANT-T0556,
