@@ -126,7 +126,9 @@ SCENARIO(quick_exit)
 {
     const char *name = "quick-exit";
     char units[600], unit[700], cron[700];
-    if (work_subdir(options, ".config/systemd/user", units, sizeof units) != 0 ||
+    // Only the child touches the systemd lookalike, so the first match of
+    // the run is the child's, made a moment before it exits.
+    if (sample_path(units, sizeof units, options->workdir, ".config/systemd/user") != 0 ||
         sample_path(unit, sizeof unit, units, "demo-quick.service") != 0 ||
         sample_path(cron, sizeof cron, options->workdir, "quick-cron.txt") != 0 ||
         sample_write_text(cron, "* * * * * /tmp/.demo-quick >/dev/null 2>&1\n") != 0) {
@@ -138,13 +140,15 @@ SCENARIO(quick_exit)
     fflush(stdout);
     pid_t child = fork();
     if (child == 0) {
-        int fd = open(unit, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
-        if (fd >= 0) {
-            static const char text[] = "[Unit]\nDescription=Quick\n\n[Service]\n"
-                                       "ExecStart=/tmp/.demo-quick\n\n[Install]\n"
-                                       "WantedBy=default.target\n";
-            sample_write_all(fd, text, sizeof text - 1);
-            close(fd);
+        if (sample_mkdir_p(units) == 0) {
+            int fd = open(unit, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+            if (fd >= 0) {
+                static const char text[] = "[Unit]\nDescription=Quick\n\n[Service]\n"
+                                           "ExecStart=/tmp/.demo-quick\n\n[Install]\n"
+                                           "WantedBy=default.target\n";
+                sample_write_all(fd, text, sizeof text - 1);
+                close(fd);
+            }
         }
         _exit(0);
     }
@@ -162,8 +166,8 @@ SCENARIO(quick_exit)
     sample_pass(name, "child %d wrote %s and exited after %ld ms; crontab stand-in exited %d after "
                    "%ld ms",
              (int)child, unit, lived, stand_in, stand_in_ms);
-    sample_note(name, "with Dump on suspicious activity (core, High) both are held at their exit "
-                   "on a revision-22 base");
+    sample_note(name, "with Dump on suspicious activity (core, High) the first one is held at its "
+                   "exit on a revision-22 base and its core taken");
     return 0;
 }
 
