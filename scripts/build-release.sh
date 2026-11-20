@@ -28,7 +28,8 @@ export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=/home/builder \
 --remap-path-prefix=$REPO=/antinomie --remap-path-prefix=$TARGET_DIR=/target"
 # Standard modules ship generated sources; rebuilding must not mutate the cache.
 export YRX_REGENERATE_MODULES_RS="${YRX_REGENERATE_MODULES_RS:-false}"
-(cd "$MONITOR" && cargo build --release --locked)
+# 0.9.0 ships the window only; 0.9.1 builds the whole workspace again.
+(cd "$MONITOR" && cargo build --release --locked -p antinomie-monitor-ui --bin antinomie-monitor)
 
 version="$("$TARGET_DIR/release/antinomie-monitor" --version | awk '{print $2}')"
 name="antinomie-$version"
@@ -36,12 +37,12 @@ stage="$(mktemp -d)"
 trap 'rm -rf -- "$stage"' EXIT
 package="$stage/$name"
 mkdir -p "$package"
-cp "$TARGET_DIR/release/antinomie-monitor" "$TARGET_DIR/release/antinomie-cli" "$package/"
-strip "$package/antinomie-monitor" "$package/antinomie-cli"
+cp "$TARGET_DIR/release/antinomie-monitor" "$package/"
+strip "$package/antinomie-monitor"
 # Read the entire stream: grep -q can hide a match behind strings' SIGPIPE
 # when pipefail is enabled.
 for private_path in "$HOME" "$REPO" "$TARGET_DIR"; do
-    for executable in antinomie-monitor antinomie-cli; do
+    for executable in antinomie-monitor; do
         if strings "$package/$executable" | grep -F "$private_path" >/dev/null; then
             echo "build-release: $executable still names $private_path; refusing to package" >&2
             exit 1
@@ -53,7 +54,6 @@ cp "$REPO/install.sh" "$REPO/CHANGELOG.md" "$REPO/LICENSE" "$REPO/LICENSING.md" 
 cp "$MONITOR/assets/antinomie.desktop" "$MONITOR/assets/antinomie.svg" "$package/"
 cp -r "$REPO/assets/branding" "$package/branding"
 cp -r "$REPO/LICENSES" "$package/"
-cp -r "$REPO/packaging" "$package/packaging"
 python3 "$REPO/scripts/check-licenses.py" --output "$package/LICENSES/cargo-dependencies"
 # Preserve notices from the toolchain/libc actually used by this build.
 rust_notice="$(rustc --print sysroot)/share/doc/rust/COPYRIGHT-library.html"
@@ -89,13 +89,11 @@ cat > "$package/README.txt" <<TEXT
 Antinomie $version (Linux x86-64)
 
 Install for the current user (no root needed):
-    ./install.sh            # antinomie and antinomie-cli commands, menu entry, icon
+    ./install.sh            # the antinomie command, menu entry, icon
     ./install.sh --uninstall
 
 Or run it in place:
     ./antinomie-monitor
-    ./antinomie-cli --help      # headless command line, no window
-    packaging/                  # systemd units and example service.toml for Auto mode
 
 Requirements: glibc 2.39 or newer (Debian 13, Ubuntu 24.04 or later), QEMU
 (qemu-system-x86_64, qemu-img, GTK display backend) and access to /dev/kvm

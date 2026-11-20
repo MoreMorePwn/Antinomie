@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn a_directory_owned_by_another_process_gets_its_own_advice() {
         let owned = format!(
-            "{} by the Antinomie daemon (pid 7)",
+            "{} by another Antinomie process (pid 7)",
             antinomie_monitor_core::data_owner::IN_USE
         );
         assert!(advice(&owned).contains("--data-dir"));

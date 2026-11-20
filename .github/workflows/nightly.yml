@@ -45,16 +45,14 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: src/antinomie/monitor
-      - name: Build guest-run and the CLI
+      - name: Build guest-run
         working-directory: src/antinomie/monitor
         run: |
           cargo build --release --locked --example guest-run
-          cargo build --release --locked -p antinomie-cli
       - name: VM checks
         run: >-
           python3 tests/ci/nightly-vm.py
           src/antinomie/monitor/target/release/examples/guest-run "$RUNNER_TEMP/vm"
-          src/antinomie/monitor/target/release/antinomie-cli
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

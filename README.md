@@ -186,7 +186,7 @@ antinomie
 - **Updating:** run `./install.sh` from a newer release. It replaces the
   executable and keeps your data.
 - **Uninstalling:** `./install.sh --uninstall` removes the installed files
-  (`antinomie`, `antinomie-cli`, the menu entry and the icon) and keeps your data too.
+  (`antinomie`, the menu entry and the icon) and keeps your data too.
 - **Other distributions:** **Tools → App dependencies** names the packages for
   apt, dnf, pacman and zypper. Only Debian and Ubuntu installs are tested.
 - **Provenance:** releases from 0.8.0 on carry a build attestation. With the GitHub
@@ -377,15 +377,14 @@ terminal: `antinomie --check-dependencies`. The
 
 ## What's new in 0.9.0
 
-* **Headless mode:** `antinomie-cli` ships beside the window in the same archive and
-  `./install.sh` installs both. It runs the engine with no display: bases, VMs,
-  snapshots, samples, custody, static analysis, rules, Triage, reports and `run exec`.
-  See [Command line and automation](docs/usage.md#command-line-and-automation-090).
-* **Auto mode:** `antinomie-cli auto daemon` and `auto submit` take a sample in and
-  give a report and a label out, on a lane VM that reverts to a clean snapshot before
-  every run, with presets, permissions, watch folders, result files, retention and a systemd unit
-  (`packaging/`). See [Auto mode](docs/auto-mode.md) and
-  [Unattended use](docs/security.md#unattended-use).
+* **arm64 guests:** BusyBox, Debian 13 Minimal and Debian 13 GNOME bases run
+  arm64 programs, with an IoT device profile for them.
+* **32-bit x86 programs** run on x86-64 bases and are recorded by their own table.
+* **Timed screenshots** of the VM screen during a run, shown in Triage and kept in
+  the report's evidence bundle.
+* **IoT bots:** a BusyBox camera base, InetSim telnet victims, FTP and TFTP, and
+  Triage rules for what a bot does to a device.
+* See the [changelog](CHANGELOG.md) for the full list.
 
 ## What's new in 0.8.3
 
@@ -531,9 +530,6 @@ Planned and undated:
 | Read | For |
 |---|---|
 | [User guide](docs/usage.md) | Bases, VMs, runs, routes and reading results. |
-| [Command line and automation](docs/usage.md#command-line-and-automation-090) | `antinomie-cli` (0.9.0): install, `doctor`, your first run, the daemon and watch folders; the [command reference](docs/usage.md#command-line-090) follows. |
-| [Auto mode](docs/auto-mode.md) | The pipeline, policies, revert, retention, failure codes, troubleshooting and the systemd unit. |
-| [Run API](docs/run-api-1.md) and [service configuration](docs/service-config.md) | The contract and the configuration files of the Auto mode daemon. |
 | [Triage report](docs/triage-report.md) | Export formats, evidence bundle and the JSON schema. |
 | [Security model](docs/security.md) | Trust boundaries, network modes, sensitive data and safe use. |
 | [Security policy](SECURITY.md) | Supported versions and how to report a vulnerability privately. |

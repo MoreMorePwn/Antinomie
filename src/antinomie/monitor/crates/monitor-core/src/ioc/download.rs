@@ -60,7 +60,7 @@ fn update_lock(data_dir: &Path) -> Result<UpdateLock, String> {
     match crate::data_owner::flock_within(&file, Duration::ZERO) {
         Ok(true) => Ok(UpdateLock { _file: file }),
         Ok(false) => Err(format!(
-            "{UPDATE_BUSY} (the window's Tools > Detection rules > IOC or antinomie-cli); try again when it ends"
+            "{UPDATE_BUSY} (the window's Tools > Detection rules > IOC or another Antinomie process); try again when it ends"
         )),
         Err(error) => Err(format!("{}: {error}", path.display())),
     }

@@ -42,7 +42,13 @@ smoke = load("auto_smoke", "test-auto-smoke.py")
 isolation = load("auto_isolation", "test-auto-isolation.py")
 faults = load("auto_faults", "test-auto-faults.py")
 soak = load("auto_soak", "test-auto-soak.py")
-PRESET_EXAMPLE = ROOT / "packaging/presets/standard.toml.example"
+BUILTIN = ROOT / "src/antinomie/monitor/crates/service/src/config/builtin.rs"
+
+
+def standard_preset_text():
+    """The built-in Standard preset (0.9.0 ships no presets/standard.toml.example; 0.9.1 does)."""
+    import re
+    return re.search(r'pub const STANDARD: &str = r#"(.*?)"#;', BUILTIN.read_text(), re.S).group(1)
 
 
 def finished_job(**changes):
@@ -150,10 +156,10 @@ class TomlTests(unittest.TestCase):
                 parsed = tomllib.loads(edited)
                 self.assertEqual(parsed["lanes"]["revert"], mode)
                 self.assertEqual(parsed["daemon"]["lanes"], 1)
-        standard = tomllib.loads(PRESET_EXAMPLE.read_text())
+        standard = tomllib.loads(standard_preset_text())
         self.assertEqual(standard["accepts"]["types"], ["elf", "sh"])
         self.assertEqual(standard["program"]["run_time_s"], 300)
-        edited = PRESET_EXAMPLE.read_text()
+        edited = standard_preset_text()
         for (section, key), value in faults.PRESET.items():
             edited = av.set_toml_key(edited, section, key, value)
         self.assertEqual(tomllib.loads(edited)["retry"]["backoff_s"], [10, 10])

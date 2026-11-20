@@ -336,7 +336,7 @@ for it, and its children live in a directory of the same name (`app.rs` with
 - **Crates (0.9.0).** `antinomie-monitor-core` is the engine, `antinomie-monitor-ui`
   the window, `antinomie-triage` the Triage model (scan, activity rules, filter
   language, eBPF decoder, run digest, report builder, detection requests), `antinomie-service` the job and query layer and
-  `antinomie-cli` the command line. The window may depend on the others, never the
+  `antinomie-cli` the command line (0.9.0 builds and tests the last two in CI but does not ship them; 0.9.1 does). The window may depend on the others, never the
   reverse: `triage`, `service` and `cli` must not link egui, eframe, winit or the UI
   crate, and `crates/cli/tests/dependency_tree.rs` fails if they do. Triage rows
   carry a colour role (`antinomie_triage::Tone`), never a colour; the window's
@@ -360,8 +360,7 @@ for it, and its children live in a directory of the same name (`app.rs` with
 - **Auto mode VM tiers (0.9.0).** A change to Auto mode, the service or the
   lane is checked on a VM with `tests/monitor/test-auto-smoke.py` (T5), and
   for a release with `test-auto-isolation.py` (T6), `test-auto-faults.py` (T7)
-  and `test-auto-soak.py` (T8). See "VM tiers T5 to T8" in
-  `docs/implementation/headless-lanes.md`.
+  and `test-auto-soak.py` (T8). Auto mode ships from 0.9.1; its guide returns with it.
 - **Size.** A file holds at most 1,200 lines of non-test code.
   `scripts/check-module-size.py` enforces this in CI. Files that were already
   larger are listed in `scripts/module-size-allowlist.txt` and may shrink but

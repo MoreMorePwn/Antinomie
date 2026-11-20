@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """T5 (design 7.2): one full Auto job on a real VM.
 
+0.9.0 does not ship antinomie-cli or the daemon; this tier needs a CLI built from
+the workspace (`cargo build --release -p antinomie-cli`, see --cli) and is run
+again for 0.9.1, which ships them. It stays in the tree for that.
+
 A benign behaviour sample (tests/monitor/behavior-samples, demo-recon by
 default, with offline arguments) goes through every stage: boot and revert
 (provision), upload, launch, run, collect, analyse, report, cleanup, under
