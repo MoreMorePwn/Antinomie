@@ -20,7 +20,7 @@ pub(super) fn parse_sigma(text: &str) -> Vec<IndexedRule> {
     text.split("\n---\n")
         .filter(|doc| doc.contains("title:"))
         .map(|doc| {
-            let id = meta_line(doc, "id").unwrap_or_else(|| "missing-id".into());
+            let id = sigma_rule_id(doc);
             let category = meta_line(doc, "category").unwrap_or_default();
             let product = meta_line(doc, "product").unwrap_or_default();
             let service = logsource_of(doc).2;
@@ -51,6 +51,15 @@ pub(super) fn parse_sigma(text: &str) -> Vec<IndexedRule> {
             }
         })
         .collect()
+}
+
+/// The id a Sigma document is selected by: its own `id:`, or for a rule without
+/// one a stable id derived from its title and text, so it can still be enabled.
+pub(super) fn sigma_rule_id(doc: &str) -> String {
+    meta_line(doc, "id").unwrap_or_else(|| {
+        let digest = Sha256::digest(doc.trim().as_bytes());
+        format!("antinomie-noid-{}", &format!("{digest:x}")[..16])
+    })
 }
 
 /// `service: auditd` without a category: evaluated against auditd-style records.
@@ -276,6 +285,23 @@ mod tests {
             "title: t\nid: 11111111-1111-4111-8111-111111111111\nlogsource:\n{logsource}\ndetection:\n{detection}\n    condition: selection\nlevel: low\n"
         );
         parse_sigma(&doc).remove(0)
+    }
+
+    #[test]
+    fn a_rule_without_an_id_gets_a_stable_distinct_id_it_can_be_selected_by() {
+        let one = "title: One\nlogsource:\n    product: linux\n    category: process_creation\ndetection:\n    selection:\n        Image|endswith: '/a'\n    condition: selection\n";
+        let two = one.replace("One", "Two");
+        let text = format!("{one}\n---\n{two}");
+        let first = parse_sigma(&text);
+        assert_eq!(first.len(), 2);
+        assert_ne!(first[0].id, first[1].id);
+        assert!(!first[0].id.is_empty() && first[0].id != "missing-id");
+        assert_eq!(first[0].id, parse_sigma(&text)[0].id);
+        let ids: Vec<&str> = first.iter().map(|rule| rule.id.as_str()).collect();
+        let kept = super::super::selection::filter_rules("sigma", &text, &ids);
+        let emitted = super::super::selection::emitted_ids("sigma", &kept);
+        assert_eq!(emitted.len(), 2);
+        assert!(ids.iter().all(|id| emitted.contains(*id)));
     }
 
     #[test]
