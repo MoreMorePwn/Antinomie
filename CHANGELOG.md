@@ -780,6 +780,7 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **Capture no longer slows to a crawl on calls with thousands of fields (ANT-T0585).** A large writev, sendmmsg or execve made the host rebuild the whole call's summary for every packet, so each packet cost more than the last (about 12,000 fields took 115 s in a test, and the guest's ring stayed full). A packet now costs only the field it touches: the same call takes 0.05 s. Nothing is dropped and the summaries are unchanged.
 - **Sigma rules without an `id:` can be enabled (ANT-T0579).** They all shared the id `missing-id`, so none could be turned on and the profile held no rules. Each now gets a stable id made from its text.
 - **A captured-core decompile that finds no function keeps the earlier export (ANT-T0579).** A header-only Ghidra export used to replace a good one. It is now refused, and the Ghidra time limit on a captured core covers both of its time budgets, so a slow run no longer loses its partial export.
 - **A YARA scan of recovered files stops at its time budget and keeps what it found (ANT-T0579).** The sandbox used to kill the scan and drop every finding. The report is now marked partial with a note, and no longer says the dump had no recovered files when the file search ran out of time.

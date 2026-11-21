@@ -947,7 +947,7 @@ pub(super) mod tests {
             result: (phase == 2).then_some(result),
             complete: true,
             issues: Vec::new(),
-            fields: Vec::new(),
+            fields: Vec::new().into(),
         };
         let mut entry = event(1);
         entry.fields.push(FieldSummary {

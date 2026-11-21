@@ -789,7 +789,7 @@ pub fn call(pid: u32, nr: u64, name: &str, result: i64) -> InvocationSummary {
             result: None,
             complete: true,
             issues: Vec::new(),
-            fields: Vec::new(),
+            fields: Default::default(),
         }),
         exit: Some(EventSummary {
             root_task_cookie: 1,
@@ -808,7 +808,7 @@ pub fn call(pid: u32, nr: u64, name: &str, result: i64) -> InvocationSummary {
             result: Some(result),
             complete: true,
             issues: Vec::new(),
-            fields: Vec::new(),
+            fields: Default::default(),
         }),
         async_events: Vec::new(),
         async_saved: 0,
@@ -877,7 +877,7 @@ pub fn triage_keeps_cookie_scoped_terminal_facts_after_a_late_parent_fork_and_pi
     let mut terminal = ended.entry.as_ref().unwrap().clone();
     terminal.phase = 3;
     terminal.timestamp_ns = 120;
-    terminal.fields = vec![captured("lifecycle.task_exit", "u64", &0_u64.to_le_bytes())];
+    terminal.fields = vec![captured("lifecycle.task_exit", "u64", &0_u64.to_le_bytes())].into();
     ended.task_exit = Some(terminal);
     let mut nodes = std::collections::BTreeMap::new();
     observe_processes(&mut nodes, &[ended]);

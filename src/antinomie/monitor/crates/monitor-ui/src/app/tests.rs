@@ -340,7 +340,7 @@ pub(super) fn event(phase: u8, cpu: u32) -> antinomie_monitor_core::EventSummary
         result: (phase == 2).then_some(4),
         complete: true,
         issues: Vec::new(),
-        fields: Vec::new(),
+        fields: Vec::new().into(),
     }
 }
 

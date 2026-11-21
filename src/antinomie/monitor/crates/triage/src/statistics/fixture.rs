@@ -241,7 +241,7 @@ pub fn summary(
         result,
         complete: true,
         issues: Vec::new(),
-        fields: Vec::new(),
+        fields: Default::default(),
     };
     InvocationSummary {
         stream_id: 1,

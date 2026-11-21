@@ -517,7 +517,7 @@ mod tests {
                 result: None,
                 complete: true,
                 issues: Vec::new(),
-                fields: vec![field],
+                fields: vec![field].into(),
             }),
             exit: None,
             async_events: Vec::new(),

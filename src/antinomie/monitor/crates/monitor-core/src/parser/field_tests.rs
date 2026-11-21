@@ -3,7 +3,7 @@
 //! valid object identities or losing bytes from the derived object store.
 use super::{tests::packet, *};
 
-fn fields(count: u32) -> Vec<Vec<u8>> {
+pub(super) fn fields(count: u32) -> Vec<Vec<u8>> {
     let mut packets = vec![packet(1, 0, 0, &[0; 120], 1)];
     for object in 1..=count {
         let mut begin = [0; 40];

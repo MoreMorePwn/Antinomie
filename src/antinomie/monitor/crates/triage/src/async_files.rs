@@ -451,7 +451,7 @@ pub fn event_for(
         result: (phase == 2).then_some(request.result).flatten(),
         complete: request.complete,
         issues: Vec::new(),
-        fields: Vec::new(),
+        fields: Default::default(),
     }
 }
 

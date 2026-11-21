@@ -24,7 +24,8 @@ fn observation(call: u64, event_seq: u64) -> antinomie_monitor_core::EventSummar
         ranges: vec![(0, 8)],
         recapture: None,
         encoding: None,
-    }];
+    }]
+    .into();
     observed
 }
 

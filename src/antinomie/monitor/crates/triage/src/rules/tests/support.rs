@@ -327,7 +327,7 @@ pub fn note(key: &str, layout: &str, bytes: &[u8]) -> EventSummary {
     let mut event = call(1, 0, "", 0).entry.unwrap();
     event.phase = 3;
     event.args = None;
-    event.fields = vec![captured(key, layout, bytes)];
+    event.fields = vec![captured(key, layout, bytes)].into();
     event
 }
 

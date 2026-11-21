@@ -1040,7 +1040,8 @@ pub mod tests {
             captured("arg1.iov", "iovec[]", &[0; 32]),
             captured("arg1.iov[0].data", "", b"AB"),
             captured("arg1.iov[1].data", "", b"CD"),
-        ];
+        ]
+        .into();
         let (_, rows) = build(&[open(2), read]);
         assert!(rows[0][3].text.contains("3 B: ABC"));
         assert!(!rows[0][3].text.contains("ABCD"));
@@ -1159,7 +1160,7 @@ pub mod tests {
         bytes[28..32].copy_from_slice(&0o100644u32.to_le_bytes());
         let mut note = call.exit.clone().unwrap();
         note.phase = 3;
-        note.fields = vec![captured("lifecycle.file_id", "antinomie.fileid/1", &bytes)];
+        note.fields = vec![captured("lifecycle.file_id", "antinomie.fileid/1", &bytes)].into();
         call.kernel_notes.push(note);
         call
     }
@@ -1372,7 +1373,7 @@ pub mod tests {
         bytes[96..100].copy_from_slice(&1u32.to_le_bytes());
         let mut note = call.exit.clone().unwrap();
         note.phase = 3;
-        note.fields = vec![captured("lifecycle.file_hash", "antinomie.hash/2", &bytes)];
+        note.fields = vec![captured("lifecycle.file_hash", "antinomie.hash/2", &bytes)].into();
         call.kernel_notes.push(note);
         call
     }
@@ -2550,7 +2551,7 @@ pub mod tests {
         call.exit.as_mut().unwrap().event_seq = 2;
         let mut record = captured("lifecycle.file_mapped", "antinomie.filemap/1", &bytes);
         record.object_id = 1;
-        note.fields = vec![record];
+        note.fields = vec![record].into();
         if !data.is_empty() {
             let mut bytes = captured("lifecycle.file_mapped.data", "", data);
             bytes.object_id = 2;

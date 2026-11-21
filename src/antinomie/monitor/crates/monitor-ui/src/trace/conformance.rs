@@ -347,7 +347,7 @@ mod view_tests {
         }
         let entry = call.entry.as_mut().unwrap();
         entry.args = Some(args);
-        entry.fields = vec![field];
+        entry.fields = vec![field].into();
         call
     }
 
@@ -403,7 +403,8 @@ mod view_tests {
             ranges: vec![(0, 5)],
             recapture: None,
             encoding: None,
-        }];
+        }]
+        .into();
         let shown = view(&call);
         assert!(shown.fallbacks.is_empty(), "{:?}", shown.fallbacks);
         assert!(shown.warnings.is_empty());

@@ -601,7 +601,7 @@ pub fn note(key: &str, layout: &str, bytes: &[u8]) -> EventSummary {
     let mut event = tests::call(1, 0, "", 0).entry.unwrap();
     event.phase = 3;
     event.args = None;
-    event.fields = vec![tests::captured(key, layout, bytes)];
+    event.fields = vec![tests::captured(key, layout, bytes)].into();
     event
 }
 
@@ -830,7 +830,8 @@ pub fn ending(pid: u32, tid: u32, raw_status: u64) -> InvocationSummary {
         "lifecycle.task_exit",
         "",
         &raw_status.to_le_bytes(),
-    )];
+    )]
+    .into();
     row.task_exit = Some(ended);
     row
 }
