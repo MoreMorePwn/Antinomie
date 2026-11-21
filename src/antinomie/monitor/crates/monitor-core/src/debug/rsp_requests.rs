@@ -96,7 +96,10 @@ impl<W: Wire> Session<'_, W> {
     }
 
     pub(super) fn select_thread(&mut self, rest: &[u8]) -> Result<Reply, DebugError> {
-        let (Some(&op), Some(sel)) = (rest.first(), parse_sel(&rest[1..])) else {
+        let Some((&op, selector)) = rest.split_first() else {
+            return Ok(errno(22));
+        };
+        let Some(sel) = parse_sel(selector) else {
             return Ok(errno(22));
         };
         match op {

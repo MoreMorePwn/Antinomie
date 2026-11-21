@@ -6,8 +6,8 @@
 use super::{
     inferior::{Inferior, Registry, RunState},
     target::{
-        ChildRef, DebugBackend, DebugError, DetachMode, ResumeAction, SessionOptions, StopEvent,
-        StopKind, TargetState, ThreadAction,
+        ChildRef, DebugBackend, DebugCaps, DebugError, DetachMode, ResumeAction, SessionOptions,
+        StopEvent, StopKind, TargetState, ThreadAction,
     },
 };
 use std::{
@@ -74,6 +74,23 @@ impl Debugger {
         }
     }
 
+    /// The capabilities of the root when it is still held, else of any process
+    /// that is (every process of a session shares the guest's engine).
+    fn any_caps(&self) -> Option<DebugCaps> {
+        self.inferiors
+            .get(&self.root)
+            .or_else(|| self.inferiors.values().next())
+            .map(|inferior| inferior.backend.caps().clone())
+    }
+    /// The root while held, else the first process left.
+    fn live_root(&self) -> Option<u32> {
+        if self.inferiors.contains_key(&self.root) {
+            Some(self.root)
+        } else {
+            self.inferiors.keys().next().copied()
+        }
+    }
+
     pub(super) fn get(&mut self, pid: u32) -> Option<&mut Inferior> {
         self.inferiors.get_mut(&pid)
     }
@@ -114,7 +131,9 @@ impl Debugger {
     /// every child to come. Not an error when it cannot: the session then behaves
     /// as in phase 2.
     pub(super) fn follow_forks(&mut self, on: bool) {
-        let caps = self.inferiors[&self.root].backend.caps().clone();
+        let Some(caps) = self.any_caps() else {
+            return;
+        };
         if !caps.follow {
             return;
         }
@@ -133,7 +152,9 @@ impl Debugger {
     /// snapshot): the processes it held, with the breakpoints the guest knows as
     /// the panel's.
     pub(super) fn adopt_existing(&mut self, children: Vec<AdoptedChild>) {
-        self.adopt_registry(self.root);
+        if let Some(root) = self.live_root() {
+            self.adopt_registry(root);
+        }
         for child in children {
             let parent = self
                 .inferiors
@@ -196,7 +217,7 @@ impl Debugger {
         if on == self.nonstop {
             return Ok(());
         }
-        if on && !self.inferiors[&self.root].backend.caps().nonstop {
+        if on && !self.any_caps().is_some_and(|caps| caps.nonstop) {
             return Err(DebugError::Unsupported("non-stop".into()));
         }
         self.options.nonstop = on;

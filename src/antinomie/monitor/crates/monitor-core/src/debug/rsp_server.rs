@@ -21,6 +21,7 @@ use std::{
         fs::PermissionsExt,
         net::{UnixListener, UnixStream},
     },
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -137,22 +138,42 @@ impl DebugServer {
                 .name("antinomie-debug".into())
                 .spawn(move || {
                     let mut debugger = Debugger::new(backend);
-                    if let Some(children) = adopted {
-                        debugger.adopt_existing(children);
-                        let _ = debugger.leave_nonstop();
+                    // A panic must not leave the guest process stopped and attached:
+                    // the detach below runs whatever happened.
+                    let served = catch_unwind(AssertUnwindSafe(|| {
+                        if let Some(children) = adopted {
+                            debugger.adopt_existing(children);
+                            let _ = debugger.leave_nonstop();
+                        }
+                        serve(&mut debugger, &mut panel_control, &unix, &tcp, &shared);
+                        // A stopped process the client left behind is released.
+                        release(&mut debugger);
+                    }));
+                    if let Err(payload) = served {
+                        let why = payload
+                            .downcast_ref::<&str>()
+                            .map(|text| (*text).to_string())
+                            .or_else(|| payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown".into());
+                        shared.update(|status| {
+                            status
+                                .ended
+                                .get_or_insert(format!("the debugger panicked: {why}"));
+                        });
                     }
-                    serve(&mut debugger, &mut panel_control, &unix, &tcp, &shared);
-                    // A stopped process the client left behind is released.
-                    release(&mut debugger);
                     let mode = detach_mode
                         .lock()
                         .map(|mode| *mode)
                         .unwrap_or(DetachMode::Resume);
                     for pid in debugger.pids() {
-                        if let Err(error) = debugger.detach(pid, mode, true) {
-                            shared.update(|status| {
+                        match catch_unwind(AssertUnwindSafe(|| debugger.detach(pid, mode, true))) {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => shared.update(|status| {
                                 status.ended.get_or_insert(format!("detach: {error}"));
-                            });
+                            }),
+                            Err(_) => shared.update(|status| {
+                                status.ended.get_or_insert("detach panicked".into());
+                            }),
                         }
                     }
                     let _ = std::fs::remove_file(&socket);
