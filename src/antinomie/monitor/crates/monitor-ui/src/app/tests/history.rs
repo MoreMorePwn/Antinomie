@@ -68,7 +68,8 @@ fn async_only_row_keeps_missing_phases_and_renders_observation_loss() {
         ranges: vec![(0, 8)],
         recapture: None,
         encoding: None,
-    }];
+    }]
+    .into();
     let mut row = InvocationSummary {
         stream_id: observed.stream_id,
         task_cookie: observed.task_cookie,
@@ -162,7 +163,8 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
         ranges: vec![(0, 8)],
         recapture: None,
         encoding: None,
-    }];
+    }]
+    .into();
     let mut row = InvocationSummary {
         stream_id: 1,
         task_cookie: 3,
@@ -228,7 +230,8 @@ fn details_values_copy_in_many_forms_and_captured_fields_open_data_windows() {
         ranges: vec![(0, 4)],
         recapture: None,
         encoding: None,
-    }];
+    }]
+    .into();
     let row = InvocationSummary {
         stream_id: 1,
         task_cookie: 3,

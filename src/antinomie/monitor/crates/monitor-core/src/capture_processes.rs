@@ -77,10 +77,26 @@ fn exec_argv(event: &EventSummary) -> Vec<String> {
     else {
         return Vec::new();
     };
+    // One pass over the fields: an exec of thousands of them is read again
+    // with every packet.
+    let prefix = format!("arg{index}.string[");
+    let mut strings: std::collections::HashMap<usize, &crate::api::FieldSummary> =
+        std::collections::HashMap::new();
+    for field in event.fields.iter() {
+        if let Some(at) = field
+            .key
+            .strip_prefix(prefix.as_str())
+            .and_then(|rest| rest.strip_suffix(']'))
+            .filter(|at| !at.starts_with('+') && (at.len() == 1 || !at.starts_with('0')))
+            .and_then(|at| at.parse::<usize>().ok())
+            .filter(|at| *at < MAX_ARGS)
+        {
+            strings.entry(at).or_insert(field);
+        }
+    }
     let mut argv = Vec::new();
     for at in 0..MAX_ARGS {
-        let key = format!("arg{index}.string[{at}]");
-        let Some(field) = event.fields.iter().find(|field| field.key == key) else {
+        let Some(field) = strings.get(&at) else {
             break;
         };
         let (text, whole) = match field.preview.iter().position(|byte| *byte == 0) {

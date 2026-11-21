@@ -108,7 +108,7 @@ pub fn the_guests_child_record_links_a_clone3_whose_flags_were_not_captured() {
     spawn.async_events.push({
         let mut note = spawn.exit.clone().unwrap();
         note.phase = 3;
-        note.fields = vec![captured("lifecycle.child_tgid", "u64", &9u64.to_le_bytes())];
+        note.fields = vec![captured("lifecycle.child_tgid", "u64", &9u64.to_le_bytes())].into();
         note
     });
     let calls = vec![
@@ -242,7 +242,8 @@ pub fn a_task_exit_record_with_its_sender_is_kept_on_the_node() {
         captured("lifecycle.signal.sender_pid", "", &44u64.to_le_bytes()),
         captured("lifecycle.signal.sender_uid", "", &0u64.to_le_bytes()),
         captured("lifecycle.signal.sender_comm", "", b"pkill"),
-    ];
+    ]
+    .into();
     killed.task_exit = Some(end);
     let nodes = process_nodes(&[killed]);
     let sender = node(&nodes, 5, 5).end_sender.as_ref().unwrap();
@@ -256,7 +257,8 @@ pub fn a_task_exit_record_with_its_sender_is_kept_on_the_node() {
     end.fields = vec![
         captured("lifecycle.task_exit", "", &15u64.to_le_bytes()),
         captured("lifecycle.signal.signo", "", &9u64.to_le_bytes()),
-    ];
+    ]
+    .into();
     other.task_exit = Some(end);
     let nodes = process_nodes(&[other]);
     assert!(node(&nodes, 6, 6).end_sender.is_none());
@@ -555,7 +557,7 @@ pub fn with_child_record(mut row: InvocationSummary, tgid: u64, tid: u64) -> Inv
     for (key, value) in [("lifecycle.child_tgid", tgid), ("lifecycle.child_pid", tid)] {
         let mut note = row.exit.clone().unwrap();
         note.phase = 3;
-        note.fields = vec![captured(key, "u64", &value.to_le_bytes())];
+        note.fields = vec![captured(key, "u64", &value.to_le_bytes())].into();
         row.kernel_notes.push(note);
     }
     row

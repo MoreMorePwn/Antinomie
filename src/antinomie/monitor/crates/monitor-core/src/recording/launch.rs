@@ -138,7 +138,7 @@ mod tests {
             result: None,
             complete: true,
             issues: Vec::new(),
-            fields,
+            fields: fields.into(),
         }
     }
 

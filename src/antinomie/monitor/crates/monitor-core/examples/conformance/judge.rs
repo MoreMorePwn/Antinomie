@@ -1118,7 +1118,7 @@ mod tests {
             result,
             complete: fields.iter().all(|f| f.complete),
             issues: Vec::new(),
-            fields,
+            fields: fields.into(),
         }
     }
 

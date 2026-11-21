@@ -39,11 +39,31 @@ impl Preview {
         }
     }
 
+    fn key_of(phase: u8, event_seq: u64) -> (u8, u64) {
+        (phase, if phase == 3 { event_seq } else { 0 })
+    }
+
+    /// Take out the summary kept for the event `packet` belongs to, so the
+    /// assembler can extend its own list in place: while a copy is kept, every
+    /// packet of an event with thousands of fields would copy them all.
+    fn take(&mut self, packet: &[u8]) -> Option<((u8, u64), EventSummary)> {
+        let (header, _) = parser::parse_packet(packet).ok()?;
+        let key = Self::key_of(header.phase, header.event_seq);
+        let event = self.latest.remove(&key)?;
+        self.size = self.size.saturating_sub(event_preview_size(&event));
+        Some((key, event))
+    }
+
+    /// Keep what [`Self::take`] took out when the packet gave no newer one.
+    fn restore(&mut self, taken: Option<((u8, u64), EventSummary)>) {
+        if let Some((key, event)) = taken {
+            self.size = self.size.saturating_add(event_preview_size(&event));
+            self.latest.insert(key, event);
+        }
+    }
+
     fn put(&mut self, event: EventSummary) -> Result<(), RecordingError> {
-        let key = (
-            event.phase,
-            if event.phase == 3 { event.event_seq } else { 0 },
-        );
+        let key = Self::key_of(event.phase, event.event_seq);
         let added = event_preview_size(&event);
         let previous = self.latest.insert(key, event);
         self.size = self
@@ -114,10 +134,14 @@ impl Source {
             return Err(RecordingError::Limit("indexed packet identity changed"));
         }
         let packet = packet.to_vec();
+        let taken = preview.take(&packet);
         match preview.assembler.ingest(&packet) {
             Ok(Some(event)) => preview.put(event)?,
-            Ok(None) => {}
-            Err(error) => push_issue(&mut self.issues, error.to_string()),
+            Ok(None) => preview.restore(taken),
+            Err(error) => {
+                preview.restore(taken);
+                push_issue(&mut self.issues, error.to_string());
+            }
         }
         Ok(())
     }

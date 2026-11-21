@@ -19,6 +19,8 @@ use objects::StoreError;
 pub(crate) const MAX_RETAINED_FIELDS: usize = 4096;
 
 #[cfg(test)]
+mod cost_tests;
+#[cfg(test)]
 mod field_tests;
 #[cfg(test)]
 mod status_tests;
@@ -242,6 +244,11 @@ pub fn parse_packet(packet: &[u8]) -> Result<(Header, &[u8])> {
     Ok((h, b))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Field summaries built on this thread, for the cost tests.
+    static FIELD_SUMMARIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 type Key = (u64, u64, u64, u8, u64);
 struct Field {
     summary: FieldSummary,
@@ -283,17 +290,21 @@ impl Field {
             total: None,
         }
     }
-    /// `pending` says the field belongs to an async lifecycle record that is
-    /// not its request's final one (see [`nothing_to_copy`]).
-    fn summary(&self, phase: u8, pending: bool) -> FieldSummary {
-        let mut s = self.summary.clone();
-        s.ranges = self.chunks.iter().map(|(o, (len, _))| (*o, *len)).collect();
+    /// Bytes stored from offset 0, and whether the chunks are contiguous.
+    fn extent(&self) -> (u64, bool) {
         let mut offset = 0;
         let contiguous = self.chunks.iter().all(|(o, (len, _))| {
             let matches = *o == offset;
             offset = offset.saturating_add(*len);
             matches
         });
+        (offset, contiguous)
+    }
+    /// `pending` says the field belongs to an async lifecycle record that is
+    /// not its request's final one (see [`nothing_to_copy`]).
+    fn complete(&self, phase: u8, pending: bool) -> bool {
+        let (offset, contiguous) = self.extent();
+        let s = &self.summary;
         let end = self.end.as_deref();
         let attempted = end.and_then(|b| u64_at(b, 24).ok());
         let copied = s.status == Some(0) && s.logical_len == Some(offset);
@@ -301,13 +312,27 @@ impl Field {
             .status
             .is_some_and(|status| nothing_to_copy(status, phase, pending, &s.key))
             && offset == 0;
-        s.complete = self.begin.is_some()
+        self.begin.is_some()
             && end.is_some()
             && (copied || empty)
             && s.captured_len == offset
             && contiguous
             && attempted == Some(self.chunk_count)
-            && self.issues.is_empty();
+            && self.issues.is_empty()
+    }
+    /// Whether the event's summary has nothing to report about this field.
+    fn settled(&self, phase: u8, pending: bool) -> bool {
+        self.settled_with(self.complete(phase, pending))
+    }
+    fn settled_with(&self, complete: bool) -> bool {
+        self.begin.is_some() && self.end.is_some() && complete && self.issues.is_empty()
+    }
+    fn summary(&self, phase: u8, pending: bool) -> FieldSummary {
+        #[cfg(test)]
+        FIELD_SUMMARIES.with(|built| built.set(built.get() + 1));
+        let mut s = self.summary.clone();
+        s.ranges = self.chunks.iter().map(|(o, (len, _))| (*o, *len)).collect();
+        s.complete = self.complete(phase, pending);
         s
     }
 }
@@ -382,6 +407,17 @@ struct Event {
     issues: Issues,
     /// Queued for retirement: its END and every field's end have arrived.
     finished: bool,
+    /// `summary.fields` is kept current as packets arrive, so a packet costs
+    /// the field it touches, not every field of the event. Fields without a
+    /// FIELD_END.
+    open_fields: usize,
+    /// Fields that report a problem in the event's summary: no FIELD_BEGIN or
+    /// FIELD_END yet, not complete, or with issues.
+    unsettled: std::collections::BTreeSet<u32>,
+    /// Fields whose capture status is not COMPLETE.
+    failed_fields: usize,
+    /// The async lifecycle state `summary.fields` was built with.
+    pending: bool,
 }
 impl Event {
     fn new(h: &Header) -> Self {
@@ -403,7 +439,7 @@ impl Event {
                 result: None,
                 complete: false,
                 issues: Vec::new(),
-                fields: Vec::new(),
+                fields: Default::default(),
             },
             header_flags: 0,
             capture_cookie: h.capture_cookie,
@@ -413,15 +449,19 @@ impl Event {
             packets: PacketSet::default(),
             issues: Issues::default(),
             finished: false,
+            open_fields: 0,
+            unsettled: std::collections::BTreeSet::new(),
+            failed_fields: 0,
+            pending: false,
         }
     }
-    fn summary(&self) -> EventSummary {
-        let mut s = self.summary.clone();
-        s.issues = self.issues.clone();
-        let phase = s.phase;
-        // An async lifecycle record before its request's final one, or the
-        // final record of an AIO read, whose output is read when the program
-        // reaps it (contract 14.2, a later "reaped" record).
+    /// Whether the event is an async lifecycle record before its request's
+    /// final one, or the final record of an AIO read, whose output is read
+    /// when the program reaps it (contract 14.2, a later "reaped" record).
+    fn pending_now(&self) -> bool {
+        if self.summary.phase != 3 {
+            return false;
+        }
         let scalar = |key: &str| {
             self.fields
                 .values()
@@ -432,19 +472,58 @@ impl Event {
         let aio_read = self.fields.values().any(|field| {
             field.summary.key == "async.system" && field.summary.preview.starts_with(b"AIO")
         }) && matches!(scalar("async.opcode"), Some(0 | 7));
-        let pending = phase == 3 && (scalar("async.final") == Some(0) || aio_read);
-        s.fields = self
-            .fields
-            .values()
-            .map(|field| field.summary(phase, pending))
-            .collect();
+        scalar("async.final") == Some(0) || aio_read
+    }
+    /// Bring `summary.fields` up to date after a packet touched field `id`.
+    fn refresh(&mut self, touched: Option<u32>) {
+        let Some(id) = touched.filter(|id| self.fields.contains_key(id)) else {
+            return;
+        };
+        let phase = self.summary.phase;
+        if phase == 3 && self.fields[&id].summary.key.starts_with("async.") {
+            let pending = self.pending_now();
+            if pending != self.pending {
+                self.pending = pending;
+                let (fields, unsettled) = (
+                    self.fields
+                        .values()
+                        .map(|f| f.summary(phase, pending))
+                        .collect(),
+                    self.fields
+                        .iter()
+                        .filter(|(_, f)| !f.settled(phase, pending))
+                        .map(|(id, _)| *id)
+                        .collect(),
+                );
+                self.summary.fields = fields;
+                self.unsettled = unsettled;
+                return;
+            }
+        }
+        let field = &self.fields[&id];
+        let summary = field.summary(phase, self.pending);
+        if field.settled_with(summary.complete) {
+            self.unsettled.remove(&id);
+        } else {
+            self.unsettled.insert(id);
+        }
+        let list = &mut self.summary.fields;
+        match list.binary_search_by_key(&id, |f| f.object_id) {
+            Ok(at) => list[at] = summary,
+            Err(at) => list.insert(at, summary),
+        }
+    }
+    fn summary(&self) -> EventSummary {
+        let mut s = self.summary.clone();
+        s.issues = self.issues.clone();
+        let phase = s.phase;
         if self.begin.is_none() {
             s.issues.push("missing EVENT_BEGIN".into());
         }
         if self.end.is_none() {
             s.issues.push("missing EVENT_END".into());
         }
-        for field in self.fields.values() {
+        for field in self.unsettled.iter().filter_map(|id| self.fields.get(id)) {
             if field.begin.is_none() {
                 s.issues.push(format!(
                     "object {} missing FIELD_BEGIN",
@@ -457,7 +536,7 @@ impl Event {
                     field.summary.object_id
                 ));
             }
-            if !field.summary(phase, pending).complete {
+            if !field.complete(phase, self.pending) {
                 s.issues.push(format!(
                     "object {} capture incomplete, status {}",
                     field.summary.object_id,
@@ -468,10 +547,7 @@ impl Event {
         }
         // A field whose status says why it is not complete explains the
         // recorder's incomplete marks; only what no field shows is reported.
-        let fields_explain = self
-            .fields
-            .values()
-            .any(|field| field.summary.status.is_some_and(|status| status != 0));
+        let fields_explain = self.failed_fields > 0;
         if self.header_flags & 2 != 0 {
             s.issues
                 .push("recorder lost this call's Entry record".into());
@@ -749,7 +825,7 @@ impl Assembler {
             if let Some(event) = self.events.get_mut(&key)
                 && !event.finished
                 && event.end.is_some()
-                && event.fields.values().all(|field| field.end.is_some())
+                && event.open_fields == 0
             {
                 event.finished = true;
                 self.just_finished = true;
@@ -805,196 +881,210 @@ impl Assembler {
         if !duplicate && e.packets.fingerprints.len() > fingerprinted {
             self.packet_count += 1;
         }
-        if e.summary.syscall_nr != h.syscall_nr {
-            e.issues.push("conflicting syscall identity".into());
-        }
-        if e.summary.root_task_cookie != h.root_task_cookie {
-            e.issues.push("conflicting root task identity".into());
-        }
-        if e.capture_cookie != h.capture_cookie {
-            e.issues
-                .push("conflicting observer capture identity".into());
-        }
-        if h.flags & !0x1f != 0 {
-            e.issues
-                .push(format!("unknown header flags 0x{:x}", h.flags));
-        }
-        e.header_flags |= h.flags;
-        if h.schema_id != 1 || !abi_decoded {
-            e.issues.push("unknown schema or ABI; raw only".into());
-        }
-        match h.fragment {
-            1 => {
-                if let Some(previous) = &e.begin {
-                    if previous != b {
-                        e.issues.push("conflicting EVENT_BEGIN".into());
-                    }
-                } else {
-                    let mut args = [0; 6];
-                    for (i, a) in args.iter_mut().enumerate() {
-                        *a = u64_at(b, i * 8)?;
-                    }
-                    e.summary.args = Some(args);
-                    if b[49] != 0 {
-                        let result = u64_at(b, 56)? as i64;
-                        e.summary.result = Some(if abi_decoded && h.abi == ANT_ABI_COMPAT {
-                            compat_result(result)
-                        } else {
-                            result
-                        });
-                    }
-                    e.begin = Some(b.to_vec());
-                }
+        let touched = matches!(h.fragment, 2..=4).then_some(h.object_id);
+        let outcome = (|| -> Result<()> {
+            if e.summary.syscall_nr != h.syscall_nr {
+                e.issues.push("conflicting syscall identity".into());
             }
-            5 => {
-                if let Some(previous) = &e.end {
-                    if previous != b {
-                        e.issues.push("conflicting EVENT_END".into());
-                    }
-                } else {
-                    e.end = Some(b.to_vec());
-                }
+            if e.summary.root_task_cookie != h.root_task_cookie {
+                e.issues.push("conflicting root task identity".into());
             }
-            2..=4 => {
-                if !e.fields.contains_key(&h.object_id) {
-                    self.field_count += 1;
-                }
-                let f = e
-                    .fields
-                    .entry(h.object_id)
-                    .or_insert_with(|| Field::new(h.object_id));
-                if h.object_total != u64::MAX {
-                    if f.total.is_some_and(|total| total != h.object_total) {
-                        f.issues.push("inconsistent object total".into());
+            if e.capture_cookie != h.capture_cookie {
+                e.issues
+                    .push("conflicting observer capture identity".into());
+            }
+            if h.flags & !0x1f != 0 {
+                e.issues
+                    .push(format!("unknown header flags 0x{:x}", h.flags));
+            }
+            e.header_flags |= h.flags;
+            if h.schema_id != 1 || !abi_decoded {
+                e.issues.push("unknown schema or ABI; raw only".into());
+            }
+            match h.fragment {
+                1 => {
+                    if let Some(previous) = &e.begin {
+                        if previous != b {
+                            e.issues.push("conflicting EVENT_BEGIN".into());
+                        }
                     } else {
-                        f.total = Some(h.object_total);
+                        let mut args = [0; 6];
+                        for (i, a) in args.iter_mut().enumerate() {
+                            *a = u64_at(b, i * 8)?;
+                        }
+                        e.summary.args = Some(args);
+                        if b[49] != 0 {
+                            let result = u64_at(b, 56)? as i64;
+                            e.summary.result = Some(if abi_decoded && h.abi == ANT_ABI_COMPAT {
+                                compat_result(result)
+                            } else {
+                                result
+                            });
+                        }
+                        e.begin = Some(b.to_vec());
                     }
                 }
-                match h.fragment {
-                    2 => {
-                        if let Some(previous) = &f.begin {
-                            if previous != b {
-                                f.issues.push("conflicting FIELD_BEGIN".into());
-                            }
+                5 => {
+                    if let Some(previous) = &e.end {
+                        if previous != b {
+                            e.issues.push("conflicting EVENT_END".into());
+                        }
+                    } else {
+                        e.end = Some(b.to_vec());
+                    }
+                }
+                2..=4 => {
+                    if !e.fields.contains_key(&h.object_id) {
+                        self.field_count += 1;
+                        e.open_fields += 1;
+                    }
+                    let f = e
+                        .fields
+                        .entry(h.object_id)
+                        .or_insert_with(|| Field::new(h.object_id));
+                    if h.object_total != u64::MAX {
+                        if f.total.is_some_and(|total| total != h.object_total) {
+                            f.issues.push("inconsistent object total".into());
                         } else {
-                            let n = usize::from(u16_at(b, 32)?);
-                            // The descriptor's argument index; 255 means none.
-                            f.summary.arg = (b[0] < 6).then_some(b[0]);
-                            f.summary.key = String::from_utf8_lossy(&b[40..40 + n]).into_owned();
-                            f.summary.layout = String::from_utf8_lossy(&b[40 + n..]).into_owned();
-                            f.summary.recapture = crate::api::Recapture::from_flags(u32_at(b, 36)?);
-                            f.summary.encoding =
-                                crate::api::FieldEncoding::from_wire(u16_at(b, 2)?);
-                            f.begin = Some(b.to_vec());
+                            f.total = Some(h.object_total);
                         }
                     }
-                    4 => {
-                        if let Some(previous) = &f.end {
-                            if previous != b {
-                                f.issues.push("conflicting FIELD_END".into());
-                            }
-                        } else {
-                            let logical = u64_at(b, 0)?;
-                            f.summary.logical_len = (logical != u64::MAX).then_some(logical);
-                            f.summary.captured_len = u64_at(b, 8)?;
-                            f.summary.status = Some(u32_at(b, 16)?);
-                            f.summary.capture_error = u32_at(b, 20)? as i32;
-                            f.end = Some(b.to_vec());
-                            if f.total.is_some_and(|n| n != logical) {
-                                f.issues
-                                    .push("terminal length disagrees with object total".into());
-                            }
-                        }
-                    }
-                    3 => {
-                        let chunk_end = h
-                            .object_offset
-                            .checked_add(b.len() as u64)
-                            .ok_or_else(|| error("chunk overflow"))?;
-                        if f.summary.logical_len.is_some_and(|total| chunk_end > total) {
-                            f.issues.push("chunk exceeds final semantic extent".into());
-                            return Ok(Some(e.summary()));
-                        }
-                        let field_key = FieldKey {
-                            stream: h.stream_id,
-                            task: h.task_cookie,
-                            call: h.call_id,
-                            phase: h.phase,
-                            seq: h.event_seq,
-                            object: h.object_id,
-                        };
-                        let fingerprint = crate::object_pack::chunk_fingerprint(b);
-                        if let Some((&offset, &(len, prior_fingerprint))) =
-                            f.chunks.range(..chunk_end).next_back()
-                            && offset.saturating_add(len) > h.object_offset
-                        {
-                            if offset == h.object_offset && len == b.len() as u64 {
-                                // Keep a bounded fingerprint with the chunk so
-                                // recognizing a duplicate never waits for an
-                                // object writer flush and a disk read.
-                                if prior_fingerprint != fingerprint {
-                                    f.issues.push("conflicting duplicate chunk".into());
+                    match h.fragment {
+                        2 => {
+                            if let Some(previous) = &f.begin {
+                                if previous != b {
+                                    f.issues.push("conflicting FIELD_BEGIN".into());
                                 }
                             } else {
-                                f.issues.push("overlapping chunks".into());
+                                let n = usize::from(u16_at(b, 32)?);
+                                // The descriptor's argument index; 255 means none.
+                                f.summary.arg = (b[0] < 6).then_some(b[0]);
+                                f.summary.key =
+                                    String::from_utf8_lossy(&b[40..40 + n]).into_owned();
+                                f.summary.layout =
+                                    String::from_utf8_lossy(&b[40 + n..]).into_owned();
+                                f.summary.recapture =
+                                    crate::api::Recapture::from_flags(u32_at(b, 36)?);
+                                f.summary.encoding =
+                                    crate::api::FieldEncoding::from_wire(u16_at(b, 2)?);
+                                f.begin = Some(b.to_vec());
                             }
-                            return Ok(Some(e.summary()));
                         }
-                        if duplicate {
-                            f.issues
-                                .push("reused packet sequence with different payload".into());
-                        }
-                        if f.chunks.len() >= 4096 {
-                            f.issues.push("host chunk state limit".into());
-                            return Ok(Some(e.summary()));
-                        }
-                        if !self.enabled {
-                            f.issues.push("host object saving stopped".into());
-                            return Ok(Some(e.summary()));
-                        }
-                        let stored = objects::store(
-                            &mut self.pack,
-                            &self.directory,
-                            &field_key,
-                            &mut f.number,
-                            h.object_offset,
-                            b,
-                            self.quota.saturating_sub(self.stored_len),
-                        );
-                        let added = match stored {
-                            Ok(stored) => stored,
-                            Err(failure) => {
-                                let message = match failure {
-                                    StoreError::Quota => {
-                                        "host object quota exhausted; saving stopped".to_string()
-                                    }
-                                    StoreError::Failed(err) => {
-                                        format!("host object persistence: {err}")
-                                    }
-                                };
-                                if !self.read_only {
-                                    self.saving_error.get_or_insert(message.clone());
-                                    self.enabled = false;
+                        4 => {
+                            if let Some(previous) = &f.end {
+                                if previous != b {
+                                    f.issues.push("conflicting FIELD_END".into());
                                 }
-                                f.issues.push(message);
-                                return Ok(Some(e.summary()));
+                            } else {
+                                let logical = u64_at(b, 0)?;
+                                f.summary.logical_len = (logical != u64::MAX).then_some(logical);
+                                f.summary.captured_len = u64_at(b, 8)?;
+                                let status = u32_at(b, 16)?;
+                                f.summary.status = Some(status);
+                                f.summary.capture_error = u32_at(b, 20)? as i32;
+                                f.end = Some(b.to_vec());
+                                e.open_fields -= 1;
+                                e.failed_fields += usize::from(status != 0);
+                                if f.total.is_some_and(|n| n != logical) {
+                                    f.issues
+                                        .push("terminal length disagrees with object total".into());
+                                }
                             }
-                        };
-                        self.stored_len += added;
-                        self.chunk_count += 1;
-                        f.chunk_count += 1;
-                        f.chunks
-                            .insert(h.object_offset, (b.len() as u64, fingerprint));
-                        f.summary.raw_path = Some(self.directory.join(field_key.file_name()));
-                        if h.object_offset == 0 {
-                            f.summary.preview = b[..b.len().min(256)].to_vec();
                         }
+                        3 => {
+                            let chunk_end = h
+                                .object_offset
+                                .checked_add(b.len() as u64)
+                                .ok_or_else(|| error("chunk overflow"))?;
+                            if f.summary.logical_len.is_some_and(|total| chunk_end > total) {
+                                f.issues.push("chunk exceeds final semantic extent".into());
+                                return Ok(());
+                            }
+                            let field_key = FieldKey {
+                                stream: h.stream_id,
+                                task: h.task_cookie,
+                                call: h.call_id,
+                                phase: h.phase,
+                                seq: h.event_seq,
+                                object: h.object_id,
+                            };
+                            let fingerprint = crate::object_pack::chunk_fingerprint(b);
+                            if let Some((&offset, &(len, prior_fingerprint))) =
+                                f.chunks.range(..chunk_end).next_back()
+                                && offset.saturating_add(len) > h.object_offset
+                            {
+                                if offset == h.object_offset && len == b.len() as u64 {
+                                    // Keep a bounded fingerprint with the chunk so
+                                    // recognizing a duplicate never waits for an
+                                    // object writer flush and a disk read.
+                                    if prior_fingerprint != fingerprint {
+                                        f.issues.push("conflicting duplicate chunk".into());
+                                    }
+                                } else {
+                                    f.issues.push("overlapping chunks".into());
+                                }
+                                return Ok(());
+                            }
+                            if duplicate {
+                                f.issues
+                                    .push("reused packet sequence with different payload".into());
+                            }
+                            if f.chunks.len() >= 4096 {
+                                f.issues.push("host chunk state limit".into());
+                                return Ok(());
+                            }
+                            if !self.enabled {
+                                f.issues.push("host object saving stopped".into());
+                                return Ok(());
+                            }
+                            let stored = objects::store(
+                                &mut self.pack,
+                                &self.directory,
+                                &field_key,
+                                &mut f.number,
+                                h.object_offset,
+                                b,
+                                self.quota.saturating_sub(self.stored_len),
+                            );
+                            let added = match stored {
+                                Ok(stored) => stored,
+                                Err(failure) => {
+                                    let message = match failure {
+                                        StoreError::Quota => {
+                                            "host object quota exhausted; saving stopped"
+                                                .to_string()
+                                        }
+                                        StoreError::Failed(err) => {
+                                            format!("host object persistence: {err}")
+                                        }
+                                    };
+                                    if !self.read_only {
+                                        self.saving_error.get_or_insert(message.clone());
+                                        self.enabled = false;
+                                    }
+                                    f.issues.push(message);
+                                    return Ok(());
+                                }
+                            };
+                            self.stored_len += added;
+                            self.chunk_count += 1;
+                            f.chunk_count += 1;
+                            f.chunks
+                                .insert(h.object_offset, (b.len() as u64, fingerprint));
+                            f.summary.raw_path = Some(self.directory.join(field_key.file_name()));
+                            if h.object_offset == 0 {
+                                f.summary.preview = b[..b.len().min(256)].to_vec();
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                _ => {}
             }
-            _ => {}
-        }
+            Ok(())
+        })();
+        e.refresh(touched);
+        outcome?;
         Ok(Some(e.summary()))
     }
     /// The newest `limit` events (table and recently retired), oldest first,

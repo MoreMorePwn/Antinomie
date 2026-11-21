@@ -173,7 +173,7 @@ pub fn call(nr: u64, name: &str, args: [u64; 6]) -> InvocationSummary {
             result: Some(3),
             complete: true,
             issues: Vec::new(),
-            fields: Vec::new(),
+            fields: Vec::new().into(),
         }),
         exit: None,
         async_events: Vec::new(),

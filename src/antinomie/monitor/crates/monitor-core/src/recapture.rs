@@ -72,7 +72,7 @@ pub(crate) fn promote(row: &mut InvocationSummary) {
             }
         }
     }
-    exit.fields = kept;
+    exit.fields = kept.into();
     entry.complete = entry.issues.is_empty();
 }
 

@@ -705,7 +705,7 @@ pub fn executed_detail(mut call: InvocationSummary, flags: Option<u8>) -> String
     if let Some(flags) = flags {
         let mut note = call.exit.clone().unwrap();
         note.phase = 3;
-        note.fields = vec![hash_note(flags)];
+        note.fields = vec![hash_note(flags)].into();
         call.kernel_notes.push(note);
     }
     let event = trace::representative(&call).unwrap();

@@ -35,7 +35,8 @@ fn note(key: &str, layout: &str, bytes: Vec<u8>) -> EventSummary {
             ranges: Vec::new(),
             recapture: None,
             encoding: None,
-        }],
+        }]
+        .into(),
     }
 }
 

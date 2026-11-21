@@ -3184,7 +3184,59 @@ pub struct EventSummary {
     pub result: Option<i64>,
     pub complete: bool,
     pub issues: Vec<String>,
-    pub fields: Vec<FieldSummary>,
+    pub fields: FieldList,
+}
+
+/// The fields of an [`EventSummary`]. Cloning shares the list, so the host
+/// parser hands out a summary of an event with thousands of fields for the
+/// cost of a counter; the first change to a shared list copies it. It reads
+/// and writes like a `Vec<FieldSummary>` and serializes as one.
+#[derive(Clone, Debug, Default)]
+pub struct FieldList(std::sync::Arc<Vec<FieldSummary>>);
+impl std::ops::Deref for FieldList {
+    type Target = Vec<FieldSummary>;
+    fn deref(&self) -> &Vec<FieldSummary> {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for FieldList {
+    fn deref_mut(&mut self) -> &mut Vec<FieldSummary> {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+impl From<Vec<FieldSummary>> for FieldList {
+    fn from(fields: Vec<FieldSummary>) -> Self {
+        Self(std::sync::Arc::new(fields))
+    }
+}
+impl FromIterator<FieldSummary> for FieldList {
+    fn from_iter<I: IntoIterator<Item = FieldSummary>>(iter: I) -> Self {
+        Self::from(iter.into_iter().collect::<Vec<_>>())
+    }
+}
+impl<'a> IntoIterator for &'a FieldList {
+    type Item = &'a FieldSummary;
+    type IntoIter = std::slice::Iter<'a, FieldSummary>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+impl IntoIterator for FieldList {
+    type Item = FieldSummary;
+    type IntoIter = std::vec::IntoIter<FieldSummary>;
+    fn into_iter(self) -> Self::IntoIter {
+        std::sync::Arc::unwrap_or_clone(self.0).into_iter()
+    }
+}
+impl Serialize for FieldList {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.as_slice().serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for FieldList {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<FieldSummary>::deserialize(deserializer).map(Self::from)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FieldSummary {
@@ -3672,7 +3724,7 @@ mod tests {
             result: None,
             complete: true,
             issues: vec![],
-            fields: vec![],
+            fields: Default::default(),
         };
         let mut lifecycle = entry.clone();
         lifecycle.phase = 3;
@@ -3708,7 +3760,7 @@ mod tests {
             result: None,
             complete: true,
             issues: vec![],
-            fields: vec![],
+            fields: Default::default(),
         };
         let ended = |call_id, raw: u64| {
             let mut event = entry.clone();
@@ -3730,7 +3782,8 @@ mod tests {
                 ranges: vec![(0, 8)],
                 recapture: None,
                 encoding: None,
-            }];
+            }]
+            .into();
             event
         };
         // exit_group(1): the kernel keeps the wait status 1 << 8.
@@ -3908,7 +3961,7 @@ mod tests {
             result: None,
             complete: true,
             issues: vec![],
-            fields: vec![],
+            fields: Default::default(),
         };
         let mut async_event = entry.clone();
         async_event.phase = 3;

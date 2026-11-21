@@ -50,7 +50,7 @@ fn event(call_id: u64, phase: u8, nr: u64) -> EventSummary {
         result: (phase == 2).then_some(3),
         complete: true,
         issues: Vec::new(),
-        fields: Vec::new(),
+        fields: Default::default(),
     }
 }
 

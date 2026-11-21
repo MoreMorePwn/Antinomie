@@ -40,7 +40,8 @@ fn observation(
         scalar("async.opcode", u64::from(opcode)),
         scalar("async.result", result as u64),
         captured("async.system", "", b"io_uring\0"),
-    ];
+    ]
+    .into();
     event.fields.extend(fields);
     event
 }
@@ -446,7 +447,8 @@ fn a_script_exec_names_its_interpreter_and_the_file_that_was_loaded() {
                 "lifecycle.exec_image",
                 "antinomie.execimg/1",
                 &bytes,
-            )];
+            )]
+            .into();
             exec.kernel_notes.push(note);
         }
         let event = trace::representative(&exec).unwrap();

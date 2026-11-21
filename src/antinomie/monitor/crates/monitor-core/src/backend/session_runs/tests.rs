@@ -19,7 +19,7 @@ fn event(call_id: u64, event_seq: u64, phase: u8, timestamp_ns: u64) -> EventSum
         result: None,
         complete: true,
         issues: Vec::new(),
-        fields: Vec::new(),
+        fields: Default::default(),
     }
 }
 
