@@ -67,9 +67,17 @@ impl VmProcess {
         }
     }
 
+    /// QEMU has exited: wait until its log files hold what it wrote.
+    pub(super) fn settle_logs(&self) {
+        capped_log::settle(&self.runtime_dir.join("qemu.log"), Duration::from_secs(2));
+    }
+
     /// [`start_error`] for this QEMU process.
     pub(super) fn start_failure(&mut self, error: &str) -> String {
         let exit = self.exited(!waited_out(error));
+        if exit.is_some() {
+            self.settle_logs();
+        }
         let said = qemu_log_line(&self.runtime_dir);
         start_error(error, exit, said.as_deref(), &self.slow_hint())
     }
