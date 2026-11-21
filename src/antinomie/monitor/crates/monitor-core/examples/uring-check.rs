@@ -765,7 +765,10 @@ fn recorded_events(dir: &std::path::Path, scratch: PathBuf) -> Result<Vec<EventS
     let mut reader = std::io::BufReader::new(
         fs::File::open(dir.join("telemetry.raw")).map_err(|e| e.to_string())?,
     );
-    let mut events = Vec::new();
+    // ingest() answers every packet with its event so far: keep each
+    // event's last answer, in the order the events began.
+    let mut events: Vec<EventSummary> = Vec::new();
+    let mut slots = BTreeMap::new();
     let mut prefix = [0; 4];
     while reader.read_exact(&mut prefix).is_ok() {
         let mut packet = vec![0; u32::from_le_bytes(prefix) as usize];
@@ -773,7 +776,20 @@ fn recorded_events(dir: &std::path::Path, scratch: PathBuf) -> Result<Vec<EventS
             break;
         }
         if let Ok(Some(event)) = assembler.ingest(&packet) {
-            events.push(event);
+            let key = (
+                event.stream_id,
+                event.task_cookie,
+                event.call_id,
+                event.phase,
+                event.event_seq,
+            );
+            match slots.get(&key) {
+                Some(&slot) => events[slot] = event,
+                None => {
+                    slots.insert(key, events.len());
+                    events.push(event);
+                }
+            }
         }
     }
     let _ = fs::remove_dir_all(scratch);
