@@ -285,7 +285,13 @@ impl PackWriter {
         {
             self.flush()
                 .map_err(|error| format!("object writer queue: {error}"))?;
-            if let Some(full) = self.segment.take() {
+            // A full writer queue leaves the old tail buffered. It belongs to
+            // the old segment at `buffer_offset`, so rolling now would write it
+            // into the new segment; keep filling this one past its size until
+            // the queue takes the tail.
+            if self.buffer.is_empty()
+                && let Some(full) = self.segment.take()
+            {
                 self.closed.push(full.file);
             }
         }
