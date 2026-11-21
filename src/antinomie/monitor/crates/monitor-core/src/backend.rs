@@ -574,6 +574,7 @@ struct Session {
     last_status_query: Instant,
     persisted_packets: u64,
     kernel_probe: KernelProbe,
+    kernel_probe_wait: KernelProbeWait,
     /// What the guest accepts for process cores, once it has said.
     core_limits: Option<crate::core_limits::CoreLimits>,
     /// Disk work of recordings closed while the boot runs (a retired capture

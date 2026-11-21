@@ -472,6 +472,7 @@ impl Session {
             last_status_query: Instant::now() - Duration::from_secs(1),
             persisted_packets: 0,
             kernel_probe: KernelProbe::Due(Instant::now()),
+            kernel_probe_wait: KernelProbeWait::default(),
             core_limits: None,
             flush_queue: Vec::new(),
             unstarted_runs: BTreeMap::new(),
@@ -485,6 +486,8 @@ impl Session {
             }
         }
         self.pending_capture_id = None;
+        // The probe's reply is among the forgotten ones.
+        self.kernel_probe = self.kernel_probe.restarted(Instant::now());
     }
 }
 impl Worker {

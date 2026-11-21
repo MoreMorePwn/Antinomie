@@ -2098,3 +2098,68 @@ fn only_the_launched_images_own_exec_hash_can_vouch_for_a_host_copy() {
     event.fields[0].preview[0] = 2;
     assert!(session_transport::launch_image_hash(&event).is_none());
 }
+
+#[test]
+fn a_forgotten_kernel_probe_reply_makes_the_probe_ask_again() {
+    let now = Instant::now();
+    for waiting in [
+        KernelProbe::Info(7),
+        KernelProbe::ArchInfo(7),
+        KernelProbe::Arch(7),
+        KernelProbe::Stats(7),
+        KernelProbe::Core(7, 2),
+        KernelProbe::Tracer(7, 1),
+    ] {
+        assert_eq!(waiting.restarted(now), KernelProbe::Due(now), "{waiting:?}");
+    }
+    // A probe not waiting on a reply is left as it is.
+    let due = KernelProbe::CoreDue(now, 1);
+    assert_eq!(due.restarted(now), due);
+    assert_eq!(KernelProbe::Done.restarted(now), KernelProbe::Done);
+}
+
+#[test]
+fn a_kernel_probe_reply_that_never_comes_times_out_and_is_asked_again() {
+    let start = Instant::now();
+    let timeout = KERNEL_PROBE_TIMEOUT;
+    let mut wait = KernelProbeWait::default();
+    let probe = KernelProbe::Info(3);
+    assert!(!wait.expired(&probe, start, timeout));
+    assert!(!wait.expired(&probe, start + timeout - Duration::from_millis(1), timeout));
+    assert!(wait.expired(&probe, start + timeout, timeout));
+    // A slower (emulated) guest gets a longer wait.
+    let mut slow = KernelProbeWait::default();
+    assert!(!slow.expired(&probe, start, timeout * 6));
+    assert!(!slow.expired(&probe, start + timeout * 5, timeout * 6));
+    assert!(slow.expired(&probe, start + timeout * 6, timeout * 6));
+    // A new request in flight starts a new wait.
+    let next = KernelProbe::Core(4, 1);
+    assert!(!wait.expired(&next, start + timeout, timeout));
+    // Not waiting clears it.
+    assert!(!wait.expired(&KernelProbe::Done, start + timeout * 3, timeout));
+    assert!(!wait.expired(&next, start + timeout * 3, timeout));
+}
+
+#[test]
+fn a_late_reply_to_a_timed_out_kernel_probe_request_is_dropped_quietly() {
+    let start = Instant::now();
+    let mut wait = KernelProbeWait::default();
+    let probe = KernelProbe::Info(3);
+    // Not abandoned yet: the reply is not the wait's to take.
+    assert!(!wait.take_abandoned(3));
+    assert!(!wait.expired(&probe, start, KERNEL_PROBE_TIMEOUT));
+    assert!(wait.expired(&probe, start + KERNEL_PROBE_TIMEOUT, KERNEL_PROBE_TIMEOUT));
+    // The late reply is taken once (so it is not an "unmatched command reply"),
+    // and an unrelated id is left alone.
+    assert!(!wait.take_abandoned(4));
+    assert!(wait.take_abandoned(3));
+    assert!(!wait.take_abandoned(3));
+    // Only the last few abandoned ids are kept.
+    for id in 100..130 {
+        let probe = KernelProbe::Info(id);
+        wait.expired(&probe, start, KERNEL_PROBE_TIMEOUT);
+        wait.expired(&probe, start + KERNEL_PROBE_TIMEOUT, KERNEL_PROBE_TIMEOUT);
+    }
+    assert!(!wait.take_abandoned(100));
+    assert!(wait.take_abandoned(129));
+}

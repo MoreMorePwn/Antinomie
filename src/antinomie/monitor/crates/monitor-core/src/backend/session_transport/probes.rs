@@ -2,6 +2,87 @@
 //! Kernel INFO and tracer capability probes (moved out of `session_transport`).
 use super::*;
 
+impl KernelProbe {
+    /// The id of the request in flight, if one is.
+    pub(in crate::backend) fn in_flight(&self) -> Option<u64> {
+        match *self {
+            Self::Info(id)
+            | Self::ArchInfo(id)
+            | Self::Arch(id)
+            | Self::Stats(id)
+            | Self::Core(id, _)
+            | Self::Tracer(id, _) => Some(id),
+            Self::Due(_) | Self::CoreDue(..) | Self::TracerDue(..) | Self::Done => None,
+        }
+    }
+    /// A request in flight whose reply will never come (the replies were
+    /// forgotten, or the guest did not answer in time) starts again from INFO.
+    pub(in crate::backend) fn restarted(self, now: Instant) -> Self {
+        if self.in_flight().is_some() {
+            Self::Due(now)
+        } else {
+            self
+        }
+    }
+}
+
+/// How long the probe waits for one reply before it asks again, at KVM speed
+/// (stretched like every other wait on the guest's answers under TCG).
+pub(in crate::backend) const KERNEL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Abandoned request ids remembered so that their late replies can be dropped.
+const ABANDONED_KEPT: usize = 16;
+
+/// When the probe request now in flight was first seen waiting, and the ids of
+/// requests given up on.
+#[derive(Clone, Debug, Default)]
+pub(in crate::backend) struct KernelProbeWait {
+    waiting: Option<(u64, Instant)>,
+    abandoned: Vec<u64>,
+}
+
+impl KernelProbeWait {
+    /// True once the request in flight has waited past `timeout`; its id is then
+    /// remembered as abandoned.
+    pub(in crate::backend) fn expired(
+        &mut self,
+        probe: &KernelProbe,
+        now: Instant,
+        timeout: Duration,
+    ) -> bool {
+        let Some(id) = probe.in_flight() else {
+            self.waiting = None;
+            return false;
+        };
+        match self.waiting {
+            Some((seen, since)) if seen == id => {
+                if now.duration_since(since) < timeout {
+                    return false;
+                }
+                self.waiting = None;
+                if self.abandoned.len() == ABANDONED_KEPT {
+                    self.abandoned.remove(0);
+                }
+                self.abandoned.push(id);
+                true
+            }
+            _ => {
+                self.waiting = Some((id, now));
+                false
+            }
+        }
+    }
+    /// A late reply to an abandoned request: forgotten here, and not an error.
+    pub(in crate::backend) fn take_abandoned(&mut self, reply_id: u64) -> bool {
+        match self.abandoned.iter().position(|id| *id == reply_id) {
+            Some(at) => {
+                self.abandoned.remove(at);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 impl Session {
     /// Advance the kernel probe: send INFO when due and apply waiting replies.
     pub(in crate::backend) fn probe_kernel(
@@ -53,7 +134,18 @@ impl Session {
             | KernelProbe::Arch(_)
             | KernelProbe::Stats(_)
             | KernelProbe::Core(..)
-            | KernelProbe::Tracer(..) => self.drain_replies(snapshot, sender),
+            | KernelProbe::Tracer(..) => {
+                if self.kernel_probe_wait.expired(
+                    &self.kernel_probe,
+                    Instant::now(),
+                    self.process.waits.guest_command(KERNEL_PROBE_TIMEOUT),
+                ) {
+                    // The reply is lost: ask again instead of waiting for ever.
+                    self.kernel_probe = self.kernel_probe.restarted(Instant::now());
+                    return Ok(());
+                }
+                self.drain_replies(snapshot, sender)
+            }
         }
     }
     /// Consume a reply that belongs to the kernel probe; false for any other reply.
@@ -65,6 +157,10 @@ impl Session {
         snapshot: &mut Snapshot,
     ) -> bool {
         const EOPNOTSUPP: i32 = 95;
+        if self.kernel_probe_wait.take_abandoned(reply_id) {
+            // The answer to a request the probe gave up on: nothing to tell.
+            return true;
+        }
         let retry = KernelProbe::Due(Instant::now() + KERNEL_PROBE_RETRY);
         match self.kernel_probe {
             KernelProbe::Info(id) if id == reply_id => {

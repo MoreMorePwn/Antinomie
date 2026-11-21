@@ -36,6 +36,8 @@ struct World {
     /// Count guest polling until a memory command is dispatched.
     event_polls: usize,
     memory_polls: Option<usize>,
+    /// The next memory read panics (a bug in the server thread).
+    panic_on_read: bool,
 }
 impl World {
     fn new() -> Arc<Mutex<Self>> {
@@ -44,6 +46,7 @@ impl World {
             log: Vec::new(),
             event_polls: 0,
             memory_polls: None,
+            panic_on_read: false,
         };
         world.spawn(10, &[10, 11], 0x1111);
         Arc::new(Mutex::new(world))
@@ -236,6 +239,9 @@ impl DebugBackend for Fake {
         Ok(())
     }
     fn read_memory(&mut self, _addr: u64, len: usize) -> Result<Vec<u8>, DebugError> {
+        if std::mem::take(&mut self.world.lock().unwrap().panic_on_read) {
+            panic!("injected panic in the server thread");
+        }
         self.with(|world, _| {
             world.memory_polls = Some(world.event_polls);
             Ok(vec![0x90; len])
@@ -632,4 +638,92 @@ fn non_stop_reports_one_thread_at_a_time_through_notifications() {
     // Leaving puts the program back in all-stop and runs it.
     assert_eq!(client.send("D"), "OK");
     fixture.wait_log("configure 10 SessionOptions { fork: true, exec: true, nonstop: false }");
+}
+
+#[test]
+fn a_bare_thread_select_packet_is_refused_without_a_panic() {
+    let fixture = Fixture::start();
+    let mut client = fixture.client();
+    client.handshake("");
+    for packet in ["H", "Hg", "Hc", "Hx1", "Hgzz"] {
+        assert_eq!(client.send(packet), "E16", "{packet}");
+    }
+    // The server thread is still serving.
+    assert_eq!(client.send("?"), "T05thread:p0a.0a;");
+    assert!(!fixture.server.is_finished());
+}
+
+#[test]
+fn no_one_byte_packet_panics_the_server() {
+    let fixture = Fixture::start();
+    let mut client = fixture.client();
+    client.handshake("");
+    for byte in 0x20u8..0x7f {
+        let packet = (byte as char).to_string();
+        if matches!(
+            packet.as_str(),
+            "$" | "#" | "}" | "*" | "k" | "D" | "R" | "c" | "C" | "s" | "S" | "r" | "v"
+        ) {
+            // These end the session, resume the guest or start a stream.
+            continue;
+        }
+        client.write(&packet);
+        if client.next().is_none() {
+            // A protocol violation ends the session on purpose; the server is
+            // then done or takes the next client, but it never panics.
+            let status = fixture.server.status();
+            assert!(
+                !status.ended.is_some_and(|why| why.contains("panic")),
+                "packet {packet:?} panicked the server"
+            );
+            if fixture.server.is_finished() {
+                return;
+            }
+            client = fixture.client();
+            client.handshake("");
+        }
+    }
+}
+
+#[test]
+fn the_root_can_leave_and_the_session_still_answers() {
+    let fixture = Fixture::start();
+    let mut client = fixture.client();
+    client.handshake("");
+    client.write("vCont;c");
+    fixture.wait_log("Continue 10");
+    fixture.with_world(|world| world.fork(10, 12, false));
+    assert_eq!(client.packet(), "T05thread:p0a.0a;fork:p0c.0c;");
+    // The original process is released; only the child remains.
+    assert_eq!(client.send("D;a"), "OK");
+    let features = client.send(
+        "qSupported:multiprocess+;swbreak+;vContSupported+;fork-events+;vfork-events+;exec-events+",
+    );
+    assert!(features.contains("fork-events+"), "{features}");
+    assert_eq!(client.send("QNonStop:0"), "OK");
+    assert!(!fixture.server.is_finished());
+}
+
+#[test]
+fn a_panic_in_the_server_thread_still_detaches_the_guest_process() {
+    let fixture = Fixture::start();
+    let mut client = fixture.client();
+    client.handshake("");
+    fixture.with_world(|world| world.panic_on_read = true);
+    client.write("m4000,10");
+    fixture.wait_log("detach 10 Resume");
+    let until = Instant::now() + Duration::from_secs(20);
+    while !fixture.server.is_finished() {
+        assert!(Instant::now() < until, "the server thread never ended");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let status = fixture.server.status();
+    assert!(
+        status
+            .ended
+            .as_deref()
+            .is_some_and(|why| why.contains("panic")),
+        "{:?}",
+        status.ended
+    );
 }
