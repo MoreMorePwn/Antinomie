@@ -616,6 +616,9 @@ pub struct MonitorApp {
     analysis_generation: u64,
     archive_selected: bool,
     history_generation: u64,
+    /// Capture listings number their own requests: a run listing never makes a
+    /// capture answer stale, or the two keep re-asking each other.
+    capture_generation: u64,
     run_filter: RunFilter,
     run_query: String,
     /// Last run-history filter that compiled. An invalid expression keeps this.
@@ -683,6 +686,8 @@ pub struct MonitorApp {
     started: Instant,
     smoke: Option<Duration>,
     closing: bool,
+    /// The Close request sent when the window was asked to close.
+    close_request: Option<u64>,
     #[cfg(test)]
     submitted: Vec<Command>,
     #[cfg(test)]
@@ -853,8 +858,7 @@ impl eframe::App for MonitorApp {
             close = false;
         }
         if close && !self.closing {
-            self.closing = true;
-            self.send(Command::Close);
+            self.start_closing(ctx);
         }
         if self.closing {
             if self.snapshot.active_vm.is_some() {

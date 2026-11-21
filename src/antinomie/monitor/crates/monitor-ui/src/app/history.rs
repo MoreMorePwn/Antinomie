@@ -10,11 +10,11 @@ use rows::RunClicks;
 impl MonitorApp {
     pub(super) fn refresh_captures(&mut self) {
         if let Some(vm_id) = self.selected.clone() {
-            self.history_generation = self.history_generation.wrapping_add(1);
+            self.capture_generation = self.capture_generation.wrapping_add(1);
             self.queue_archive(Request::ListCaptures {
                 options: self.options.clone(),
                 vm_id,
-                generation: self.history_generation,
+                generation: self.capture_generation,
             });
         }
     }

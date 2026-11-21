@@ -103,3 +103,56 @@ fn guest_commands_are_held_quietly_while_the_ram_dump_pauses_the_vm() {
     app.send(Command::ListProcesses { after_pid: 0 });
     assert_eq!(app.submitted.len(), sent + 1);
 }
+
+fn temp_backend(name: &str) -> (PathBuf, antinomie_monitor_core::Backend) {
+    let data = std::env::temp_dir().join(format!("close-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let options = BackendOptions {
+        data_dir: data.clone(),
+        headless: true,
+        ..Default::default()
+    };
+    let backend = antinomie_monitor_core::Backend::new(options).unwrap();
+    (data, backend)
+}
+
+#[test]
+fn a_close_that_cannot_be_sent_leaves_the_window_open_and_says_why() {
+    let ctx = context();
+    let (data, backend) = temp_backend("refused");
+    let mut app = running_app();
+    app.backend = Some(backend);
+    app.snapshot.active_vm = Some("vm".into());
+    // The backend is already shutting down, so it refuses a second Close.
+    app.backend.as_ref().unwrap().send(Command::Close).unwrap();
+    app.start_closing(&ctx);
+    assert!(!app.closing, "the window kept cancelling its own close");
+    assert!(app.close_request.is_none());
+    assert!(
+        app.status.contains("could not be shut down"),
+        "{}",
+        app.status
+    );
+    drop(app);
+    let _ = std::fs::remove_dir_all(data);
+}
+
+#[test]
+fn a_close_waits_for_the_vm_and_a_lost_backend_lets_it_finish() {
+    let ctx = context();
+    let (data, backend) = temp_backend("accepted");
+    let mut app = running_app();
+    app.backend = Some(backend);
+    app.snapshot.active_vm = Some("vm".into());
+    app.start_closing(&ctx);
+    assert!(app.closing);
+    assert!(app.close_request.is_some());
+    app.resolve_backend_disconnect();
+    assert!(
+        app.snapshot.active_vm.is_none(),
+        "a close would wait for a VM no backend can stop"
+    );
+    drop(app);
+    let _ = std::fs::remove_dir_all(data);
+}

@@ -154,6 +154,7 @@ impl MonitorApp {
             analysis_generation: 0,
             archive_selected: false,
             history_generation: 0,
+            capture_generation: 0,
             run_filter: RunFilter::All,
             run_query: String::new(),
             applied_run_query: String::new(),
@@ -208,6 +209,7 @@ impl MonitorApp {
             started: Instant::now(),
             smoke,
             closing: false,
+            close_request: None,
             #[cfg(test)]
             submitted: Vec::new(),
             #[cfg(test)]
