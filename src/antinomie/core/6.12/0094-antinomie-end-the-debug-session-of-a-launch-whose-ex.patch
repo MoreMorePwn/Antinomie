@@ -1,0 +1,169 @@
+From deda20a27988fc4da6268739aad354bd9db2444f Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 22 Nov 2026 01:12:29 +0700
+Subject: [PATCH] antinomie: end the debug session of a launch whose exec
+ failed
+
+Debug on start makes the session for the launched program in the
+launching task, before the exec, so that the program parks at its first
+return to user mode. When the exec failed (a file without an execute
+bit, a missing interpreter), the task left without ever returning to
+user mode and the session stayed published: RUNNING, not yet adopted,
+with nobody to adopt it, since the host learns of a session only from a
+launch that succeeded. Nothing ever looked at its group again, so every
+later Debug on start and attach was refused with EBUSY until the guest
+rebooted, and the control worker, which polls at every tick while a
+session is active, kept doing so.
+
+- A launch whose call_usermodehelper_exec() fails ends the session made
+  for it (ant_debug_launch_failed(), from control.c's execute(), by the
+  launch's task cookie and start time); the entry callback queued for
+  the task is cancelled with it.
+- The admission check and every new session (any_live_session(),
+  retire_dead_sessions()) look at the group of each session that is not
+  over: a group with no live task becomes EXITED, as a STATUS would make
+  it (ant_dbg_note_end()). A session not adopted yet whose group is gone
+  is retired: nobody will read it.
+- The control worker's fast poll (ant_debug_active()) ignores a session
+  whose group is gone.
+
+Found by the 0.9.0 bug hunt (KDBG-2). No contract change (revision 22).
+---
+ kernel/antinomie/control.c |  3 ++
+ kernel/antinomie/debug.c   | 62 ++++++++++++++++++++++++++++++++++----
+ kernel/antinomie/debug.h   |  2 ++
+ 3 files changed, 61 insertions(+), 6 deletions(-)
+
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index c7443b428..06cad2367 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -448,6 +448,9 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	error = call_usermodehelper_exec(info, UMH_WAIT_EXEC);
+ 	/* UMH owns and has freed launch regardless of success. */
+ 	if (error) {
++		/* No program for the session Debug on start made for it. */
++		if (flags & ANTC_EXEC_DEBUG)
++			ant_debug_launch_failed(session->task_cookie, session->start_ns);
+ 		ant_specimen_finish(specimen, false);
+ 		ant_core_finish_launch(core, false);
+ 		free_session(session);
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 21e8aa3c9..59a906be8 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -2268,16 +2268,41 @@ static bool session_over(struct ant_dbg *s)
+ 	return state == ANTC_DEBUG_EXITED || state == ANTC_DEBUG_EXEC;
+ }
+ 
++/* No task of the group is alive any more. Cheap enough for an RCU reader: the
++ * session's reference on the leader keeps the signal struct.
++ */
++static bool ant_dbg_group_dead(struct ant_dbg *s)
++{
++	return atomic_read(&s->leader->signal->live) == 0;
++}
++
++/* A group that ended while nobody asked for its status (a launch whose exec
++ * failed, a program killed before a debugger adopted it) is EXITED from here
++ * on, as a STATUS would have made it. Not while the worker resumes the group:
++ * do_cont() finds the end itself. dbg_lock held.
++ */
++static void ant_dbg_note_end(struct ant_dbg *s)
++{
++	u32 state = READ_ONCE(s->state);
++
++	if ((state == ANTC_DEBUG_RUNNING || state == ANTC_DEBUG_STOPPING ||
++	     state == ANTC_DEBUG_STOPPED) && ant_dbg_group_dead(s))
++		group_over(s);
++}
++
+ /* Retire the sessions of programs that are gone (their last report was read).
+- * dbg_lock held.
++ * A session no debugger has adopted yet is kept for its report, unless its
++ * group is gone: then nobody will ever read it. dbg_lock held.
+  */
+ static void retire_dead_sessions(void)
+ {
+ 	struct ant_dbg *s, *next;
+ 
+-	list_for_each_entry_safe(s, next, &sessions, node)
+-		if (session_over(s) && !s->start_pending)
++	list_for_each_entry_safe(s, next, &sessions, node) {
++		ant_dbg_note_end(s);
++		if (session_over(s) && (!s->start_pending || ant_dbg_group_dead(s)))
+ 			retire_session(s);
++	}
+ }
+ 
+ /* dbg_lock held. */
+@@ -2299,10 +2324,14 @@ static bool any_live_session(void)
+ {
+ 	struct ant_dbg *s;
+ 
+-	/* A refused session holds nothing: its program runs undebugged. */
+-	list_for_each_entry(s, &sessions, node)
++	/* A refused session holds nothing: its program runs undebugged. Nor does
++	 * one whose group ended unseen.
++	 */
++	list_for_each_entry(s, &sessions, node) {
++		ant_dbg_note_end(s);
+ 		if (!session_over(s) && !READ_ONCE(s->refused))
+ 			return true;
++	}
+ 	return false;
+ }
+ 
+@@ -2484,6 +2513,27 @@ int ant_debug_launch(void)
+ 	return 0;
+ }
+ 
++/* The launch's exec failed (a file that is not executable, a missing
++ * interpreter): the task that was to become the program leaves without ever
++ * returning to user mode, and the host, which learns of a session only from a
++ * launch that succeeded, never adopts the one made for it. It ends here, so
++ * that later debug launches and attaches are not refused as busy and the
++ * control worker no longer polls for it.
++ */
++void ant_debug_launch_failed(u64 cookie, u64 start_ns)
++{
++	struct ant_dbg *s, *next;
++
++	if (!cookie)
++		return;
++	mutex_lock(&dbg_lock);
++	list_for_each_entry_safe(s, next, &sessions, node)
++		if (s->start_pending && !s->parent_id && s->cookie == cookie &&
++		    s->start_ns == start_ns)
++			refuse_session(s);	/* its entry callback goes too */
++	mutex_unlock(&dbg_lock);
++}
++
+ /* ---- following forks, execs and new threads ---------------------------------- */
+ 
+ /* A thread created while the group runs gets the program's debug registers
+@@ -3880,7 +3930,7 @@ bool ant_debug_active(void)
+ 
+ 	rcu_read_lock();
+ 	list_for_each_entry_rcu(s, &sessions, node)
+-		if (!session_over(s))
++		if (!session_over(s) && !ant_dbg_group_dead(s))
+ 			active = true;
+ 	rcu_read_unlock();
+ 	return active;
+diff --git a/kernel/antinomie/debug.h b/kernel/antinomie/debug.h
+index feeebf611..8abb4e722 100644
+--- a/kernel/antinomie/debug.h
++++ b/kernel/antinomie/debug.h
+@@ -125,6 +125,8 @@ bool ant_debug_active(void);
+  */
+ int ant_debug_launch_check(void);
+ int ant_debug_launch(void);
++/* The launch's exec failed: its session (the program's identity) ends. */
++void ant_debug_launch_failed(u64 cookie, u64 start_ns);
+ /* STOP_RUN signalled a run: a session debugging it lets it go and steps aside. */
+ void ant_debug_run_stop(u64 root_cookie);
+ /* Whether the task sleeps in a debug stop; and wake it to run queued work. */
+-- 
+2.53.0
+

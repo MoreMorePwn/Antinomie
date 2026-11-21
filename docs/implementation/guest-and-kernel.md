@@ -324,7 +324,7 @@ unattributed, the gaps and the calls per second are in the report and
 | Tier | Runs | Takes (this machine) |
 |---|---|---|
 | quick | the conformance trace suite's oracle groups `user`, `root`, `threads` (`conf-quick`); on a Debian base also `nic-routed` (0.9.0): a VM of the realistic desktop profile on a Routed network whose card must get a DHCP lease (`guest-run`; on arm64 QEMU's igb at 00:0e.0); on a Debian desktop base (GNOME) also `desktop` (0.9.0): a VM with the in-app screen runs `tests/monitor/debian-desktop-check.sh` as root, which waits for the display manager's greeter session (and, under GDM, gnome-shell with a framebuffer of its own, from DRM's debugfs: before that the display still shows the console, for minutes under CPU emulation) and checks Debian's banner and kernel packages, the vmlinux BTF, `virtio_gpu` as Debian's module loaded by udev on a connected connector, every loaded module signed with taint 0, and the serial console and `panic=-1` on the command line; then a screenshot of the greeter (`screens/desktop-greeter.png` in the output folder) | about 1 min with the examples built, 5 to 7 min when the render test has to build too; `nic-routed` adds a VM creation and boot (about a minute on KVM, several under TCG on arm64) |
-| full | quick; `conf-stress-light`, `conf-stress-heavy`, `conf-stress-extreme`, `conf-stress-lossy`, `conf-stress-contended` (0.8.0) (one check and one conformance run each, cleaned up in between); `debug-p2`, `debug-p3`, `audit-stop`, `audit-core`, `uring-status`, `uring-boots`, `tracer-record`, `tracer-qa`, `debugger-live`, `stealth`, `cloud`, `snapshot`, `snapshot-uefi` (Debian bases); `uring-legacy` and `tracer-legacy` on the old base; interop in both directions (`io-old-new-*`: the old host with BASE; this host with the old base: `io-new-old-audit` and the two legacy checks, since an old guest lacks what the other checks need) | about 2 h 10 min plus, the first time, about 15 min to build the old host; the five stress groups take 80 to 95 min of it (light 5-7, heavy 10-24, extreme 35-56, lossy 4-13, contended 14-17) |
+| full | quick; `conf-stress-light`, `conf-stress-heavy`, `conf-stress-extreme`, `conf-stress-lossy`, `conf-stress-contended` (0.8.0) (one check and one conformance run each, cleaned up in between); `debug-p2`, `debug-p3`, `audit-stop`, `audit-core`, `uring-status`, `uring-boots`, `uring-bounds` (0.9.0), `tracer-record`, `tracer-qa`, `debugger-live`, `stealth`, `cloud`, `snapshot`, `snapshot-uefi` (Debian bases); `uring-legacy` and `tracer-legacy` on the old base; interop in both directions (`io-old-new-*`: the old host with BASE; this host with the old base: `io-new-old-audit` and the two legacy checks, since an old guest lacks what the other checks need) | about 2 h 10 min plus, the first time, about 15 min to build the old host; the five stress groups take 80 to 95 min of it (light 5-7, heavy 10-24, extreme 35-56, lossy 4-13, contended 14-17) |
 
 Quick is the default for every change. Full is required when a change touches the
 kernel/host contract, and for a release check:
@@ -1141,8 +1141,10 @@ compat table's layouts).
   under the native calls' keys. sendmmsg, recvmmsg and recvmmsg_time64 do the
   same per message (`arg1.mmsg.N.header` as `msghdr` at entry and `mmsghdr` at
   exit, `arg1.mmsg.N.iov`, `.iov[K].data`, `.name`, `.control`; the first
-  1024 messages), and a receive's timeout at entry and exit (`old_timespec`,
-  `timespec` for _time64).
+  1024 messages, and since 0.9.0's patch 0098, here and in the native
+  capture, the headers of messages a receive got past them as one field
+  `arg1.mmsg.1024.header`, `RESOURCE_EXHAUSTED`), and a receive's timeout at
+  entry and exit (`old_timespec`, `timespec` for _time64).
 * **Compat futex, epoll waits and SysV control records (patch 51, B4).**
   futex (the time32 call of both compat ABIs) records the native capture's
   fields with the compat timeout: `arg0.futex.observed` and, for the requeue

@@ -294,7 +294,7 @@ class PlanTests(unittest.TestCase):
         for name in ("conf-stress-light", "conf-stress-heavy", "conf-stress-extreme", "conf-stress-lossy",
                      "conf-stress-rate", "conf-stress-contended",
                      "debug-p2", "debug-p3", "audit-stop", "audit-core", "uring-status",
-                     "uring-boots", "uring-legacy", "tracer-record", "tracer-ia32", "tracer-legacy",
+                     "uring-boots", "uring-bounds", "uring-legacy", "tracer-record", "tracer-ia32", "tracer-legacy",
                      "tracer-qa",
                      "debugger-live", "stealth", "cloud", "route", "snapshot", "snapshot-uefi", "specimen",
                      "io-old-new-p3",

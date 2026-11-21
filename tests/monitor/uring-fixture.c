@@ -41,6 +41,14 @@
  *                    from the file into a pipe, UNLINKAT of a directory
  *                    (AT_REMOVEDIR), and rmdir of another; exit 0
  *   script FILE      writes an executable "#!/bin/sh" script to FILE and runs it
+ *   aio-flood        io_submit on a context that does not exist with nr 1 << 20,
+ *                    every entry the same valid iocb: the kernel fails it at
+ *                    once (EINVAL), and so must the recorded call; prints
+ *                    "AIO FLOOD rc=R errno=E ms=M", exit 0 when it is EINVAL
+ *   mmsg-flood       recvmmsg with vlen 0xffffffff (MSG_DONTWAIT) on a UDP socket
+ *                    holding two datagrams it sent itself; the headers end at an
+ *                    unmapped page; prints "MMSG FLOOD rc=R errno=E", exit 0 when
+ *                    both were received
  *
  * Build: cc -static -O2 -pthread -Wall -Wextra -Werror tests/monitor/uring-fixture.c
  */
@@ -56,7 +64,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <netinet/in.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -713,6 +723,103 @@ static int mode_aio(void)
 	return 0;
 }
 
+static long elapsed_ms(const struct timespec *start)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (now.tv_sec - start->tv_sec) * 1000L + (now.tv_nsec - start->tv_nsec) / 1000000L;
+}
+
+/* The bug hunt's K1-01: the kernel handles at most a context's nr_events
+ * entries and none of a context that does not exist; the recorder read all nr
+ * of them, three fields each, before the call could fail.
+ */
+static int mode_aio_flood(void)
+{
+	enum { COUNT = 1 << 20 };
+	struct iocb cb, **list;
+	struct timespec start;
+	long rc, ms;
+	int saved = 0;
+	char line[96];
+
+	list = mmap(NULL, COUNT * sizeof(*list), PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (list == MAP_FAILED)
+		return 2;
+	memset(&cb, 0, sizeof(cb));
+	cb.aio_lio_opcode = IOCB_CMD_PREAD;
+	cb.aio_fildes = STDIN_FILENO;
+	for (long i = 0; i < COUNT; i++)
+		list[i] = &cb;
+	say("URING READY\n");
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	rc = syscall(__NR_io_submit, (aio_context_t)0, (long)COUNT, list);
+	if (rc < 0)
+		saved = errno;
+	ms = elapsed_ms(&start);
+	snprintf(line, sizeof(line), "AIO FLOOD rc=%ld errno=%d ms=%ld\n", rc, saved, ms);
+	say(line);
+	munmap(list, COUNT * sizeof(*list));
+	if (rc != -1 || saved != EINVAL)
+		return 1;
+	say("URING DONE\n");
+	return 0;
+}
+
+/* The bug hunt's K1-02: the recorder sized its state for recvmmsg by vlen
+ * (32 GiB for 0xffffffff), which the page allocator refused with a warning
+ * in the kernel log. The kernel receives the two datagrams there are.
+ */
+static int mode_mmsg_flood(void)
+{
+	enum { SLOTS = 4 };
+	struct sockaddr_in address = { .sin_family = AF_INET };
+	socklen_t length = sizeof(address);
+	static char buffers[SLOTS][64];
+	static struct iovec vectors[SLOTS];
+	struct mmsghdr *headers;
+	long page = sysconf(_SC_PAGESIZE), rc;
+	unsigned char *pages;
+	int fd, saved = 0;
+	char line[96];
+
+	/* The headers end where the mapping does: a reader of more than SLOTS
+	 * of them faults at the next one.
+	 */
+	pages = mmap(NULL, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (pages == MAP_FAILED || munmap(pages + page, page))
+		return 2;
+	headers = (struct mmsghdr *)(pages + page - SLOTS * sizeof(*headers));
+	memset(headers, 0, SLOTS * sizeof(*headers));
+	for (int i = 0; i < SLOTS; i++) {
+		vectors[i].iov_base = buffers[i];
+		vectors[i].iov_len = sizeof(buffers[i]);
+		headers[i].msg_hdr.msg_iov = &vectors[i];
+		headers[i].msg_hdr.msg_iovlen = 1;
+	}
+	address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	if (fd < 0 || bind(fd, (struct sockaddr *)&address, sizeof(address)) ||
+	    getsockname(fd, (struct sockaddr *)&address, &length) ||
+	    sendto(fd, "one", 3, 0, (struct sockaddr *)&address, length) != 3 ||
+	    sendto(fd, "two", 3, 0, (struct sockaddr *)&address, length) != 3)
+		return 2;
+	say("URING READY\n");
+	rc = syscall(__NR_recvmmsg, fd, headers, 0xffffffffUL, (long)MSG_DONTWAIT, NULL);
+	if (rc < 0)
+		saved = errno;
+	snprintf(line, sizeof(line), "MMSG FLOOD rc=%ld errno=%d\n", rc, saved);
+	say(line);
+	close(fd);
+	munmap(pages, page);
+	if (rc != 2)
+		return 1;
+	say("URING DONE\n");
+	return 0;
+}
+
 /* Fill an entry, then publish it: the SQPOLL thread may take it at once. */
 static void sq_queue(struct ring *ring, const struct io_uring_sqe *entry)
 {
@@ -943,6 +1050,10 @@ int main(int argc, char **argv)
 		return mode_morefiles();
 	if (!strcmp(mode, "script") && argc > 2)
 		return mode_script(argv[2]);
-	say("usage: uring-fixture pairs|cancel|drain|sqpoll|threads|crash|hold|hold-ignore|files|syncfiles|sqfiles|morefiles|aio|script FILE\n");
+	if (!strcmp(mode, "aio-flood"))
+		return mode_aio_flood();
+	if (!strcmp(mode, "mmsg-flood"))
+		return mode_mmsg_flood();
+	say("usage: uring-fixture pairs|cancel|drain|sqpoll|threads|crash|hold|hold-ignore|files|syncfiles|sqfiles|morefiles|aio|aio-flood|mmsg-flood|script FILE\n");
 	return 64;
 }
