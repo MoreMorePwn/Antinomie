@@ -91,6 +91,8 @@ pub(super) struct StringsState {
     running: Option<Running>,
     extracted: Option<Arc<Extracted>>,
     error: Option<String>,
+    /// The search was cancelled: it starts again only when asked.
+    cancelled: bool,
     /// The filter as typed, and the last text of it that compiled.
     query: String,
     applied: String,
@@ -200,7 +202,9 @@ impl StringsState {
             if let Some(result) = result {
                 self.running = None;
                 match result {
-                    Ok(extracted) if extracted.stopped == Some(Stopped::Cancelled) => {}
+                    Ok(extracted) if extracted.stopped == Some(Stopped::Cancelled) => {
+                        self.cancelled = true;
+                    }
                     Ok(extracted) => self.extracted = Some(Arc::new(extracted)),
                     Err(error) => self.error = Some(error),
                 }
@@ -262,7 +266,11 @@ impl StringsState {
         {
             self.reset();
         }
-        if self.extracted.is_none() && self.running.is_none() && self.error.is_none() {
+        if self.extracted.is_none()
+            && self.running.is_none()
+            && self.error.is_none()
+            && !self.cancelled
+        {
             self.start(&record.core);
         }
         if self.running.is_some() || self.deriving.is_some() {
@@ -279,6 +287,13 @@ impl StringsState {
             );
             if ui.button("Cancel").clicked() {
                 running.cancel.store(true, Ordering::Relaxed);
+            }
+            return None;
+        }
+        if self.cancelled && self.extracted.is_none() {
+            ui.label("The search was cancelled.");
+            if ui.button("Start search").clicked() {
+                self.cancelled = false;
             }
             return None;
         }
