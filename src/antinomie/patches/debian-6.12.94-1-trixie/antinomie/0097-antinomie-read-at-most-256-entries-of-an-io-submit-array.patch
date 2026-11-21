@@ -1,4 +1,4 @@
-Description: antinomie: read at most 4096 entries of an io_submit array
+Description: antinomie: read at most 256 entries of an io_submit array
  The capture of io_submit read nr entries of the iocb pointer array at
  entry, each with its iocb and buffer fields, about three records per
  entry, and the array itself as one field of nr pointers. The kernel
@@ -8,11 +8,19 @@ Description: antinomie: read at most 4096 entries of an io_submit array
  20, array) therefore cost millions of records under the never-drop
  contract before the call could fail.
  .
- The recorder now reads at most ANT_AIO_SUBMIT_MAX (4096) entries: the
- array field covers them, and one field arg2.iocbpp[4096] with the
+ The recorder now reads at most ANT_AIO_SUBMIT_MAX (256) entries: the
+ array field covers them, and one field arg2.iocbpp[256] with the
  status RESOURCE_EXHAUSTED and no bytes stands for the rest. An nr the
  kernel rejects outright (negative, or more pointers than LONG_MAX
  bytes) is recorded as before.
+ .
+ Why 256 and not more: all entries are fields of the one Entry record,
+ up to four each, and the app assembles a record's fields as its
+ packets arrive at a cost that grows with the fields the record already
+ holds. A bound of 4096 entries (12,290 fields for the test's reads)
+ kept the call in the recorder for minutes under never-drop, the guest
+ waiting for the host at every packet. 256 entries keep the record at
+ about the 1,025 fields of a writev() of UIO_MAXIOV vectors.
  .
  Found by the 0.9.0 bug hunt (K1-01). No contract change (revision 22).
 Author: MikiMiku <jonathanirvinjo@gmail.com>
@@ -22,23 +30,27 @@ Last-Update: 2026-11-22
 
 ---
 diff --git a/kernel/antinomie/async_capture.c b/kernel/antinomie/async_capture.c
-index 5887132e9..102a95234 100644
+index 5887132e9..9b3e11a33 100644
 --- a/kernel/antinomie/async_capture.c
 +++ b/kernel/antinomie/async_capture.c
-@@ -21,6 +21,12 @@
+@@ -21,6 +21,16 @@
  #define ANT_PBUF_COUNT 65535
  #define ANT_SQ_COUNT 32768
  #define ANT_CQ_COUNT (2 * ANT_SQ_COUNT)
 +/* io_submit() entries read at entry. The kernel itself handles at most the
 + * context's nr_events of them and none for a context that does not exist,
 + * neither of which the recorder can know before the call; a larger nr is a
-+ * prefix and one field for the rest.
++ * prefix and one field for the rest. Each entry is up to four fields of the
++ * one Entry record, so the record keeps about as many fields as a writev()
++ * of UIO_MAXIOV vectors: the host assembles a record's fields as they
++ * arrive, at a cost that grows with the fields it already holds, and under
++ * never-drop the call waits for it.
 + */
-+#define ANT_AIO_SUBMIT_MAX 4096U
++#define ANT_AIO_SUBMIT_MAX 256U
  
  struct ant_uring_setup {
  	struct io_uring_params params;
-@@ -76,15 +82,25 @@ static void signal_mask(struct ant_task *ctx, u8 arg, u64 address, u64 size)
+@@ -76,15 +86,25 @@ static void signal_mask(struct ant_task *ctx, u8 arg, u64 address, u64 size)
  
  static void aio_submission(struct ant_task *ctx, const u64 a[6])
  {

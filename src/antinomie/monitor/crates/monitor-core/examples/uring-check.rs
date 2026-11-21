@@ -28,8 +28,9 @@
 //! module reads them (see its documentation). `bounds` runs the 0.9.0 bug
 //! hunt's K1-01 and K1-02 calls (an `io_submit` of 2^20 entries on a context
 //! that does not exist, a `recvmmsg` with vlen 0xffffffff) and reads their
-//! recordings: each call ends as the kernel ends it, the recorder reads at most
-//! 4096 `io_submit` entries and records the rest as one field it did not read,
+//! recordings: each call ends as the kernel ends it, `io_submit` returns within
+//! [`AIO_FLOOD_MS`] under never-drop, the recorder reads at most
+//! 256 `io_submit` entries and records the rest as one field it did not read,
 //! `recvmmsg` is recorded at entry and exit, and the guest kernel log has no
 //! warning. The data folder must be new and disposable. Every result is a
 //! `RESULT` line.
@@ -724,7 +725,11 @@ fn record(bundle: &str, data: &str, workload: &str, fixture: &str) -> Result<(),
 
 /// The io_submit entries the recorder reads at most (patch 0097's
 /// ANT_AIO_SUBMIT_MAX); each is up to three fields.
-const AIO_SUBMIT_MAX: usize = 4096;
+const AIO_SUBMIT_MAX: usize = 256;
+/// Longest the fixture may see its `io_submit` take (its `ms=`). The 4096
+/// entries of the first 0097 kept the call in the recorder for minutes: the
+/// host's cost per packet grows with the fields the record already holds.
+const AIO_FLOOD_MS: u64 = 20_000;
 /// ANT_RESOURCE_EXHAUSTED: a bound of the recorder's.
 const RESOURCE_EXHAUSTED: u32 = 8;
 
@@ -805,6 +810,16 @@ fn bounds(bundle: &str, data: &str, workload: &str, fixture: &str) -> Result<(),
         match d.execution(&id).and_then(|e| e.root_exit) {
             Some(WaitStatus::Exited { code: 0 }) => {}
             other => return Err(format!("{label} ended {other:?}: {line}")),
+        }
+        if label == "aio-flood" {
+            let ms = line
+                .split_whitespace()
+                .find_map(|part| part.strip_prefix("ms="))
+                .and_then(|ms| ms.parse::<u64>().ok())
+                .ok_or_else(|| format!("aio-flood printed no time: {line}"))?;
+            if ms > AIO_FLOOD_MS {
+                return Err(format!("io_submit took {ms} ms (at most {AIO_FLOOD_MS})"));
+            }
         }
         let directory = d.run(&id).ok_or("run missing")?.directory.clone();
         runs.push((label, directory));
