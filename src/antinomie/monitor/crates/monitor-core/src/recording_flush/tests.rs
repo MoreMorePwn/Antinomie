@@ -239,7 +239,8 @@ fn stop_seals_without_the_disk_and_publishes_final_files_after_the_data() {
     let directory = std::env::temp_dir().join(format!("ant-stop-order-{}", storage::unique_id()));
     let mut run = ProgramRun::new(run_summary(&directory), 1 << 20).unwrap();
     _writer.pause();
-    assert!(run.capture.append(b"telemetry before stop"));
+    // A raw record is at least 128 bytes (shorter ones are never written).
+    assert!(run.capture.append(&[b't'; 128]));
     run.output(b"last words", 1 << 20).unwrap();
     run.capture.flush();
 
@@ -285,7 +286,7 @@ fn stop_seals_without_the_disk_and_publishes_final_files_after_the_data() {
         std::fs::read(directory.join("telemetry.raw"))
             .unwrap()
             .len(),
-        4 + b"telemetry before stop".len()
+        4 + 128
     );
     std::fs::remove_dir_all(directory).unwrap();
 }

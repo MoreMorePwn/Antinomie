@@ -62,6 +62,7 @@ impl Drop for UnstartedRuntime {
         }
     }
 }
+mod capped_log;
 mod failure;
 mod machine;
 mod qmp;
@@ -408,6 +409,7 @@ impl VmProcess {
                 return Ok(());
             }
             if let Some(status) = self.child.try_wait().map_err(|e| e.to_string())? {
+                self.settle_logs();
                 return Err(format!(
                     "QEMU exited ({status}) before the guest connected{}",
                     qemu_log_hint(&self.runtime_dir)
@@ -689,8 +691,8 @@ impl VmProcess {
                 .arg(format!("unix:{},server=on,wait=off", qemu_path(&qmp_path)?))
                 .args(["-monitor", "none", "-serial", "stdio"])
                 .stdin(Stdio::null())
-                .stdout(Stdio::from(serial))
-                .stderr(Stdio::from(stderr));
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
         } else {
             cmd.arg("-name")
                 .arg(name_option(&vm.name))
@@ -717,8 +719,8 @@ impl VmProcess {
                 .arg(format!("unix:{},server=on,wait=off", qemu_path(&qmp_path)?))
                 .args(["-monitor", "none", "-serial", "stdio"])
                 .stdin(Stdio::null())
-                .stdout(Stdio::from(serial))
-                .stderr(Stdio::from(stderr));
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
         }
         if incoming {
             cmd.args(["-S", "-incoming", "defer"]);
@@ -837,7 +839,24 @@ impl VmProcess {
         if let Some((sizing, _)) = &initial_size {
             sizing.before_spawn()?;
         }
-        let child = cmd.spawn().map_err(|e| format!("QEMU launch: {e}"))?;
+        let process_dir = runtime_dir.clone();
+        let mut child = cmd.spawn().map_err(|e| format!("QEMU launch: {e}"))?;
+        if let Some(output) = child.stdout.take() {
+            capped_log::spawn_capped(
+                output,
+                serial,
+                &process_dir.join("serial.log"),
+                capped_log::SERIAL_LOG_BYTES,
+            );
+        }
+        if let Some(output) = child.stderr.take() {
+            capped_log::spawn_capped(
+                output,
+                stderr,
+                &process_dir.join("qemu.log"),
+                capped_log::QEMU_LOG_BYTES,
+            );
+        }
         let mut process = Self {
             child,
             ram_path,
