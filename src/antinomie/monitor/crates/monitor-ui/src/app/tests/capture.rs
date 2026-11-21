@@ -265,7 +265,7 @@ fn older_observation_uses_archive_when_live_preview_is_absent() {
     assert_eq!(app.invocations()[0].entry.as_ref().unwrap().cpu, 4);
     assert_eq!(app.archive_next, Some(64));
     assert_eq!(app.archive_error.as_deref(), Some("Pending tails"));
-    app.history_generation = 2;
+    app.capture_generation = 2;
     app.handle_archive_answer(Answer::ListCaptures {
         vm_id: "other".into(),
         generation: 2,

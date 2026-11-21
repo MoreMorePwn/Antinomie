@@ -94,9 +94,14 @@ struct PacketList {
 
 /// The packet rows in the order the Packets header chose, kept until the sort,
 /// the rows or the page change so a long capture is not sorted every frame.
+/// What an order was made from: the sort, a fingerprint of the rows (so a new
+/// filter or page that keeps the same count still remakes it), the packets
+/// they index, the page and whether the Made by column is shown.
+type PacketOrderKey = (Option<crate::triage::SortSpec>, u64, usize, u64, bool);
+
 #[derive(Default)]
 struct PacketOrder {
-    key: Option<(crate::triage::SortSpec, usize, usize, u64, bool)>,
+    key: Option<PacketOrderKey>,
     rows: Vec<usize>,
 }
 

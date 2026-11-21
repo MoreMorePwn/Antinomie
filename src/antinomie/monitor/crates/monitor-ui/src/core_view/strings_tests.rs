@@ -342,3 +342,46 @@ fn choosing_a_string_hands_its_fields_to_the_details_panel() {
     assert_eq!(field("Segment"), "sample");
     assert_eq!(field("Length"), "14 octets");
 }
+
+#[test]
+fn a_cancelled_search_stays_stopped_until_it_is_started_again() {
+    let ctx = context();
+    let fixture = Fixture::new();
+    let record = fixture.view.selected.clone().unwrap();
+    let mut state = StringsState::default();
+    let starts = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&starts);
+    let source = record.core.source.clone();
+    state.start_with(10, move |cancel, _| {
+        counted.fetch_add(1, Ordering::Relaxed);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !cancel.load(Ordering::Relaxed) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        Ok(Extracted {
+            source,
+            strings: Vec::new(),
+            names: Vec::new(),
+            scanned: 0,
+            stopped: Some(Stopped::Cancelled),
+        })
+    });
+    state
+        .running
+        .as_ref()
+        .unwrap()
+        .cancel
+        .store(true, Ordering::Relaxed);
+    let shown = pump(&ctx, &mut state, &record, |shown| {
+        has(shown, "Start search")
+    });
+    assert!(!has(&shown, "Cancel"));
+    // Further frames do not begin another search.
+    for _ in 0..5 {
+        pump(&ctx, &mut state, &record, |shown| {
+            has(shown, "Start search")
+        });
+        assert!(!state.running());
+    }
+    assert_eq!(starts.load(Ordering::Relaxed), 1);
+}

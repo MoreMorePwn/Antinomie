@@ -268,35 +268,82 @@ fn replacing_one_history_list_kind_defers_a_refresh_for_that_kind() {
     ));
 }
 
+/// The listing the worker would answer for `request`: one run, or no captures.
+fn listing_answer(request: &Request) -> Answer {
+    match request {
+        Request::ListVm {
+            vm_id, generation, ..
+        } => Answer::ListVm {
+            vm_id: vm_id.clone(),
+            generation: *generation,
+            result: Ok(vec![run("listed")]),
+            checked: Vec::new(),
+            retained: Vec::new(),
+        },
+        Request::ListCaptures {
+            vm_id, generation, ..
+        } => Answer::ListCaptures {
+            vm_id: vm_id.clone(),
+            generation: *generation,
+            result: Ok(vec![observer("listed", CaptureState::Finalized)]),
+        },
+        _ => panic!("not a listing"),
+    }
+}
+
 #[test]
-fn stale_capture_list_reply_after_run_refresh_requeues_capture_history() {
+fn a_run_refresh_does_not_make_a_running_capture_listing_stale() {
     let mut app = running_app();
     app.selected = Some("vm".into());
     app.capture_tab = true;
     app.capture_history = vec![observer("existing", CaptureState::Finalized)];
     app.refresh_captures();
-    let capture_generation = app.history_generation;
-    // The capture request is now in flight, freeing the single queued slot.
-    app.pending_archive = None;
+    let running = app.pending_archive.take().unwrap();
+    // The run list is asked for while the capture list is being read.
     app.refresh_run_history();
-    assert!(app.history_generation > capture_generation);
     assert!(matches!(app.pending_archive, Some(Request::ListVm { .. })));
+    app.handle_archive_answer(listing_answer(&running));
+    assert_eq!(app.capture_history[0].id, "listed");
+    assert!(!app.history_sync.captures_refresh_due);
+}
 
-    app.handle_archive_answer(Answer::ListCaptures {
-        vm_id: "vm".into(),
-        generation: capture_generation,
-        result: Ok(vec![observer("late", CaptureState::Finalized)]),
-    });
-    assert_eq!(app.capture_history[0].id, "existing");
-    assert!(app.history_sync.captures_refresh_due);
+#[test]
+fn overlapping_run_and_capture_listings_settle_instead_of_asking_again_forever() {
+    let mut app = running_app();
+    app.selected = Some("vm".into());
+    app.refresh_run_history();
+    let mut running = app.pending_archive.take();
+    app.refresh_captures();
+    let mut steps = 0;
+    // The worker holds one read, the single slot one more.
+    while running.is_some() || app.pending_archive.is_some() {
+        steps += 1;
+        assert!(steps < 12, "the listings never settled");
+        if let Some(request) = running.take() {
+            app.handle_archive_answer(listing_answer(&request));
+        }
+        app.refresh_history_when_idle();
+        running = app.pending_archive.take();
+    }
+    assert!(
+        app.history.iter().any(|run| run.id == "listed"),
+        "the disk listing was never applied"
+    );
+    assert_eq!(app.capture_history[0].id, "listed");
+}
 
-    // Once the run list leaves the queue, the lost capture refresh is replayed.
-    app.pending_archive = None;
-    app.refresh_history_when_idle();
-    assert!(matches!(
-        app.pending_archive,
-        Some(Request::ListCaptures { vm_id, .. }) if vm_id == "vm"
-    ));
+#[test]
+fn an_answer_for_a_superseded_run_listing_waits_for_the_newer_one() {
+    let mut app = running_app();
+    app.selected = Some("vm".into());
+    app.refresh_run_history();
+    let running = app.pending_archive.take().unwrap();
+    app.refresh_run_history();
+    app.handle_archive_answer(listing_answer(&running));
+    // The newer listing is still queued; nothing asks a third time.
+    assert!(!app.history_sync.refresh_due);
+    assert!(matches!(app.pending_archive, Some(Request::ListVm { .. })));
+    assert!(app.history.is_empty());
 }
 
 #[test]
@@ -966,5 +1013,41 @@ fn the_cached_run_lists_follow_new_and_changed_runs() {
     assert!(
         mentions(&text, "2 of 2 runs"),
         "Run History lists the new run: {text:?}"
+    );
+}
+
+#[test]
+fn a_selected_capture_keeps_its_process_tree_when_it_is_finalized() {
+    use antinomie_monitor_core::capture_processes::CaptureProcess;
+    let mut app = running_app();
+    let tree = vec![CaptureProcess {
+        pid: 7,
+        parent_pid: 1,
+        name: "worker".into(),
+        exe: None,
+        at_start: false,
+        first_ns: 0,
+        last_ns: 1,
+        calls: 3,
+        packets: 0,
+        exited: false,
+        exit_code: None,
+        args: Vec::new(),
+    }];
+    let mut live = app.snapshot.clone();
+    live.captures = vec![observer("cap", CaptureState::Active)];
+    live.capture_processes.insert("cap".into(), tree);
+    deliver(&mut app, live.clone());
+    app.selected_capture = Some("cap".into());
+    assert_eq!(app.capture_process_list().map(<[_]>::len), Some(1));
+    // The backend drops the finished capture's live list.
+    let mut finished = live;
+    finished.captures = vec![observer("cap", CaptureState::Finalized)];
+    finished.capture_processes.clear();
+    deliver(&mut app, finished);
+    assert_eq!(
+        app.capture_process_list().map(<[_]>::len),
+        Some(1),
+        "the tree vanished when the capture was finalized"
     );
 }

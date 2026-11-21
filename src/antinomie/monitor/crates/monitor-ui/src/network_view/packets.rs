@@ -71,6 +71,14 @@ fn compare_packets(column: usize, left: &NetworkPacket, right: &NetworkPacket) -
     }
 }
 
+/// Tells two row lists apart even when they have the same length.
+fn rows_fingerprint(rows: &[usize]) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    rows.hash(&mut hasher);
+    hasher.finish()
+}
+
 impl NetworkView {
     pub(super) fn packets(&mut self, ui: &mut egui::Ui, is_live: bool, cx: &NetworkContext<'_>) {
         self.packets_path_bar(ui);
@@ -127,15 +135,13 @@ impl NetworkView {
         let sort = crate::triage::sort_current(ui.ctx(), PACKETS_TABLE);
         let mut cached = std::mem::take(&mut self.packet_order);
         let made_by = self.has_made_by();
-        let key = sort.map(|spec| {
-            (
-                spec,
-                list.rows.len(),
-                packets.len(),
-                self.display_page_start,
-                self.raw_frames() || made_by,
-            )
-        });
+        let key = Some((
+            sort,
+            rows_fingerprint(&list.rows),
+            packets.len(),
+            self.display_page_start,
+            self.raw_frames() || made_by,
+        ));
         if cached.key != key || cached.rows.len() != list.rows.len() {
             cached.rows = ordered_rows_by(&list.rows, packets, sort, &|packet| {
                 self.made_by_text(packet)
@@ -206,8 +212,13 @@ impl NetworkView {
                         crate::widgets::fit_table::row_height(font_size),
                         list.rows.len(),
                         |mut row| {
-                            let index = ordered[row.index()];
-                            let packet = &packets[index];
+                            // The page can shrink under a stale order.
+                            let Some(packet) = ordered
+                                .get(row.index())
+                                .and_then(|&index| packets.get(index))
+                            else {
+                                return;
+                            };
                             let selected = list
                                 .selected
                                 .as_ref()

@@ -607,12 +607,17 @@ impl MonitorApp {
         };
         // Run History lists one of runs and captures; ask for the other once.
         let asked_id = ui.id().with("empty_trace_lists");
-        let asked = (vm_id.clone(), self.history_generation, self.capture_tab);
+        let list_generation = if self.capture_tab {
+            self.history_generation
+        } else {
+            self.capture_generation
+        };
+        let asked = (vm_id.clone(), list_generation, self.capture_tab);
         if ui.data(|data| data.get_temp::<(String, u64, bool)>(asked_id)) != Some(asked.clone())
             && self.pending_archive.is_none()
         {
             let options = self.options.clone();
-            let generation = self.history_generation;
+            let generation = list_generation;
             let carried = self.carried_run_directories();
             self.queue_archive(if self.capture_tab {
                 Request::ListVm {

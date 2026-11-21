@@ -367,8 +367,9 @@ impl MonitorApp {
                 if self.selected.as_ref() != Some(&vm_id) {
                     return;
                 }
-                if generation != self.history_generation {
-                    self.history_sync.captures_refresh_due = true;
+                // A newer capture listing is queued, running or marked for
+                // replay, so this answer is dropped without asking again.
+                if generation != self.capture_generation {
                     return;
                 }
                 match result {
@@ -438,8 +439,8 @@ impl MonitorApp {
                 if self.selected.as_ref() != Some(&vm_id) {
                     return;
                 }
+                // As for captures: a newer run listing is already on its way.
                 if generation != self.history_generation {
-                    self.history_sync.refresh_due = true;
                     return;
                 }
                 match result {

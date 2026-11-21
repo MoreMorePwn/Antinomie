@@ -276,6 +276,14 @@ impl MonitorApp {
                 self.capture_history.push(capture);
             }
         }
+        // A capture that ends leaves the live process lists; the selected
+        // one keeps the tree it had, as if it had been opened from disk.
+        if let Some(id) = self.selected_capture.clone()
+            && !snapshot.capture_processes.contains_key(&id)
+            && let Some(live) = self.snapshot.capture_processes.get(&id)
+        {
+            self.archived_processes = Some((id, Ok(live.clone())));
+        }
         self.follow_runs(&snapshot);
         let mut snapshot = snapshot;
         super::settle_value_limits(&mut snapshot.runs);
@@ -352,6 +360,17 @@ impl MonitorApp {
                 } => {
                     if self.pending_kill == Some(id) {
                         self.pending_kill = None;
+                    }
+                    if self.close_request == Some(id) {
+                        self.close_request = None;
+                        if !success {
+                            // The VM is still running: let the user close again.
+                            self.closing = false;
+                            self.report_error(format!(
+                                "The VM could not be shut down, so the window stays open: {message}"
+                            ));
+                            continue;
+                        }
                     }
                     if self.import_job.as_ref().is_some_and(|job| job.0 == id) {
                         self.import_job = None;
@@ -657,11 +676,38 @@ impl MonitorApp {
         sync_runs(&mut self.terminals, &self.snapshot);
     }
 
+    /// The window was asked to close: shut the VM down first. When the
+    /// request cannot be sent while a VM runs, the window stays open and says
+    /// why, instead of cancelling every close forever.
+    pub(super) fn start_closing(&mut self, ctx: &egui::Context) {
+        match self.send_request(Command::Close) {
+            Some(id) => {
+                self.closing = true;
+                self.close_request = Some(id);
+            }
+            // No backend, or no VM in it: nothing to shut down.
+            None if self.backend.is_none() || self.snapshot.active_vm.is_none() => {
+                self.closing = true;
+            }
+            None => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                let reason = std::mem::take(&mut self.status);
+                self.report_error(format!(
+                    "The VM could not be shut down, so the window stays open: {reason}"
+                ));
+            }
+        }
+    }
+
     pub(super) fn resolve_backend_disconnect(&mut self) {
         if self.backend_disconnected {
             return;
         }
         self.backend_disconnected = true;
+        // No backend is left to stop the VM, so a close in progress can finish.
+        if self.closing {
+            self.snapshot.active_vm = None;
+        }
         self.stale_command_ids.clear();
         let message = "Backend disconnected; pending operation outcomes are unknown. No commands were retried.";
         self.vm_snapshots.pending = None;

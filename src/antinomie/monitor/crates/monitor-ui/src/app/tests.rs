@@ -189,6 +189,7 @@ pub(crate) fn app() -> MonitorApp {
         analysis_generation: 0,
         archive_selected: false,
         history_generation: 0,
+        capture_generation: 0,
         run_filter: RunFilter::All,
         run_query: String::new(),
         applied_run_query: String::new(),
@@ -240,6 +241,7 @@ pub(crate) fn app() -> MonitorApp {
         started: Instant::now(),
         smoke: None,
         closing: false,
+        close_request: None,
         submitted: Vec::new(),
         launch_action_rects: None,
     }
