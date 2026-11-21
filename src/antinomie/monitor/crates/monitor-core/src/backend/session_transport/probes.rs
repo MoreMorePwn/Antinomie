@@ -2,6 +2,54 @@
 //! Kernel INFO and tracer capability probes (moved out of `session_transport`).
 use super::*;
 
+impl KernelProbe {
+    /// The id of the request in flight, if one is.
+    pub(in crate::backend) fn in_flight(&self) -> Option<u64> {
+        match *self {
+            Self::Info(id)
+            | Self::ArchInfo(id)
+            | Self::Arch(id)
+            | Self::Stats(id)
+            | Self::Core(id, _)
+            | Self::Tracer(id, _) => Some(id),
+            Self::Due(_) | Self::CoreDue(..) | Self::TracerDue(..) | Self::Done => None,
+        }
+    }
+    /// A request in flight whose reply will never come (the replies were
+    /// forgotten, or the guest did not answer in time) starts again from INFO.
+    pub(in crate::backend) fn restarted(self, now: Instant) -> Self {
+        if self.in_flight().is_some() {
+            Self::Due(now)
+        } else {
+            self
+        }
+    }
+}
+
+/// How long the probe waits for one reply before it asks again.
+pub(in crate::backend) const KERNEL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// When the probe request now in flight was first seen waiting.
+#[derive(Clone, Copy, Debug, Default)]
+pub(in crate::backend) struct KernelProbeWait(Option<(u64, Instant)>);
+
+impl KernelProbeWait {
+    /// True once the request in flight has waited past the timeout.
+    pub(in crate::backend) fn expired(&mut self, probe: &KernelProbe, now: Instant) -> bool {
+        let Some(id) = probe.in_flight() else {
+            self.0 = None;
+            return false;
+        };
+        match self.0 {
+            Some((seen, since)) if seen == id => now.duration_since(since) >= KERNEL_PROBE_TIMEOUT,
+            _ => {
+                self.0 = Some((id, now));
+                false
+            }
+        }
+    }
+}
+
 impl Session {
     /// Advance the kernel probe: send INFO when due and apply waiting replies.
     pub(in crate::backend) fn probe_kernel(
@@ -53,7 +101,17 @@ impl Session {
             | KernelProbe::Arch(_)
             | KernelProbe::Stats(_)
             | KernelProbe::Core(..)
-            | KernelProbe::Tracer(..) => self.drain_replies(snapshot, sender),
+            | KernelProbe::Tracer(..) => {
+                if self
+                    .kernel_probe_wait
+                    .expired(&self.kernel_probe, Instant::now())
+                {
+                    // The reply is lost: ask again instead of waiting for ever.
+                    self.kernel_probe = self.kernel_probe.restarted(Instant::now());
+                    return Ok(());
+                }
+                self.drain_replies(snapshot, sender)
+            }
         }
     }
     /// Consume a reply that belongs to the kernel probe; false for any other reply.

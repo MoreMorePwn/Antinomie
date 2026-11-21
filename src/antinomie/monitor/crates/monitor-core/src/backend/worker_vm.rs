@@ -249,6 +249,7 @@ impl Worker {
                 last_status_query: Instant::now(),
                 persisted_packets: 0,
                 kernel_probe: KernelProbe::Due(Instant::now()),
+                kernel_probe_wait: KernelProbeWait::default(),
                 core_limits: None,
                 flush_queue: Vec::new(),
                 unstarted_runs: BTreeMap::new(),

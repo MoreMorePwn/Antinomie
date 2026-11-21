@@ -4,6 +4,9 @@ use super::*;
 
 mod arch_probe;
 mod probes;
+#[cfg(test)]
+pub(super) use probes::KERNEL_PROBE_TIMEOUT;
+pub(super) use probes::KernelProbeWait;
 mod terminal;
 
 /// Passes of the guest control worker after which a command it has not
