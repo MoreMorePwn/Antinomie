@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Runs one facts worker reads.
+const FACTS_BATCH: usize = 1024;
+
 type FactsBatch = Vec<(String, Result<RunFilterFacts, String>)>;
 
 #[derive(Default)]
@@ -44,18 +47,28 @@ pub(crate) fn refresh_facts(ui: &egui::Ui, runs: &[RunSummary]) {
                 .retain(|id, _| runs.iter().any(|run| &run.id == id));
         }
     }
-    let missing = runs.iter().any(|run| !cache.values.contains_key(&run.id));
-    if cache.pending.is_some()
-        || (!missing
-            && cache
-                .refreshed
-                .is_some_and(|last| last.elapsed() < Duration::from_secs(5)))
-    {
+    // One worker reads at most FACTS_BATCH runs. Runs without facts go first,
+    // so a list longer than a batch is filled in over several workers; once
+    // all are known, the newest are read again every few seconds.
+    let mut batch: Vec<_> = runs
+        .iter()
+        .filter(|run| !cache.values.contains_key(&run.id))
+        .take(FACTS_BATCH)
+        .collect();
+    if cache.pending.is_some() {
         return;
     }
-    let identities: Vec<_> = runs
-        .iter()
-        .take(1024)
+    if batch.is_empty() {
+        if cache
+            .refreshed
+            .is_some_and(|last| last.elapsed() < Duration::from_secs(5))
+        {
+            return;
+        }
+        batch = runs.iter().take(FACTS_BATCH).collect();
+    }
+    let identities: Vec<_> = batch
+        .into_iter()
         .map(|run| {
             (
                 run.id.clone(),
@@ -442,6 +455,31 @@ mod tests {
             }),
             analysis: None,
             notes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_list_longer_than_one_batch_gets_the_facts_of_every_run() {
+        let ctx = egui::Context::default();
+        let runs: Vec<_> = (0..1500)
+            .map(|index| run(&format!("r{index}"), index, RunState::Finalized))
+            .collect();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let known = |ctx: &egui::Context| {
+            ctx.data(|data| {
+                data.get_temp::<Arc<Mutex<FactsCache>>>(egui::Id::new("run-filter-facts"))
+                    .map_or(0, |cache| cache.lock().unwrap().values.len())
+            })
+        };
+        while known(&ctx) < runs.len() {
+            assert!(
+                Instant::now() < deadline,
+                "only {} of {} runs got their facts",
+                known(&ctx),
+                runs.len()
+            );
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| refresh_facts(ui, &runs));
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 
