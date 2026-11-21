@@ -473,6 +473,62 @@ fn recovered_files(
     Ok(files)
 }
 
+/// Scan the recovered files in turn. The loop honours the scan deadline: a file
+/// not reached when it passes is left out with a note, and the findings already
+/// made stay in the report (ANT-T0579).
+#[allow(clippy::too_many_arguments)]
+fn scan_recovered_files(
+    scanner: &mut yara_x::Scanner<'_>,
+    files: &[PathBuf],
+    sources: &[String],
+    budget: &mut super::RuleTextBudget,
+    report: &mut Report,
+    total: &mut u64,
+    deadline: Instant,
+    progress: &mut super::runner::ProgressWriter,
+) {
+    let file_total = files.len() as u64;
+    for (index, path) in files.iter().enumerate() {
+        if Instant::now() >= deadline {
+            report.state = State::Partial;
+            report.warnings.push(format!(
+                "Recovered-file scan reached its time budget after {index} of {file_total} files; the rest were not scanned"
+            ));
+            break;
+        }
+        let seen = index as u64 + 1;
+        if seen == 1 {
+            progress.stage(ScanTarget::RecoveredFile {
+                index: seen,
+                total: file_total.max(1),
+            });
+        } else {
+            progress.note(ScanTarget::RecoveredFile {
+                index: seen,
+                total: file_total,
+            });
+        }
+        let input = ScannedInput::new(InputKind::RecoveredFile, path);
+        match scan_file(
+            scanner,
+            path,
+            sources,
+            budget,
+            report,
+            total,
+            InputKind::RecoveredFile,
+        ) {
+            Ok((size, sha256)) => report.input(input.size(size).sha256(sha256)),
+            Err(error) => {
+                if report.warnings.len() < 64 {
+                    report.warnings.push(format!("{}: {error}", path.display()));
+                }
+                report.input(input.sized().failed(format!("YARA failed: {error}")));
+            }
+        }
+    }
+}
+
 /// The inputs skipped because the run recorded no memory dump or core file.
 fn note_no_artifacts(report: &mut Report, request: &Request) {
     report
@@ -746,9 +802,11 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                 report.warnings.push("Memory rules run on captured contiguous blocks up to 64 MiB. Missing pages are excluded; matches spanning blocks and whole-file conditions are not complete memory coverage.".into());
             }
             if request.settings.scan_recovered {
+                let before = report.warnings.len();
                 let files = recovered_files(artifacts.memory_dump.as_ref(), deadline, &mut report)?;
-                let file_total = files.len() as u64;
+                let cut_short = report.warnings.len() > before && files.is_empty();
                 if files.is_empty()
+                    && !cut_short
                     && let Some(directory) = &artifacts.memory_dump
                 {
                     report.input(
@@ -756,38 +814,16 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                             .skipped("the memory dump has no recovered files"),
                     );
                 }
-                for (index, path) in files.iter().enumerate() {
-                    let seen = index as u64 + 1;
-                    if seen == 1 {
-                        progress.stage(ScanTarget::RecoveredFile {
-                            index: seen,
-                            total: file_total.max(1),
-                        });
-                    } else {
-                        progress.note(ScanTarget::RecoveredFile {
-                            index: seen,
-                            total: file_total,
-                        });
-                    }
-                    let input = ScannedInput::new(InputKind::RecoveredFile, path);
-                    match scan_file(
-                        &mut scanner,
-                        path,
-                        &sources,
-                        &mut budget,
-                        &mut report,
-                        &mut total,
-                        InputKind::RecoveredFile,
-                    ) {
-                        Ok((size, sha256)) => report.input(input.size(size).sha256(sha256)),
-                        Err(error) => {
-                            if report.warnings.len() < 64 {
-                                report.warnings.push(format!("{}: {error}", path.display()));
-                            }
-                            report.input(input.sized().failed(format!("YARA failed: {error}")));
-                        }
-                    }
-                }
+                scan_recovered_files(
+                    &mut scanner,
+                    &files,
+                    &sources,
+                    &mut budget,
+                    &mut report,
+                    &mut total,
+                    deadline,
+                    &mut progress,
+                );
             }
         } else {
             note_no_artifacts(&mut report, request);
@@ -806,6 +842,65 @@ mod tests {
     /// Item 25 (2026-11-14): the saved positions per rule follow the
     /// setting (100 by default), and every hit past them is counted, across
     /// patterns and blocks, so saved plus left out is every hit.
+    #[test]
+    fn a_recovered_file_loop_past_its_deadline_keeps_the_partial_result() {
+        let rules = yara_x::compile("rule r { strings: $a = \"ab\" condition: $a }").unwrap();
+        let identity = Identity {
+            vm_id: "v".into(),
+            boot_id: "b".into(),
+            run_id: "r".into(),
+            root_cookie: 1,
+        };
+        let dir =
+            std::env::temp_dir().join(format!("ant-yara-deadline-{}", crate::storage::unique_id()));
+        crate::storage::private_dir(&dir).unwrap();
+        let files: Vec<PathBuf> = (0..3)
+            .map(|index| {
+                let path = dir.join(format!("f{index}"));
+                fs::write(&path, b"xx ab xx").unwrap();
+                path
+            })
+            .collect();
+        let mut report = Report::empty(Engine::Yara, identity);
+        let mut scanner = yara_x::Scanner::new(&rules);
+        let mut budget = super::RuleTextBudget::new();
+        let mut progress = super::runner::ProgressWriter::new(&dir);
+        let mut total = 0;
+        scan_recovered_files(
+            &mut scanner,
+            &files,
+            &[],
+            &mut budget,
+            &mut report,
+            &mut total,
+            Instant::now() - Duration::from_secs(1),
+            &mut progress,
+        );
+        assert_eq!(report.state, State::Partial);
+        assert!(
+            report.warnings.iter().any(|w| w.contains("time budget")),
+            "{:?}",
+            report.warnings
+        );
+        assert_eq!(report.scanned_objects, 0);
+        // With time left, every file is scanned and the findings kept.
+        let mut report = Report::empty(Engine::Yara, report.identity.clone());
+        let mut scanner = yara_x::Scanner::new(&rules);
+        scan_recovered_files(
+            &mut scanner,
+            &files,
+            &[],
+            &mut budget,
+            &mut report,
+            &mut total,
+            Instant::now() + Duration::from_secs(60),
+            &mut progress,
+        );
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].count, 3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn every_hit_past_the_saved_positions_is_counted_exactly() {
         let rules = yara_x::compile(
