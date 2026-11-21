@@ -950,6 +950,49 @@ fn eight_finished_reports_make_room_and_eight_running_ones_refuse() {
 }
 
 #[test]
+fn a_ninth_host_file_analysis_makes_room_instead_of_refusing_for_the_session() {
+    use crate::analysis::{AnalysisKind, AnalysisState};
+    let images = Images::new();
+    let data = images.path("data");
+    let mut worker = blank_worker(data.clone());
+    let selection = crate::analysis::AnalysisSelection {
+        enabled: true,
+        checks: vec![AnalysisKind::Metadata],
+        time_limit_minutes: 0,
+        limits: Default::default(),
+    };
+    let report = |state| {
+        let mut report = crate::analysis::jobs::new_report("/old", &selection);
+        report.state = state;
+        report
+    };
+    let file = images.path("extracted.bin");
+    fs::write(&file, b"bytes").unwrap();
+    worker.snapshot.analysis_reports = (0..8).map(|_| report(AnalysisState::Complete)).collect();
+    let oldest = worker.snapshot.analysis_reports[0].id.clone();
+    worker
+        .analyze_host_file("fixture", &file, selection.clone())
+        .unwrap();
+    assert!(
+        worker
+            .snapshot
+            .analysis_reports
+            .iter()
+            .all(|r| r.id != oldest)
+    );
+    // The shared rule: eight unfinished reports refuse, with the right words.
+    let mut running: Vec<_> = (0..8).map(|_| report(AnalysisState::Running)).collect();
+    let error = super::make_room_for_report(&mut running).unwrap_err();
+    assert!(
+        error.contains("still running") && !error.contains("boot"),
+        "{error}"
+    );
+    running[5].state = AnalysisState::Cancelled;
+    assert!(super::make_room_for_report(&mut running).is_ok());
+    assert_eq!(running.len(), 7);
+}
+
+#[test]
 fn checks_are_added_to_a_finished_analysis_without_a_vm_and_only_by_plain_paths() {
     use crate::analysis::{AnalysisKind, AnalysisSectionState, AnalysisState};
     let images = Images::new();

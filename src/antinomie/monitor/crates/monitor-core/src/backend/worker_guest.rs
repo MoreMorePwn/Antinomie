@@ -268,9 +268,7 @@ impl Worker {
         if !analysis.enabled {
             return Err("Analyze Only requires static analysis enabled".into());
         }
-        if self.snapshot.analysis_reports.len() >= 8 {
-            return Err("this VM boot reached the eight standalone analysis limit".into());
-        }
+        super::worker_disks::make_room_for_report(&mut self.snapshot.analysis_reports)?;
         let report = crate::analysis::jobs::new_report(&path, &analysis);
         let directory = crate::locations::locations(&self.options, &session.vm.id)?
             .recording_directory
