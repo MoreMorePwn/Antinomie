@@ -1426,3 +1426,84 @@ fn a_capture_list_is_read_again_when_the_window_is_opened_again() {
         "opening the window lists the folders again"
     );
 }
+
+fn raw_frame_view(name: &str) -> (PathBuf, NetworkView) {
+    let root = std::env::temp_dir().join(format!("ant-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("raw.pcap");
+    std::fs::write(&path, crate::app::tests::test_pcap()).unwrap();
+    let view = NetworkView {
+        captures_for: Some((None, vec![])),
+        list: PacketList::new(Some(path)),
+        display_worker_error: Some("TShark unavailable: tshark is missing".into()),
+        ..Default::default()
+    };
+    (root, view)
+}
+
+fn raw_frame(ctx: &egui::Context, view: &mut NetworkView) {
+    let _ = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 800.0),
+            )),
+            ..Default::default()
+        },
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
+                view.show(
+                    ui,
+                    NetworkContext {
+                        vm_id: None,
+                        active: None,
+                        recordings: None,
+                        recording_roots: &[],
+                        nat: true,
+                        running: false,
+                        pending: false,
+                        boot_id: None,
+                        font_size: 16.0,
+                    },
+                );
+            });
+        },
+    );
+}
+
+#[test]
+fn the_packet_order_follows_the_rows_even_when_their_count_stays_the_same() {
+    let (root, mut view) = raw_frame_view("order-key");
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    for _ in 0..3 {
+        raw_frame(&ctx, &mut view);
+    }
+    assert_eq!(view.list.packets.len(), 2);
+    // A new quick search keeps one row, but a different one.
+    let kept = view.list.packets.len();
+    view.list.rows_for = Some((view.applied_filter.clone(), kept));
+    view.list.rows = vec![0];
+    raw_frame(&ctx, &mut view);
+    assert_eq!(view.packet_order.rows, [0]);
+    view.list.rows = vec![1];
+    raw_frame(&ctx, &mut view);
+    assert_eq!(view.packet_order.rows, [1], "the old rows stayed on screen");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_page_that_shrinks_under_a_stale_order_does_not_panic() {
+    let (root, mut view) = raw_frame_view("order-shrink");
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    for _ in 0..3 {
+        raw_frame(&ctx, &mut view);
+    }
+    view.list.rows_for = Some((view.applied_filter.clone(), 1));
+    view.list.rows = vec![1];
+    raw_frame(&ctx, &mut view);
+    view.list.packets.truncate(1);
+    raw_frame(&ctx, &mut view);
+    std::fs::remove_dir_all(root).unwrap();
+}
