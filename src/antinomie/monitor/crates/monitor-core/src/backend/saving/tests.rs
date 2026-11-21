@@ -209,7 +209,7 @@ fn another_failure_of_the_boot_does_not_fail_a_complete_run_either() {
 fn quota_refusals_of_the_raw_archive_use_the_shared_message() {
     let fixture = Fixture::new();
     let mut tiny = RawCapture::new(fixture.root.join("tiny"), 8).unwrap();
-    assert!(!tiny.append(b"too long for eight bytes"));
+    assert!(!tiny.append(&[0; 128]));
     let error = tiny.error.clone().unwrap();
     assert_eq!(error, crate::quota::message(8));
     assert!(crate::quota::is_quota_error(&error));

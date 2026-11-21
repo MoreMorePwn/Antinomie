@@ -1030,6 +1030,7 @@ use migrate::migrate_data_with_proc;
 pub(crate) use migrate::{ensure_data_dir, migrate_default_data};
 
 mod capture;
+pub(crate) use capture::RAW_PACKET_LENGTHS;
 pub use capture::RawCapture;
 mod vm_ops;
 pub(crate) use vm_ops::{
@@ -1753,44 +1754,64 @@ mod tests {
     fn raw_packets_reach_the_file_on_flush_and_drop() {
         let path = std::env::temp_dir().join(format!("ant-capture-{}", unique_id()));
         let mut c = RawCapture::new(path.clone(), 1 << 20).unwrap();
-        assert!(c.append(b"one"));
-        assert!(c.append(b"two"));
+        assert!(c.append(&[1; 128]));
+        assert!(c.append(&[2; 128]));
         assert_eq!(fs::metadata(path.join("telemetry.raw")).unwrap().len(), 0);
         assert!(c.flush());
         crate::writer::barrier();
-        assert_eq!(fs::metadata(path.join("telemetry.raw")).unwrap().len(), 14);
-        assert!(c.append(b"three"));
+        assert_eq!(fs::metadata(path.join("telemetry.raw")).unwrap().len(), 264);
+        assert!(c.append(&[3; 130]));
         drop(c);
         crate::writer::barrier();
-        assert_eq!(
-            fs::read(path.join("telemetry.raw")).unwrap()[14..],
-            [5, 0, 0, 0, b't', b'h', b'r', b'e', b'e']
-        );
+        let saved = fs::read(path.join("telemetry.raw")).unwrap();
+        assert_eq!(saved[264..268], [130, 0, 0, 0]);
+        assert_eq!(saved[268..], [3; 130]);
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn records_the_reader_would_refuse_are_counted_and_never_written() {
+        let path = std::env::temp_dir().join(format!("ant-capture-{}", unique_id()));
+        let mut c = RawCapture::new(path.clone(), 1 << 30).unwrap();
+        assert!(c.append(&[1; 128]));
+        assert!(c.append(&[0; 10]));
+        assert!(c.append(&[]));
+        assert!(c.append(&vec![0; 262_113]));
+        assert!(c.append(&vec![9; 262_112]));
+        assert!(c.append(&[2; 200]));
+        assert_eq!((c.skipped, c.packets, c.error.clone()), (3, 3, None));
+        drop(c);
+        crate::writer::barrier();
+        let mut reader =
+            std::io::BufReader::new(fs::File::open(path.join("telemetry.raw")).unwrap());
+        let mut lengths = Vec::new();
+        while let Some((_, packet)) = crate::recording::next_packet(&mut reader).unwrap() {
+            lengths.push(packet.len());
+        }
+        assert_eq!(lengths, [128, 262_112, 200]);
         fs::remove_dir_all(path).unwrap();
     }
     #[test]
     fn quota_preserves_prior_packets() {
         let path = std::env::temp_dir().join(format!("ant-capture-{}", unique_id()));
-        let mut c = RawCapture::new(path.clone(), 8).unwrap();
-        assert!(c.append(b"test"));
-        assert!(!c.append(b"lost"));
+        let mut c = RawCapture::new(path.clone(), 140).unwrap();
+        assert!(c.append(&[7; 128]));
+        assert!(!c.append(&[8; 128]));
         assert!(c.error.is_some());
         assert!(c.flush());
         crate::writer::barrier();
-        assert_eq!(
-            fs::read(path.join("telemetry.raw")).unwrap(),
-            [4, 0, 0, 0, b't', b'e', b's', b't']
-        );
+        let mut expected = vec![128, 0, 0, 0];
+        expected.extend([7; 128]);
+        assert_eq!(fs::read(path.join("telemetry.raw")).unwrap(), expected);
         drop(c);
         fs::remove_dir_all(path).unwrap();
     }
     #[test]
     fn quota_accounts_for_assembled_objects() {
         let path = std::env::temp_dir().join(format!("ant-shared-quota-{}", unique_id()));
-        let mut c = RawCapture::new(path.clone(), 16).unwrap();
-        assert!(c.append_with_reserved(b"data", 8));
-        assert!(!c.append_with_reserved(b"x", 8));
-        assert_eq!(c.bytes, 8);
+        let mut c = RawCapture::new(path.clone(), 140 + 8).unwrap();
+        assert!(c.append_with_reserved(&[4; 128], 8));
+        assert!(!c.append_with_reserved(&[5; 128], 8));
+        assert_eq!(c.bytes, 132);
         drop(c);
         fs::remove_dir_all(path).unwrap();
     }
