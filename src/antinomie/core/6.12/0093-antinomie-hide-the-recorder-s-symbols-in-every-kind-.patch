@@ -1,0 +1,286 @@
+From 018d03323af5e853bdd3ab4d2981bf4af4e575a9 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sat, 21 Nov 2026 22:33:00 +0700
+Subject: [PATCH] antinomie: hide the recorder's symbols in every kind of
+ section it uses
+
+/proc/kallsyms names every kernel symbol to any program. The recorder
+leaves its own out: those of kernel/antinomie by their address, between
+labels that section_begin.o and section_end.o put at the start and the
+end of the directory's .text, .rodata, .data, .bss and per-CPU data,
+and the hooks elsewhere by their ant_* names. Symbols of the directory
+in any other kind of section were listed by name:
+
+- the guest facade's boot options and what they set
+  (facade_pci_param() and the other facade_*_param(), take_text(),
+  pci_rules, hide_qemu_cdrom, efi_vendor, drm_name, usb_facade,
+  acpi_facade, nvme, board_sub*) and the boot age's (boot_age_param(),
+  boot_age_s, continuous): init code, and data that is read-only after
+  init, with the early parameter tables named after them (__setup_*,
+  __setup_str_*);
+- the cold parts GCC splits off functions into .text.unlikely
+  (fatal_note.cold, field.cold, uevent_rewrite.cold and others with
+  Debian's configuration);
+- the flags of the *_once macros the headers' inline helpers use
+  (__already_done.N, in .data..once).
+
+sections.h now labels those kinds too: .text.unlikely,
+.data..ro_after_init, .data..read_mostly, .data..once, and the init
+sections .init.text, .init.data, .init.rodata and .init.setup. The
+kernel frees the init sections after boot and kallsyms keeps their
+names; the check compares addresses only, so it holds for them as well.
+Code that stays after boot may not refer to an init section (modpost),
+so an early initcall copies the labels' addresses into a table that is
+read-only after init. The end labels are weak: each shares its address
+with the first symbol linked after the directory, and kallsyms names an
+address by the first of its symbols, sorting a weak one last.
+
+Two hooks in stock files had symbols of their own under other names:
+the blob /sys/firmware/fdt shows (drivers/of/fdt.c, arm64) is now
+ant_fdt_raw_blob, and fs/binfmt_elf.c's live-core helpers are always
+inline, so neither can leave a name only this kernel has.
+
+The kernel build checks the result (scripts/check-kernel-kallsyms.py):
+no symbol of kernel/antinomie may lie outside every label pair unless
+it is named like the recorder, and the series may define no new name
+in a stock file that is not.
+
+Hooked kernel files:
+- drivers/of/fdt.c: the variable's name.
+- fs/binfmt_elf.c: the helpers' inlining.
+
+No contract change (revision 22).
+---
+ drivers/of/fdt.c            | 10 +++---
+ fs/binfmt_elf.c             |  8 +++--
+ kernel/antinomie/sections.h | 64 ++++++++++++++++++++++++++++++-------
+ kernel/antinomie/stealth.c  | 43 +++++++++++++++++++++----
+ 4 files changed, 99 insertions(+), 26 deletions(-)
+
+diff --git a/drivers/of/fdt.c b/drivers/of/fdt.c
+index 0d8d7fc1b..ad17d62cc 100644
+--- a/drivers/of/fdt.c
++++ b/drivers/of/fdt.c
+@@ -1259,13 +1259,13 @@ void __init unflatten_and_copy_device_tree(void)
+ #ifdef CONFIG_SYSFS
+ /* The tree /sys/firmware/fdt shows: the boot loader's, as Antinomie's
+  * facade gives it. */
+-static const void *of_fdt_raw_blob;
++static const void *ant_fdt_raw_blob;
+ 
+ static ssize_t of_fdt_raw_read(struct file *filp, struct kobject *kobj,
+ 			       struct bin_attribute *bin_attr,
+ 			       char *buf, loff_t off, size_t count)
+ {
+-	memcpy(buf, of_fdt_raw_blob + off, count);
++	memcpy(buf, ant_fdt_raw_blob + off, count);
+ 	return count;
+ }
+ 
+@@ -1282,10 +1282,10 @@ static int __init of_fdt_raw_init(void)
+ 		pr_warn("not creating '/sys/firmware/fdt': CRC check failed\n");
+ 		return 0;
+ 	}
+-	of_fdt_raw_blob = ant_fdt_shown(initial_boot_params);
+-	if (!of_fdt_raw_blob)
++	ant_fdt_raw_blob = ant_fdt_shown(initial_boot_params);
++	if (!ant_fdt_raw_blob)
+ 		return 0;
+-	of_fdt_raw_attr.size = fdt_totalsize(of_fdt_raw_blob);
++	of_fdt_raw_attr.size = fdt_totalsize(ant_fdt_raw_blob);
+ 	return sysfs_create_bin_file(firmware_kobj, &of_fdt_raw_attr);
+ }
+ late_initcall(of_fdt_raw_init);
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+index 7256e15e1..5046d9393 100644
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -1568,8 +1568,10 @@ static void fill_prstatus(struct elf_prstatus_common *prstatus,
+ 	prstatus->pr_cstime = ns_to_kernel_old_timeval(p->signal->cstime);
+ }
+ 
+-/* A process core the recorder writes of a live process (manual_core.c). */
+-static inline bool live_core(void)
++/* A process core the recorder writes of a live process (manual_core.c).
++ * Always inline, as core_note_alloc(): out of line, either would be a symbol
++ * only this kernel has, which /proc/kallsyms lists to every program. */
++static __always_inline bool live_core(void)
+ {
+ #ifdef CONFIG_ANTINOMIE
+ 	return ant_coredump_live() != NULL;
+@@ -1578,7 +1580,7 @@ static inline bool live_core(void)
+ #endif
+ }
+ 
+-static inline void *core_note_alloc(size_t size)
++static __always_inline void *core_note_alloc(size_t size)
+ {
+ #ifdef CONFIG_ANTINOMIE
+ 	if (live_core())
+diff --git a/kernel/antinomie/sections.h b/kernel/antinomie/sections.h
+index d369e6214..8c6bc6ba4 100644
+--- a/kernel/antinomie/sections.h
++++ b/kernel/antinomie/sections.h
+@@ -4,30 +4,72 @@
+  * objects put symbols in. The linker keeps one directory's input sections of
+  * a kind together and in link order, so each pair brackets exactly this
+  * directory's functions and data (ant_symbol_hidden()).
++ *
++ * Every kind counts, not only .text, .rodata, .data and .bss: the init code
++ * and data the kernel frees after boot (kallsyms still lists their names),
++ * what is read-only after init or read mostly, the flags of the *_once
++ * macros (.data..once, from the headers' inline helpers too), and the cold
++ * parts GCC splits off a function (name.cold, in .text.unlikely). The kernel
++ * build checks that no symbol of this directory lies outside every pair
++ * unless it is named like the recorder (scripts/check-kernel-kallsyms.py); a
++ * section kind new to the recorder needs its pair here.
+  */
+ #ifndef ANT_SECTIONS_H
+ #define ANT_SECTIONS_H
+ 
+ #include <linux/objtool.h>
+ 
++/* The begin labels are global, the end labels weak: an end label shares its
++ * address with the first symbol linked after this directory, and kallsyms
++ * names an address by the first of its symbols, sorting a weak one last. */
++#define ANT_SECTION_BIND_begin ".globl"
++#define ANT_SECTION_BIND_end ".weak"
++
+ /* The text labels are addresses, never call targets: no ENDBR (objtool). */
+-#define ANT_SECTION_LABEL(name, section, flags, note)	\
+-	asm(".pushsection " section "," flags "\n"	\
+-	    ".globl " #name "\n"			\
+-	    #name ":\n"					\
+-	    note					\
++#define ANT_SECTION_LABEL(name, bind, section, flags, note)	\
++	asm(".pushsection " section "," flags "\n"		\
++	    bind " " #name "\n"					\
++	    #name ":\n"						\
++	    note						\
+ 	    ".popsection\n")
+ 
+-#define ANT_SECTION_LABELS(where)							\
+-	ANT_SECTION_LABEL(ant_text_##where, ".text", "\"ax\"", ANNOTATE_NOENDBR);	\
+-	ANT_SECTION_LABEL(ant_rodata_##where, ".rodata", "\"a\"", "");		\
+-	ANT_SECTION_LABEL(ant_data_##where, ".data", "\"aw\"", "");		\
+-	ANT_SECTION_LABEL(ant_bss_##where, ".bss", "\"aw\",@nobits", "");	\
+-	ANT_SECTION_LABEL(ant_percpu_##where, ".data..percpu", "\"aw\"", "")
++#define ANT_SECTION_LABELS(where)								\
++	ANT_SECTION_LABEL(ant_text_##where, ANT_SECTION_BIND_##where, ".text", "\"ax\"",	\
++			  ANNOTATE_NOENDBR);							\
++	ANT_SECTION_LABEL(ant_unlikely_##where, ANT_SECTION_BIND_##where, ".text.unlikely",	\
++			  "\"ax\"", ANNOTATE_NOENDBR);						\
++	ANT_SECTION_LABEL(ant_rodata_##where, ANT_SECTION_BIND_##where, ".rodata", "\"a\"", "");	\
++	ANT_SECTION_LABEL(ant_ro_after_init_##where, ANT_SECTION_BIND_##where,			\
++			  ".data..ro_after_init", "\"aw\"", "");				\
++	ANT_SECTION_LABEL(ant_data_##where, ANT_SECTION_BIND_##where, ".data", "\"aw\"", "");	\
++	ANT_SECTION_LABEL(ant_read_mostly_##where, ANT_SECTION_BIND_##where,			\
++			  ".data..read_mostly", "\"aw\"", "");					\
++	ANT_SECTION_LABEL(ant_once_##where, ANT_SECTION_BIND_##where, ".data..once",		\
++			  "\"aw\"", "");							\
++	ANT_SECTION_LABEL(ant_bss_##where, ANT_SECTION_BIND_##where, ".bss",			\
++			  "\"aw\",@nobits", "");						\
++	ANT_SECTION_LABEL(ant_percpu_##where, ANT_SECTION_BIND_##where, ".data..percpu",	\
++			  "\"aw\"", "");							\
++	ANT_SECTION_LABEL(ant_init_text_##where, ANT_SECTION_BIND_##where, ".init.text",	\
++			  "\"ax\"", ANNOTATE_NOENDBR);						\
++	ANT_SECTION_LABEL(ant_init_data_##where, ANT_SECTION_BIND_##where, ".init.data",	\
++			  "\"aw\"", "");							\
++	ANT_SECTION_LABEL(ant_init_rodata_##where, ANT_SECTION_BIND_##where, ".init.rodata",	\
++			  "\"a\"", "");								\
++	ANT_SECTION_LABEL(ant_init_setup_##where, ANT_SECTION_BIND_##where, ".init.setup",	\
++			  "\"aw\"", "")
+ 
+ extern const char ant_text_begin[], ant_text_end[];
++extern const char ant_unlikely_begin[], ant_unlikely_end[];
+ extern const char ant_rodata_begin[], ant_rodata_end[];
++extern const char ant_ro_after_init_begin[], ant_ro_after_init_end[];
+ extern const char ant_data_begin[], ant_data_end[];
++extern const char ant_read_mostly_begin[], ant_read_mostly_end[];
++extern const char ant_once_begin[], ant_once_end[];
+ extern const char ant_bss_begin[], ant_bss_end[];
+ extern const char ant_percpu_begin[], ant_percpu_end[];
++extern const char ant_init_text_begin[], ant_init_text_end[];
++extern const char ant_init_data_begin[], ant_init_data_end[];
++extern const char ant_init_rodata_begin[], ant_init_rodata_end[];
++extern const char ant_init_setup_begin[], ant_init_setup_end[];
+ #endif
+diff --git a/kernel/antinomie/stealth.c b/kernel/antinomie/stealth.c
+index fbc8de6d3..0e5388c22 100644
+--- a/kernel/antinomie/stealth.c
++++ b/kernel/antinomie/stealth.c
+@@ -7,10 +7,11 @@
+  * first prints it, applied here, and never reach the saved command line:
+  * /proc/cmdline and the kernel log show the rest of the line only.
+  *
+- * The recorder's symbols (this directory's functions and data, and the hooks
+- * elsewhere named ant_*) are left out of what programs read by name:
+- * /proc/kallsyms and /proc/<pid>/wchan. The kernel itself still has them, so
+- * stack traces, kprobes and every internal lookup work as before.
++ * The recorder's symbols (this directory's functions and data, in whatever
++ * section they are, init ones included, and the hooks elsewhere named ant_*)
++ * are left out of what programs read by name: /proc/kallsyms and
++ * /proc/<pid>/wchan. The kernel itself still has them, so stack traces,
++ * kprobes and every internal lookup work as before.
+  *
+  * QEMU's own ACPI devices (HID QEMU0001 pvpanic, QEMU0002 fw_cfg, ...) are not
+  * enumerated: no driver of this kernel uses them, and enumerated they appear
+@@ -83,15 +84,44 @@ void __init ant_cmdline_take(char *cmdline)
+ 
+ static const struct {
+ 	const char *begin, *end;
+-} ant_sections[] = {
++} ant_section_labels[] __initconst = {
+ 	{ ant_text_begin, ant_text_end },
++	{ ant_unlikely_begin, ant_unlikely_end },
+ 	{ ant_rodata_begin, ant_rodata_end },
++	{ ant_ro_after_init_begin, ant_ro_after_init_end },
+ 	{ ant_data_begin, ant_data_end },
++	{ ant_read_mostly_begin, ant_read_mostly_end },
++	{ ant_once_begin, ant_once_end },
+ 	{ ant_bss_begin, ant_bss_end },
+ 	/* Per-CPU symbols are offsets into the per-CPU area, in kallsyms too. */
+ 	{ ant_percpu_begin, ant_percpu_end },
++	/* Freed after boot; kallsyms keeps listing the names in them. */
++	{ ant_init_text_begin, ant_init_text_end },
++	{ ant_init_data_begin, ant_init_data_end },
++	{ ant_init_rodata_begin, ant_init_rodata_end },
++	{ ant_init_setup_begin, ant_init_setup_end },
+ };
+ 
++/* The labels' addresses, copied by init code: code that stays after boot may
++ * not refer to the init sections (modpost), and the numbers stay valid for
++ * the names kallsyms lists after the kernel frees those sections. Nothing
++ * reads symbols by name before early initcalls. */
++static struct {
++	unsigned long begin, end;
++} ant_sections[ARRAY_SIZE(ant_section_labels)] __ro_after_init;
++
++static int __init ant_stealth_init(void)
++{
++	size_t i;
++
++	for (i = 0; i < ARRAY_SIZE(ant_sections); i++) {
++		ant_sections[i].begin = (unsigned long)ant_section_labels[i].begin;
++		ant_sections[i].end = (unsigned long)ant_section_labels[i].end;
++	}
++	return 0;
++}
++early_initcall(ant_stealth_init);
++
+ /* ant_* and what the build names after it: __pfx_ant_*, __ksymtab_ant_*,
+  * __setup_ant_*, the initcall entries (__initcall__kmod_..._ant_*_init). */
+ static bool ant_symbol_name(const char *name)
+@@ -104,8 +134,7 @@ bool ant_symbol_hidden(unsigned long address, const char *name)
+ 	size_t i;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(ant_sections); i++)
+-		if (address >= (unsigned long)ant_sections[i].begin &&
+-		    address < (unsigned long)ant_sections[i].end)
++		if (address >= ant_sections[i].begin && address < ant_sections[i].end)
+ 			return true;
+ 	return name && ant_symbol_name(name);
+ }
+-- 
+2.53.0
+

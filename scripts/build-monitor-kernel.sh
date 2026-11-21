@@ -261,6 +261,17 @@ check_banner() {
     fi
 }
 
+# /proc/kallsyms names every symbol to any program: no symbol of the
+# recorder's objects may lie outside sections.h's label pairs unless it is
+# named like the recorder, and no patch may give a stock file a name only this
+# kernel has. The recorder's names stock code lacks go to
+# recorder-kallsyms-names.txt (stealth-probe's optional list).
+check_kallsyms() {
+    python3 "$repo/scripts/check-kernel-kallsyms.py" --system-map "$build_tree/System.map" \
+        --objects "$build_tree/kernel/antinomie/built-in.a" --series "$series_dir" \
+        --write-names "$build_tree/recorder-kallsyms-names.txt"
+}
+
 # The extra profile's own symbols (busybox-extra.cfg): NAME, !NAME, NAME=VALUE.
 extra_on="" extra_off="" extra_values=""
 if [[ $profile == extra ]]; then
@@ -369,6 +380,7 @@ if [[ $profile == minimal || $profile == extra ]]; then
     # The guest reads this BTF: nothing of the recorder may be in it.
     python3 "$repo/scripts/check-kernel-btf.py" --vmlinux "$build_tree/vmlinux" \
         --system-map "$build_tree/System.map" --modules "$build_tree/modules-install"
+    check_kallsyms
     # The camera base's kernel builds more drivers in: none of the recorder's
     # functions may be traceable or share a stock function's name.
     if [[ $profile == extra ]]; then
@@ -441,6 +453,7 @@ if [[ $profile == stock ]]; then
     [[ ${ANTINOMIE_CCACHE_DIR:-} == "" ]] || ! command -v ccache >/dev/null || ccache --show-stats >&2
     python3 "$repo/scripts/check-kernel-btf.py" --vmlinux "$build_tree/vmlinux" \
         --system-map "$build_tree/System.map"
+    check_kallsyms
     # Debian's exports, structure layouts and traceable functions.
     abi_check=("$repo/scripts/check-kernel-abi.py" --vmlinux "$build_tree/vmlinux"
                --system-map "$build_tree/System.map" --symvers "$build_tree/vmlinux.symvers")

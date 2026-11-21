@@ -1,0 +1,106 @@
+From 8ada3402f2352a87606bd0f4a7b86d0be08d6e5e Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 22 Nov 2026 01:12:29 +0700
+Subject: [PATCH] antinomie: size recvmmsg's capture state by at most
+ UIO_MAXIOV messages
+
+The native recvmmsg capture allocated its state for vlen messages (8
+bytes each) at entry: vlen 0xffffffff asked GFP_NOWAIT for 32 GiB. The
+page allocator refused it with a warning and a backtrace naming
+recorder functions in the kernel log (a stealth leak), and the call
+was recorded without its messages. sendmmsg was already bounded.
+
+Both now hold at most UIO_MAXIOV (1024) messages, the allocations of
+the state and of each message do not warn, and a recvmmsg that
+received more messages than that records the headers past the
+capacity as one field arg1.mmsg.1024.header with the status
+RESOURCE_EXHAUSTED (the kernel itself does not bound recvmmsg's vlen).
+The compat capture (AArch32, ia32), which was bounded, gets the same
+field and allocation flags.
+
+Found by the 0.9.0 bug hunt (K1-02). No contract change (revision 22).
+---
+ kernel/antinomie/native_capture.c | 18 +++++++++++++++---
+ kernel/antinomie/recorder.c       | 10 +++++++++-
+ 2 files changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
+index 28977d74f..08a82a89e 100644
+--- a/kernel/antinomie/native_capture.c
++++ b/kernel/antinomie/native_capture.c
+@@ -490,14 +490,17 @@ static void capture_mmsg(struct ant_task *ctx, const u64 args[6],
+ 	struct ant_message_state *message;
+ 	struct mmsghdr observed;
+ 	enum ant_status status;
+-	u32 capacity = input ? min_t(u32, args[2], UIO_MAXIOV) : (u32)args[2];
++	/* At most UIO_MAXIOV messages either way. sendmmsg() sends no more;
++	 * recvmmsg() may receive more, and those are recorded as one field.
++	 */
++	u32 capacity = min_t(u32, args[2], UIO_MAXIOV);
+ 	u32 index, count;
+ 	u64 address, header_size, size = (u64)capacity * sizeof(struct mmsghdr);
+ 	char prefix[48], key[64];
+ 
+ 	BUILD_BUG_ON(sizeof(struct mmsghdr) != 64);
+ 	if (!output) {
+-		state = kzalloc(struct_size(state, messages, capacity), GFP_NOWAIT);
++		state = kzalloc(struct_size(state, messages, capacity), GFP_NOWAIT | __GFP_NOWARN);
+ 		if (!state) {
+ 			ant_capture_field(ctx, 1, "arg1.mmsg.context", LAYOUT("mmsghdr[]"), 3,
+ 					  args[1], NULL, size, size, ANT_RESOURCE_EXHAUSTED);
+@@ -538,7 +541,7 @@ static void capture_mmsg(struct ant_task *ctx, const u64 args[6],
+ 		if (status != ANT_COMPLETE || ant_capture_lost(ctx))
+ 			break;
+ 		if (!output) {
+-			message = kzalloc(sizeof(*message), GFP_NOWAIT);
++			message = kzalloc(sizeof(*message), GFP_NOWAIT | __GFP_NOWARN);
+ 			if (!message) {
+ 				ant_capture_field(ctx, 1, key, "", 1, address, NULL,
+ 						  sizeof(*message), sizeof(*message),
+@@ -564,6 +567,15 @@ static void capture_mmsg(struct ant_task *ctx, const u64 args[6],
+ 						  ANT_CONTEXT_MISSING);
+ 		}
+ 	}
++	/* Messages received past the capacity: their headers, not read. */
++	if (output && !input && (u64)result > state->capacity && !ant_capture_lost(ctx) &&
++	    args[1] <= U64_MAX - (u64)state->capacity * sizeof(struct mmsghdr)) {
++		scnprintf(key, sizeof(key), "arg1.mmsg.%u.header", state->capacity);
++		size = ((u64)result - state->capacity) * sizeof(struct mmsghdr);
++		ant_capture_field(ctx, 1, key, LAYOUT("mmsghdr[]"), 3,
++				  args[1] + (u64)state->capacity * sizeof(struct mmsghdr),
++				  NULL, size, size, ANT_RESOURCE_EXHAUSTED);
++	}
+ 	if (!input)
+ 		capture_optional(ctx, 4, args[4], output ? "arg4.timeout.observed" :
+ 				 "arg4.timeout", LAYOUT("timespec"),
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index c61ef455f..391fa85c9 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -1456,7 +1456,7 @@ static void compat_mmsg(struct ant_task *ctx, bool output, long result, bool sen
+ 	timeout_size = ctx->wire_nr == ANT_COMPAT_NR(recvmmsg_time64) ?
+ 		sizeof(struct __kernel_timespec) : sizeof(struct old_timespec32);
+ 	if (!output) {
+-		state = kzalloc(struct_size(state, messages, capacity), GFP_NOWAIT);
++		state = kzalloc(struct_size(state, messages, capacity), GFP_NOWAIT | __GFP_NOWARN);
+ 		if (!state) {
+ 			field(ctx, 1, "arg1.mmsg.context", ANT_COMPAT_LAYOUT("mmsghdr[]"), 3,
+ 			      ctx->args[1], NULL, (u64)capacity * sizeof(header),
+@@ -1503,6 +1503,14 @@ static void compat_mmsg(struct ant_task *ctx, bool output, long result, bool sen
+ 					       header.msg_len, true);
+ 		}
+ 	}
++	/* Messages received past the capacity: their headers, not read. */
++	if (output && !send && (u64)result > state->capacity && !ctx->failed_count) {
++		scnprintf(key, sizeof(key), "arg1.mmsg.%u.header", state->capacity);
++		field(ctx, 1, key, ANT_COMPAT_LAYOUT("mmsghdr[]"), 3,
++		      ctx->args[1] + (u64)state->capacity * sizeof(header), NULL,
++		      ((u64)result - state->capacity) * sizeof(header),
++		      ((u64)result - state->capacity) * sizeof(header), ANT_RESOURCE_EXHAUSTED);
++	}
+ timeout:
+ 	if (!send && ctx->args[4] && !ctx->failed_count)
+ 		field(ctx, 4, output ? "arg4.timeout.observed" : "arg4.timeout",
+-- 
+2.53.0
+

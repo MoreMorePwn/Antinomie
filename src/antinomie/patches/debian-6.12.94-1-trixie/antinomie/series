@@ -101,3 +101,14 @@
 # run's pending work
 0091-antinomie-record-where-a-read-or-write-began-from-the-position-the-call-was-given.patch
 0092-antinomie-count-queued-file-hashes-as-a-run-s-pending-work-also-over-a-task-s-exit.patch
+# From the 0.9.0 bug hunt (no contract change): the recorder's symbols in every kind of
+# section it uses are hidden from /proc/kallsyms
+0093-antinomie-hide-the-recorder-s-symbols-in-every-kind-of-section-it-uses.patch
+# From the 0.9.0 bug hunt (no contract change): the debug session of a launch whose exec
+# failed, thread records reaped while the program runs, no thread held by a session that is
+# over, io_submit read at most 256 entries deep, recvmmsg's state at most UIO_MAXIOV messages
+0094-antinomie-end-the-debug-session-of-a-launch-whose-exec-failed.patch
+0095-antinomie-reap-the-debugger-s-thread-records-while-the-program-runs.patch
+0096-antinomie-let-a-session-that-is-over-hold-no-thread.patch
+0097-antinomie-read-at-most-256-entries-of-an-io-submit-array.patch
+0098-antinomie-size-recvmmsg-s-capture-state-by-at-most-uio-maxiov-messages.patch

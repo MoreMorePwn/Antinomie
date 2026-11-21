@@ -413,6 +413,32 @@ impl Worker {
         }
     }
 
+    /// After the guest refused a Debug on start launch: a base before 0.9.0's
+    /// patch 0094 keeps the session it made for a launch whose exec failed,
+    /// with nobody to adopt it, and then refuses every later debug launch and
+    /// attach as busy (and polls at every tick). With no debugger attached, any
+    /// launch session not adopted yet is such a leftover: it is ended (its
+    /// program, if one were left, never ran an instruction).
+    pub(super) fn debug_end_unadopted_starts(&mut self) {
+        if self.debug.is_active() {
+            return;
+        }
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let mut link = WorkerLink {
+            session,
+            snapshot: &mut self.snapshot,
+            sender: &self.sender,
+        };
+        let Ok(sessions) = KernelDebugBackend::list_sessions(&mut link) else {
+            return;
+        };
+        for id in unadopted_starts(&sessions) {
+            let _ = link.request(wire::DETACH, &wire::detach_request(id, true));
+        }
+    }
+
     /// Find the sessions the guest holds and make a debugger of them: the
     /// breakpoints and the stopped threads are still there.
     fn debug_adopt_existing(&mut self) -> Option<String> {
@@ -493,6 +519,17 @@ impl Worker {
         self.publish();
         Some(message)
     }
+}
+
+/// The guest's launch sessions (Debug on start) no debugger has adopted yet:
+/// not a followed child (that has a parent session), not over.
+fn unadopted_starts(sessions: &[SessionInfo]) -> Vec<u64> {
+    sessions
+        .iter()
+        .filter(|info| info.child_pending && info.parent_session == 0)
+        .filter(|info| info.state != wire::STATE_EXITED && info.state != wire::STATE_EXEC)
+        .map(|info| info.session)
+        .collect()
 }
 
 #[cfg(test)]

@@ -398,11 +398,24 @@ decompressor reads the original line for its KASLR placement. The host is
 unchanged.
 
 **Symbols (0047).** `section_begin.o` and `section_end.o`, linked first and last
-in `kernel/antinomie`, put labels at the start and end of its `.text`,
-`.rodata`, `.data`, `.bss` and per-CPU sections (`sections.h`; the text labels
-are annotated as not being call targets for objtool). `ant_symbol_hidden()`
-answers for an address in one of these ranges or an `ant_*` name (the hooks
-elsewhere and their `__pfx_`, `__ksymtab_`, `__setup_` and initcall entries).
+in `kernel/antinomie`, put labels at the start and end of every kind of section
+its objects use (`sections.h`; the text labels are annotated as not being call
+targets for objtool, the end labels are weak so that kallsyms names the
+address they share with the next symbol by that symbol): `.text`,
+`.text.unlikely` (the `.cold` parts GCC splits off), `.rodata`,
+`.data..ro_after_init`, `.data`, `.data..read_mostly`, `.bss`, per-CPU, and
+the init sections `.init.text`, `.init.data`, `.init.rodata` and
+`.init.setup` (patch 0093; before it, the facade's and the boot age's boot
+options and settings, such as `facade_pci_param` and `pci_rules`, and Debian's
+`.cold` parts were listed). The kernel frees the init sections after boot but
+kallsyms keeps their names; an early initcall copies the labels' addresses
+into a table that is read-only after init, since code that stays may not refer
+to an init section. `ant_symbol_hidden()` answers for an address in one of
+these ranges or an `ant_*` name (the hooks elsewhere and their `__pfx_`,
+`__ksymtab_`, `__setup_` and initcall entries). Every kernel build runs
+`scripts/check-kernel-kallsyms.py`: a symbol of the recorder's objects outside
+every pair and not named like the recorder, or a name the series gives a stock
+file that only this kernel has, fails it.
 `/proc/kallsyms` skips those lines for every reader, root too, and
 `/proc/<pid>/wchan` shows 0 for them. The kernel's table is complete: oopses,
 `%pS`, kprobes, `kallsyms_lookup_name()` and the debugger are unaffected.
