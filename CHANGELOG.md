@@ -780,6 +780,8 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **Evidence storage no longer loses or blocks data in three edge cases (ANT-T0578).** A busy disk writer could put the end of one object-store segment into the next one at the wrong place, so those objects read back wrong; a huge process tree (about 35,000 processes) made the whole capture stop saving, and now processes.json is cut to fit and everything else keeps saving; a raw record the reader would refuse (under 128 bytes or over 262,112) is now counted and left out instead of making the archive unreadable.
+
 - **The BusyBox camera base has its own name, not "BusyBox" (ANT-T0576).** A base whose `bundle.json` has no name but carries a `device` record (the camera/DVR base) is now named "BusyBox camera" in the base list, pickers, run details, reports and memory dumps, matching its catalog label; bases already installed show it after the update, with no re-download.
 
 - **The digest of a large run no longer stalls while the run is open (ANT-T0575).** With a big run selected, the background digest could sit at "Reading the calls, pass 1 of 2: 1,024 of …" until the window had finished counting the run's calls (minutes for a million calls), and an index left half-built after the app was killed waited the same way. Opening the run's index no longer waits for the other readers of it, and the window's count reads the calls in short batches, so the digest, the count and an index that is still being finished all go on together. A digest that does have to wait for the index now says "Waiting for the run's index".
