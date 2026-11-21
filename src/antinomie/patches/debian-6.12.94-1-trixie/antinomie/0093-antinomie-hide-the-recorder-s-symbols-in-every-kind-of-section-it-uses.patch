@@ -15,18 +15,20 @@ Description: antinomie: hide the recorder's symbols in every kind of section it 
    __setup_str_*);
  - the cold parts GCC splits off functions into .text.unlikely
    (fatal_note.cold, field.cold, uevent_rewrite.cold and others with
-   Debian's configuration).
+   Debian's configuration);
+ - the flags of the *_once macros the headers' inline helpers use
+   (__already_done.N, in .data..once).
  .
  sections.h now labels those kinds too: .text.unlikely,
- .data..ro_after_init, .data..read_mostly, and the init sections
- .init.text, .init.data, .init.rodata and .init.setup. The kernel frees
- the init sections after boot and kallsyms keeps their names; the check
- compares addresses only, so it holds for them as well. Code that stays
- after boot may not refer to an init section (modpost), so an early
- initcall copies the labels' addresses into a table that is read-only
- after init. The end labels are weak: each shares its address with the
- first symbol linked after the directory, and kallsyms names an address
- by the first of its symbols, sorting a weak one last.
+ .data..ro_after_init, .data..read_mostly, .data..once, and the init
+ sections .init.text, .init.data, .init.rodata and .init.setup. The
+ kernel frees the init sections after boot and kallsyms keeps their
+ names; the check compares addresses only, so it holds for them as well.
+ Code that stays after boot may not refer to an init section (modpost),
+ so an early initcall copies the labels' addresses into a table that is
+ read-only after init. The end labels are weak: each shares its address
+ with the first symbol linked after the directory, and kallsyms names an
+ address by the first of its symbols, sorting a weak one last.
  .
  Two hooks in stock files had symbols of their own under other names:
  the blob /sys/firmware/fdt shows (drivers/of/fdt.c, arm64) is now
@@ -110,21 +112,22 @@ index 7256e15e1..5046d9393 100644
  #ifdef CONFIG_ANTINOMIE
  	if (live_core())
 diff --git a/kernel/antinomie/sections.h b/kernel/antinomie/sections.h
-index d369e6214..5c46b9e2b 100644
+index d369e6214..8c6bc6ba4 100644
 --- a/kernel/antinomie/sections.h
 +++ b/kernel/antinomie/sections.h
-@@ -4,30 +4,68 @@
+@@ -4,30 +4,72 @@
   * objects put symbols in. The linker keeps one directory's input sections of
   * a kind together and in link order, so each pair brackets exactly this
   * directory's functions and data (ant_symbol_hidden()).
 + *
 + * Every kind counts, not only .text, .rodata, .data and .bss: the init code
 + * and data the kernel frees after boot (kallsyms still lists their names),
-+ * what is read-only after init or read mostly, and the cold parts GCC splits
-+ * off a function (name.cold, in .text.unlikely). The kernel build checks that
-+ * no symbol of this directory lies outside every pair unless it is named like
-+ * the recorder (scripts/check-kernel-kallsyms.py); a section kind new to the
-+ * recorder needs its pair here.
++ * what is read-only after init or read mostly, the flags of the *_once
++ * macros (.data..once, from the headers' inline helpers too), and the cold
++ * parts GCC splits off a function (name.cold, in .text.unlikely). The kernel
++ * build checks that no symbol of this directory lies outside every pair
++ * unless it is named like the recorder (scripts/check-kernel-kallsyms.py); a
++ * section kind new to the recorder needs its pair here.
   */
  #ifndef ANT_SECTIONS_H
  #define ANT_SECTIONS_H
@@ -167,6 +170,8 @@ index d369e6214..5c46b9e2b 100644
 +	ANT_SECTION_LABEL(ant_data_##where, ANT_SECTION_BIND_##where, ".data", "\"aw\"", "");	\
 +	ANT_SECTION_LABEL(ant_read_mostly_##where, ANT_SECTION_BIND_##where,			\
 +			  ".data..read_mostly", "\"aw\"", "");					\
++	ANT_SECTION_LABEL(ant_once_##where, ANT_SECTION_BIND_##where, ".data..once",		\
++			  "\"aw\"", "");							\
 +	ANT_SECTION_LABEL(ant_bss_##where, ANT_SECTION_BIND_##where, ".bss",			\
 +			  "\"aw\",@nobits", "");						\
 +	ANT_SECTION_LABEL(ant_percpu_##where, ANT_SECTION_BIND_##where, ".data..percpu",	\
@@ -186,6 +191,7 @@ index d369e6214..5c46b9e2b 100644
 +extern const char ant_ro_after_init_begin[], ant_ro_after_init_end[];
  extern const char ant_data_begin[], ant_data_end[];
 +extern const char ant_read_mostly_begin[], ant_read_mostly_end[];
++extern const char ant_once_begin[], ant_once_end[];
  extern const char ant_bss_begin[], ant_bss_end[];
  extern const char ant_percpu_begin[], ant_percpu_end[];
 +extern const char ant_init_text_begin[], ant_init_text_end[];
@@ -194,7 +200,7 @@ index d369e6214..5c46b9e2b 100644
 +extern const char ant_init_setup_begin[], ant_init_setup_end[];
  #endif
 diff --git a/kernel/antinomie/stealth.c b/kernel/antinomie/stealth.c
-index fbc8de6d3..0ff69a057 100644
+index fbc8de6d3..0e5388c22 100644
 --- a/kernel/antinomie/stealth.c
 +++ b/kernel/antinomie/stealth.c
 @@ -7,10 +7,11 @@
@@ -213,7 +219,7 @@ index fbc8de6d3..0ff69a057 100644
   *
   * QEMU's own ACPI devices (HID QEMU0001 pvpanic, QEMU0002 fw_cfg, ...) are not
   * enumerated: no driver of this kernel uses them, and enumerated they appear
-@@ -83,15 +84,43 @@ void __init ant_cmdline_take(char *cmdline)
+@@ -83,15 +84,44 @@ void __init ant_cmdline_take(char *cmdline)
  
  static const struct {
  	const char *begin, *end;
@@ -225,6 +231,7 @@ index fbc8de6d3..0ff69a057 100644
 +	{ ant_ro_after_init_begin, ant_ro_after_init_end },
  	{ ant_data_begin, ant_data_end },
 +	{ ant_read_mostly_begin, ant_read_mostly_end },
++	{ ant_once_begin, ant_once_end },
  	{ ant_bss_begin, ant_bss_end },
  	/* Per-CPU symbols are offsets into the per-CPU area, in kallsyms too. */
  	{ ant_percpu_begin, ant_percpu_end },
@@ -258,7 +265,7 @@ index fbc8de6d3..0ff69a057 100644
  /* ant_* and what the build names after it: __pfx_ant_*, __ksymtab_ant_*,
   * __setup_ant_*, the initcall entries (__initcall__kmod_..._ant_*_init). */
  static bool ant_symbol_name(const char *name)
-@@ -104,8 +133,7 @@ bool ant_symbol_hidden(unsigned long address, const char *name)
+@@ -104,8 +134,7 @@ bool ant_symbol_hidden(unsigned long address, const char *name)
  	size_t i;
  
  	for (i = 0; i < ARRAY_SIZE(ant_sections); i++)

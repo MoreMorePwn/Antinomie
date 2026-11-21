@@ -233,8 +233,8 @@ def added_text(path):
 
 
 class SeriesTests(unittest.TestCase):
-    KINDS = {"text", "unlikely", "rodata", "ro_after_init", "data", "read_mostly", "bss", "percpu",
-             "init_text", "init_data", "init_rodata", "init_setup"}
+    KINDS = {"text", "unlikely", "rodata", "ro_after_init", "data", "read_mostly", "once", "bss",
+             "percpu", "init_text", "init_data", "init_rodata", "init_setup"}
 
     def test_sections_h_labels_every_kind_and_stealth_c_checks_every_pair(self):
         sections = added_text("kernel/antinomie/sections.h")
