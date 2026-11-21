@@ -534,6 +534,10 @@ impl Worker {
             Err(error) => {
                 if error.0 == RunState::FailedToStart {
                     self.analyze_refused_launch(request, &mut run, shape);
+                    // An older base keeps the session it made for the launch.
+                    if request.debug_on_start {
+                        self.debug_end_unadopted_starts();
+                    }
                 }
                 let session = self.session.as_mut().ok_or("VM is stopped")?;
                 return Err(session.failed_run_launch(&mut run, artifacts, error));

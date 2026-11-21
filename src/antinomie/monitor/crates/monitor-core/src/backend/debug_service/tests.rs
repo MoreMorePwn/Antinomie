@@ -122,3 +122,34 @@ fn a_paused_guest_makes_requests_wait_not_time_out() {
     request.reply.send(Ok(vec![7])).unwrap();
     assert_eq!(asker.join().unwrap().unwrap(), vec![7]);
 }
+
+#[test]
+fn only_launch_sessions_nobody_adopted_are_ended_after_a_refused_launch() {
+    let info = |session, state, child_pending, parent_session| SessionInfo {
+        session,
+        state,
+        options: Default::default(),
+        tgid: 100 + session as u32,
+        task_cookie: session,
+        start_boot_ns: 1,
+        parent_session,
+        child_pending,
+        shared_memory: false,
+        nonstop: false,
+        event_kind: 0,
+        event_sequence: 0,
+        threads: 1,
+        stopped_threads: 0,
+    };
+    let sessions = [
+        // A failed launch's leftover (a base before patch 0094): running, not adopted.
+        info(1, wire::STATE_RUNNING, true, 0),
+        // A session a debugger adopted.
+        info(2, wire::STATE_STOPPED, false, 0),
+        // A followed child nobody adopted yet: its parent's debugger decides.
+        info(3, wire::STATE_RUNNING, true, 1),
+        // Over already: the guest retires it by itself.
+        info(4, wire::STATE_EXITED, true, 0),
+    ];
+    assert_eq!(unadopted_starts(&sessions), vec![1]);
+}

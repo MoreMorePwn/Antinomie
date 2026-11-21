@@ -9,6 +9,7 @@
 //!   uring-check boots  BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE [COUNT]
 //!   uring-check legacy BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE
 //!   uring-check record BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE
+//!   uring-check bounds BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE
 //!
 //! WORKLOAD is the static `ant-workload` sample and FIXTURE the static
 //! `tests/monitor/uring-fixture` program. `status` runs every case with and
@@ -24,8 +25,14 @@
 //! requests, a script exec, the workload async-io module) on four vCPUs, stops the
 //! VM so the recordings are complete, and prints a `RUN label=directory` line
 //! for each; the ignored test `recorded_uring_triage` of the app's triage
-//! module reads them (see its documentation). The data folder must be new and
-//! disposable. Every result is a `RESULT` line.
+//! module reads them (see its documentation). `bounds` runs the 0.9.0 bug
+//! hunt's K1-01 and K1-02 calls (an `io_submit` of 2^20 entries on a context
+//! that does not exist, a `recvmmsg` with vlen 0xffffffff) and reads their
+//! recordings: each call ends as the kernel ends it, the recorder reads at most
+//! 4096 `io_submit` entries and records the rest as one field it did not read,
+//! `recvmmsg` is recorded at entry and exit, and the guest kernel log has no
+//! warning. The data folder must be new and disposable. Every result is a
+//! `RESULT` line.
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -715,6 +722,169 @@ fn record(bundle: &str, data: &str, workload: &str, fixture: &str) -> Result<(),
     Ok(())
 }
 
+/// The io_submit entries the recorder reads at most (patch 0097's
+/// ANT_AIO_SUBMIT_MAX); each is up to three fields.
+const AIO_SUBMIT_MAX: usize = 4096;
+/// ANT_RESOURCE_EXHAUSTED: a bound of the recorder's.
+const RESOURCE_EXHAUSTED: u32 = 8;
+
+/// The guest kernel log has no warning, oops or allocation failure report.
+fn kernel_log_clean(d: &mut Driver) -> Result<(), String> {
+    d.receive();
+    let path = d.snapshot.serial_log.clone().ok_or("no serial log")?;
+    let log = String::from_utf8_lossy(&fs::read(&path).map_err(|e| e.to_string())?).into_owned();
+    for marker in [
+        "WARNING:",
+        "Call Trace",
+        "page allocation failure",
+        "Oops",
+        "BUG:",
+    ] {
+        if let Some(at) = log.find(marker) {
+            let start = log[..at].rfind('\n').unwrap_or(0);
+            return Err(format!(
+                "the guest kernel reported {marker:?}:\n{}",
+                log[start..].chars().take(1500).collect::<String>()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every event of a recording.
+fn recorded_events(dir: &std::path::Path, scratch: PathBuf) -> Result<Vec<EventSummary>, String> {
+    use std::io::Read;
+    let mut assembler =
+        parser::Assembler::new(scratch.clone(), u64::MAX).map_err(|e| e.to_string())?;
+    assembler.set_arch(recording::Recording::raw(dir).guest_arch());
+    let mut reader = std::io::BufReader::new(
+        fs::File::open(dir.join("telemetry.raw")).map_err(|e| e.to_string())?,
+    );
+    let mut events = Vec::new();
+    let mut prefix = [0; 4];
+    while reader.read_exact(&mut prefix).is_ok() {
+        let mut packet = vec![0; u32::from_le_bytes(prefix) as usize];
+        if reader.read_exact(&mut packet).is_err() {
+            break;
+        }
+        if let Ok(Some(event)) = assembler.ingest(&packet) {
+            events.push(event);
+        }
+    }
+    let _ = fs::remove_dir_all(scratch);
+    Ok(events)
+}
+
+fn bounds(bundle: &str, data: &str, workload: &str, fixture: &str) -> Result<(), String> {
+    let mut d = prepare(
+        bundle,
+        data,
+        "capture bounds",
+        workload,
+        fixture,
+        STATUS_CPUS,
+    )?;
+    let mut runs = Vec::new();
+    for (label, needle) in [("aio-flood", "AIO FLOOD"), ("mmsg-flood", "MMSG FLOOD")] {
+        let id = d.launch(FIXTURE, &[label], false)?;
+        let watched = d.watch(&id, 120);
+        let line = d
+            .output(&id)
+            .lines()
+            .find(|line| line.starts_with(needle))
+            .unwrap_or_default()
+            .to_string();
+        result(format!(
+            "{label}: {} after {} ms; {line}",
+            d.describe(&id),
+            watched.elapsed.as_millis()
+        ));
+        if !watched.ended {
+            return Err(format!("{label} did not end"));
+        }
+        match d.execution(&id).and_then(|e| e.root_exit) {
+            Some(WaitStatus::Exited { code: 0 }) => {}
+            other => return Err(format!("{label} ended {other:?}: {line}")),
+        }
+        let directory = d.run(&id).ok_or("run missing")?.directory.clone();
+        runs.push((label, directory));
+    }
+    kernel_log_clean(&mut d)?;
+    // The recordings are complete when the VM has stopped.
+    d.command(Command::Stop)?;
+    d.wait("VM stop", 90, |s| s.state == VmState::Stopped)?;
+    thread::sleep(Duration::from_secs(2));
+    for (label, directory) in &runs {
+        let scratch = d.options.data_dir.join(format!("assemble-{label}"));
+        let events = recorded_events(directory, scratch)?;
+        if *label == "aio-flood" {
+            let calls: Vec<&EventSummary> = events
+                .iter()
+                .filter(|e| e.syscall_name == "io_submit" && e.phase == 1)
+                .collect();
+            let [call] = calls.as_slice() else {
+                return Err(format!("{} io_submit entries recorded", calls.len()));
+            };
+            let rest = format!("arg2.iocbpp[{AIO_SUBMIT_MAX}]");
+            if call.fields.len() > 3 * AIO_SUBMIT_MAX + 8 {
+                return Err(format!("io_submit recorded {} fields", call.fields.len()));
+            }
+            if !call
+                .fields
+                .iter()
+                .any(|f| f.key == rest && f.status == Some(RESOURCE_EXHAUSTED))
+            {
+                return Err(format!(
+                    "io_submit has no {rest} field marked RESOURCE_EXHAUSTED"
+                ));
+            }
+            let exit = events
+                .iter()
+                .find(|e| e.syscall_name == "io_submit" && e.phase == 2)
+                .ok_or("io_submit has no exit record")?;
+            if exit.result != Some(-22) {
+                return Err(format!("io_submit returned {:?}", exit.result));
+            }
+            result(format!(
+                "aio-flood: io_submit recorded with {} fields at entry, the rest as {rest}, result -EINVAL",
+                call.fields.len()
+            ));
+        } else {
+            let entry = events
+                .iter()
+                .find(|e| e.syscall_name == "recvmmsg" && e.phase == 1)
+                .ok_or("recvmmsg has no entry record")?;
+            let exit = events
+                .iter()
+                .find(|e| e.syscall_name == "recvmmsg" && e.phase == 2)
+                .ok_or("recvmmsg has no exit record")?;
+            if exit.result != Some(2) {
+                return Err(format!("recvmmsg returned {:?}", exit.result));
+            }
+            if entry
+                .fields
+                .iter()
+                .any(|f| f.key == "arg1.mmsg.context" && f.status == Some(RESOURCE_EXHAUSTED))
+            {
+                return Err("recvmmsg's state was refused (RESOURCE_EXHAUSTED)".into());
+            }
+            for index in 0..2 {
+                let key = format!("arg1.mmsg.{index}.header");
+                if !exit.fields.iter().any(|f| f.key == key) {
+                    return Err(format!("recvmmsg's exit lacks {key}"));
+                }
+            }
+            result(format!(
+                "mmsg-flood: recvmmsg recorded at entry ({} fields) and exit ({} fields), result 2",
+                entry.fields.len(),
+                exit.fields.len()
+            ));
+        }
+    }
+    println!("PASS bounds");
+    Ok(())
+}
+
 fn finish(mode: &str, failed: Vec<String>) -> Result<(), String> {
     if failed.is_empty() {
         println!("PASS {mode}");
@@ -835,6 +1005,7 @@ fn main() {
         ["status", bundle, data, workload, fixture] => status(bundle, data, workload, fixture),
         ["legacy", bundle, data, workload, fixture] => legacy(bundle, data, workload, fixture),
         ["record", bundle, data, workload, fixture] => record(bundle, data, workload, fixture),
+        ["bounds", bundle, data, workload, fixture] => bounds(bundle, data, workload, fixture),
         ["boots", bundle, data, workload, fixture] => boots(bundle, data, workload, fixture, 3),
         ["boots", bundle, data, workload, fixture, count] => count
             .parse()
@@ -842,7 +1013,7 @@ fn main() {
             .and_then(|count| boots(bundle, data, workload, fixture, count)),
         _ => {
             eprintln!(
-                "usage: uring-check status|legacy|record|boots BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE [COUNT]"
+                "usage: uring-check status|legacy|record|boots|bounds BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE [COUNT]"
             );
             std::process::exit(2);
         }

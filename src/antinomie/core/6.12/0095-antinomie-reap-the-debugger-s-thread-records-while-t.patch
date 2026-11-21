@@ -1,0 +1,248 @@
+From 8d891c6f6abcd658af92c7b4c6b0cd03a5560ff5 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 22 Nov 2026 01:12:29 +0700
+Subject: [PATCH] antinomie: reap the debugger's thread records while the
+ program runs
+
+A debug session keeps a record for each thread of the program, at most
+1024. Records of threads that had exited were let go only at a stop
+(do_stop()). A program that started and ended more than 1024 threads
+while the session ran without a stop (one long continue, or non-stop
+mode, which never stops the group) used them up: a new thread got no
+record, and when it reached an engine breakpoint the trap glue could
+neither adopt it nor tell its breakpoint from a foreign one, so the
+thread took a SIGTRAP and the program died.
+
+- When the session nears its bound (1024 records less the 32 spares) or
+  reaches it, the worker reaps the records of exited threads
+  (ant_dbg_reap(), new request W_REAP), and at a stop as before.
+- The reap holds dbg_lock, so no command handler holds a record it
+  found while it is freed, and the session's hw_lock, so no walk over
+  the records that sleeps (hw_sync(), hw_clear_all()) runs meanwhile. A
+  record whose hardware breakpoint events are not released yet waits
+  for the next reap instead of being freed with them.
+- A thread of the program that reaches an inserted breakpoint and
+  cannot have a record yet (all in use, no spare) executes the
+  instruction again instead of taking a SIGTRAP; adopt_current() asked
+  the worker to reap and refill, and the thread stops there once it has
+  a record.
+- Threads recorded by the worker after their creation get the
+  program's hardware breakpoints at once, not at the next stop.
+
+Found by the 0.9.0 bug hunt (KDBG-3). No contract change (revision 22).
+---
+ kernel/antinomie/debug.c | 104 ++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 93 insertions(+), 11 deletions(-)
+
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 59a906be8..ae12b9464 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -69,6 +69,7 @@
+ #define W_DETACH 4U
+ #define W_SYNC 8U
+ #define W_RUNSTOP 16U
++#define W_REAP 32U
+ #define SPARE_RECORDS 32U
+ #define HIST_ENTRIES 64U
+ 
+@@ -494,12 +495,36 @@ static struct ant_dbg_thread *record_alloc(struct ant_dbg *s, struct task_struct
+ 	return t;
+ }
+ 
++/* The records of threads that have exited are let go by the worker
++ * (ant_dbg_reap()) as soon as the session nears its bound or reaches it, not
++ * only at a stop: a program that starts and ends threads while it runs must
++ * keep getting records, or a new thread's breakpoint would be its SIGTRAP.
++ * s->lock held. Returns whether the worker has to run for it.
++ */
++static bool ant_dbg_reap_soon(struct ant_dbg *s)
++{
++	if (s->records < MAX_RECORDS - SPARE_RECORDS)
++		return false;
++	s->want |= W_REAP;
++	return true;
++}
++
++/* The worker runs for a session's request. A session never published is
++ * discarded without its reference count: its bits wait for nobody.
++ */
++static void ant_dbg_kick_worker(struct ant_dbg *s)
++{
++	if (READ_ONCE(s->published))
++		queue_work_ref(s);
++}
++
+ /* Add the record of a task unless there is one or there is no room. Returns the
+  * record in the list, or NULL; *error is -E2BIG when the bound is exceeded.
+  */
+ static struct ant_dbg_thread *record_add(struct ant_dbg *s, struct task_struct *task, int *error)
+ {
+ 	struct ant_dbg_thread *t, *old;
++	bool reap;
+ 
+ 	t = record_alloc(s, task);
+ 	if (!t) {
+@@ -513,16 +538,22 @@ static struct ant_dbg_thread *record_add(struct ant_dbg *s, struct task_struct *
+ 	rcu_read_unlock();
+ 	if (old || s->records == MAX_RECORDS) {
+ 		/* Adopted by the trap glue meanwhile, or no room. */
++		reap = !old && ant_dbg_reap_soon(s);
+ 		if (!old && error)
+ 			*error = -E2BIG;
+ 		spin_unlock_irq(&s->lock);
+ 		put_task_struct(task);
+ 		kfree(t);
++		if (reap)
++			ant_dbg_kick_worker(s);
+ 		return old;
+ 	}
+ 	s->records++;
+ 	list_add_tail_rcu(&t->node, &s->threads);
++	reap = ant_dbg_reap_soon(s);
+ 	spin_unlock_irq(&s->lock);
++	if (reap)
++		ant_dbg_kick_worker(s);
+ 	return t;
+ }
+ 
+@@ -593,10 +624,22 @@ static void free_record_rcu(struct rcu_head *rcu)
+ 	kfree(t);
+ }
+ 
++/* Whether a record still holds a hardware breakpoint event (s->hw_lock held). */
++static bool ant_dbg_record_hw(struct ant_dbg_thread *t)
++{
++	unsigned int slot;
++
++	for (slot = 0; slot < ANT_DBG_MAX_HW; slot++)
++		if (READ_ONCE(t->hw[slot]))
++			return true;
++	return false;
++}
++
+ /* Forget threads that have fully exited, so a program that starts and ends
+  * threads for a long time does not use up the session's records. A record is
+- * safe to free once the task is a zombie (its task_work can no longer run) and
+- * no callback is queued.
++ * safe to free once the task is a zombie (its task_work can no longer run), no
++ * callback is queued and its hardware events are released (the free cannot).
++ * s->hw_lock held.
+  */
+ static void reap_records(struct ant_dbg *s)
+ {
+@@ -604,7 +647,8 @@ static void reap_records(struct ant_dbg *s)
+ 
+ 	spin_lock_irq(&s->lock);
+ 	list_for_each_entry_safe(t, next, &s->threads, node) {
+-		if (!READ_ONCE(t->task->exit_state) || test_bit(0, &t->queued))
++		if (!READ_ONCE(t->task->exit_state) || test_bit(0, &t->queued) ||
++		    ant_dbg_record_hw(t))
+ 			continue;
+ 		list_del_rcu(&t->node);
+ 		s->records--;
+@@ -865,11 +909,14 @@ static struct ant_dbg_thread *adopt_current(struct ant_dbg *s)
+ 		t->state = T_RUNNING;
+ 		s->records++;
+ 		list_add_tail_rcu(&t->node, &s->threads);
+-		s->want |= W_SYNC;
++		ant_dbg_reap_soon(s);
++	} else {
++		/* None to hand out: the worker reaps exited threads first. */
++		s->want |= W_REAP;
+ 	}
++	s->want |= W_SYNC;
+ 	spin_unlock_irqrestore(&s->lock, flags);
+-	if (t)
+-		queue_work_ref(s);
++	queue_work_ref(s);
+ 	return t;
+ }
+ 
+@@ -977,6 +1024,15 @@ bool ant_dbg_trap_breakpoint(struct pt_regs *regs, unsigned long addr)
+ 			WRITE_ONCE(t->pending, ANTC_DEBUG_EVENT_BREAKPOINT);
+ 			queue_thread(s, t);
+ 			consumed = true;
++		} else if (!t && inserted && READ_ONCE(current->mm) == as->mm) {
++			/* A thread of the program that cannot have a record yet (all
++			 * in use or no spare; adopt_current() asked the worker to reap
++			 * and refill). The engine's byte must not be its SIGTRAP: it
++			 * executes the instruction again, and stops there as soon as
++			 * it gets a record (or runs it once the byte is out).
++			 */
++			ant_dbg_arch_set_pc(regs, addr);
++			consumed = true;
+ 		} else if (!t) {
+ 			consumed = repair_foreign(s, as, regs, addr);
+ 		} else if (recently_removed(as, addr)) {
+@@ -1130,18 +1186,33 @@ static void hw_clear_all(struct ant_dbg *s)
+ 	mutex_unlock(&s->hw_lock);
+ }
+ 
+-/* A thread that has exited has its events detached; release them. */
++/* A thread that has exited has its events detached; release them. s->hw_lock
++ * held.
++ */
+ static void hw_release_exited(struct ant_dbg *s)
+ {
+ 	struct ant_dbg_thread *t;
+ 	unsigned int slot;
+ 
+-	mutex_lock(&s->hw_lock);
+ 	for_each_record(t, s)
+ 		if (READ_ONCE(t->task->exit_state) && !test_bit(0, &t->queued))
+ 			for (slot = 0; slot < ANT_DBG_MAX_HW; slot++)
+ 				hw_unregister(t, slot);
++}
++
++/* Let go of the records of exited threads (the worker, at a stop and whenever
++ * the session nears its bound). Under dbg_lock, so no command handler holds a
++ * record it found, and s->hw_lock, so no walk that sleeps over the records
++ * (hw_sync(), hw_clear_all()) runs meanwhile.
++ */
++static void ant_dbg_reap(struct ant_dbg *s)
++{
++	mutex_lock(&dbg_lock);
++	mutex_lock(&s->hw_lock);
++	hw_release_exited(s);
++	reap_records(s);
+ 	mutex_unlock(&s->hw_lock);
++	mutex_unlock(&dbg_lock);
+ }
+ 
+ static unsigned int hw_used(struct ant_dbg *s)
+@@ -1724,8 +1795,7 @@ static void do_stop(struct ant_dbg *s)
+ 	}
+ 	s->state = ANTC_DEBUG_STOPPING;
+ 	spin_unlock_irq(&s->lock);
+-	hw_release_exited(s);
+-	reap_records(s);
++	ant_dbg_reap(s);
+ 	for (;;) {
+ 		spin_lock_irq(&s->lock);
+ 		seen = s->park_seq;
+@@ -2213,8 +2283,20 @@ static void dbg_work_fn(struct work_struct *work)
+ 			do_runstop(s);
+ 			continue;
+ 		}
+-		if (want & W_SYNC)
++		if (want & W_REAP)
++			ant_dbg_reap(s);
++		if (want & W_SYNC) {
+ 			sync_threads(s, false);
++			/* Threads recorded only now (none could be had at their
++			 * creation, or the trap glue adopted them) get the program's
++			 * hardware breakpoints too.
++			 */
++			if (hw_used(s)) {
++				mutex_lock(&s->hw_lock);
++				hw_sync(s);
++				mutex_unlock(&s->hw_lock);
++			}
++		}
+ 		if (want & W_STOP)
+ 			do_stop(s);
+ 		if (want & W_CONT)
+-- 
+2.53.0
+

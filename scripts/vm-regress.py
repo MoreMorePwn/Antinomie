@@ -524,6 +524,8 @@ def plan_x86_64(tier, ctx):
         vm_check("audit-core", "full", "audit-check", ["core", fix / "audit-fixture"]),
         vm_check("uring-status", "full", "uring-check", ["status", workload, urfix], timeout=3000),
         vm_check("uring-boots", "full", "uring-check", ["boots", workload, urfix], timeout=3000),
+        # The bug hunt's capture bounds: a huge io_submit nr and recvmmsg vlen.
+        vm_check("uring-bounds", "full", "uring-check", ["bounds", workload, urfix]),
         vm_check("uring-legacy", "full", "uring-check", ["legacy", workload, urfix], bundle=old_base,
                  timeout=3000, needs=("old_base",)),
         vm_check("tracer-record", "full", "tracer-check", ["record", fix / "tracer-fixture"]),

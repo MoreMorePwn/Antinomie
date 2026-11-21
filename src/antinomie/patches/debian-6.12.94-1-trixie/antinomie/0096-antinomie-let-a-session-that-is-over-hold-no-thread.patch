@@ -1,0 +1,84 @@
+Description: antinomie: let a session that is over hold no thread
+ A session without the EXEC option ends when its program executes a new
+ image: mark_unfollowed_exec() records the state EXEC at the exec and
+ lets every recorded thread go. The new image's threads still matched
+ the session, though: their first signal (a SIGCHLD, say) went to
+ ant_dbg_signal(), which parked the thread in a session no debugger
+ would continue, and it slept until the next detach or attach. The
+ signal hooks also kept queueing default-fatal signals for a debugger
+ that was gone.
+ .
+ - hook_session() finds no session for a thread of a session that is
+   over (EXITED or EXEC): signals, forks and execs take their normal
+   path.
+ - ant_dbg_wants_signals() is false for such a session.
+ - park_current() does not park in a session that is over; it checks
+   under the lock mark_unfollowed_exec() changes the state under, so a
+   thread that parked just before is released by it.
+ .
+ Found by the 0.9.0 bug hunt (KDBG-4). No contract change (revision 22).
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-22
+
+---
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index ae12b9464..4ea77ef0c 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -308,6 +308,7 @@ static void session_put(struct ant_dbg *s)
+ 
+ static void dbg_work_fn(struct work_struct *work);
+ static void retire_session(struct ant_dbg *old);
++static bool session_over(struct ant_dbg *s);
+ 
+ /* A zeroed session with its locks, queues and one reference. */
+ static struct ant_dbg *session_alloc(void)
+@@ -345,7 +346,9 @@ static struct ant_dbg *session_of(struct task_struct *task)
+ }
+ 
+ /* A hook's session for the running thread, with a reference, when it is to be
+- * debugged.
++ * debugged. A session that is over (the program exited, or executed a new
++ * image a session without the EXEC option does not follow) debugs nothing: its
++ * threads take their signals, forks and execs as if no debugger were there.
+  */
+ static struct ant_dbg *hook_session(void)
+ {
+@@ -353,7 +356,7 @@ static struct ant_dbg *hook_session(void)
+ 
+ 	rcu_read_lock();
+ 	s = session_of(current);
+-	if (s && (READ_ONCE(s->teardown) || READ_ONCE(s->run_stop_req) ||
++	if (s && (READ_ONCE(s->teardown) || READ_ONCE(s->run_stop_req) || session_over(s) ||
+ 		  !refcount_inc_not_zero(&s->refs)))
+ 		s = NULL;
+ 	rcu_read_unlock();
+@@ -1444,6 +1447,16 @@ static void park_current(struct ant_dbg *s, struct ant_dbg_thread *t, u32 pendin
+ 	}
+ 	WRITE_ONCE(t->vfork_wait, false);
+ 	spin_lock_irqsave(&s->lock, flags);
++	/* Nothing lets a thread go from a session that is over: an exec it does
++	 * not follow released every thread it had, and one that parked now would
++	 * sleep until the next detach or attach. (Checked under the lock that
++	 * mark_unfollowed_exec() changes the state under: a thread that parked
++	 * just before is released by it.)
++	 */
++	if (session_over(s)) {
++		spin_unlock_irqrestore(&s->lock, flags);
++		goto out;
++	}
+ 	t->reason = pending ?: ANTC_DEBUG_EVENT_INTERRUPT;
+ 	t->go = false;
+ 	t->epoch++;
+@@ -2227,7 +2240,8 @@ bool ant_dbg_wants_signals(struct task_struct *task)
+ 
+ 	rcu_read_lock();
+ 	s = session_of(task);
+-	wanted = s && !READ_ONCE(s->run_stop_req) && same_thread_group(task, s->leader);
++	wanted = s && !READ_ONCE(s->run_stop_req) && !session_over(s) &&
++		same_thread_group(task, s->leader);
+ 	rcu_read_unlock();
+ 	return wanted;
+ }

@@ -50,6 +50,18 @@
  *   vforknovm every third round clones a child with CLONE_VFORK and no
  *            CLONE_VM (its own copy of memory; the parent waits for it); the
  *            child calls child_site() twice and exits 7
+ *   churn    prints "churn ready" and waits for a 'g' line, then starts and
+ *            joins ROUNDS threads one after another; thread N calls
+ *            churn_site(N) when N is CHURN_FIRST_HIT (1100, past the engine's
+ *            1024 thread records) or a multiple of CHURN_EVERY (100) past it,
+ *            and after joining such a thread the main thread prints
+ *            "churn joined N" and waits for a 'g' line again; "churn done
+ *            ROUNDS" at the end, exit 0
+ *   exec-chld waits for a 'g' line after printing its identity, then execs
+ *            this program in mode leafchld
+ *   leafchld prints "leafchld pid=N", handles SIGCHLD, forks a child that
+ *            exits after 200 ms, waits for the signal, reaps the child, prints
+ *            "leafchld reaped" and exits 5
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -80,6 +92,7 @@ SITE(parent_site)
 SITE(child_site)
 SITE(leaf_site)
 SITE(grandchild_site)
+SITE(churn_site)
 
 __attribute__((noinline, used)) long work(long slot)
 {
@@ -166,14 +179,106 @@ static void *spawned(void *unused)
     return NULL;
 }
 
+#define CHURN_FIRST_HIT 1100
+#define CHURN_EVERY 100
+
+static int churn_hit(long index)
+{
+    return index >= CHURN_FIRST_HIT && (index - CHURN_FIRST_HIT) % CHURN_EVERY == 0;
+}
+
+static void *churner(void *index)
+{
+    if (churn_hit((long)index)) churn_site((long)index);
+    return NULL;
+}
+
+static volatile sig_atomic_t chld_seen;
+static void on_chld(int signal)
+{
+    (void)signal;
+    chld_seen = 1;
+}
+
 static void print_symbols(void)
 {
     printf("symbols parent_site=%p child_site=%p leaf_site=%p grandchild_site=%p work=%p"
-           " watched=%p counters=%p exit_syscall=%p pause_syscall=%p vfork_syscall=%p\n",
+           " watched=%p counters=%p exit_syscall=%p pause_syscall=%p vfork_syscall=%p"
+           " churn_site=%p\n",
            (void *)parent_site, (void *)child_site, (void *)leaf_site, (void *)grandchild_site,
            (void *)work, (void *)&watched, (void *)counters, (void *)exit_syscall,
-           (void *)pause_syscall, (void *)vfork_syscall);
+           (void *)pause_syscall, (void *)vfork_syscall, (void *)churn_site);
     fflush(stdout);
+}
+
+/* A 'g' on stdin (the line ends of earlier gates are skipped): the debugger
+ * is ready for what comes next. 0 at the end of input.
+ */
+static int gate(void)
+{
+    char byte = 0;
+    ssize_t count;
+    for (;;) {
+        count = read(STDIN_FILENO, &byte, 1);
+        if (count < 0 && errno == EINTR) continue;
+        if (count != 1) return 0;
+        if (byte == 'g') return 1;
+        if (byte != '\n') return 0;
+    }
+}
+
+static int churn(long threads)
+{
+    printf("churn ready\n");
+    fflush(stdout);
+    if (!gate()) return 98;
+    for (long i = 0; i < threads; i++) {
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, churner, (void *)i)) {
+            printf("churn create failed at %ld\n", i);
+            return 1;
+        }
+        pthread_join(thread, NULL);
+        if (churn_hit(i)) {
+            printf("churn joined %ld\n", i);
+            fflush(stdout);
+            if (!gate()) return 98;
+        }
+    }
+    printf("churn done %ld\n", threads);
+    return 0;
+}
+
+/* The image an unfollowed exec leaves: its first signal (SIGCHLD, handled)
+ * must be delivered, not held by a debug session that is over.
+ */
+static int leafchld(void)
+{
+    struct sigaction action;
+    sigset_t chld, old;
+    int status = 0;
+
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = on_chld;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGCHLD, &action, NULL);
+    sigemptyset(&chld);
+    sigaddset(&chld, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &chld, &old);
+    printf("leafchld pid=%d\n", (int)getpid());
+    fflush(stdout);
+    pid_t child = fork();
+    if (child == 0) {
+        usleep(200000);
+        _exit(0);
+    }
+    if (child < 0) return 1;
+    while (!chld_seen) sigsuspend(&old);
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    if (waitpid(child, &status, 0) != child) return 1;
+    printf("leafchld reaped\n");
+    fflush(stdout);
+    return 5;
 }
 
 static int leaf(void)
@@ -192,6 +297,7 @@ int main(int argc, char **argv)
     const char *mode = argc > 1 ? argv[1] : "fork";
     int exec_gate = !strcmp(mode, "exec-gated");
     if (exec_gate) mode = "exec";
+    int exec_chld = !strcmp(mode, "exec-chld");
     long rounds = argc > 2 ? strtol(argv[2], NULL, 10) : 60;
     long workers = argc > 3 ? strtol(argv[3], NULL, 10) : 0;
     pthread_t threads[MAX_WORKERS];
@@ -201,9 +307,20 @@ int main(int argc, char **argv)
     ssize_t length = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
     self_path[length > 0 ? length : 0] = 0;
     if (!strcmp(mode, "leaf")) return leaf();
+    if (!strcmp(mode, "leafchld")) return leafchld();
     print_symbols();
     printf("start\n");
     fflush(stdout);
+    if (!strcmp(mode, "churn")) return churn(rounds);
+    if (exec_chld) {
+        char *args[] = { self_path, "leafchld", NULL };
+        if (!gate()) return 98;
+        printf("exec now pid=%d\n", (int)getpid());
+        fflush(stdout);
+        execv(self_path, args);
+        printf("exec failed %d\n", errno);
+        return 1;
+    }
     if (!strcmp(mode, "nonstop") || !strcmp(mode, "exec"))
         for (long i = 0; i < workers; i++) pthread_create(&threads[i], NULL, worker, (void *)i);
     long lead = argc > 4 ? strtol(argv[4], NULL, 10) : 0;
