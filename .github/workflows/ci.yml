@@ -104,6 +104,7 @@ jobs:
           python3 scripts/sync-quilt-view.py --check
           python3 tests/monitor/test-publish-base-sources.py
           python3 tests/monitor/test-kernel-btf.py
+          python3 tests/monitor/test-kernel-kallsyms.py
           python3 tests/monitor/test-kernel-abi.py
           python3 scripts/test-refresh-monitor-bundle.py
           python3 scripts/test-full-pack.py

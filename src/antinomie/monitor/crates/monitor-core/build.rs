@@ -26,6 +26,7 @@ const KIT_FILES: &[&str] = &[
     "scripts/make-kernel-symbols.py",
     "scripts/check-kernel-btf.py",
     "scripts/check-kernel-abi.py",
+    "scripts/check-kernel-kallsyms.py",
     "src/antinomie/packaging/debian-6.12.94-1-trixie/adapter.conf",
     "src/antinomie/packaging/debian-6.12.94-1-trixie/module-signing.pem",
     "src/antinomie/packaging/debian-6.12.94-1-trixie/module-signing-arm64.pem",

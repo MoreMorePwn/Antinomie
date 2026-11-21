@@ -16,6 +16,11 @@
  * command line options, build string, symbols, worker thread names and the
  * shape of the launched process. "STEALTH-END" ends the output.
  *
+ * An optional argument names a file of symbol names only the recorder has,
+ * one per line (the list the guest kernel's build writes:
+ * scripts/check-kernel-kallsyms.py --write-names); kallsyms.antinomie then
+ * fails on any of them too.
+ *
  * Build: cc -static -O2 -Wall -Wextra -Werror tests/monitor/stealth-probe.c
  * (also aarch64-linux-gnu-gcc: the CPUID and I/O port checks are x86-64's, and
  * the timing checks read the virtual counter, cntvct_el0, for the TSC)
@@ -967,6 +972,79 @@ static int antinomie_symbol(const char *name)
 	       !strncmp(name, "antc_", 5) || antinomie_word(name) || strstr(name, "_ant_");
 }
 
+/* Names only the recorder's code has that the kernel's ant_symbol_name() does
+ * not match, so it hides them by their address alone: the guest facade's and
+ * the boot age's boot options and settings, cold parts GCC splits off
+ * recorder functions, the hooks' helpers in stock files. Generic ones (nvme,
+ * continuous, field) are left to the build's list. */
+static const char *const recorder_names[] = {
+	"pci_rules", "pci_rule_count", "board_sub", "board_sub_vendor", "board_sub_device",
+	"acpi_facade", "usb_facade", "drm_name", "efi_vendor", "hide_qemu_cdrom", "take_text",
+	"uevent_rewrite", "boot_age_s", "boot_age_param", "fatal_note", "async_fields",
+	"lifecycle_task_exit", "restore_byte", "insert_one", "of_fdt_raw_blob", "live_core",
+	"core_note_alloc",
+};
+static const char *const recorder_prefixes[] = { "facade_", "hide_qemu", "boot_age_" };
+/* The build's list (the optional argument). */
+static char **build_names;
+static size_t build_count;
+
+static void read_build_names(const char *path)
+{
+	FILE *file = fopen(path, "r");
+	char line[256];
+	size_t room = 0;
+
+	if (!file) {
+		report("skip", "kallsyms.names", strerror(errno));
+		return;
+	}
+	while (fgets(line, sizeof(line), file)) {
+		line[strcspn(line, "\r\n")] = '\0';
+		if (!*line || *line == '#')
+			continue;
+		if (build_count == room) {
+			char **more = realloc(build_names, (room = room ? 2 * room : 256) * sizeof(*more));
+
+			if (!more)
+				break;
+			build_names = more;
+		}
+		if (!(build_names[build_count] = strdup(line)))
+			break;
+		build_count++;
+	}
+	fclose(file);
+	reportf("info", "kallsyms.names", "%zu names from %s", build_count, path);
+}
+
+/* A name only the recorder has: the build's list as written, or the list
+ * above without what the build adds around a name (__pfx_, __setup_str_,
+ * __setup_ before it; .cold, .constprop.N, .isra.N, .part.N after it). */
+static int recorder_only_symbol(const char *name)
+{
+	static const char *const added[] = { "__pfx_", "__setup_str_", "__setup_" };
+	char base[256];
+	size_t i;
+
+	for (i = 0; i < build_count; i++)
+		if (!strcmp(name, build_names[i]))
+			return 1;
+	for (i = 0; i < sizeof(added) / sizeof(added[0]); i++)
+		if (!strncmp(name, added[i], strlen(added[i]))) {
+			name += strlen(added[i]);
+			break;
+		}
+	snprintf(base, sizeof(base), "%.*s", (int)strcspn(name, "."), name);
+	for (i = 0; i < sizeof(recorder_names) / sizeof(recorder_names[0]); i++)
+		if (!strcmp(base, recorder_names[i]))
+			return 1;
+	for (i = 0; i < sizeof(recorder_prefixes) / sizeof(recorder_prefixes[0]); i++)
+		if (!strncmp(base, recorder_prefixes[i], strlen(recorder_prefixes[i])))
+			return 1;
+	return 0;
+}
+
 static void check_kallsyms(void)
 {
 	FILE *file = fopen("/proc/kallsyms", "r");
@@ -985,7 +1063,7 @@ static void check_kallsyms(void)
 		total++;
 		if (strspn(address, "0") == strlen(address))
 			zero++;
-		if (antinomie_symbol(name)) {
+		if (antinomie_symbol(name) || recorder_only_symbol(name)) {
 			hits++;
 			if (strncmp(name, "__pfx_", 6))
 				printf("STEALTH-DETAIL kallsyms %s %s\n", type, name);
@@ -1898,8 +1976,8 @@ int main(int argc, char **argv)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	printf("STEALTH-BEGIN uid %d euid %d\n", getuid(), geteuid());
-	(void)argc;
-	(void)argv;
+	if (argc > 1)
+		read_build_names(argv[1]);
 	check_self();
 	check_residency();
 	check_cpuid();

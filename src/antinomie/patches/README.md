@@ -1,7 +1,7 @@
 # The Antinomie guest kernel patch series
 
 The guest kernel is Debian's `linux` 6.12.94-1 (trixie) with Antinomie's own
-patch series on top. The series is fifty-four topic patches; each one adds one
+patch series on top. The series is fifty-five topic patches; each one adds one
 part of the design and says, in its description, what it adds, why, which
 existing kernel files it hooks and why there, and which contract revision it
 belongs to.
@@ -89,6 +89,7 @@ changes. Line counts are added/removed lines of the patch.
 | 57 | read non-resident pages into a live core on request, and count what a core lacks (contract revision 22) | +93 -10 | none (`manual_core.c`: policy NONRESIDENT, `get_dump_page()`, the page counts; `process_core.c`: the counts, CORE_STATUS COVERAGE, CORE_CAPS; `process_core.h`, `control_wire.h`) | none |
 | 91 | record where a read or write began from the position the call was given (no contract change) | +26 -12 | none (`fileops.c`: the start is the given position unless the file system moved it, as an append does) | `fs/read_write.c` (`vfs_read()`, `vfs_write()`, `vfs_readv()`, `vfs_writev()` note the position they were given), `include/linux/antinomie_monitor.h` |
 | 92 | count queued file hashes as a run's pending work, also over a task's exit (no contract change) | +54 | none (`hash.c`: `job_count()`, the count let go in `job_free()`; `run.c`: one pending operation per exiting task of a run that hashes writes, `ant_monitor_files_closed()`; `state.h`: `files_closing`) | `kernel/exit.c` (`do_exit()` after `exit_task_work()`), `include/linux/antinomie_monitor.h` |
+| 93 | hide the recorder's symbols in every kind of section it uses (no contract change) | +94 -26 | none (`sections.h`: label pairs for `.text.unlikely`, `.data..ro_after_init`, `.data..read_mostly`, `.init.text`, `.init.data`, `.init.rodata`, `.init.setup`, weak end labels; `stealth.c`: `ant_section_labels[]`, `ant_stealth_init()`) | `drivers/of/fdt.c` (`ant_fdt_raw_blob`), `fs/binfmt_elf.c` (`live_core()`, `core_note_alloc()` always inline) |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`
