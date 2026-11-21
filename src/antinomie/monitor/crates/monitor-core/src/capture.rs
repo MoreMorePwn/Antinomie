@@ -95,7 +95,7 @@ impl CaptureSession {
         if self.processes.take_changed()
             && let Err(error) = storage::queue_json(
                 &self.summary.directory.join(PROCESSES_FILE),
-                &self.processes.list(),
+                &fit_processes(self.processes.list(), LIVE_PROCESSES_BYTES),
             )
         {
             self.storage_error(error);
@@ -114,7 +114,7 @@ impl CaptureSession {
         }
         storage::atomic_json(
             &self.summary.directory.join(PROCESSES_FILE),
-            &self.processes.list(),
+            &fit_processes(self.processes.list(), FINAL_PROCESSES_BYTES),
         )?;
         storage::atomic_json(&self.summary.directory.join("capture.json"), &self.summary)?;
         storage::atomic_json(
@@ -131,6 +131,37 @@ impl CaptureSession {
 }
 
 const PROCESSES_FILE: &str = "processes.json";
+/// Size budgets for processes.json: the queued live copy stays under the JSON
+/// queue's 8 MiB cap, the final one under the reader's 64 MiB cap.
+const LIVE_PROCESSES_BYTES: usize = 7 * 1024 * 1024;
+const FINAL_PROCESSES_BYTES: usize = 48 * 1024 * 1024;
+
+/// The process list cut to the first processes (by pid) that fit `budget`
+/// bytes of pretty JSON, so a huge tree never makes the save fail and stop
+/// the capture's other recording.
+fn fit_processes(mut list: Vec<CaptureProcess>, budget: usize) -> Vec<CaptureProcess> {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    loop {
+        let mut counter = Counter(0);
+        if serde_json::to_writer_pretty(&mut counter, &list).is_err() {
+            return list;
+        }
+        if counter.0 <= budget || list.len() <= 1 {
+            return list;
+        }
+        let keep = (list.len() as u128 * budget as u128 / counter.0 as u128) as usize;
+        list.truncate(keep.min(list.len() - 1).max(1) * 9 / 10 + 1);
+    }
+}
 
 /// The process tree a capture saved; empty for captures before Antinomie 0.3.0.
 pub fn capture_processes(directory: &Path) -> Result<Vec<CaptureProcess>, String> {
@@ -289,6 +320,48 @@ mod tests {
         packet[128..136].copy_from_slice(&99u64.to_le_bytes());
         packet[136..144].copy_from_slice(&17u64.to_le_bytes());
         packet
+    }
+    #[test]
+    fn a_huge_process_tree_is_saved_cut_and_the_capture_keeps_saving() {
+        let root = std::env::temp_dir().join(format!("ant-capture-tree-{}", storage::unique_id()));
+        let mut capture = CaptureSession::new(summary(root.clone()), 1 << 30).unwrap();
+        capture.observe_identity(17, 9).unwrap();
+        let processes = (1..=40_000u32)
+            .map(|pid| CaptureProcess {
+                pid,
+                parent_pid: pid.saturating_sub(1),
+                name: format!("worker-{pid}"),
+                exe: Some(format!("/usr/lib/some/long/path/to/worker-{pid}")),
+                args: vec![format!("worker-{pid}"), "--flag=value".into()],
+                packets: 1,
+                ..CaptureProcess::default()
+            })
+            .collect::<Vec<_>>();
+        capture.processes.restore_baseline(processes);
+        capture.persist_processes();
+        assert_eq!(capture.capture.error, None);
+        assert_eq!(capture.summary.recording_error, None);
+        assert!(capture.can_save());
+        assert!(capture.capture.append(&packet(1)));
+        capture.finalize(&Health::default()).unwrap();
+        let saved = capture_processes(&root).unwrap();
+        assert!(!saved.is_empty());
+        assert_eq!(saved[0].pid, 1);
+        drop(capture);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_process_list_is_cut_to_its_byte_budget_and_kept_when_it_fits() {
+        let list = (1..=1000u32)
+            .map(|pid| CaptureProcess {
+                pid,
+                ..CaptureProcess::default()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(fit_processes(list.clone(), usize::MAX).len(), 1000);
+        let cut = fit_processes(list, 50_000);
+        assert!(!cut.is_empty() && cut.len() < 1000);
+        assert!(serde_json::to_vec_pretty(&cut).unwrap().len() <= 50_000);
     }
     #[test]
     fn stopped_archive_accepts_late_tails_without_terminal_or_fake_run() {
