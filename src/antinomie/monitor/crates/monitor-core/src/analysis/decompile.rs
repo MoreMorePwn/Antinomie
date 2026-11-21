@@ -927,6 +927,30 @@ public class AntinomieCoreExport extends GhidraScript {
 }
 "#;
 
+/// Ghidra's auto-analysis budget on a captured core, in seconds.
+const CORE_ANALYSIS_SECS: u64 = 90;
+/// The script's decompile budget on a captured core, in seconds.
+const CORE_EXPORT_SECS: u64 = 90;
+/// Headroom for the JVM start, the import and the project save, in seconds.
+const CORE_OVERHEAD_SECS: u64 = 90;
+/// The sandbox kill: both budgets plus the overhead, so the script ends on its
+/// own budget and the partial export it flushed is never discarded by the kill.
+const CORE_KILL_SECS: u64 = CORE_ANALYSIS_SECS + CORE_EXPORT_SECS + CORE_OVERHEAD_SECS;
+
+/// An export is usable only when it holds at least one function. The script
+/// always writes the base line first, so a header-only export (or one with
+/// only the timeout marker) must not replace an earlier good export.
+fn check_core_export(text: &str) -> Result<(), String> {
+    if text
+        .lines()
+        .any(|line| line.starts_with(MARK_FUNCTION.trim_end()))
+    {
+        Ok(())
+    } else {
+        Err("Ghidra export has no function marker; prior export preserved.".into())
+    }
+}
+
 /// Decompile captured core bytes through the analysis tool runner.
 /// The original core file is not imported as an executable. A mappings text
 /// file is not consulted. Returns the export text only after a successful run.
@@ -999,9 +1023,9 @@ pub fn decompile_captured_core(
             "-postScript".into(),
             "AntinomieCoreExport.java".into(),
             export_s.clone(),
-            "90".into(),
+            CORE_EXPORT_SECS.to_string(),
             "-analysisTimeoutPerFile".into(),
-            "90".into(),
+            CORE_ANALYSIS_SECS.to_string(),
             "-max-cpu".into(),
             "4".into(),
         ];
@@ -1015,7 +1039,7 @@ pub fn decompile_captured_core(
             work,
             &extra,
             &env,
-            Duration::from_secs(180),
+            Duration::from_secs(CORE_KILL_SECS),
             cancel,
         )
         .map_err(|error| format!("Ghidra: {error} sparse-plan.txt is not a load result."))?;
@@ -1034,14 +1058,7 @@ pub fn decompile_captured_core(
         }
         let text = String::from_utf8(captured)
             .map_err(|error| format!("Ghidra export is not UTF-8: {error}"))?;
-        if !text
-            .lines()
-            .any(|line| line.starts_with("@@ANTINOMIE-FUNCTION"))
-            && !text.contains("@@ANTINOMIE-TIMEOUT")
-            && !text.contains("@@ANTINOMIE-BASE")
-        {
-            return Err("Ghidra export has no function marker.".into());
-        }
+        check_core_export(&text)?;
         // A retry must not replace a prior successful export or project until the
         // new result is complete, bounded, and valid. copy_project verifies actual
         // native project members before a directory becomes the retained interface.
@@ -1158,6 +1175,23 @@ mod sparse_tests {
         }
         image.extend_from_slice(&payload);
         image
+    }
+
+    #[test]
+    fn a_header_only_export_is_rejected_so_the_prior_export_stays() {
+        assert!(check_core_export("@@ANTINOMIE-BASE\t4194304\n").is_err());
+        assert!(check_core_export("@@ANTINOMIE-BASE\t4194304\n@@ANTINOMIE-TIMEOUT\n").is_err());
+        assert!(check_core_export("").is_err());
+        assert!(
+            check_core_export("@@ANTINOMIE-BASE\t1\n@@ANTINOMIE-FUNCTION\t1\t2\tmain\nint x;\n")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_core_sandbox_kill_covers_both_ghidra_budgets() {
+        let kill = std::hint::black_box(CORE_KILL_SECS);
+        assert!(kill >= CORE_ANALYSIS_SECS + CORE_EXPORT_SECS + 60);
     }
 
     #[test]

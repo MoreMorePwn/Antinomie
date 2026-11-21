@@ -529,7 +529,7 @@ fn dependency_closure(rules: &[IndexedRule], disabled: &BTreeSet<String>) -> BTr
     blocked
 }
 
-fn emitted_ids(engine: &str, text: &str) -> BTreeSet<String> {
+pub(super) fn emitted_ids(engine: &str, text: &str) -> BTreeSet<String> {
     match engine {
         "yara" => yara_blocks(text)
             .into_iter()
@@ -537,7 +537,8 @@ fn emitted_ids(engine: &str, text: &str) -> BTreeSet<String> {
             .collect(),
         "sigma" => text
             .split("\n---\n")
-            .filter_map(|doc| meta_line(doc, "id"))
+            .filter(|doc| doc.contains("title:"))
+            .map(sigma_rule_id)
             .collect(),
         _ => ids_blocks(text).into_iter().map(|(sid, _)| sid).collect(),
     }
@@ -607,7 +608,7 @@ pub(super) fn filter_rules(engine: &str, text: &str, ids: &[&str]) -> String {
         }
         "sigma" => {
             for doc in text.split("\n---\n") {
-                let id = meta_line(doc, "id").unwrap_or_default();
+                let id = sigma_rule_id(doc);
                 if ids.contains(&id.as_str()) {
                     if !out.is_empty() {
                         out.push_str("\n---\n");

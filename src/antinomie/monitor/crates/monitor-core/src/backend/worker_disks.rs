@@ -544,9 +544,7 @@ impl Worker {
         if !analysis.enabled {
             return Err("static analysis is not selected".into());
         }
-        if self.snapshot.analysis_reports.len() >= 8 {
-            return Err("the eight standalone analysis limit is reached".into());
-        }
+        self.make_room_for_analysis()?;
         let metadata =
             fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
         if !metadata.file_type().is_file() {
@@ -618,25 +616,7 @@ impl Worker {
     /// samples one after another (a job runner) lets the oldest finished one
     /// go; only eight unfinished ones refuse.
     fn make_room_for_analysis(&mut self) -> Result<(), String> {
-        let reports = &mut self.snapshot.analysis_reports;
-        if reports.len() < 8 {
-            return Ok(());
-        }
-        let finished = |report: &crate::analysis::AnalysisReport| {
-            !matches!(
-                report.state,
-                crate::analysis::AnalysisState::Acquiring
-                    | crate::analysis::AnalysisState::Queued
-                    | crate::analysis::AnalysisState::Running
-            )
-        };
-        match reports.iter().position(finished) {
-            Some(index) => {
-                reports.remove(index);
-                Ok(())
-            }
-            None => Err("eight analyses are still running; wait for one to finish".into()),
-        }
+        make_room_for_report(&mut self.snapshot.analysis_reports)
     }
 
     /// Queue checks that a finished analysis in `directory` does not have. The
@@ -717,3 +697,28 @@ impl Worker {
 
 #[cfg(test)]
 mod tests;
+
+/// Let the oldest finished standalone report go when the snapshot holds eight;
+/// only eight unfinished ones refuse (the three standalone-analysis commands).
+pub(super) fn make_room_for_report(
+    reports: &mut Vec<crate::analysis::AnalysisReport>,
+) -> Result<(), String> {
+    if reports.len() < 8 {
+        return Ok(());
+    }
+    let finished = |report: &crate::analysis::AnalysisReport| {
+        !matches!(
+            report.state,
+            crate::analysis::AnalysisState::Acquiring
+                | crate::analysis::AnalysisState::Queued
+                | crate::analysis::AnalysisState::Running
+        )
+    };
+    match reports.iter().position(finished) {
+        Some(index) => {
+            reports.remove(index);
+            Ok(())
+        }
+        None => Err("eight analyses are still running; wait for one to finish".into()),
+    }
+}

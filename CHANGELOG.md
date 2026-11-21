@@ -780,6 +780,11 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **Sigma rules without an `id:` can be enabled (ANT-T0579).** They all shared the id `missing-id`, so none could be turned on and the profile held no rules. Each now gets a stable id made from its text.
+- **A captured-core decompile that finds no function keeps the earlier export (ANT-T0579).** A header-only Ghidra export used to replace a good one. It is now refused, and the Ghidra time limit on a captured core covers both of its time budgets, so a slow run no longer loses its partial export.
+- **A YARA scan of recovered files stops at its time budget and keeps what it found (ANT-T0579).** The sandbox used to kill the scan and drop every finding. The report is now marked partial with a note, and no longer says the dump had no recovered files when the file search ran out of time.
+- **Analyze Only and Analyze host file no longer refuse a ninth analysis for the rest of the session (ANT-T0579).** They drop the oldest finished report to make room, as Samples > Analyze does, and the refusal when eight are still running no longer blames the VM boot.
+
 - **The BusyBox camera base has its own name, not "BusyBox" (ANT-T0576).** A base whose `bundle.json` has no name but carries a `device` record (the camera/DVR base) is now named "BusyBox camera" in the base list, pickers, run details, reports and memory dumps, matching its catalog label; bases already installed show it after the update, with no re-download.
 
 - **The digest of a large run no longer stalls while the run is open (ANT-T0575).** With a big run selected, the background digest could sit at "Reading the calls, pass 1 of 2: 1,024 of …" until the window had finished counting the run's calls (minutes for a million calls), and an index left half-built after the app was killed waited the same way. Opening the run's index no longer waits for the other readers of it, and the window's count reads the calls in short batches, so the digest, the count and an index that is still being finished all go on together. A digest that does have to wait for the index now says "Waiting for the run's index".
