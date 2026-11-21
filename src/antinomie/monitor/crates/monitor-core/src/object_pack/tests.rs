@@ -306,3 +306,31 @@ fn an_index_growing_while_it_is_read_is_read_again() {
     );
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn a_segment_roll_with_a_full_writer_queue_keeps_every_chunk_where_it_was_placed() {
+    let slow = writer::held::SlowWriter::install_with_limit(600);
+    slow.pause();
+    let root = directory("roll-full-queue");
+    let mut pack = PackWriter::new(root.clone(), writer::error_slot());
+    pack.set_segment_size(150);
+    let mut keys = Vec::new();
+    for call in 1..=6u64 {
+        let key = key(call, 1);
+        let mut field = None;
+        store(&mut pack, &key, &mut field, 0, &[call as u8; 100]);
+        keys.push(key);
+    }
+    slow.resume();
+    pack.sync().unwrap();
+    for (index, key) in keys.iter().enumerate() {
+        assert_eq!(
+            read_field_range(&root, key, 0, 100).unwrap().unwrap(),
+            vec![index as u8 + 1; 100],
+            "chunk {index}"
+        );
+    }
+    drop(pack);
+    drop(slow);
+    fs::remove_dir_all(root).unwrap();
+}

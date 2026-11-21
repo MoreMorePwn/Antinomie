@@ -36,11 +36,15 @@ pub struct RawCapture {
     quota: u64,
     pub packets: u64,
     pub bytes: u64,
+    /// Records left out because their length is one the reader refuses.
+    pub skipped: u64,
     pub error: Option<String>,
     pub final_health: Option<Health>,
     /// The guest kernel's INFO answer, recorded in the manifest.
     pub guest_kernel: Option<crate::api::GuestKernel>,
 }
+/// The record lengths `recording::next_packet` accepts.
+pub(crate) const RAW_PACKET_LENGTHS: std::ops::RangeInclusive<usize> = 128..=262112;
 /// Buffered raw packet bytes that trigger a write before the next flush.
 const RAW_BUFFER: usize = 1024 * 1024;
 impl Drop for RawCapture {
@@ -88,6 +92,7 @@ impl RawCapture {
             quota,
             packets: 0,
             bytes: 0,
+            skipped: 0,
             error: Some("recording sealed".into()),
             final_health: None,
             guest_kernel: None,
@@ -112,6 +117,7 @@ impl RawCapture {
             quota,
             packets: 0,
             bytes: 0,
+            skipped: 0,
             error: None,
             final_health: None,
             guest_kernel: None,
@@ -123,6 +129,12 @@ impl RawCapture {
     pub fn append_with_reserved(&mut self, packet: &[u8], reserved_len: u64) -> bool {
         if self.error.is_some() {
             return false;
+        }
+        // The reader refuses the whole archive at a record outside this
+        // range, so such a record is counted and never written.
+        if !RAW_PACKET_LENGTHS.contains(&packet.len()) {
+            self.skipped += 1;
+            return true;
         }
         let Some(total) = self
             .bytes

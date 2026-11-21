@@ -185,7 +185,9 @@ fn packet_key(packet: &[u8]) -> Option<(parser::Header, InvocationKey)> {
     Some((header, key))
 }
 
-fn next_packet(reader: &mut BufReader<File>) -> Result<Option<(u64, Vec<u8>)>, RecordingError> {
+pub(crate) fn next_packet(
+    reader: &mut BufReader<File>,
+) -> Result<Option<(u64, Vec<u8>)>, RecordingError> {
     let offset = reader.stream_position()?;
     let mut prefix = [0; 4];
     let first = reader.read(&mut prefix)?;
@@ -194,7 +196,7 @@ fn next_packet(reader: &mut BufReader<File>) -> Result<Option<(u64, Vec<u8>)>, R
     }
     reader.read_exact(&mut prefix[first..])?;
     let size = u32::from_le_bytes(prefix) as usize;
-    if !(128..=262112).contains(&size) {
+    if !crate::storage::RAW_PACKET_LENGTHS.contains(&size) {
         return Err(RecordingError::Limit("invalid raw packet length"));
     }
     let mut packet = vec![0; size];

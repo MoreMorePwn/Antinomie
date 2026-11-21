@@ -884,10 +884,7 @@ mod tests {
         assert!(first_end.is_some());
         run.record_tree_completion();
         assert_eq!(run.ended_ms, first_end);
-        assert!(
-            run.capture
-                .append(b"late telemetry after process completion")
-        );
+        assert!(run.capture.append(&[b'l'; 128]));
         assert!(run.output(b"late terminal tail", 65536).is_ok());
         run.finalize(65536, "vm-stop", &Health::default()).unwrap();
         assert_eq!(run.summary.state, RunState::Finished);
@@ -953,7 +950,7 @@ mod tests {
             analysis: None,
         };
         let mut run = ProgramRun::new(summary, 65536).unwrap();
-        assert!(run.capture.append(b"telemetry"));
+        assert!(run.capture.append(&[b't'; 128]));
         // Not saved while the terminal is open.
         assert!(!run.seal_if_complete());
         run.eof(65536).unwrap();
