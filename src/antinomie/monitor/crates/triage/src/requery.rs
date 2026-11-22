@@ -10,9 +10,22 @@
 //! filter, sort or page, and is copied from the index the rows belong to.
 use super::*;
 
+/// The operation tabs in slot order from 8.
+const OPERATION_TABS: [FileTab; FILE_TABS] = [
+    FileTab::Created,
+    FileTab::Written,
+    FileTab::Deleted,
+    FileTab::Renamed,
+    FileTab::Executed,
+    FileTab::Attributes,
+    FileTab::Probed,
+    FileTab::Other,
+];
+
 /// The filter, sort and page each table of an index was made with.
 #[derive(Clone, PartialEq)]
 pub struct Shown {
+    visibility: file_visibility::FileVisibility,
     filters: [String; SLOTS],
     sorts: [Option<sorting::Spec>; SLOTS],
     offsets: [usize; SLOTS],
@@ -21,6 +34,7 @@ pub struct Shown {
 impl Shown {
     pub fn of(request: &ScanRequest) -> Self {
         Self {
+            visibility: request.file_visibility,
             filters: request.filters.clone(),
             sorts: request.sorts,
             offsets: request.offsets,
@@ -29,7 +43,10 @@ impl Shown {
 
     /// Table `slot` is asked for as it was made.
     fn same(&self, slot: usize, request: &ScanRequest) -> bool {
-        self.filters[slot] == request.filters[slot]
+        // A Files chip changes what every file table lists and counts.
+        (!(slot == 1 || slot == 2 || slot == 5 || (8..8 + FILE_TABS).contains(&slot))
+            || self.visibility == request.file_visibility)
+            && self.filters[slot] == request.filters[slot]
             && self.sorts[slot] == request.sorts[slot]
             && self.offsets[slot] == request.offsets[slot]
     }
@@ -66,14 +83,22 @@ fn derive(
 
     // The findings table, the behaviour tally and the graph: the engine's rows
     // narrowed by the chips and the filter.
+    let variant = &index.variants[usize::from(request.finding_view.show_info)];
+    data.counts.findings = variant.badge;
+    data.counts.finding_tiers = variant.tiers;
+    data.counts.findings_hidden = variant.hidden;
+    data.counts.findings_suppressed = variant.suppressed;
+    data.counts.findings_capped = variant.capped;
+    data.suspicious = variant.suspicious.clone();
+    data.flagged_paths = variant.flagged_paths.clone();
     let mut graph = graph::Collector::new(&data.process, request.finding_view);
-    for mark in &index.info {
+    for mark in &variant.info {
         graph.count_info(&request.finding_view, mark);
     }
     let mut finding_page = sorting::Page::new(request, 0, cancel);
     let finding_query = query::compile_table(&request.filters[0], FINDING_FIELDS);
     let mut tally = crate::digest::Tally::default();
-    for finding in &index.findings {
+    for finding in &variant.findings {
         let in_table = rules::view_keeps(&request.finding_view, &finding.values)
             && finding_query.keep_table(&finding.values);
         graph.push(finding, in_table);
@@ -88,14 +113,50 @@ fn derive(
     data.findings_omitted = findings_omitted;
     data.behaviour = Some(tally.finish());
 
-    // The file tables.
+    // The file tables, with the Files chips as the request has them: what a
+    // table lists and what its counts say are made from the same rows.
+    let file_table = |slot: usize, data: &mut ScanData| -> Result<(Vec<Vec<Cell>>, u64), String> {
+        let query = query::compile_table(&request.filters[slot], FILE_FIELDS);
+        let mut page = sorting::Page::<Vec<Cell>>::new(request, slot, cancel);
+        let (mut listed, mut count) = (0u64, file_visibility::VisibilityCount::default());
+        let chips = request.file_visibility;
+        let mut keep = |values: &[row_index::RowField]| {
+            let failed = file_visibility::FileVisibility::failed_values(values);
+            count.failed += u64::from(failed);
+            if failed && !chips.show_failed {
+                return false;
+            }
+            listed += 1;
+            count.add_values(chips, values, true);
+            chips.keeps_values(values, true) && query.keep_table(values)
+        };
+        index.each_matching(slot, cancel, &mut keep, |seq, row| {
+            if page.needs_row() {
+                page.push_at(row()?, Some(seq))
+            } else {
+                page.count_only();
+                Ok(())
+            }
+        })?;
+        let (rows, omitted, _) = page.finish_with(Some(&|seq| index.row(slot, seq)))?;
+        let tab = match slot {
+            1 => FileTab::Opened,
+            5 => FileTab::Read,
+            _ => OPERATION_TABS[slot - 8],
+        };
+        match tab {
+            FileTab::Opened => data.counts.opened = listed,
+            FileTab::Read => data.counts.reads = listed,
+            other => data.counts.tabs[other.slot() - 8] = listed,
+        }
+        data.counts.visibility[file_visibility::visibility_slot(tab)] = count;
+        Ok((rows, omitted))
+    };
     let page_of = |slot: usize, fields: &[FieldSpec<'static>]| -> Result<_, String> {
         let query = query::compile_table(&request.filters[slot], fields);
         let mut page = sorting::Page::<Vec<Cell>>::new(request, slot, cancel);
-        let keep = |values: &[row_index::RowField]| query.keep_table(values);
-        index.each_matching(slot, cancel, &keep, |seq, row| {
-            // A row outside an unsorted page is only counted; a sorted table
-            // spools its key and reads the page's rows back from the log.
+        let mut keep = |values: &[row_index::RowField]| query.keep_table(values);
+        index.each_matching(slot, cancel, &mut keep, |seq, row| {
             if page.needs_row() {
                 page.push_at(row()?, Some(seq))
             } else {
@@ -106,29 +167,35 @@ fn derive(
         page.finish_with(Some(&|seq| index.row(slot, seq)))
     };
     if !unchanged(5) {
-        (data.read, data.read_omitted, _) = page_of(5, FILE_FIELDS)?;
+        (data.read, data.read_omitted) = file_table(5, &mut data)?;
     }
     if !unchanged(1) {
-        let (opened, opened_omitted, _) = page_of(1, FILE_FIELDS)?;
-        data.opened = opened;
-        data.opened_omitted = opened_omitted;
+        (data.opened, data.opened_omitted) = file_table(1, &mut data)?;
     }
     for at in 0..FILE_TABS {
         if !unchanged(8 + at) {
-            let (rows, omitted, _) = page_of(8 + at, FILE_FIELDS)?;
+            let (rows, omitted) = file_table(8 + at, &mut data)?;
             data.file_tabs[at] = FileRows { rows, omitted };
         }
     }
 
-    // The Changed files table, from the files themselves.
+    // The Changed files table, from the files themselves, with the chips.
     let change_query = query::compile_table(&request.filters[2], FILE_FIELDS);
     let mut change_page = sorting::Page::<Vec<Cell>>::new(request, 2, cancel);
+    let mut count = file_visibility::VisibilityCount::default();
+    let kept_at = file_visibility::settle_changes(
+        &index.changes,
+        request.file_visibility,
+        data.clock_anchor,
+        &mut count,
+    );
+    data.counts.visibility[file_visibility::visibility_slot(FileTab::Changed)] = count;
     let mut listed = Vec::new();
-    for (at, change) in index.changes.iter().enumerate() {
+    for &at in &kept_at {
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
-        let row = change.row(data.clock_anchor);
+        let row = index.changes[at].row(data.clock_anchor);
         if change_query.keep_table(&row[0].values) {
             change_page.push(row)?;
             listed.push(at);
@@ -263,5 +330,22 @@ pub fn differences(a: &ScanData, b: &ScanData) -> Vec<String> {
     check("urls", rows(&x.urls) == rows(&y.urls));
     check("inetsim", rows(&x.inetsim) == rows(&y.inetsim));
     check("whole_run", a.whole_run == b.whole_run);
+    check("suspicious", a.suspicious == b.suspicious);
+    check("flagged_paths", a.flagged_paths == b.flagged_paths);
+    check("finding_notes", a.finding_notes == b.finding_notes);
+    let (x, y) = (&a.counts, &b.counts);
+    check(
+        "counts.findings",
+        (x.findings, x.finding_tiers, x.findings_hidden)
+            == (y.findings, y.finding_tiers, y.findings_hidden)
+            && (x.findings_suppressed, x.findings_capped)
+                == (y.findings_suppressed, y.findings_capped),
+    );
+    check(
+        "counts.files",
+        (x.opened, x.reads, x.changed, x.tabs, x.failed_attempts)
+            == (y.opened, y.reads, y.changed, y.tabs, y.failed_attempts),
+    );
+    check("counts.visibility", x.visibility == y.visibility);
     out
 }

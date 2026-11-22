@@ -129,7 +129,7 @@ impl RowLog {
     pub fn each_matching(
         &self,
         cancel: &AtomicBool,
-        keep: &dyn Fn(&[RowField]) -> bool,
+        keep: &mut dyn FnMut(&[RowField]) -> bool,
         mut visit: impl FnMut(u64, RowAt) -> Result<(), String>,
     ) -> Result<(), String> {
         let mut query = self
@@ -244,8 +244,7 @@ impl Tap {
     pub fn seal(
         self: &Arc<Self>,
         request: &ScanRequest,
-        findings: Vec<Finding>,
-        info: Vec<rules::InfoMark>,
+        variants: [InfoVariant; 2],
         verdicts: Vec<antinomie_monitor_core::ioc::verdict::Verdict>,
     ) -> Option<Arc<RowIndex>> {
         if self.failed() {
@@ -256,39 +255,49 @@ impl Tap {
         }
         let changes = self.changes.lock().ok()?.take()?;
         Some(Arc::new(RowIndex {
-            file_visibility: request.file_visibility,
-            show_info: request.finding_view.show_info,
             facts: facts(request),
             tap: Arc::clone(self),
-            findings,
-            info,
+            variants,
             changes,
             verdicts,
         }))
     }
 }
 
+/// What the findings view takes from the engine, for one choice of Show INFO
+/// (ANT-T0592): the engine settles its rows both ways in the scan, so the chip
+/// is answered without one.
+#[derive(Clone, Default)]
+pub struct InfoVariant {
+    pub findings: Vec<Finding>,
+    pub info: Vec<rules::InfoMark>,
+    pub badge: u64,
+    pub tiers: [u64; 4],
+    pub hidden: u64,
+    pub suppressed: u64,
+    pub capped: u64,
+    pub suspicious: Suspicious,
+    pub flagged_paths: crate::file_shown::Flags,
+}
+
 /// The rows of one run's tables, and what the passes counted that they depend on.
 pub struct RowIndex {
-    /// The toggles the rows were made under: a request with others scans.
-    pub file_visibility: file_visibility::FileVisibility,
-    pub show_info: bool,
     /// The request facts the rows depend on that the recording's stamp does not carry.
     pub facts: String,
     /// Holds the logs; nothing is recorded into it after the seal.
     pub tap: Arc<Tap>,
-    pub findings: Vec<Finding>,
-    pub info: Vec<rules::InfoMark>,
+    /// The engine's output without and with INFO rows, by `show_info as usize`.
+    pub variants: [InfoVariant; 2],
+    /// The changes the Changed table could list, before the Files chips.
     pub changes: Vec<files::Change>,
     pub verdicts: Vec<antinomie_monitor_core::ioc::verdict::Verdict>,
 }
 
 impl RowIndex {
-    /// Whether a new index made with `request` would have the same rows.
+    /// Whether a new index made with `request` would have the same rows. The
+    /// Files chips and Show INFO are not asked: the rows are made before them.
     pub fn fits(&self, request: &ScanRequest) -> bool {
-        self.file_visibility == request.file_visibility
-            && self.show_info == request.finding_view.show_info
-            && self.facts == facts(request)
+        self.facts == facts(request)
     }
 
     /// The rows of table `slot`, in scan order.
@@ -315,7 +324,7 @@ impl RowIndex {
         &self,
         slot: usize,
         cancel: &AtomicBool,
-        keep: &dyn Fn(&[RowField]) -> bool,
+        keep: &mut dyn FnMut(&[RowField]) -> bool,
         visit: impl FnMut(u64, RowAt) -> Result<(), String>,
     ) -> Result<(), String> {
         let (_, log) = self

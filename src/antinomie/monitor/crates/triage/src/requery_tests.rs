@@ -128,19 +128,32 @@ fn a_whole_run_report_after_a_filtered_screen_is_answered_from_its_rows() {
 }
 
 #[test]
-fn another_toggle_or_a_changed_recording_scans_again() {
+fn a_chip_is_answered_from_the_rows_and_a_changed_recording_scans_again() {
     let (temp, _) = run(60);
     let cancel = Arc::new(AtomicBool::new(false));
     scan_archive_query(&temp.directory, None, false, &cancel, &request()).unwrap();
     let before = reads();
-    let mut info = request();
-    info.finding_view.show_info = true;
-    scan_archive_query(&temp.directory, None, false, &cancel, &info).unwrap();
-    assert_eq!(reads(), before + 1, "Show INFO changes the rows");
-    let mut visibility = request();
-    visibility.file_visibility.show_failed = false;
-    scan_archive_query(&temp.directory, None, false, &cancel, &visibility).unwrap();
-    assert_eq!(reads(), before + 2, "a Files chip changes the counts");
+    // Show INFO and the Files chips (all 16 combinations) are answered from the
+    // rows, and are what a scan of the request makes (ANT-T0592).
+    for bits in 0..16u32 {
+        let mut chips = request();
+        chips.finding_view.show_info = bits & 1 != 0;
+        chips.file_visibility.hide_standard_io = bits & 2 != 0;
+        chips.file_visibility.hide_libraries = bits & 4 != 0;
+        chips.file_visibility.show_failed = bits & 8 != 0;
+        let at = reads();
+        let derived = scan_archive_query(&temp.directory, None, false, &cancel, &chips).unwrap();
+        assert_eq!(reads(), at, "combination {bits} is answered without a scan");
+        let mut plain = chips.clone();
+        plain.keep_index = false;
+        let full = scan_archive_uncached(&temp.directory, None, false, &cancel, &plain).unwrap();
+        assert_eq!(
+            requery::differences(&derived, &full),
+            Vec::<String>::new(),
+            "combination {bits}"
+        );
+    }
+    let before = reads();
     // The recording grew: whatever the request says, it is read again.
     let mut raw = std::fs::OpenOptions::new()
         .append(true)
@@ -151,7 +164,7 @@ fn another_toggle_or_a_changed_recording_scans_again() {
     let mut filtered = request();
     filtered.filters[0] = "finding.rule == \"memory.rwx\"".into();
     scan_archive_query(&temp.directory, None, false, &cancel, &filtered).unwrap();
-    assert_eq!(reads(), before + 3);
+    assert_eq!(reads(), before + 1);
     // A timer refresh of an unchanged recording is still told so.
     let kept = scan_archive_query(&temp.directory, None, false, &cancel, &filtered).unwrap();
     let mut timer = filtered.clone();
@@ -221,7 +234,7 @@ fn a_table_log_replays_its_rows_in_scan_order_through_the_scans_own_pages() {
     }
     tap.keep_changes(Vec::new());
     let index = tap
-        .seal(&ScanRequest::default(), Vec::new(), Vec::new(), Vec::new())
+        .seal(&ScanRequest::default(), Default::default(), Vec::new())
         .unwrap();
     assert_eq!(index.row_count(), 350);
     let cancel = Arc::new(AtomicBool::new(false));

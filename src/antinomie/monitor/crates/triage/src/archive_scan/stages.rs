@@ -415,6 +415,11 @@ impl Scan {
             if let Some(row) =
                 file_index.observe_with(files, invocation, event, Some(&recording.directory), &hits)
             {
+                // Every read is kept before the chips: a later Files chip is
+                // answered from these rows (ANT-T0592).
+                if let Some(tap) = &request.tap {
+                    tap.push(5, &row);
+                }
                 // Failed reads are listed with their result while Failed attempts is on.
                 let failed_read = file_visibility::FileVisibility::failed(&row);
                 if failed_read {
@@ -430,9 +435,6 @@ impl Scan {
                         true,
                     );
                     if request.file_visibility.keeps_with(&row, true) {
-                        if let Some(tap) = &request.tap {
-                            tap.push(5, &row);
-                        }
                         if read_query.keep_table(&row[0].values) {
                             read_page.push(row)?;
                         }
@@ -519,31 +521,22 @@ impl Scan {
         // attempts at such files when failures are shown, and standard I/O
         // when it is not hidden; devices, `/proc`, `/sys`, directories and
         // unnamed descriptors are not files the run changed.
-        let visible: Vec<_> = all_changes
+        let counted: Vec<_> = all_changes
             .into_iter()
             .filter(|change| {
                 change.standard_io
                     || files::counted_file(&change.path, change.path_known, false, change.directory)
             })
-            .filter(|change| {
-                let row = change.row(clock_anchor);
-                counts.visibility[file_visibility::visibility_slot(FileTab::Changed)]
-                    .note_failed(&row);
-                if request.file_visibility.show_failed
-                    || !file_visibility::FileVisibility::failed(&row)
-                {
-                    counts.visibility[file_visibility::visibility_slot(FileTab::Changed)].add(
-                        request.file_visibility,
-                        &row,
-                        request.file_visibility.show_failed,
-                    );
-                }
-                request.file_visibility.keeps(&row)
-            })
             .collect();
+        let kept_at = file_visibility::settle_changes(
+            &counted,
+            request.file_visibility,
+            clock_anchor,
+            &mut counts.visibility[file_visibility::visibility_slot(FileTab::Changed)],
+        );
         let mut listed = Vec::new();
-        for (at, change) in visible.iter().enumerate() {
-            let row = change.row(clock_anchor);
+        for &at in &kept_at {
+            let row = counted[at].row(clock_anchor);
             if change_query.keep_table(&row[0].values) {
                 change_page.push(row)?;
                 listed.push(at);
@@ -553,10 +546,11 @@ impl Scan {
             .iter()
             .skip(request.offsets[2])
             .take(request.rows())
-            .map(|at| visible[*at].clone())
+            .map(|at| counted[*at].clone())
             .collect();
+        // Before the chips: a later Files chip is answered from these.
         if let Some(tap) = &request.tap {
-            tap.keep_changes(visible);
+            tap.keep_changes(counted);
         }
         let (read, read_omitted, _) = read_page.finish()?;
         let (mut changed, changed_omitted, _) = change_page.finish()?;
@@ -895,10 +889,36 @@ impl Scan {
         let verdicts = ioc_scan::verdicts(&ioc, &known, &online);
         ioc_scan::list_findings(&mut engine, &ioc, &verdicts, clock_anchor);
         ioc_scan::annotate(&mut network.new_tabs, &network.http, &ioc, &verdicts);
-        let output = engine.finish(&files);
-        // What a later filter, sort or page of this run is answered from.
-        let kept_findings = request.tap.as_ref().map(|_| output.rows.clone());
-        let kept_marks = request.tap.as_ref().map(|_| output.info.clone());
+        // With a tap the engine settles its rows both ways (Show INFO on and
+        // off); the one the request asks for is this scan's output.
+        let (output, other_output) = if request.tap.is_some() {
+            let (this, other) = engine.finish_both(&files);
+            (this, Some(other))
+        } else {
+            (engine.finish(&files), None)
+        };
+        // What a later filter, sort, page, Files chip or Show INFO of this run
+        // is answered from.
+        let kept_variants = other_output.map(|other| {
+            let variant = |output: &rules::Output| row_index::InfoVariant {
+                findings: output.rows.clone(),
+                info: output.info.clone(),
+                badge: output.badge,
+                tiers: output.tiers,
+                hidden: output.hidden,
+                suppressed: output.suppressed,
+                capped: output.capped,
+                suspicious: output.tasks.clone(),
+                flagged_paths: crate::file_shown::flagged(&output.rows),
+            };
+            let mut variants = [
+                row_index::InfoVariant::default(),
+                row_index::InfoVariant::default(),
+            ];
+            variants[usize::from(request.finding_view.show_info)] = variant(&output);
+            variants[usize::from(!request.finding_view.show_info)] = variant(&other);
+            variants
+        });
         let mut process = finish_processes(nodes);
         if root_crash.is_some() {
             settle_crashed_start(&mut process, &recording.directory);
@@ -914,19 +934,9 @@ impl Scan {
         counts.findings_capped = output.capped;
         let finding_notes = output.notes;
         let suspicious = output.tasks;
-        let mut flagged_paths = crate::file_shown::Flags::new();
+        let flagged_paths = crate::file_shown::flagged(&output.rows);
         let mut tally = crate::digest::Tally::default();
         for finding in output.rows {
-            let tier = crate::file_shown::text_of(&finding.values, "finding.tier")
-                .and_then(rules::Tier::from_tag)
-                .filter(|tier| *tier != rules::Tier::Info);
-            if let Some(tier) = tier {
-                let text = |key| crate::file_shown::text_of(&finding.values, key);
-                if let Some(object) = text("finding.object") {
-                    let rule = text("finding.rule").unwrap_or_default();
-                    crate::file_shown::flag(&mut flagged_paths, object, tier, rule);
-                }
-            }
             if let Some(writer) = &mut journal {
                 if let Err(error) = writer.push(&finding) {
                     journal_error = Some(error);
@@ -1003,10 +1013,8 @@ impl Scan {
         }
         let stable_source =
             source_key == normalized::source_key(&recording.directory, pcap, pcap_open, request);
-        let rows = match (&request.tap, kept_findings, kept_marks) {
-            (Some(tap), Some(findings), Some(marks)) if complete => {
-                tap.seal(request, findings, marks, verdicts)
-            }
+        let rows = match (&request.tap, kept_variants) {
+            (Some(tap), Some(variants)) if complete => tap.seal(request, variants, verdicts),
             _ => None,
         };
         let mut reasons = incomplete_reasons(&Source {

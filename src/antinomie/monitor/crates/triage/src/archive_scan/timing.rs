@@ -128,7 +128,7 @@ fn time_a_filter_change_on_a_kept_index() {
         "TIMING kept: {} logged rows, {} MiB of row bytes on disk, {} findings, {} changed files, {} read rows shown",
         rows.row_count(),
         rows.tap.bytes() >> 20,
-        rows.findings.len(),
+        rows.variants[0].findings.len(),
         rows.changes.len(),
         first.read.len()
     );
@@ -251,4 +251,71 @@ fn time_a_filter_change_on_a_kept_index() {
         assert!(differences.is_empty());
     }
     drop(last);
+}
+
+/// ANT-T0592: every Files chip combination and Show INFO on and off, each
+/// answered from the rows of one scan and compared with a full scan of the
+/// same request (`ANT_TIMING_COMBOS=<n>` runs only the first n of the 16).
+#[test]
+#[ignore = "needs ANT_TIMING_RUN"]
+fn every_chip_combination_is_what_a_full_scan_makes() {
+    let Some(dir) = std::env::var_os("ANT_TIMING_RUN") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let run: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("run.json")).unwrap()).unwrap();
+    let mut request = request_of(&run);
+    request.keep_index = true;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let at = Instant::now();
+    let first = scan_archive_query(&dir, None, false, &cancel, &request).unwrap();
+    let rows = first.rows.clone().expect("the first scan kept its rows");
+    eprintln!(
+        "TIMING first scan {:.1} s, {} logged rows, {} MiB of row bytes, peak {} MiB",
+        at.elapsed().as_secs_f64(),
+        rows.row_count(),
+        rows.tap.bytes() >> 20,
+        peak_rss_mib()
+    );
+    let only: usize = std::env::var("ANT_TIMING_COMBOS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(16);
+    for bits in 0..only as u32 {
+        let mut chips = request.clone();
+        chips.finding_view.show_info = bits & 1 != 0;
+        chips.file_visibility.hide_standard_io = bits & 2 != 0;
+        chips.file_visibility.hide_libraries = bits & 4 != 0;
+        chips.file_visibility.show_failed = bits & 8 != 0;
+        let (scans, at) = (READS.with(std::cell::Cell::get), Instant::now());
+        let derived = scan_archive_query(&dir, None, false, &cancel, &chips).unwrap();
+        eprintln!(
+            "TIMING combination {bits} (info {}, stdio {}, libs {}, failed {}): {:.2} s from the rows ({} scans), reads {} opened {} changed {} void {}",
+            chips.finding_view.show_info,
+            chips.file_visibility.hide_standard_io,
+            chips.file_visibility.hide_libraries,
+            chips.file_visibility.show_failed,
+            at.elapsed().as_secs_f64(),
+            READS.with(std::cell::Cell::get) - scans,
+            derived.counts.reads,
+            derived.counts.opened,
+            derived.counts.changed,
+            derived.rows.is_none()
+        );
+        assert_eq!(READS.with(std::cell::Cell::get), scans, "no scan");
+        let mut plain = chips.clone();
+        plain.keep_index = false;
+        let at = Instant::now();
+        let full = scan_archive_uncached(&dir, None, false, &cancel, &plain).unwrap();
+        let differences = requery::differences(&derived, &full);
+        eprintln!(
+            "TIMING combination {bits}: full scan {:.1} s, differences {differences:?}",
+            at.elapsed().as_secs_f64()
+        );
+        assert!(
+            differences.is_empty(),
+            "combination {bits}: {differences:?}"
+        );
+    }
 }

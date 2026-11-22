@@ -231,6 +231,18 @@ impl TabSink {
             let tab = hit.category.tab();
             let show = !failed || request.file_visibility.show_failed;
             let row = file_category::category_row(files, call, event, *hit);
+            // Every hit is kept before the chips: a later Files chip is
+            // answered from these rows (ANT-T0592).
+            if let Some(tap) = &request.tap {
+                tap.push(
+                    if Self::position(tab) == 0 {
+                        1
+                    } else {
+                        Self::position(tab) + 7
+                    },
+                    &row,
+                );
+            }
             counts.visibility[file_visibility::visibility_slot(tab)].note_failed(&row);
             if show {
                 match tab {
@@ -248,9 +260,6 @@ impl TabSink {
             );
             let keeps = request.file_visibility.keeps_with(&row, show);
             if keeps {
-                if let Some(tap) = &request.tap {
-                    tap.push(if at == 0 { 1 } else { at + 7 }, &row);
-                }
                 if self.queries[at].keep_table(&row[0].values) {
                     self.pages[at].push(row)?;
                 }

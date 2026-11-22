@@ -431,6 +431,25 @@ fn check(bundle: &str, data: &str, native: &str, compat: Option<&str>) -> Result
         vec!["-c".into(), "sleep 2".into()],
         None,
     ));
+    // `chips` (only with TRIGGER_CHECK_ONLY=chips; ANT-T0592): benign file
+    // calls that give the Files tables rows the chips hide: standard input
+    // and output through a pipe, library paths (one missing), a refused open,
+    // a refused write and a write under a library folder. The run is the
+    // recording the chip combinations are checked on.
+    if std::env::var("TRIGGER_CHECK_ONLY").is_ok_and(|only| only == "chips") {
+        cases.push((
+            "chips",
+            "/bin/sh".into(),
+            vec![
+                "-c".into(),
+                "echo hi | cat; cat /lib/none /etc/hostname /nope; ls /usr/lib /lib >/dev/null; \
+                 echo x > /nonexistent/f; echo y > /tmp/chip.txt; mkdir -p /usr/lib/chipdir; \
+                 echo z > /usr/lib/chipdir/z; rm /tmp/chip.txt; echo done >&2"
+                    .into(),
+            ],
+            None,
+        ));
+    }
     let holds = d
         .snapshot
         .guest_kernel
@@ -492,6 +511,7 @@ fn check(bundle: &str, data: &str, native: &str, compat: Option<&str>) -> Result
                     }
                     Ok(())
                 }),
+                None if name == "chips" => Ok(()),
                 None => quiet(&run),
             }
         });

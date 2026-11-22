@@ -28,33 +28,45 @@ impl FileVisibility {
 
     /// Like [`Self::keeps`], with `show_failed` decided by the caller.
     pub fn keeps_with(self, row: &[Cell], show_failed: bool) -> bool {
-        if !show_failed && Self::failed(row) {
+        self.keeps_values(
+            row.first().map_or(&[], |cell| cell.values.as_slice()),
+            show_failed,
+        )
+    }
+
+    /// [`Self::keeps_with`] for the fields of a row's first cell.
+    pub fn keeps_values(self, values: &[row_index::RowField], show_failed: bool) -> bool {
+        if !show_failed && Self::failed_values(values) {
             return false;
         }
-        let (stdio, library) = Self::classes(row);
+        let (stdio, library) = Self::classes_values(values);
         !(self.hide_standard_io && stdio) && !(self.hide_libraries && library)
     }
 
     /// The call the row stands for was refused by the kernel.
     pub fn failed(row: &[Cell]) -> bool {
-        row.first().is_some_and(|first| {
-            first.values.iter().any(|(key, value)| {
-                *key == "file.result" && matches!(value, RowValue::Text(text) if text == "failed")
-            })
+        row.first()
+            .is_some_and(|first| Self::failed_values(&first.values))
+    }
+
+    pub fn failed_values(values: &[row_index::RowField]) -> bool {
+        values.iter().any(|(key, value)| {
+            *key == "file.result" && matches!(value, RowValue::Text(text) if text == "failed")
         })
     }
 
     /// Whether the row is standard input/output, and whether it is a library,
     /// whatever the toggles say: what each chip would hide.
     pub fn classes(row: &[Cell]) -> (bool, bool) {
-        let Some(first) = row.first() else {
-            return (false, false);
-        };
-        let stdio = first.values.iter().any(|(key, value)| {
+        Self::classes_values(row.first().map_or(&[], |cell| cell.values.as_slice()))
+    }
+
+    pub fn classes_values(values: &[row_index::RowField]) -> (bool, bool) {
+        let stdio = values.iter().any(|(key, value)| {
             matches!((*key, value), ("file.standard_io", RowValue::Bool(true)))
                 || (*key == "file.fd" && matches!(value, RowValue::Number(0..=2)))
         });
-        let library = first.values.iter().any(|(key, value)| {
+        let library = values.iter().any(|(key, value)| {
             *key == "file.path" && matches!(value, RowValue::Text(path) if library_path(path))
         });
         (stdio, library)
@@ -83,12 +95,49 @@ impl VisibilityCount {
     }
 
     pub fn add(&mut self, visibility: FileVisibility, row: &[Cell], show_failed: bool) {
-        let (stdio, library) = FileVisibility::classes(row);
+        self.add_values(
+            visibility,
+            row.first().map_or(&[], |cell| cell.values.as_slice()),
+            show_failed,
+        );
+    }
+
+    /// [`Self::add`] for the fields of a row's first cell.
+    pub fn add_values(
+        &mut self,
+        visibility: FileVisibility,
+        values: &[row_index::RowField],
+        show_failed: bool,
+    ) {
+        let (stdio, library) = FileVisibility::classes_values(values);
         self.total += 1;
         self.stdio += u64::from(stdio);
         self.library += u64::from(library);
-        self.shown += u64::from(visibility.keeps_with(row, show_failed));
+        self.shown += u64::from(visibility.keeps_values(values, show_failed));
     }
+}
+
+/// The changes the Changed table lists with these chips, as their positions
+/// in `counted`, and what the chips hid, counted into `count`: refused
+/// attempts are counted always, listed with the Failed attempts chip.
+pub fn settle_changes(
+    counted: &[files::Change],
+    visibility: FileVisibility,
+    clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
+    count: &mut VisibilityCount,
+) -> Vec<usize> {
+    let mut kept = Vec::new();
+    for (at, change) in counted.iter().enumerate() {
+        let row = change.row(clock_anchor);
+        count.note_failed(&row);
+        if visibility.show_failed || !FileVisibility::failed(&row) {
+            count.add(visibility, &row, visibility.show_failed);
+        }
+        if visibility.keeps(&row) {
+            kept.push(at);
+        }
+    }
+    kept
 }
 
 /// Where a Files table's visibility counts are kept: Opened, Read, Changed,

@@ -410,7 +410,21 @@ impl Engine {
     }
 
     /// Settle every row: scope, siblings, tiers, caps.
-    pub fn finish(mut self, files: &FdState) -> Output {
+    pub fn finish(self, files: &FdState) -> Output {
+        self.finish_settled(files, false).0
+    }
+
+    /// [`Self::finish`] and, when `both`, the output the other `show_info`
+    /// would have given: the same settled rows put through the same caps with
+    /// INFO rows built or not (INFO rows take cap budget, so the other output
+    /// is not this one with rows taken out). Returned as (this option's, the
+    /// other's). ANT-T0592: a Show INFO chip is then answered without a scan.
+    pub fn finish_both(self, files: &FdState) -> (Output, Output) {
+        let (this, other) = self.finish_settled(files, true);
+        (this, other.expect("both outputs were asked for"))
+    }
+
+    fn finish_settled(mut self, files: &FdState, both: bool) -> (Output, Option<Output>) {
         let traced = self.state.probes.traced_exec.clone();
         let host_aggs = std::mem::take(&mut self.host_aggs);
         if let Some((hit, number, capture, time)) = self.state.frames.nxdomain_hit.take() {
@@ -445,68 +459,106 @@ impl Engine {
             noise::settle(agg);
         }
         aggs.sort_by_key(|agg| agg.first_ns);
-        let mut info_matches = self.info_matches;
-        let mut shown = Vec::new();
-        let mut info = Vec::new();
-        for agg in aggs {
-            if agg.tier == Tier::Info {
-                info_matches += agg.count;
-                if !self.options.show_info {
-                    if !agg.hidden() && agg.first_ns != 0 {
-                        if let Some(spec) = spec(agg.rule) {
-                            info.push(InfoMark {
-                                ns: agg.first_ns,
-                                count: u32::try_from(agg.count).unwrap_or(u32::MAX),
-                                rule: agg.rule,
-                                category: spec.category,
-                            });
-                        }
-                    }
-                    continue;
-                }
-            }
-            shown.push(agg);
-        }
-        let (mut kept, overflow) = noise::cap(shown);
-        // The worst first, each tier in the order it happened.
-        kept.sort_by_key(|agg| (std::cmp::Reverse(agg.tier), agg.first_ns));
-        let held_back = self.dropped;
-        let mut output = Output {
-            rows: Vec::new(),
-            tiers: [0; 4],
-            hidden: 0,
-            capped: 0,
-            suppressed: self.state.frames.suppressed,
-            notes: std::mem::take(&mut self.notes),
-            badge: 0,
-            tasks: Suspicious::new(),
-            info,
+        let (info_matches, held_back, suppressed) = (
+            self.info_matches,
+            self.dropped,
+            self.state.frames.suppressed,
+        );
+        let settle_with = |aggs: Vec<Agg>, show_info: bool, notes: Vec<String>| {
+            settle(
+                aggs,
+                &Settle {
+                    show_info,
+                    info_matches,
+                    held_back,
+                    suppressed,
+                },
+                notes,
+            )
         };
-        output.tiers[Tier::Info.index()] = info_matches;
-        output.capped += held_back;
-        output.badge += held_back;
-        for agg in &kept {
-            if agg.hidden() {
-                output.hidden += 1;
-            } else if agg.tier != Tier::Info {
-                output.tiers[agg.tier.index()] += 1;
-                output.badge += 1;
+        let other =
+            both.then(|| settle_with(aggs.clone(), !self.options.show_info, self.notes.clone()));
+        let this = settle_with(
+            aggs,
+            self.options.show_info,
+            std::mem::take(&mut self.notes),
+        );
+        (this, other)
+    }
+}
+
+/// What [`settle`] reads besides the rows.
+struct Settle {
+    show_info: bool,
+    info_matches: u64,
+    held_back: u64,
+    suppressed: u64,
+}
+
+/// Tiers, INFO rows or marks, caps and the output's counts of the settled
+/// rows: a pure function of its inputs.
+fn settle(aggs: Vec<Agg>, with: &Settle, notes: Vec<String>) -> Output {
+    let mut info_matches = with.info_matches;
+    let mut shown = Vec::new();
+    let mut info = Vec::new();
+    for agg in aggs {
+        if agg.tier == Tier::Info {
+            info_matches += agg.count;
+            if !with.show_info {
+                if !agg.hidden() && agg.first_ns != 0 {
+                    if let Some(spec) = spec(agg.rule) {
+                        info.push(InfoMark {
+                            ns: agg.first_ns,
+                            count: u32::try_from(agg.count).unwrap_or(u32::MAX),
+                            rule: agg.rule,
+                            category: spec.category,
+                        });
+                    }
+                }
+                continue;
             }
-            let row = rows::finding(agg);
-            if !agg.hidden() && agg.tier != Tier::Info && agg.cookie != 0 {
-                tally(&mut output.tasks, &row.values);
-            }
+        }
+        shown.push(agg);
+    }
+    let (mut kept, overflow) = noise::cap(shown);
+    // The worst first, each tier in the order it happened.
+    kept.sort_by_key(|agg| (std::cmp::Reverse(agg.tier), agg.first_ns));
+    let held_back = with.held_back;
+    let mut output = Output {
+        rows: Vec::new(),
+        tiers: [0; 4],
+        hidden: 0,
+        capped: 0,
+        suppressed: with.suppressed,
+        notes,
+        badge: 0,
+        tasks: Suspicious::new(),
+        info,
+    };
+    output.tiers[Tier::Info.index()] = info_matches;
+    output.capped += held_back;
+    output.badge += held_back;
+    for agg in &kept {
+        if agg.hidden() {
+            output.hidden += 1;
+        } else if agg.tier != Tier::Info {
+            output.tiers[agg.tier.index()] += 1;
+            output.badge += 1;
+        }
+        let row = rows::finding(agg);
+        if !agg.hidden() && agg.tier != Tier::Info && agg.cookie != 0 {
+            tally(&mut output.tasks, &row.values);
+        }
+        output.rows.push(row);
+    }
+    for (rule, overflow) in &overflow {
+        output.capped += overflow.count;
+        output.badge += overflow.count;
+        if let Some(row) = rows::overflow_row(rule, overflow) {
             output.rows.push(row);
         }
-        for (rule, overflow) in &overflow {
-            output.capped += overflow.count;
-            output.badge += overflow.count;
-            if let Some(row) = rows::overflow_row(rule, overflow) {
-                output.rows.push(row);
-            }
-        }
-        output
     }
+    output
 }
 
 /// A row a shell command gave (`chattr +i ...` in `sh -c`) says it failed

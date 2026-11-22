@@ -42,7 +42,7 @@ pub fn list_of<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> &'a [St
 
 /// What the findings above Info say of one path: how many name it as their
 /// object, and the worst of them.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct PathFlag {
     pub count: u64,
     pub worst: rules::Tier,
@@ -52,6 +52,24 @@ pub struct PathFlag {
 
 /// The paths that findings above Info name, with what they say of each.
 pub type Flags = std::collections::BTreeMap<String, PathFlag>;
+
+/// The paths the findings name, flagged with their worst tier (INFO rows
+/// flag nothing): what a scan and a derived index both hold.
+pub fn flagged(findings: &[Finding]) -> Flags {
+    let mut flags = Flags::new();
+    for finding in findings {
+        let tier = text_of(&finding.values, "finding.tier")
+            .and_then(rules::Tier::from_tag)
+            .filter(|tier| *tier != rules::Tier::Info);
+        if let Some(tier) = tier
+            && let Some(object) = text_of(&finding.values, "finding.object")
+        {
+            let rule = text_of(&finding.values, "finding.rule").unwrap_or_default();
+            flag(&mut flags, object, tier, rule);
+        }
+    }
+    flags
+}
 
 /// Count one finding of `rule` and `tier` against `path`.
 pub fn flag(flags: &mut Flags, path: &str, tier: rules::Tier, rule: &str) {
