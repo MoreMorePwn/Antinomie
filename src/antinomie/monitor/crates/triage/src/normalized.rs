@@ -558,6 +558,11 @@ pub fn build(
     let shown = displayed_path(call, event, files);
     let mut inferred = Vec::new();
     match sigma_events::clean(&shown) {
+        // A socket, a pipe or an anonymous inode is no file: the name goes in
+        // its own field and TargetFilename stays empty (ANT-T0593).
+        Some(_) if descriptor_names::kind(&shown).is_some() => {
+            text(&mut fields, "Descriptor", Some(&shown));
+        }
         Some((path, lexical)) => {
             text(&mut fields, "TargetFilename", Some(&path));
             if lexical {

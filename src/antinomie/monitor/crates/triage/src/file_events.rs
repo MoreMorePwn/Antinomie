@@ -116,6 +116,14 @@ pub fn event_row(
         cell(file_outcome(invocation), tone::text(), false),
     ];
     let paths = path_list(invocation);
+    let descriptor = descriptor_names::kind(&row[0].text);
+    if descriptor.is_none()
+        && row[0].text == "—"
+        && paths.is_empty()
+        && fd_argument(invocation, event).is_some()
+    {
+        row[0].note = Some(descriptor_names::BEFORE_RECORDING.into());
+    }
     let ret = invocation.exit.as_ref().and_then(|exit| exit.result);
     let writing = matches!(
         event.syscall_name.as_str(),
@@ -222,6 +230,12 @@ pub fn event_row(
             } else {
                 RowValue::Missing
             },
+        ),
+        (
+            "file.descriptor",
+            descriptor.map_or(RowValue::Missing, |kind| {
+                RowValue::Text(descriptor_names::kind_tag(kind).into())
+            }),
         ),
         ("file.count", RowValue::Number(1)),
         ("process.pid", RowValue::Number(i128::from(event.pid))),

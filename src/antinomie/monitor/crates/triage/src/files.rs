@@ -272,11 +272,7 @@ impl FileIndex {
         );
         // A write to a socket moves data to a peer: the network tables hold
         // it, and it is no change to a file (ANT-T0435, N6).
-        if writing
-            && fd.is_some_and(|fd| {
-                crate::sigma_events::socket_at(files, call.task_cookie, event.tid, fd).is_some()
-            })
-        {
+        if (reading || writing) && descriptor_names::socket_fd(files, call, event) {
             return None;
         }
         let failed = file_category::outcome(call).failed();
@@ -317,7 +313,15 @@ impl FileIndex {
             );
             return None;
         }
+        // A pipe or an eventfd is named for the table row, and is no file to
+        // group under: it stays the task's descriptor, as before it had a name.
         let observed = displayed_path(call, event, files);
+        let descriptor = descriptor_names::kind(&observed).map(|_| observed.clone());
+        let observed = if descriptor.is_some() {
+            "—".to_owned()
+        } else {
+            observed
+        };
         let path_known = observed != "—";
         // The map key stays unique per task and descriptor. The visible label does not.
         let group = if path_known {
@@ -447,13 +451,10 @@ impl FileIndex {
             size,
         };
         let read_row = if reading {
-            Some(read_cells(
-                &read_context,
-                &path,
-                path_known,
-                fd,
-                Some(&bytes),
-            ))
+            Some(match &descriptor {
+                Some(label) => read_cells(&read_context, label, true, fd, Some(&bytes)),
+                None => read_cells(&read_context, &path, path_known, fd, Some(&bytes)),
+            })
         } else {
             // The source of a kernel-side copy was read too.
             transfer_source(name, args).map(|source| {
@@ -604,6 +605,11 @@ impl FileIndex {
             return;
         }
         let observed = displayed_path(call, event, files);
+        let observed = if descriptor_names::kind(&observed).is_some() {
+            "—".to_owned()
+        } else {
+            observed
+        };
         let (mut path, mut path_known, mut new_name) = (observed.clone(), observed != "—", None);
         // A rename or link acts on the file by its old name and names it anew.
         if hits
