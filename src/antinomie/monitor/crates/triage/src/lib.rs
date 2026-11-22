@@ -561,6 +561,10 @@ pub struct ScanData {
     /// the scan kept them: a request that differs only in filters, sorts and
     /// pages is answered from them ([`requery`]).
     pub rows: Option<Arc<row_index::RowIndex>>,
+    /// The filters, sorts and pages the tables were made with, when `rows` is
+    /// kept: a request that leaves a table's own as they are keeps its rows
+    /// ([`requery`], ANT-T0592).
+    pub shown: Option<requery::Shown>,
     /// [`source_stamp`] of the recording when this index began.
     pub stamp: String,
     /// The index was made with no filter, sort, page or toggle: the whole run

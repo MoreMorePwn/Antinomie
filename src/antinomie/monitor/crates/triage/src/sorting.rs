@@ -200,6 +200,43 @@ impl Codec {
         Ok(payload)
     }
 
+    /// The fields of a row's first cell alone, which every filter reads.
+    pub fn encode_values(
+        &mut self,
+        values: &[(&'static str, RowValue)],
+    ) -> Result<Vec<u8>, String> {
+        let stored: Vec<(usize, &RowValue)> = values
+            .iter()
+            .map(|(name, value)| {
+                let next = self.names.len();
+                let index = *self.lookup.entry(name).or_insert_with(|| {
+                    self.names.push(name);
+                    next
+                });
+                (index, value)
+            })
+            .collect();
+        if self.names.len() > 512 {
+            return Err("sort field registry exceeds bound".into());
+        }
+        serde_json::to_vec(&stored).map_err(|error| error.to_string())
+    }
+
+    pub fn decode_values(&self, payload: &[u8]) -> Result<Vec<(&'static str, RowValue)>, String> {
+        let stored: Vec<(usize, RowValue)> =
+            serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+        stored
+            .into_iter()
+            .map(|(index, value)| {
+                self.names
+                    .get(index)
+                    .copied()
+                    .map(|name| (name, value))
+                    .ok_or_else(|| "invalid stored field index".to_owned())
+            })
+            .collect()
+    }
+
     pub fn decode(&self, payload: &[u8]) -> Result<Vec<Cell>, String> {
         let stored: Vec<StoredCell> =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
@@ -231,70 +268,137 @@ impl Codec {
     }
 }
 
+/// Bytes of rows a sort keeps in its own file at most. A sort whose rows are
+/// already kept by the run's index ([`row_index`]) keeps none: it spools keys.
+pub const SPOOL_PAYLOAD_MAX: u64 = 2 << 30;
+/// Pages the key table may hold, 1 GiB (a key is a number or a lowercase text).
+const SPOOL_KEY_PAGES: u64 = 262_144;
+
+/// Where a spooled row's cells are: in the spool's own file, or in the run's
+/// index under the row's sequence number (ANT-T0592).
+enum Place {
+    File { offset: u64, len: u64 },
+    Kept(u64),
+}
+
+/// A disk-backed sort: the keys in a small SQLite table, ordered by SQLite
+/// (its temporary files are not bounded by the table's page limit), and the
+/// rows themselves in an append-only file the page reads back by offset.
 pub struct Spool {
     pub connection: rusqlite::Connection,
-    // Connection drops before this directory and its temporary database.
+    // Connection drops before this directory and its temporary files.
     pub _directory: PacketSpool,
+    payload: std::fs::File,
+    written: u64,
     pub codec: Codec,
 }
 
 impl Spool {
     pub fn new(cancel: Arc<AtomicBool>) -> Result<Self, String> {
         let directory = PacketSpool::new()?;
+        let payload = directory
+            .rows
+            .try_clone()
+            .map_err(|error| error.to_string())?;
         let mut connection = rusqlite::Connection::open(directory.directory.join("sort.sqlite"))
             .map_err(|error| error.to_string())?;
-        connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA max_page_count=65536; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; CREATE TABLE rows(seq INTEGER PRIMARY KEY, missing INTEGER NOT NULL, k TEXT NOT NULL, payload BLOB NOT NULL); BEGIN;").map_err(|error| error.to_string())?;
+        connection.execute_batch(&format!("PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA max_page_count={SPOOL_KEY_PAGES}; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; CREATE TABLE rows(seq INTEGER PRIMARY KEY, missing INTEGER NOT NULL, k TEXT NOT NULL, offset INTEGER NOT NULL, len INTEGER NOT NULL); BEGIN;")).map_err(|error| error.to_string())?;
         connection
             .progress_handler(10_000, Some(move || cancel.load(Ordering::Relaxed)))
             .map_err(|error| error.to_string())?;
         Ok(Self {
             connection,
             _directory: directory,
+            payload,
+            written: 0,
             codec: Codec::default(),
         })
     }
-    pub fn push(&mut self, key: Atom, cells: Vec<Cell>) -> Result<(), String> {
-        let payload = self.codec.encode(&cells)?;
+    fn insert(&mut self, key: Atom, place: Place) -> Result<(), String> {
         let missing = key == Atom::Missing;
         let encoded = match key {
             Atom::Number(number) => format!("n{:039}", (number as u128) ^ (1u128 << 127)),
             Atom::Text(text) => format!("s{text}"),
             Atom::Missing => String::new(),
         };
+        // A kept row has length 0 and its sequence number in the offset.
+        let (offset, len) = match place {
+            Place::File { offset, len } => (offset, len),
+            Place::Kept(seq) => (seq, 0),
+        };
         self.connection
-            .execute(
-                "INSERT INTO rows(missing,k,payload) VALUES(?1,?2,?3)",
-                rusqlite::params![missing, encoded, payload],
-            )
-            .map_err(|error| format!("triage sort spool (256 MiB limit): {error}"))?;
+            .prepare_cached("INSERT INTO rows(missing,k,offset,len) VALUES(?1,?2,?3,?4)")
+            .and_then(|mut insert| {
+                insert.execute(rusqlite::params![
+                    missing,
+                    encoded,
+                    offset as i64,
+                    len as i64
+                ])
+            })
+            .map_err(|error| format!("triage sort spool (keys): {error}"))?;
         Ok(())
     }
+    pub fn push(&mut self, key: Atom, cells: Vec<Cell>) -> Result<(), String> {
+        use std::os::unix::fs::FileExt;
+        let payload = self.codec.encode(&cells)?;
+        let len = payload.len() as u64;
+        if self.written.saturating_add(len) > SPOOL_PAYLOAD_MAX {
+            return Err(format!(
+                "triage sort spool: the sorted rows pass {} GiB; filter the table first",
+                SPOOL_PAYLOAD_MAX >> 30
+            ));
+        }
+        self.payload
+            .write_all_at(&payload, self.written)
+            .map_err(|error| format!("triage sort spool (rows): {error}"))?;
+        let offset = self.written;
+        self.written += len;
+        self.insert(key, Place::File { offset, len })
+    }
+    /// A row the run's index keeps under `seq`: only its key is spooled.
+    pub fn push_kept(&mut self, key: Atom, seq: u64) -> Result<(), String> {
+        self.insert(key, Place::Kept(seq))
+    }
+    /// The rows of one page in sort order. `kept` reads a row the run's index
+    /// keeps (a spool made with [`Self::push_kept`]).
     pub fn page<T: Row>(
         &self,
         offset: usize,
         limit: usize,
         descending: bool,
+        kept: Option<&dyn Fn(u64) -> Result<Vec<Cell>, String>>,
     ) -> Result<Vec<T>, String> {
+        use std::os::unix::fs::FileExt;
         self.connection
             .execute_batch("COMMIT")
             .map_err(|error| error.to_string())?;
         let order = if descending { "DESC" } else { "ASC" };
-        let mut query = self.connection.prepare(&format!("SELECT payload FROM rows ORDER BY missing ASC, k {order}, seq ASC LIMIT ?1 OFFSET ?2")).map_err(|error| error.to_string())?;
+        let mut query = self.connection.prepare(&format!("SELECT offset, len FROM rows ORDER BY missing ASC, k {order}, seq ASC LIMIT ?1 OFFSET ?2")).map_err(|error| error.to_string())?;
         let offset = i64::try_from(offset).map_err(|_| "sorted page offset overflow")?;
-        let rows = query
+        let places = query
             .query_map(rusqlite::params![limit as i64, offset], |row| {
-                row.get::<_, Vec<u8>>(0)
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
             })
             .map_err(|error| error.to_string())?;
         let mut result = Vec::new();
         let mut retained_size = 0usize;
-        for row in rows {
-            let row = row.map_err(|error| error.to_string())?;
-            retained_size = retained_size.saturating_add(row.len());
+        for place in places {
+            let (at, len) = place.map_err(|error| error.to_string())?;
+            let cells = if len == 0 {
+                let kept = kept.ok_or("a sorted row is kept by the index, which is not given")?;
+                kept(at as u64)?
+            } else {
+                let mut payload = vec![0u8; len as usize];
+                self.payload
+                    .read_exact_at(&mut payload, at as u64)
+                    .map_err(|error| format!("triage sort spool (rows): {error}"))?;
+                retained_size = retained_size.saturating_add(payload.len());
+                self.codec.decode(&payload)?
+            };
             if retained_size > 16 * 1024 * 1024 {
                 return Err("sorted page exceeds 16 MiB preview bound".into());
             }
-            let cells = self.codec.decode(&row)?;
             result.push(T::from_cells(cells)?);
         }
         Ok(result)
@@ -328,6 +432,21 @@ impl<T: Row> Page<T> {
         }
     }
     pub fn push(&mut self, row: T) -> Result<(), String> {
+        self.push_at(row, None)
+    }
+    /// Whether a row pushed now would be read: any row of a sorted table, and
+    /// those inside the window of an unsorted one. A caller that holds its rows
+    /// undecoded counts the others with [`Self::count_only`].
+    pub fn needs_row(&self) -> bool {
+        self.sort.is_some() || (self.count >= self.offset && self.rows.len() < self.limit)
+    }
+    pub fn count_only(&mut self) {
+        self.count = self.count.saturating_add(1);
+    }
+    /// [`Self::push`] of a row the run's index keeps as number `seq` of its
+    /// log: a sorted table spools its key alone and reads the row back from
+    /// the log at the end ([`Self::finish_with`]).
+    pub fn push_at(&mut self, row: T, kept: Option<u64>) -> Result<(), String> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
@@ -360,17 +479,27 @@ impl<T: Row> Page<T> {
             if self.spool.is_none() {
                 self.spool = Some(Spool::new(Arc::clone(&self.cancel))?);
             }
-            self.spool
-                .as_mut()
-                .ok_or("sort spool missing")?
-                .push(atom(header, sort.column, &cells), cells)?;
+            let spool = self.spool.as_mut().ok_or("sort spool missing")?;
+            let key = atom(header, sort.column, &cells);
+            match kept {
+                Some(seq) => spool.push_kept(key, seq)?,
+                None => spool.push(key, cells)?,
+            }
         } else if self.count >= self.offset && self.rows.len() < self.limit {
             self.rows.push(row);
         }
         self.count = self.count.saturating_add(1);
         Ok(())
     }
-    pub fn finish(mut self) -> Result<(Vec<T>, u64, usize), String> {
+    pub fn finish(self) -> Result<(Vec<T>, u64, usize), String> {
+        self.finish_with(None)
+    }
+    /// [`Self::finish`] for a table whose rows were pushed with
+    /// [`Self::push_at`]: `kept` reads row number `seq` of the log.
+    pub fn finish_with(
+        mut self,
+        kept: Option<&dyn Fn(u64) -> Result<Vec<Cell>, String>>,
+    ) -> Result<(Vec<T>, u64, usize), String> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
@@ -379,6 +508,7 @@ impl<T: Row> Page<T> {
                 self.offset,
                 self.limit,
                 self.sort.is_some_and(|sort| sort.descending),
+                kept,
             )?;
         }
         let omitted = self.count.saturating_sub(self.rows.len()) as u64;
@@ -428,6 +558,35 @@ pub mod tests {
         assert_eq!((rows.len(), omitted, total), (52, 2000, 2052));
         assert_eq!(rows[0][0].text, "50");
         assert_eq!(rows.last().unwrap()[0].text, "Unavailable");
+    }
+
+    #[test]
+    fn a_sort_of_rows_the_index_keeps_spools_only_their_keys() {
+        let mut request = ScanRequest::default();
+        request.sorts[6] = Some(Spec {
+            column: 0,
+            descending: false,
+        });
+        let kept: Vec<Vec<Cell>> = (0..300u32)
+            .map(|n| {
+                let mut row = vec![cell((299 - n).to_string(), tone::text(), true)];
+                row[0].values = vec![("frame.number", RowValue::Number(i128::from(299 - n)))];
+                row
+            })
+            .collect();
+        let mut page = Page::<Vec<Cell>>::new(&request, 6, &Arc::new(AtomicBool::new(false)));
+        for (seq, row) in kept.iter().enumerate() {
+            page.push_at(row.clone(), Some(seq as u64)).unwrap();
+        }
+        let fetch = |seq: u64| Ok(kept[seq as usize].clone());
+        let (rows, omitted, total) = page.finish_with(Some(&fetch)).unwrap();
+        assert_eq!((rows.len(), omitted, total), (300, 0, 300));
+        assert_eq!(rows[0][0].text, "0");
+        assert_eq!(rows[299][0].text, "299");
+        // Without the log to read them back, a kept row is an error, not a gap.
+        let mut page = Page::<Vec<Cell>>::new(&request, 6, &Arc::new(AtomicBool::new(false)));
+        page.push_at(kept[0].clone(), Some(0)).unwrap();
+        assert!(page.finish().is_err());
     }
 
     #[test]

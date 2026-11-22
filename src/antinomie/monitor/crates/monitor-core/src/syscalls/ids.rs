@@ -42,6 +42,14 @@ pub fn wire_number(id: u64) -> u64 {
     id & NUMBER_MASK
 }
 
+/// The ABI of an id, if it is one this host ships a table for; does not load
+/// the table.
+pub fn abi_of(id: u64) -> Option<Abi> {
+    [Abi::X86_64, Abi::Aarch64, Abi::Arm, Abi::I386]
+        .into_iter()
+        .find(|abi| abi.tag() == tag_of(id))
+}
+
 /// The ABI tag of an id (0: x86-64).
 pub(super) fn tag_of(id: u64) -> u64 {
     id >> ABI_SHIFT

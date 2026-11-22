@@ -166,21 +166,67 @@ fn time_a_filter_change_on_a_kept_index() {
             "filter Changed",
             change(&|r| r.filters[2] = "file.path contains \"/tmp\"".into()),
         ),
+        // ANT-T0592: the sort of the whole Read table, and the chips.
+        (
+            "sort the whole Read table",
+            change(&|r| r.sorts[5] = spec(0, false)),
+        ),
+        (
+            "sort the whole Read table, descending, page 3",
+            change(&|r| {
+                r.sorts[5] = spec(0, true);
+                r.offsets[5] = 200;
+            }),
+        ),
+        (
+            "chip: Hide libraries toggled",
+            change(&|r| r.file_visibility.hide_libraries = !r.file_visibility.hide_libraries),
+        ),
+        (
+            "chip: Hide standard I/O toggled",
+            change(&|r| r.file_visibility.hide_standard_io = !r.file_visibility.hide_standard_io),
+        ),
+        (
+            "chip: Failed attempts toggled",
+            change(&|r| r.file_visibility.show_failed = !r.file_visibility.show_failed),
+        ),
+        (
+            "chip: Show INFO",
+            change(&|r| r.finding_view.show_info = !r.finding_view.show_info),
+        ),
         ("back to no filter", request.clone()),
     ];
     let mut last = None;
+    let chips = std::env::var_os("ANT_TIMING_CHIPS").is_some();
     for (name, next) in &requests {
+        // A chip is a full scan (minutes) until ANT-T0592's chips are answered
+        // from the rows: only with `ANT_TIMING_CHIPS=1`.
+        if name.starts_with("chip:") && !chips {
+            continue;
+        }
         let at = Instant::now();
         let reads = READS.with(std::cell::Cell::get);
         let done = scan_archive_query(&dir, None, false, &cancel, next).unwrap();
         eprintln!(
-            "TIMING {name}: {:.2} s ({} scans), read {} rows, findings {}, peak {} MiB",
+            "TIMING {name}: {:.2} s ({} scans), read {} rows ({} omitted), findings {}, peak {} MiB",
             at.elapsed().as_secs_f64(),
             READS.with(std::cell::Cell::get) - reads,
             done.read.len(),
+            done.read_omitted,
             done.findings.len(),
             peak_rss_mib()
         );
+        // With `ANT_TIMING_VERIFY=<part of a name>`: the answers of the
+        // requests whose name has it are checked against a scan that keeps
+        // nothing (a full scan each).
+        if std::env::var("ANT_TIMING_VERIFY").is_ok_and(|part| name.contains(part.as_str())) {
+            let mut plain = next.clone();
+            plain.keep_index = false;
+            let full = scan_archive_uncached(&dir, None, false, &cancel, &plain).unwrap();
+            let differences = requery::differences(&done, &full);
+            eprintln!("TIMING {name}: differences from a full scan: {differences:?}");
+            assert!(differences.is_empty(), "{name}: {differences:?}");
+        }
         last = Some((next.clone(), done));
     }
     if mode == "verify" {

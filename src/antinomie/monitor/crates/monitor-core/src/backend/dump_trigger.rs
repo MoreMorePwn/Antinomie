@@ -18,6 +18,11 @@ const RETRY_EVERY: Duration = Duration::from_millis(500);
 /// Asks per match; with [`RETRY_EVERY`] it stays inside the core's timeout.
 const RETRY_MAX: u32 = 8;
 
+/// What the worker spends on the list of processes that tells what a refused
+/// process started: at most this long, and at most [`LIST_MAX`] processes.
+const LIST_BUDGET: Duration = Duration::from_secs(2);
+const LIST_MAX: usize = 256;
+
 pub(super) struct CoreRetry {
     cookie: u64,
     finding: LiveFinding,
@@ -322,11 +327,14 @@ impl Worker {
             return (failed("the call names no process"), true);
         }
         let timeout = session.reply_timeout();
-        let page = match session.list_processes(
+        // Sorted by pid: the process, if there, is on the first page.
+        let page = match session.list_processes_within(
             pid.saturating_sub(1),
             &mut self.snapshot,
             &self.sender,
             timeout,
+            1,
+            None,
         ) {
             Ok(page) => page,
             Err(error) => return (failed(format!("process list: {error}")), false),
@@ -671,30 +679,54 @@ impl Worker {
     /// waiting for it (vfork and posix_spawn share memory until that program
     /// runs), or nothing more is known.
     fn explain_refused_core(&mut self, cookie: u64, finding: &LiveFinding) {
-        let exec = self
-            .session
-            .as_ref()
+        let session = self.session.as_ref();
+        let watch = session
             .and_then(|session| session.runs.get(&cookie))
-            .and_then(|run| run.watch.as_ref())
-            .is_some_and(|watch| watch.exec_unfinished(finding));
-        let tries = self
-            .core_refusals
-            .entry((cookie, finding.pid, finding.call_id))
-            .or_insert(0);
-        *tries += 1;
-        if *tries <= RETRY_MAX {
-            self.core_retries.push(CoreRetry {
-                cookie,
-                finding: finding.clone(),
-                due: Instant::now() + RETRY_EVERY,
-            });
+            .and_then(|run| run.watch.as_ref());
+        let exec = watch.is_some_and(|watch| watch.exec_unfinished(finding));
+        // An ia32 or x32 program, or an AArch32 one on a guest without ELF32
+        // cores, is refused for good: no list of processes, no retry.
+        let permanent = if exec {
+            None
+        } else {
+            crate::dump_trigger::permanent_core_refusal(
+                watch.and_then(|watch| watch.program_abi(finding.pid)),
+                session
+                    .and_then(|session| session.core_limits)
+                    .is_some_and(|limits| limits.compat_elf32),
+            )
+        };
+        if permanent.is_none() {
+            let tries = self
+                .core_refusals
+                .entry((cookie, finding.pid, finding.call_id))
+                .or_insert(0);
+            *tries += 1;
+            if *tries <= RETRY_MAX {
+                self.core_retries.push(CoreRetry {
+                    cookie,
+                    finding: finding.clone(),
+                    due: Instant::now() + RETRY_EVERY,
+                });
+            }
         }
         let mut started = None;
-        if !exec && let Some(session) = self.session.as_mut() {
+        if !exec
+            && permanent.is_none()
+            && let Some(session) = self.session.as_mut()
+        {
+            // Bounded: the worker waits for no more than one retry's time, and
+            // for no more than the processes that can have started since.
             let timeout = session.reply_timeout();
-            if let Ok(page) =
-                session.list_processes(finding.pid, &mut self.snapshot, &self.sender, timeout)
-            {
+            let deadline = Instant::now() + LIST_BUDGET;
+            if let Ok(page) = session.list_processes_within(
+                finding.pid,
+                &mut self.snapshot,
+                &self.sender,
+                timeout,
+                LIST_MAX,
+                Some(deadline),
+            ) {
                 started = page
                     .processes
                     .iter()
@@ -711,11 +743,13 @@ impl Worker {
                     && core.refused
                 {
                     let guest = core.error.take().unwrap_or_default();
-                    core.error = Some(crate::dump_trigger::refused_core_text(
-                        exec,
-                        started.as_ref().map(|(pid, name)| (*pid, name.as_str())),
-                        &guest,
-                    ));
+                    core.error = Some(permanent.clone().unwrap_or_else(|| {
+                        crate::dump_trigger::refused_core_text(
+                            exec,
+                            started.as_ref().map(|(pid, name)| (*pid, name.as_str())),
+                            &guest,
+                        )
+                    }));
                 }
             }
             crate::dump_trigger::trim_refused(log);

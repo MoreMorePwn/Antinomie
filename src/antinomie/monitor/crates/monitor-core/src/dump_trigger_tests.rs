@@ -681,3 +681,61 @@ fn a_refused_core_names_what_the_process_was_doing() {
     assert!(plain.starts_with(guest));
     assert!(plain.ends_with("the next match may take one."));
 }
+
+#[test]
+fn a_core_refused_for_good_is_told_by_the_program_s_abi() {
+    // Which program made a call, from the id the event carries.
+    assert_eq!(ProgramAbi::of_call(id(Abi::X86_64, 59)), ProgramAbi::Native);
+    assert_eq!(
+        ProgramAbi::of_call(id(Abi::Aarch64, 221)),
+        ProgramAbi::Native
+    );
+    assert_eq!(ProgramAbi::of_call(id(Abi::I386, 11)), ProgramAbi::Ia32);
+    assert_eq!(ProgramAbi::of_call(id(Abi::Arm, 11)), ProgramAbi::Aarch32);
+    assert_eq!(
+        ProgramAbi::of_call(id(Abi::X86_64, 0x4000_0000 + 520)),
+        ProgramAbi::X32
+    );
+    // The decision: no retry for ia32, x32 and AArch32 before revision 21.
+    let ia32 = permanent_core_refusal(Some(ProgramAbi::Ia32), false).unwrap();
+    assert!(
+        ia32.starts_with("The guest writes no core of an ia32 program"),
+        "{ia32}"
+    );
+    assert!(ia32.contains("did not use up the trigger's cores"));
+    assert!(
+        !ia32.contains("held by a debugger"),
+        "no list of possibilities: {ia32}"
+    );
+    let x32 = permanent_core_refusal(Some(ProgramAbi::X32), true).unwrap();
+    assert!(x32.contains("x32 program"), "{x32}");
+    let old = permanent_core_refusal(Some(ProgramAbi::Aarch32), false).unwrap();
+    assert!(old.contains("revision 21 or later"), "{old}");
+    // May pass: a native program, a revision-21 AArch32 program, an unseen one.
+    assert_eq!(
+        permanent_core_refusal(Some(ProgramAbi::Aarch32), true),
+        None
+    );
+    assert_eq!(
+        permanent_core_refusal(Some(ProgramAbi::Native), false),
+        None
+    );
+    assert_eq!(permanent_core_refusal(None, false), None);
+}
+
+#[test]
+fn the_watch_knows_each_process_s_abi_by_its_latest_call() {
+    let mut watch = Watch::with_judge(
+        Box::new(OpenJudge(Arc::default())),
+        &DumpTrigger::default(),
+        &[],
+    );
+    let call = |call_id: u64, nr: u64| event(call_id, 1, nr);
+    assert_eq!(watch.program_abi(7), None);
+    watch.event(call(1, id(Abi::I386, 11)));
+    assert_eq!(watch.program_abi(7), Some(ProgramAbi::Ia32));
+    // A compat program that executes a native one is native from then on.
+    watch.event(call(2, id(Abi::X86_64, 59)));
+    assert_eq!(watch.program_abi(7), Some(ProgramAbi::Native));
+    assert_eq!(watch.program_abi(8), None);
+}

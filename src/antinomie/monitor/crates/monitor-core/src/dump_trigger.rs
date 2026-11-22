@@ -430,6 +430,8 @@ pub(crate) struct Watch {
     /// The latest (call id, phase) seen from each process, whatever the call:
     /// says whether a process that executed a program has gone on to run it.
     seen: HashMap<u32, (u64, u8)>,
+    /// The kind of program each process last called from (ANT-T0598).
+    abis: HashMap<u32, ProgramAbi>,
     /// Matches at an exec call whose program has not started yet (ANT-T0591):
     /// a process inside `execve` cannot be paused for a core, so the match
     /// waits for the new image's first call, or for [`EXEC_WAIT`].
@@ -459,6 +461,7 @@ impl Watch {
             hold_grace: HOLD_GRACE,
             settled: false,
             seen: HashMap::new(),
+            abis: HashMap::new(),
             deferred: VecDeque::new(),
             exec_wait: EXEC_WAIT,
         }
@@ -531,6 +534,11 @@ impl Watch {
             }
             let at = self.seen.entry(event.pid).or_default();
             *at = (*at).max((event.call_id, event.phase));
+            if self.abis.len() >= PENDING_MAX {
+                self.abis.clear();
+            }
+            self.abis
+                .insert(event.pid, ProgramAbi::of_call(event.syscall_nr));
         }
         if !matches!(event.phase, 1 | 2)
             || (!self.keep.is_empty() && !self.keep.contains(&event.syscall_nr))
@@ -553,6 +561,11 @@ impl Watch {
             Some(entry) => self.judge_events(&[entry, event]),
             None => self.judge_events(&[event]),
         }
+    }
+
+    /// The kind of program `pid` last called from, if the run saw it.
+    pub(crate) fn program_abi(&self, pid: u32) -> Option<ProgramAbi> {
+        self.abis.get(&pid).copied()
     }
 
     /// An exec call's match whose program has run on: the exec call returned
@@ -670,6 +683,59 @@ pub fn refused_core_text(exec: bool, started: Option<(u32, &str)>, guest: &str) 
         )
     } else {
         format!("{} {kept}", guest.trim_end())
+    }
+}
+
+/// The kind of program a process runs, from the ABI of its calls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgramAbi {
+    /// The guest's own ABI: x86-64 on x86-64, AArch64 on arm64.
+    Native,
+    /// A 32-bit x86 program on an x86-64 guest.
+    Ia32,
+    /// An x32 program (x86-64 instructions, 32-bit pointers).
+    X32,
+    /// An AArch32 program on an arm64 guest.
+    Aarch32,
+}
+
+impl ProgramAbi {
+    /// The program that made the call with host syscall id `id` (an event's
+    /// `syscall_nr`).
+    pub fn of_call(id: u64) -> Self {
+        use crate::syscalls::Abi;
+        /// `__X32_SYSCALL_BIT`: x32 calls are x86-64 numbers with it set.
+        const X32_BIT: u64 = 0x4000_0000;
+        match crate::syscalls::abi_of(id) {
+            Some(Abi::I386) => Self::Ia32,
+            Some(Abi::Arm) => Self::Aarch32,
+            Some(Abi::X86_64) if crate::syscalls::wire_number(id) & X32_BIT != 0 => Self::X32,
+            _ => Self::Native,
+        }
+    }
+}
+
+/// Whether a live core refused with -95 (unsupported) for a program of kind
+/// `abi` can never pass, and if so the plain words for it. An ia32 or x32
+/// program on an x86-64 guest never gets a core; an AArch32 program on an
+/// arm64 guest gets one only from guest revision 21 on (`compat_elf32`).
+/// Other programs, and a program whose kind the run did not see, may be
+/// refused only for the moment (busy, not pausable, ANT-T0591).
+pub fn permanent_core_refusal(abi: Option<ProgramAbi>, compat_elf32: bool) -> Option<String> {
+    let kept = "This did not use up the trigger's cores: the next match may take one.";
+    match abi? {
+        ProgramAbi::Native => None,
+        ProgramAbi::Ia32 => Some(format!(
+            "The guest writes no core of an ia32 program (a 32-bit x86 program on an x86-64 guest). {kept}"
+        )),
+        ProgramAbi::X32 => Some(format!(
+            "The guest writes no core of an x32 program (x86-64 with 32-bit pointers). {kept}"
+        )),
+        ProgramAbi::Aarch32 if !compat_elf32 => Some(format!(
+            "The guest writes no core of an AArch32 program: this arm64 base is guest revision 20 \
+             or older; use a base of revision 21 or later. {kept}"
+        )),
+        ProgramAbi::Aarch32 => None,
     }
 }
 
