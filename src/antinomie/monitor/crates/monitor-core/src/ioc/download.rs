@@ -42,6 +42,15 @@ struct UpdateLock {
     _file: File,
 }
 
+impl Drop for UpdateLock {
+    /// Unlock explicitly: closing the file is not enough while a process forked
+    /// in that moment (curl, a tool) still holds a copy of the descriptor
+    /// until its `exec`, and the lock lives with the open file, not the copy.
+    fn drop(&mut self) {
+        let _ = rustix::fs::flock(&self._file, rustix::fs::FlockOperation::Unlock);
+    }
+}
+
 /// Take the update lock of `data_dir`'s datasets without waiting.
 fn update_lock(data_dir: &Path) -> Result<UpdateLock, String> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -932,6 +941,19 @@ mod tests {
             &mut quiet,
         )
         .unwrap();
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_update_lock_is_free_at_once_even_while_a_forked_child_holds_the_descriptor() {
+        let dir = data_dir("lockfork");
+        let lock = update_lock(&dir).unwrap();
+        // What a process forked by another thread holds until its exec.
+        let inherited = lock._file.try_clone().unwrap();
+        assert!(update_lock(&dir).err().unwrap().starts_with(UPDATE_BUSY));
+        drop(lock);
+        update_lock(&dir).expect("released when the update ends");
+        drop(inherited);
         let _ = fs::remove_dir_all(dir);
     }
 
