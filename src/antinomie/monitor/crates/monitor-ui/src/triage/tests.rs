@@ -7,6 +7,7 @@ mod async_previews;
 mod layout;
 mod scroll;
 mod suspicious;
+mod tab_bar;
 mod theme_switch;
 
 #[test]
