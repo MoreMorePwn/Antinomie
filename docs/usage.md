@@ -2093,6 +2093,17 @@ then gone as before. On an older base the run's notes say the base cannot hold
 a process at its exit, and a program that matches and exits within a few tens of
 milliseconds can be gone before the guest can pause it.
 
+**Known issue (0.9.0): the sample can see a held process.** While a process is
+held at its exit it is still listed in `/proc`, with its `/proc/<pid>/exe` link,
+and on a TCG guest that can last a few hundred milliseconds. A program that
+daemonizes (forks, lets its parent exit, forks again) and then checks whether a
+copy of itself is already running sees its own exiting parent or grandparent and
+quits at once. An arm64 IoT bot did exactly that: it scanned every
+`/proc/<pid>/exe`, found its grandparent, and exited after half a second with no
+network activity. If a sample forks and exits right away, untick the trigger's
+core (the memory dump does not hold processes) and take a core by hand from the
+process list once it has settled.
+
 The guest copies only the pages that are in memory when it reads a live core
 (never swapped-out or untouched pages) and the thread contexts it could park. A
 trigger core whose only gap is pages that were not in memory, with **Read

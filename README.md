@@ -56,7 +56,7 @@ is the recorded run; no VM is running.</sub>
 > sample can still do.
 
 > [!NOTE]
-> This README describes **0.8.3**, a host-only release on the 0.8 line. Download it
+> This README describes **0.9.0**, which adds arm64 guests and new revision-22 bases. Download it
 > from [Releases](https://github.com/MoreMorePwn/Antinomie/releases); the
 > [changelog](CHANGELOG.md) lists every change.
 
@@ -169,14 +169,14 @@ and network card into its disk without root; BusyBox VMs do not need it:
 sudo apt install qemu-system-x86 qemu-utils qemu-system-gui curl libsqlite3-0 bubblewrap tshark util-linux libguestfs-tools
 ```
 
-Download `antinomie-0.8.3-linux-x86_64.tar.gz` and `SHA256SUMS` from
+Download `antinomie-0.9.0-linux-x86_64.tar.gz` and `SHA256SUMS` from
 [Releases](https://github.com/MoreMorePwn/Antinomie/releases) into one folder,
 then verify, extract and install for your user (no root):
 
 ```sh
 sha256sum --check SHA256SUMS
-tar -xzf antinomie-0.8.3-linux-x86_64.tar.gz
-cd antinomie-0.8.3
+tar -xzf antinomie-0.9.0-linux-x86_64.tar.gz
+cd antinomie-0.9.0
 ./install.sh
 antinomie --check-dependencies
 antinomie
@@ -202,7 +202,7 @@ antinomie
 Install the [host build prerequisites](src/antinomie/monitor/README.md#build-and-run), then:
 
 ```sh
-git clone --branch v0.8.3 https://github.com/MoreMorePwn/Antinomie.git
+git clone --branch v0.9.0 https://github.com/MoreMorePwn/Antinomie.git
 cd Antinomie
 ./run.sh
 ```

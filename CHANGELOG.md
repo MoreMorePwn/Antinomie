@@ -6,6 +6,23 @@ it runs.
 
 ## 0.9.0 — 2026-MM-DD
 
+Antinomie 0.9.0 runs arm64 programs: BusyBox, Debian 13 Minimal and Debian 13
+GNOME bases for arm64, with an IoT device profile, 32-bit ARM programs on them,
+and 32-bit x86 programs on x86-64 bases, each recorded by its own call table. It
+comes with new revision-22 bases: a hardened guest that hides itself better and
+holds an exiting process for a trigger's core, and a BusyBox camera base for IoT
+bots with InetSim telnet victims, FTP and TFTP. Also new: timed screenshots of
+the VM screen, a Statistics window, the debugger on arm64, uptime and clock
+settings in the device profile, faster Triage on large runs (filters and pages
+answered from the run's kept rows), and many fixes from evaluations with real
+malware. Details follow.
+
+**Known issue.** A process held at its exit for a dump trigger's core is still
+visible in `/proc` for up to a few hundred milliseconds on a TCG guest; a sample
+that daemonizes and checks for a running copy of itself can see its own exiting
+parent and quit. Untick the trigger's core for such samples (see
+[docs/usage.md](docs/usage.md#dump-when-suspicious-activity-is-seen)).
+
 Runs the bases 0.8.3 runs (contract revision 20), revision-21 bases and the
 bases built by this release (contract revision 22), arm64 BusyBox, Debian 13
 Minimal and Debian 13 GNOME among them. An app older than 0.9.0 refuses a revision-21 or 22 base and
