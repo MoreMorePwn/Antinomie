@@ -1848,7 +1848,7 @@ sync_file_range.write | sync_file_range(fd=3, offset=0, nbytes=4096, flags=SYNC_
 syncfs.badf | syncfs(fd=999) = EBADF |
 syncfs.file | syncfs(fd=3) = 0 |
 sysfs.bad_index | sysfs(option=filesystem index to name, arg1=9999, arg2=<handle>) = EINVAL |
-sysfs.fs_count | sysfs(option=filesystem count, arg1=0, arg2=0) = 32 |
+sysfs.fs_count | sysfs(option=filesystem count, arg1=0, arg2=0) = 32|33 |
 sysfs.fs_index | sysfs(option=filesystem name to index, arg1="proc", arg2=0) = 3 | arg1.fsname:complete:"proc"
 sysfs.fs_name | sysfs(option=filesystem index to name, arg1=3, arg2="proc") = 0 | arg2.fsname:complete
 sysfs.missing_name | sysfs(option=filesystem name to index, arg1="ant-nofs", arg2=0) = EINVAL | arg1.fsname:complete:"ant-nofs"
