@@ -493,3 +493,191 @@ fn each_dump_kind_counts_against_its_own_limit() {
     bad.max_cores = 9;
     assert!(bad.validate().unwrap_err().contains("cores"));
 }
+
+/// A judge that matches every `execve` at High (the dropped-exec rule).
+struct ExecJudge;
+
+impl LiveJudge for ExecJudge {
+    fn judge(&mut self, call: &InvocationSummary) -> Vec<LiveFinding> {
+        let event = call.entry.as_ref().or(call.exit.as_ref()).unwrap();
+        if known_name(event.syscall_nr) != Some("execve") {
+            return Vec::new();
+        }
+        vec![LiveFinding {
+            rule: "execution.dropped_exec".into(),
+            summary: "/tmp/.x was written during the run and is now executed".into(),
+            tier: TriggerTier::High,
+            pid: event.pid,
+            tid: event.tid,
+            task_cookie: event.task_cookie,
+            stream_id: event.stream_id,
+            call_id: event.call_id,
+            guest_ns: event.timestamp_ns,
+            syscall: "execve".into(),
+        }]
+    }
+}
+
+fn exec_watch() -> Watch {
+    Watch::with_judge(Box::new(ExecJudge), &DumpTrigger::default(), &keep())
+}
+
+#[test]
+fn a_match_at_an_exec_still_running_waits_for_the_new_programs_first_call() {
+    let (execve, openat) = (id(Abi::X86_64, 59), id(Abi::X86_64, 257));
+    let mut watch = exec_watch();
+    // The entry of the exec, whose exit has not come (the judge sees it alone).
+    let entry = event(1, 1, execve);
+    watch.event(entry.clone());
+    watch.order.clear();
+    let entry = watch
+        .pending
+        .drain()
+        .next()
+        .map(|(_, e)| e)
+        .unwrap_or(entry);
+    watch.judge_events(&[entry]);
+    assert!(watch.queue.is_empty(), "the process is inside execve");
+    assert_eq!(watch.deferred.len(), 1);
+    watch.tick();
+    assert!(watch.queue.is_empty());
+    // The new image's first call (any call, watched or not) ends the wait.
+    watch.event(event(2, 1, openat));
+    watch.tick();
+    assert!(watch.deferred.is_empty());
+    assert_eq!(watch.queue.len(), 1);
+    assert_eq!(watch.queue[0].call_id, 1);
+}
+
+#[test]
+fn an_exec_that_has_returned_is_not_waited_for() {
+    let execve = id(Abi::X86_64, 59);
+    let mut watch = exec_watch();
+    watch.event(event(1, 1, execve));
+    watch.event(event(1, 2, execve));
+    assert_eq!(watch.queue.len(), 1);
+    assert!(watch.deferred.is_empty());
+    assert!(!watch.exec_unfinished(&watch.queue[0]));
+}
+
+#[test]
+fn an_exec_that_never_returns_waits_only_a_bounded_time_and_a_flush_ends_it() {
+    let execve = id(Abi::X86_64, 59);
+    let mut watch = exec_watch();
+    watch.exec_wait = Duration::from_millis(30);
+    let first = event(1, 1, execve);
+    watch.judge_events(std::slice::from_ref(&first));
+    assert_eq!(watch.deferred.len(), 1);
+    assert!(watch.exec_unfinished(&watch.deferred[0].0));
+    std::thread::sleep(Duration::from_millis(40));
+    watch.tick();
+    assert_eq!(watch.queue.len(), 1, "the core is asked for anyway");
+    // A run that ends hands over what still waits.
+    let mut ended = exec_watch();
+    ended.judge_events(&[first]);
+    assert!(ended.queue.is_empty());
+    ended.flush();
+    assert_eq!(ended.queue.len(), 1);
+}
+
+#[test]
+fn a_held_process_is_not_waited_for() {
+    let execve = id(Abi::X86_64, 59);
+    let mut watch = exec_watch();
+    watch.judge_events(&[event(1, 1, execve)]);
+    assert_eq!(watch.deferred.len(), 1);
+    watch.hold(7, 7);
+    assert_eq!(watch.queue.len(), 1);
+}
+
+fn refused_record(at_ms: u64, refused: bool) -> TriggerRecord {
+    TriggerRecord {
+        at_ms,
+        finding: LiveFinding {
+            rule: "execution.dropped_exec".into(),
+            summary: String::new(),
+            tier: TriggerTier::High,
+            pid: 189,
+            tid: 189,
+            task_cookie: 1,
+            stream_id: 1,
+            call_id: 21,
+            guest_ns: 0,
+            syscall: "execve".into(),
+        },
+        memory: None,
+        core: Some(TriggerDump {
+            refused,
+            ..TriggerDump::default()
+        }),
+        held: false,
+    }
+}
+
+#[test]
+fn a_core_the_guest_refused_does_not_use_up_the_trigger_s_cores() {
+    let plan = DumpTrigger::default();
+    assert_eq!(plan.max_cores, 1);
+    let mut log = TriggerLog::default();
+    log.records.push(refused_record(1, true));
+    assert_eq!(plan.room(&log), (true, false), "the one core is still free");
+    assert!(!log.records[0].counts(), "and it starts no cooldown");
+    // A core that was taken still uses it up.
+    log.records.push(refused_record(2, false));
+    assert_eq!(plan.room(&log), (false, false));
+    assert!(log.records[1].counts());
+    // A refused core beside a memory dump still counts for the memory dump.
+    let mut both = refused_record(3, true);
+    both.memory = Some(TriggerDump::default());
+    assert!(both.counts());
+}
+
+#[test]
+fn only_the_refusals_that_may_pass_are_retried_and_a_log_keeps_the_newest_few() {
+    use crate::core_limits::CoreReasonCode as Code;
+    for code in [Code::Unsupported, Code::Interrupted, Code::Deadline] {
+        assert!(retryable_core_refusal(code), "{code:?}");
+    }
+    for code in [
+        Code::Writer,
+        Code::Budget,
+        Code::Canceled,
+        Code::ProcessGone,
+    ] {
+        assert!(!retryable_core_refusal(code), "{code:?}");
+    }
+    let mut log = TriggerLog::default();
+    for at in 0..12 {
+        log.records.push(refused_record(at, true));
+    }
+    log.records.push(refused_record(99, false));
+    trim_refused(&mut log);
+    assert_eq!(log.records.len(), REFUSED_KEPT + 1);
+    assert_eq!(log.records[0].at_ms, 4, "the oldest went");
+    assert_eq!(log.records.last().map(|r| r.at_ms), Some(99));
+}
+
+#[test]
+fn a_refused_core_names_what_the_process_was_doing() {
+    let guest = "The process could not be paused for a core (it was stopped, held by a debugger, or has \
+                 more threads than the guest allows) (guest state 5, status -95).";
+    let exec = refused_core_text(true, None, guest);
+    assert!(
+        exec.starts_with("The process was replacing its program (execve)"),
+        "{exec}"
+    );
+    assert!(exec.contains("(guest state 5, status -95)."), "{exec}");
+    assert!(!exec.contains("held by a debugger"), "{exec}");
+    assert!(exec.contains("the next match may take one"));
+    let spawn = refused_core_text(false, Some((190, "xmrig")), guest);
+    assert!(
+        spawn.contains("another program (xmrig, process 190)"),
+        "{spawn}"
+    );
+    assert!(spawn.contains("vfork or posix_spawn"), "{spawn}");
+    assert!(spawn.contains("status -95"));
+    // Nothing more known: the guest's own words stay, with the budget note.
+    let plain = refused_core_text(false, None, guest);
+    assert!(plain.starts_with(guest));
+    assert!(plain.ends_with("the next match may take one."));
+}

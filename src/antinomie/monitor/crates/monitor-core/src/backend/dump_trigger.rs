@@ -11,6 +11,19 @@ use crate::observation::GuestProcessIdentity;
 /// Free disk space that must remain after a memory dump, bytes.
 const DISK_RESERVE: u64 = 1 << 30;
 
+/// Asks the guest again for a core it refused while the process was busy: a
+/// process waiting for a vfork or posix_spawn child is free once the child
+/// has started its program or ended.
+const RETRY_EVERY: Duration = Duration::from_millis(500);
+/// Asks per match; with [`RETRY_EVERY`] it stays inside the core's timeout.
+const RETRY_MAX: u32 = 8;
+
+pub(super) struct CoreRetry {
+    cookie: u64,
+    finding: LiveFinding,
+    due: Instant,
+}
+
 /// A trigger core the guest refused because its process was not there.
 struct GoneCore {
     cookie: u64,
@@ -89,6 +102,7 @@ impl Worker {
         for (cookie, finding) in found {
             self.take_trigger(cookie, finding);
         }
+        self.retry_refused_cores();
         self.release_held(releases);
         for cookie in over {
             self.note_settled_trigger(cookie);
@@ -149,11 +163,16 @@ impl Worker {
             .and_then(|watch| watch.held.remove(&finding.pid));
         let held = hold.is_some();
         let log = run.summary.triggers.get_or_insert_with(TriggerLog::default);
-        let cooling = log.records.last().is_some_and(|last| {
-            now < last
-                .at_ms
-                .saturating_add(u64::from(plan.cooldown_secs) * 1000)
-        });
+        let cooling = log
+            .records
+            .iter()
+            .rev()
+            .find(|r| r.counts())
+            .is_some_and(|last| {
+                now < last
+                    .at_ms
+                    .saturating_add(u64::from(plan.cooldown_secs) * 1000)
+            });
         if !run.summary.state.is_live() {
             // The run ended before the match was handled: the process is gone
             // too, and a note says by how much the dump was late.
@@ -436,6 +455,7 @@ impl Worker {
         let mut start_memory = Vec::new();
         let mut changed = Vec::new();
         let mut gone = Vec::new();
+        let mut refused = Vec::new();
         let self_dump = self
             .snapshot
             .memory_dump
@@ -477,6 +497,16 @@ impl Worker {
                             .or_else(|| summary.issue.clone());
                         core.note.clone_from(&summary.note);
                         touched = true;
+                        if state == RunArtifactState::Failed
+                            && summary.reason.as_ref().is_some_and(|reason| {
+                                crate::dump_trigger::retryable_core_refusal(reason.code)
+                            })
+                        {
+                            // Not a core taken: the match did not use up the
+                            // trigger's cores, and the next one may try again.
+                            core.refused = true;
+                            refused.push((*cookie, record.finding.clone()));
+                        }
                         if state == RunArtifactState::Failed
                             && record.memory.is_none()
                             && summary.reason.as_ref().is_some_and(|reason| {
@@ -566,6 +596,130 @@ impl Worker {
         for core in gone {
             self.retry_or_skip_core(core);
         }
+        for (cookie, finding) in refused {
+            self.explain_refused_core(cookie, &finding);
+        }
+    }
+
+    /// Ask again for the cores the guest refused, once their wait is over:
+    /// the refused record becomes the new request, which may be refused in
+    /// turn (up to [`RETRY_MAX`] times) or taken.
+    fn retry_refused_cores(&mut self) {
+        let now = Instant::now();
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.core_retries)
+            .into_iter()
+            .partition(|retry| retry.due <= now);
+        self.core_retries = waiting;
+        for CoreRetry {
+            cookie, finding, ..
+        } in due
+        {
+            let Some(run) = self
+                .session
+                .as_ref()
+                .and_then(|session| session.runs.get(&cookie))
+            else {
+                continue;
+            };
+            let waiting = run.summary.triggers.as_ref().is_some_and(|log| {
+                log.records.iter().any(|record| {
+                    record.finding == finding && record.core.as_ref().is_some_and(|c| c.refused)
+                })
+            });
+            // Another match may have taken the trigger's core meanwhile.
+            let room = run
+                .summary
+                .request
+                .dump_trigger
+                .as_ref()
+                .zip(run.summary.triggers.as_ref())
+                .is_some_and(|(plan, log)| {
+                    let others = TriggerLog {
+                        records: log.records.iter().filter(|r| r.counts()).cloned().collect(),
+                        ..TriggerLog::default()
+                    };
+                    plan.room(&others).0
+                });
+            if !waiting || !room || !run.summary.state.is_live() {
+                continue;
+            }
+            let (run_id, root_pid) = (run.summary.id.clone(), run.summary.pid);
+            let limits = (
+                run.summary.request.core_max_size,
+                run.summary.request.core_timeout_ms,
+            );
+            let (core, gone) = self.queue_trigger_core(&finding, &run_id, root_pid, limits, None);
+            if gone {
+                // The process ended meanwhile: the refusal stays as it was.
+                continue;
+            }
+            self.save_trigger(cookie, |log| {
+                if let Some(record) = log.records.iter_mut().find(|record| {
+                    record.finding == finding && record.core.as_ref().is_some_and(|c| c.refused)
+                }) {
+                    record.core = Some(core);
+                }
+            });
+            self.check_manual_cores();
+        }
+    }
+
+    /// The guest could not pause the process for a trigger's core: say why,
+    /// as far as the run shows it, in place of the guest's list of
+    /// possibilities. The process was inside `execve` (the match waited for
+    /// it and the wait ran out), or it has just started a program and was
+    /// waiting for it (vfork and posix_spawn share memory until that program
+    /// runs), or nothing more is known.
+    fn explain_refused_core(&mut self, cookie: u64, finding: &LiveFinding) {
+        let exec = self
+            .session
+            .as_ref()
+            .and_then(|session| session.runs.get(&cookie))
+            .and_then(|run| run.watch.as_ref())
+            .is_some_and(|watch| watch.exec_unfinished(finding));
+        let tries = self
+            .core_refusals
+            .entry((cookie, finding.pid, finding.call_id))
+            .or_insert(0);
+        *tries += 1;
+        if *tries <= RETRY_MAX {
+            self.core_retries.push(CoreRetry {
+                cookie,
+                finding: finding.clone(),
+                due: Instant::now() + RETRY_EVERY,
+            });
+        }
+        let mut started = None;
+        if !exec && let Some(session) = self.session.as_mut() {
+            let timeout = session.reply_timeout();
+            if let Ok(page) =
+                session.list_processes(finding.pid, &mut self.snapshot, &self.sender, timeout)
+            {
+                started = page
+                    .processes
+                    .iter()
+                    .find(|process| process.parent_tgid == finding.pid)
+                    .map(|process| (process.identity.tgid, process.command.clone()));
+            }
+        }
+        self.save_trigger(cookie, |log| {
+            for record in &mut log.records {
+                if record.finding != *finding {
+                    continue;
+                }
+                if let Some(core) = record.core.as_mut()
+                    && core.refused
+                {
+                    let guest = core.error.take().unwrap_or_default();
+                    core.error = Some(crate::dump_trigger::refused_core_text(
+                        exec,
+                        started.as_ref().map(|(pid, name)| (*pid, name.as_str())),
+                        &guest,
+                    ));
+                }
+            }
+            crate::dump_trigger::trim_refused(log);
+        });
     }
 
     /// The guest found no such process for a trigger's core. When the process

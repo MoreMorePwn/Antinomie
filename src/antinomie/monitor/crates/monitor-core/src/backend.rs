@@ -60,7 +60,7 @@ use crate::{
     vm::VmProcess,
 };
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     fs::{self, File},
     io::{BufReader, Read, Seek, SeekFrom},
     path::PathBuf,
@@ -238,6 +238,8 @@ impl Backend {
                     build: None,
                     tool: None,
                     last_publish: Instant::now(),
+                    core_retries: Vec::new(),
+                    core_refusals: HashMap::new(),
                     layer_scan: Instant::now(),
                     layer_sweep: Vec::new(),
                     latest_snapshot: worker_snapshot,
@@ -805,6 +807,10 @@ struct Worker {
     /// In-flight analysis tool installation.
     tool: Option<ToolJob>,
     last_publish: Instant,
+    /// Trigger cores the guest refused that are asked for again (ANT-T0591).
+    core_retries: Vec<dump_trigger::CoreRetry>,
+    /// How many times each refused match was asked again.
+    core_refusals: HashMap<(u64, u32, u64), u32>,
     /// When the pending disk layers were last read.
     layer_scan: Instant,
     /// VMs whose `snapshots/` folder the startup sweep has still to go over
