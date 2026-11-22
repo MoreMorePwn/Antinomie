@@ -705,6 +705,7 @@ their entries are listed in full.
 - **A job resumed at `analyse` lists each report file once.** A job resumed after a daemon stop or crash wrote its report again under the same names and added a second set of artifact rows; the first rows kept the old hash, so `artifact.get` of their ids served the new file under a hash it did not have. Writing an artifact at the same place now replaces its row.
 - **An event subscription may filter on `job.trigger`.** `{"op":"subscribe","types":["job.trigger"]}` was refused with `invalid_argument`; an unfiltered subscription received it.
 - **`capabilities.queries.limits` reports the `[query]` settings in force.** It reported the defaults, so a client sizing its read concurrency from it used the wrong numbers when `service.toml` set them.
+- **A trigger core the guest can never take is not asked for again (ANT-T0598).** A core refused for an ia32 or x32 program on an x86-64 guest, or for an AArch32 program on an arm64 base older than guest revision 21, was asked for up to eight more times and ended with a guess about busy processes. Such a refusal now says what it is ("The guest writes no core of an ia32 program"), is not retried, is not counted for the trigger's cores, and lists no guest processes. The list a refused core does read is bounded (256 processes, 2 seconds), and a trigger core request reads one page of it instead of up to 4096 processes.
 
 ## 0.9.0 — 2026-11-23
 

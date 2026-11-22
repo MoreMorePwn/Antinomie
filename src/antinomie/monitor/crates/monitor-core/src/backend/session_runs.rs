@@ -445,15 +445,41 @@ impl Session {
     ) -> Result<crate::GuestProcessPage, String> {
         /// Processes listed at most, across pages.
         const PROCESS_LIST_MAX: usize = 4096;
+        self.list_processes_within(after_pid, snapshot, sender, timeout, PROCESS_LIST_MAX, None)
+    }
+
+    /// [`Self::list_processes`] for a caller on the worker's hot path: at most
+    /// `max` processes, and with a `deadline` no request waits past it (a
+    /// slow guest cannot hold the worker for a page's whole timeout, and a
+    /// page that does not come in time is an error, ANT-T0598).
+    pub(super) fn list_processes_within(
+        &mut self,
+        after_pid: u32,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+        timeout: Duration,
+        max: usize,
+        deadline: Option<Instant>,
+    ) -> Result<crate::GuestProcessPage, String> {
         let mut page: Option<crate::GuestProcessPage> = None;
         let mut next = after_pid;
         loop {
+            let wait = match deadline {
+                Some(deadline) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return page.ok_or_else(|| "process list out of time".into());
+                    }
+                    timeout.min(left)
+                }
+                None => timeout,
+            };
             let reply = self.request(
                 control::PROCESS_LIST,
                 &control::process_list(next),
                 snapshot,
                 sender,
-                timeout,
+                wait,
             )?;
             let part = control::process_page(&reply, &self.boot_id, next)?;
             next = part.next_pid;
@@ -467,7 +493,7 @@ impl Session {
             if next == 0
                 || page
                     .as_ref()
-                    .is_some_and(|page| page.processes.len() >= PROCESS_LIST_MAX)
+                    .is_some_and(|page| page.processes.len() >= max)
             {
                 return page.ok_or_else(|| "empty process list".into());
             }
