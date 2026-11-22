@@ -13,7 +13,7 @@ body:
     attributes:
       label: Antinomie version
       description: Output of `antinomie --version`.
-      placeholder: antinomie 0.9.0
+      placeholder: antinomie 0.9.1
     validations:
       required: true
   - type: input

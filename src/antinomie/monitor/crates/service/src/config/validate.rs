@@ -223,7 +223,7 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     if config.safety.unsafe_routes_ack.is_some() {
         sink.error(
             "safety.unsafe_routes_ack",
-            "reserved: no live route is set up on this node before 0.9.1",
+            "reserved: no live route is set up on this node in this version",
         );
     }
     check_lanes(&config.lanes, sink);
@@ -231,7 +231,7 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
     {
         sink.error(
             "query.scan_cache_mib",
-            "not supported in 0.9.0: the daemon keeps 2 scans in memory; remove the key",
+            "not supported in this version: the daemon keeps 2 scans in memory; remove the key",
         );
     }
     for (name, value) in [
@@ -282,13 +282,10 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
             );
         }
         if watch.policy.is_some() {
-            sink.error(
-                &key("policy"),
-                "renamed `preset` in 0.9.0 (policies became presets)",
-            );
+            sink.error(&key("policy"), "renamed `preset` (policies became presets)");
         }
         if watch.policy_by_dir.is_some() {
-            sink.error(&key("policy_by_dir"), "renamed `preset_by_dir` in 0.9.0");
+            sink.error(&key("policy_by_dir"), "renamed `preset_by_dir`");
         }
     }
     for dir in [
@@ -317,8 +314,7 @@ fn check_service(config: &ServiceConfig, sink: &mut Sink<'_>) {
 }
 
 /// Why `[[notify.webhooks]]` is refused.
-pub const WEBHOOKS_UNSUPPORTED: &str =
-    "not supported in 0.9.0: webhooks are not delivered; use notify.on_finish or poll the run API";
+pub const WEBHOOKS_UNSUPPORTED: &str = "not supported in this version: webhooks are not delivered; use notify.on_finish or poll the run API";
 
 /// The highest priority a run can have.
 pub const MAX_PRIORITY: u8 = 9;
@@ -413,13 +409,16 @@ pub fn parse_preset(name: &str, file: &str, text: &str) -> (Option<LoadedPreset>
         sink.error(key, message);
     }
     if preset.vm.keep_on_failure {
-        sink.error("vm.keep_on_failure", "keeping a VM arrives with 0.9.1");
+        sink.error(
+            "vm.keep_on_failure",
+            "keeping a VM arrives in a later version",
+        );
     }
     if preset.network.route.is_live() {
         sink.error(
             "network.route",
             format!(
-                "route {} is not set up on this node; live routes arrive with 0.9.1",
+                "route {} is not set up on this node; live routes arrives in a later version",
                 preset.network.route
             ),
         );
@@ -779,7 +778,7 @@ fn refuse_policies(data_dir: &Path, problems: &mut Vec<Problem>) {
     problems.push(file_problem(
         Severity::Error,
         "policies",
-        "policies/ is replaced by presets/ in 0.9.0: write each policy as \
+        "policies/ is replaced by presets/: write each policy as \
          presets/<name>.toml with the keys below (default is now the built-in \
          preset standard), then remove policies/",
     ));

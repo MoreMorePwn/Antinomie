@@ -143,7 +143,10 @@ fn shape_errors_an_unknown_preset_and_reserved_keys_are_errors_not_jobs() {
         assert_eq!(error.code, ErrorCode::Unsupported, "{field}");
         assert_eq!(error.field.as_deref(), Some(field));
         assert_eq!(error.reason(), Some(ErrorReason::Reserved));
-        assert!(error.message.contains("arrives with 0.9.1"), "{error:?}");
+        assert!(
+            error.message.contains("arrives in a later version"),
+            "{error:?}"
+        );
     }
     // At its default, a reserved key is accepted.
     let fine = fx

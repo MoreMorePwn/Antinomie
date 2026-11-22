@@ -194,7 +194,7 @@ fn keeping_the_vm_needs_run_keep_vm_and_then_arrives_with_0_9_1() {
     let failure = failure_of(&fx, &holding(&[Permission::RunKeepVm]), keep);
     assert_eq!(failure.code, FailureCode::UnavailableOnNode);
     assert_eq!(failure.field.as_deref(), Some("vm.keep_on_failure"));
-    assert_eq!(failure.message, "keeping a VM arrives with 0.9.1");
+    assert_eq!(failure.message, "keeping a VM arrives in a later version");
     assert_eq!(failure.details["what"], json!("keep_vm"));
     // Asking not to keep it needs nothing.
     let job = fx

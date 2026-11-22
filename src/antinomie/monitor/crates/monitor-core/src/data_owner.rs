@@ -105,9 +105,8 @@ impl DataOwner {
         };
         let what = match record.kind {
             OwnerKind::Gui => "the Antinomie window",
-            // The daemon and the command line ship from 0.9.1; until then the app
-            // names them neutrally.
-            OwnerKind::Daemon | OwnerKind::Cli => "another Antinomie process",
+            OwnerKind::Daemon => "the Antinomie daemon",
+            OwnerKind::Cli => "an antinomie-cli command",
         };
         let lane = record
             .lane
@@ -381,10 +380,7 @@ mod tests {
         assert_eq!(owner.record.as_ref().unwrap().pid, std::process::id());
         let message = in_use_message(&owner);
         assert!(message.starts_with(IN_USE));
-        assert!(
-            message.contains("another Antinomie process")
-                && message.contains(&std::process::id().to_string())
-        );
+        assert!(message.contains("daemon") && message.contains(&std::process::id().to_string()));
         // The recorded process is gone: the lock is still held, the name is not trusted.
         record.pid = 4_000_000_000;
         write_record(&root, &record).unwrap();
@@ -415,7 +411,7 @@ mod tests {
         let first = lock_data_dir(&root, &claim(OwnerKind::Cli)).unwrap();
         let error = lock_data_dir(&root, &claim(OwnerKind::Gui)).err().unwrap();
         assert!(
-            error.starts_with(IN_USE) && error.contains("another Antinomie process"),
+            error.starts_with(IN_USE) && error.contains("antinomie-cli"),
             "{error}"
         );
         drop(first);
@@ -475,7 +471,7 @@ mod tests {
             .unwrap();
         assert!(began.elapsed() >= wait, "{:?}", began.elapsed());
         assert!(
-            error.starts_with(IN_USE) && error.contains("another Antinomie process"),
+            error.starts_with(IN_USE) && error.contains("daemon"),
             "{error}"
         );
         fs::remove_dir_all(root).unwrap();
@@ -496,7 +492,7 @@ mod tests {
                 record: Some(record)
             }
             .describe(),
-            "another Antinomie process (pid 42, started 2026-10-31 12:00:00 UTC, socket /d/run/antinomie.sock)"
+            "the Antinomie daemon (pid 42, started 2026-10-31 12:00:00 UTC, socket /d/run/antinomie.sock)"
         );
     }
 }

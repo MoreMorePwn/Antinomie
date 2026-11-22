@@ -241,7 +241,7 @@ pub struct Dumps {
     pub max_dumps: u32,
     /// 0 to 3600.
     pub dumps_apart_s: u32,
-    /// Reserved (0.9.1).
+    /// Reserved (later).
     pub disk_dump: bool,
 }
 
@@ -298,7 +298,7 @@ impl Dumps {
 pub struct Vm {
     /// A lane group of node setup (`[lanes] group` in service.toml).
     pub lane_group: String,
-    /// Keep the VM after a failure (needs `run.keep_vm`; arrives with 0.9.1).
+    /// Keep the VM after a failure (needs `run.keep_vm`; arrives in a later version).
     pub keep_on_failure: bool,
     /// Allow taking control (0.9.1 interactive sessions; nothing to take in
     /// 0.9.0).
@@ -421,9 +421,9 @@ pub struct StaticAnalysis {
     pub ghidra_disassembly: bool,
     /// Checks whose timing out or stopping short fails the `analyse` stage.
     pub required_checks: Vec<StaticCheck>,
-    /// Reserved (0.9.1).
+    /// Reserved (later).
     pub rebuilt_file_mib: u32,
-    /// Reserved (0.9.1).
+    /// Reserved (later).
     pub rebuilt_run_mib: u32,
     pub limits: SizeLimits,
 }

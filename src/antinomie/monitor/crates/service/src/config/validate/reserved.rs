@@ -12,7 +12,7 @@ use crate::config::{
 pub type Reserved = (&'static str, String);
 
 fn arrives(default: &str) -> String {
-    format!("arrives with 0.9.1; 0.9.0 accepts only {default}")
+    format!("arrives in a later version; this version accepts only {default}")
 }
 
 /// The keys of `preset` that 0.9.0 cannot act on yet and that are not at

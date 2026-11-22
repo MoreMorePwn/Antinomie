@@ -55,7 +55,8 @@ on Debian 13 Minimal over the Tor route. Every view is the recorded run; no VM i
 > sample can still do.
 
 > [!NOTE]
-> This README describes **0.9.0**, which adds arm64 guests and new revision-22 bases. Download it
+> This README describes **0.9.1**, which brings back the command line, Auto mode and the run API
+> beside the 0.9.0 window (arm64 guests, revision-22 bases). Download it
 > from [Releases](https://github.com/MoreMorePwn/Antinomie/releases); the
 > [changelog](CHANGELOG.md) lists every change.
 
@@ -168,14 +169,14 @@ and network card into its disk without root; BusyBox VMs do not need it:
 sudo apt install qemu-system-x86 qemu-utils qemu-system-gui curl libsqlite3-0 bubblewrap tshark util-linux libguestfs-tools
 ```
 
-Download `antinomie-0.9.0-linux-x86_64.tar.gz` and `SHA256SUMS` from
+Download `antinomie-0.9.1-linux-x86_64.tar.gz` and `SHA256SUMS` from
 [Releases](https://github.com/MoreMorePwn/Antinomie/releases) into one folder,
 then verify, extract and install for your user (no root):
 
 ```sh
 sha256sum --check SHA256SUMS
-tar -xzf antinomie-0.9.0-linux-x86_64.tar.gz
-cd antinomie-0.9.0
+tar -xzf antinomie-0.9.1-linux-x86_64.tar.gz
+cd antinomie-0.9.1
 ./install.sh
 antinomie --check-dependencies
 antinomie
@@ -185,7 +186,7 @@ antinomie
 - **Updating:** run `./install.sh` from a newer release. It replaces the
   executable and keeps your data.
 - **Uninstalling:** `./install.sh --uninstall` removes the installed files
-  (`antinomie`, the menu entry and the icon) and keeps your data too.
+  (`antinomie`, `antinomie-cli`, the menu entry and the icon) and keeps your data too.
 - **Other distributions:** **Tools → App dependencies** names the packages for
   apt, dnf, pacman and zypper. Only Debian and Ubuntu installs are tested.
 - **Provenance:** releases from 0.8.0 on carry a build attestation. With the GitHub
@@ -201,7 +202,7 @@ antinomie
 Install the [host build prerequisites](src/antinomie/monitor/README.md#build-and-run), then:
 
 ```sh
-git clone --branch v0.9.0 https://github.com/MoreMorePwn/Antinomie.git
+git clone --branch v0.9.1 https://github.com/MoreMorePwn/Antinomie.git
 cd Antinomie
 ./run.sh
 ```
@@ -374,6 +375,20 @@ The app checks dependencies at startup (**Tools → App dependencies**). From a
 terminal: `antinomie --check-dependencies`. The
 [full dependency list](docs/usage.md#dependencies-and-analysis-tools) names every tool.
 
+## What's new in 0.9.1
+
+* **Headless mode:** `antinomie-cli` is back in the archive beside the window, and
+  `./install.sh` installs both. It runs the engine with no display: bases, VMs,
+  snapshots, samples, custody, static analysis, rules, Triage, reports and `run exec`.
+  See [Command line and automation](docs/usage.md#command-line-and-automation-091).
+* **Auto mode:** `antinomie-cli auto daemon` and `auto submit` take a sample in and
+  give a report and a label out, on a lane VM that reverts to a clean snapshot before
+  every run, with presets, permissions, watch folders, result files, retention and a systemd unit
+  (`packaging/`). See [Auto mode](docs/auto-mode.md) and
+  [Unattended use](docs/security.md#unattended-use).
+* **Run API:** the daemon serves version 1 of the run API on a local socket; the
+  contract and its JSON Schema are in [Run API](docs/run-api-1.md).
+
 ## What's new in 0.9.0
 
 * **arm64 guests:** BusyBox, Debian 13 Minimal and Debian 13 GNOME bases run
@@ -401,6 +416,9 @@ Planned and undated:
 | Read | For |
 |---|---|
 | [User guide](docs/usage.md) | Bases, VMs, runs, routes and reading results. |
+| [Command line and automation](docs/usage.md#command-line-and-automation-091) | `antinomie-cli` (0.9.1): install, `doctor`, your first run, the daemon and watch folders; the [command reference](docs/usage.md#command-line-091) follows. |
+| [Auto mode](docs/auto-mode.md) | The pipeline, presets, revert, retention, failure codes, troubleshooting and the systemd unit. |
+| [Run API](docs/run-api-1.md) and [service configuration](docs/service-config.md) | The contract and the configuration files of the Auto mode daemon. |
 | [Triage report](docs/triage-report.md) | Export formats, evidence bundle and the JSON schema. |
 | [Security model](docs/security.md) | Trust boundaries, network modes, sensitive data and safe use. |
 | [Security policy](SECURITY.md) | Supported versions and how to report a vulnerability privately. |

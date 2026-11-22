@@ -42,13 +42,7 @@ smoke = load("auto_smoke", "test-auto-smoke.py")
 isolation = load("auto_isolation", "test-auto-isolation.py")
 faults = load("auto_faults", "test-auto-faults.py")
 soak = load("auto_soak", "test-auto-soak.py")
-BUILTIN = ROOT / "src/antinomie/monitor/crates/service/src/config/builtin.rs"
-
-
-def standard_preset_text():
-    """The built-in Standard preset (0.9.0 ships no presets/standard.toml.example; 0.9.1 does)."""
-    import re
-    return re.search(r'pub const STANDARD: &str = r#"(.*?)"#;', BUILTIN.read_text(), re.S).group(1)
+PRESET_EXAMPLE = ROOT / "packaging/presets/standard.toml.example"
 
 
 def finished_job(**changes):
@@ -156,10 +150,10 @@ class TomlTests(unittest.TestCase):
                 parsed = tomllib.loads(edited)
                 self.assertEqual(parsed["lanes"]["revert"], mode)
                 self.assertEqual(parsed["daemon"]["lanes"], 1)
-        standard = tomllib.loads(standard_preset_text())
+        standard = tomllib.loads(PRESET_EXAMPLE.read_text())
         self.assertEqual(standard["accepts"]["types"], ["elf", "sh"])
         self.assertEqual(standard["program"]["run_time_s"], 300)
-        edited = standard_preset_text()
+        edited = PRESET_EXAMPLE.read_text()
         for (section, key), value in faults.PRESET.items():
             edited = av.set_toml_key(edited, section, key, value)
         self.assertEqual(tomllib.loads(edited)["retry"]["backoff_s"], [10, 10])
@@ -299,7 +293,7 @@ class ProcessTests(unittest.TestCase):
             work = av.Work(Path(tmp) / "w").prepare()
             fake = Path(tmp) / "fake-cli"
             flags = sorted({flag for group in av.CLI_SURFACE.values() for flag in group})
-            fake.write_text("#!/bin/sh\n[ \"$1\" = --version ] && { echo 'antinomie-cli 0.9.0'; exit 0; }\n"
+            fake.write_text("#!/bin/sh\n[ \"$1\" = --version ] && { echo 'antinomie-cli 0.9.1'; exit 0; }\n"
                             "echo 'Usage: antinomie-cli'\n" + "".join(f"echo '  {f} <X>'\n" for f in flags))
             fake.chmod(0o755)
             results = av.check_cli_surface(av.Cli(fake, work, "tcg"))

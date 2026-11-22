@@ -183,10 +183,6 @@ mod tests {
 
     #[test]
     fn the_checked_in_schema_is_current() {
-        // 0.9.0 ships without the run API documents; 0.9.1 restores the file.
-        if !file().exists() && std::env::var_os("UPDATE_SCHEMA").is_none() {
-            return;
-        }
         let current = render();
         if std::env::var_os("UPDATE_SCHEMA").is_some() {
             std::fs::write(file(), &current).unwrap();

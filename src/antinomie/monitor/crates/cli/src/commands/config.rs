@@ -29,9 +29,9 @@ pub enum Config {
     /// text. Takes the engine lock, so it refuses while a window or daemon runs.
     Set { key: String, value: String },
     /// Check `service.toml` and the presets (the five built in and
-    /// `presets/*.toml`): unknown keys, the node ceilings, the keys 0.9.0
+    /// `presets/*.toml`): unknown keys, the node ceilings, the keys this version
     /// reserves, live routes, and the lanes against the lane VM (its network
-    /// and snapshots). A 0.9.0 `policies/` folder is an error naming the new
+    /// and snapshots). A `policies/` folder is an error naming the new
     /// key of each old one. Prints each problem with its line; exit 4 when
     /// there is an error. Reads only.
     Validate {

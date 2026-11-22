@@ -1,49 +1,80 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Packaging checks: 0.9.0 ships the desktop app only.
-
-The command line (antinomie-cli), the Auto daemon, its systemd units, the
-service.toml example and the presets are not built, installed or packed in 0.9.0.
-0.9.1 reverts the commit that removed them and restores the checks of the units
-and examples that this file had (git log -- tests/monitor/test-packaging.py).
-"""
+"""Packaging checks: the systemd units, the examples and the install scripts."""
+import re
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ("scripts/build-monitor-host.sh", "scripts/build-release.sh", "install.sh")
+PACKAGING = ROOT / "packaging"
 
 
-class DesktopOnlyTests(unittest.TestCase):
-    def test_scripts_do_not_build_ship_or_install_the_cli(self):
-        for name in SCRIPTS:
-            self.assertNotIn("antinomie-cli", (ROOT / name).read_text(), name)
+def settings(path):
+    """Directive -> list of values, from the [Service] section."""
+    values = {}
+    section = None
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            section = line
+        elif section == "[Service]" and "=" in line:
+            key, value = line.split("=", 1)
+            values.setdefault(key, []).append(value)
+    return values
 
-    def test_release_archive_has_no_packaging_folder(self):
-        self.assertNotIn("packaging", (ROOT / "scripts/build-release.sh").read_text())
-        self.assertFalse((ROOT / "packaging").exists())
 
-    def test_release_archive_holds_the_window_and_its_menu_entry(self):
-        release = (ROOT / "scripts/build-release.sh").read_text()
-        for item in ("antinomie-monitor", "antinomie.desktop", "antinomie.svg", "install.sh"):
-            self.assertIn(item, release, item)
-        install = (ROOT / "install.sh").read_text()
-        for item in ("antinomie-monitor", "antinomie.desktop", "antinomie.svg"):
-            self.assertIn(item, install, item)
+class UnitTests(unittest.TestCase):
+    units = ("antinomie-auto.service", "antinomie-auto.user.service")
 
-    def test_release_build_names_only_the_window(self):
-        release = (ROOT / "scripts/build-release.sh").read_text()
-        self.assertIn("cargo build --release --locked -p antinomie-monitor-ui --bin antinomie-monitor", release)
+    def test_stop_and_restart_follow_the_design(self):
+        for name in self.units:
+            s = settings(PACKAGING / name)
+            self.assertEqual(s["Type"], ["simple"], name)
+            self.assertEqual(s["Restart"], ["on-failure"], name)
+            self.assertEqual(s["KillMode"], ["mixed"], name)
+            self.assertGreaterEqual(int(s["TimeoutStopSec"][0]), 360, name)
 
-    def test_nightly_does_not_build_the_cli(self):
-        nightly = (ROOT / ".github/workflows/nightly.yml").read_text()
-        self.assertNotIn("-p antinomie-cli", nightly)
+    def test_hardening_is_present(self):
+        for name in self.units:
+            s = settings(PACKAGING / name)
+            self.assertEqual(s["NoNewPrivileges"], ["yes"], name)
+            self.assertEqual(s["ProtectSystem"], ["strict"], name)
+            self.assertEqual(s["PrivateTmp"], ["yes"], name)
+            self.assertIn("AF_UNIX", s["RestrictAddressFamilies"][0], name)
+            # bubblewrap makes user namespaces
+            self.assertIn("user", s["RestrictNamespaces"][0].split(), name)
+            # QEMU and the YARA-X engine generate code at run time
+            self.assertNotIn("MemoryDenyWriteExecute", s, name)
+            self.assertNotIn("PrivateDevices", s, name)
 
-    def test_ci_still_tests_the_cli_and_service_crates(self):
-        # They stay in the workspace; CI builds and tests the whole workspace.
-        manifest = (ROOT / "src/antinomie/monitor/Cargo.toml").read_text()
-        for crate in ("crates/cli", "crates/service"):
-            self.assertIn(crate, manifest, crate)
+    def test_system_unit_lets_qemu_open_kvm(self):
+        s = settings(PACKAGING / "antinomie-auto.service")
+        self.assertIn("/dev/kvm rw", s["DeviceAllow"])
+        self.assertEqual(s["DevicePolicy"], ["closed"])
+        self.assertIn("kvm", s["SupplementaryGroups"][0].split())
+        self.assertEqual(s["StateDirectory"], ["antinomie"])
+
+    def test_units_start_the_daemon_on_a_data_folder_of_its_own(self):
+        for name in self.units:
+            exec_start = settings(PACKAGING / name)["ExecStart"][0]
+            self.assertRegex(exec_start, r"antinomie-cli --data-dir \S+ .*auto daemon$", name)
+            self.assertNotRegex(exec_start, r"%h/antinomie\s", name)  # not the window's folder
+
+    def test_standard_preset_example_is_the_built_in_one(self):
+        source = (ROOT / "src/antinomie/monitor/crates/service/src/config/builtin.rs").read_text()
+        body = re.search(r'pub const STANDARD: &str = r#"(.*?)"#;', source, re.S).group(1)
+        example = (PACKAGING / "presets/standard.toml.example").read_text()
+        self.assertTrue(example.endswith(body))
+        self.assertFalse((PACKAGING / "policies").exists())
+
+
+class ScriptTests(unittest.TestCase):
+    def test_scripts_build_ship_and_install_the_cli(self):
+        for name in ("scripts/build-monitor-host.sh", "scripts/build-release.sh", "install.sh"):
+            self.assertIn("antinomie-cli", (ROOT / name).read_text(), name)
+        self.assertIn("packaging", (ROOT / "scripts/build-release.sh").read_text())
 
 
 if __name__ == "__main__":

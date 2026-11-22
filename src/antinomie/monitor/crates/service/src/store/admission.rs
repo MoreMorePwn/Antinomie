@@ -8,7 +8,7 @@
 //!    names roles, and 0.9.0 callers have none, so it locks nothing);
 //! 4. the overrides resolve onto the preset (the Custom rule) and every value
 //!    is valid, else `invalid_argument` naming the field; a key 0.9.0 reserves
-//!    away from its default is `unsupported` ("arrives with 0.9.1");
+//!    away from its default is `unsupported` ("arrives in a later version");
 //! 5. every risky option has its permission, else `permission_denied` naming
 //!    them in `details.needs`;
 //! 6. the node has what the run needs, else `unavailable_on_node`;
@@ -180,7 +180,7 @@ pub struct NodeRefusal {
 }
 
 /// What this node lacks for the options of `preset`: no live route is set
-/// up for the service before 0.9.1, a kept VM arrives with 0.9.1, and the
+/// up for the service in this version, a kept VM arrives in a later version, and the
 /// lane group must be the node's (`[lanes] group`).
 pub fn node_refusals(preset: &Preset, lane_group: &str) -> Vec<NodeRefusal> {
     let mut out = Vec::new();
@@ -190,7 +190,7 @@ pub fn node_refusals(preset: &Preset, lane_group: &str) -> Vec<NodeRefusal> {
             field: "network.route",
             what: format!("route.{}", route.kind()),
             message: format!(
-                "route {route} is not set up on this node; live routes arrive with 0.9.1"
+                "route {route} is not set up on this node; live routes arrives in a later version"
             ),
         });
     }
@@ -198,7 +198,7 @@ pub fn node_refusals(preset: &Preset, lane_group: &str) -> Vec<NodeRefusal> {
         out.push(NodeRefusal {
             field: "vm.keep_on_failure",
             what: "keep_vm".into(),
-            message: "keeping a VM arrives with 0.9.1".into(),
+            message: "keeping a VM arrives in a later version".into(),
         });
     }
     if preset.vm.lane_group != lane_group {

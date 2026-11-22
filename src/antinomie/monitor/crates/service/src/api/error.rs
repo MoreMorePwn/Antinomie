@@ -90,8 +90,8 @@ pub enum ErrorReason {
     HeavyReadLimit,
     /// `unavailable`: a read passed its deadline and was cancelled.
     ReadTimeout,
-    /// `unsupported`: a preset key 0.9.0 reserves, set away from its default
-    /// ("arrives with 0.9.1").
+    /// `unsupported`: a preset key this version reserves, set away from its default
+    /// ("arrives in a later version").
     Reserved,
     /// `unsupported`: the core needs a newer guest revision.
     GuestRevision,

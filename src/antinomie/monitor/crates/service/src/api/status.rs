@@ -154,7 +154,7 @@ pub struct Capabilities {
     pub accept_types: Vec<String>,
     pub accept_arch: Vec<String>,
     /// The routes this node runs: `drop` and `inet_sim` (no live route is
-    /// set up before 0.9.1).
+    /// set up in this version).
     pub routes: Vec<Route>,
     pub report_formats: Vec<ReportFormat>,
     /// Available check names, tool presence considered.

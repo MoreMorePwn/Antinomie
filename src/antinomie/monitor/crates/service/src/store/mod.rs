@@ -236,8 +236,8 @@ fn check_layout(conn: &Connection, service_dir: &Path) -> R<()> {
 fn layout_1_refused(service_dir: &Path, found: u32) -> String {
     let dir = service_dir.display();
     format!(
-        "the job store {dir}/jobs.sqlite (layout {found}) was written by a 0.9.0 test build \
-         before the run API and is not converted: data folders of 0.9.0 pre-release tests \
+        "the job store {dir}/jobs.sqlite (layout {found}) was written by a test build \
+         before the run API and is not converted: data folders of pre-release tests \
          must be recreated. Stop the daemon and move {dir}/jobs.sqlite (with its -wal and \
          -shm files) and {dir}/jobs/ out of the way; the samples, recordings, presets and \
          lane files stay"

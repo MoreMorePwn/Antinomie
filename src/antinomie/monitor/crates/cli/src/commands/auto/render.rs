@@ -465,13 +465,13 @@ mod tests {
                 &text,
             );
             // Live network's Tor route is a node matter in 0.9.0 (live
-            // routes arrive with 0.9.1), not a fault of the printed TOML.
+            // routes arrives in a later version), not a fault of the printed TOML.
             let errors: Vec<_> = problems
                 .iter()
                 .filter(|p| p.severity == antinomie_service::config::Severity::Error)
                 .filter(|p| {
                     !(p.key.as_deref() == Some("network.route")
-                        && p.message.contains("live routes arrive with 0.9.1"))
+                        && p.message.contains("live routes arrives in a later version"))
                 })
                 .collect();
             assert!(errors.is_empty(), "{name}: {errors:?}\n{text}");
