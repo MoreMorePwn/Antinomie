@@ -4,7 +4,7 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.9.0 — 2026-MM-DD
+## 0.9.0 — 2026-11-23
 
 Antinomie 0.9.0 runs arm64 programs: BusyBox, Debian 13 Minimal and Debian 13
 GNOME bases for arm64, with an IoT device profile, 32-bit ARM programs on them,
