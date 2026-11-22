@@ -344,7 +344,7 @@ fn a_store_of_a_test_build_before_the_run_api_is_refused_and_a_new_one_opens() {
         assert_eq!(error.code, ErrorCode::Unavailable);
         for words in [
             "(layout 1)",
-            "0.9.0 test build before the run API",
+            "test build before the run API",
             "not converted",
             "must be recreated",
             &format!("{}/jobs.sqlite", service.display()),

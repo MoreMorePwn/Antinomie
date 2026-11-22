@@ -110,7 +110,7 @@ pub enum Phase {
 }
 
 /// Why the daemon does not start with a 0.9.0 `policies/` folder.
-pub const POLICIES_REFUSED: &str = "policies/ is replaced by presets/ in 0.9.0: \
+pub const POLICIES_REFUSED: &str = "policies/ is replaced by presets/: \
     `antinomie-cli config validate` names the new key of each old one";
 
 /// The flags the supervisor sets and the lane's thread reads.

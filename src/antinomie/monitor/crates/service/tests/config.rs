@@ -215,7 +215,7 @@ fn the_listing_names_what_each_built_in_preset_needs() {
     assert_eq!(find("live-network").needs, [Permission::RouteTor]);
     assert_eq!(
         find("live-network").unavailable,
-        ["route tor is not set up on this node; live routes arrive with 0.9.1"]
+        ["route tor is not set up on this node; live routes arrives in a later version"]
     );
     assert_eq!(find("standard").title, "Standard");
     assert!(find("standard").built_in);
@@ -423,7 +423,7 @@ fn reserved_keys_are_accepted_at_their_default_only() {
         let found = problems(text);
         assert_eq!(found.len(), 1, "{text}: {found:?}");
         assert!(found[0].contains(key), "{found:?}");
-        assert!(found[0].contains("0.9.1"), "{found:?}");
+        assert!(found[0].contains("later version"), "{found:?}");
     }
 }
 
@@ -879,9 +879,8 @@ fn webhooks_are_refused_as_not_part_of_0_9_0() {
     let hook = "[[notify.webhooks]]\nurl = \"https://example.org/x\"\nsecret_file = \"/s\"\n";
     let (_, found) = parse_service("service.toml", hook);
     assert!(
-        found
-            .iter()
-            .any(|p| p.severity == Severity::Error && p.message.contains("not supported in 0.9.0")),
+        found.iter().any(|p| p.severity == Severity::Error
+            && p.message.contains("not supported in this version")),
         "{found:?}"
     );
 }
@@ -890,9 +889,8 @@ fn webhooks_are_refused_as_not_part_of_0_9_0() {
 fn a_changed_scan_cache_is_refused_and_the_other_query_keys_are_accepted() {
     let (_, found) = parse_service("service.toml", "[query]\nscan_cache_mib = 512\n");
     assert!(
-        found
-            .iter()
-            .any(|p| p.severity == Severity::Error && p.message.contains("not supported in 0.9.0")),
+        found.iter().any(|p| p.severity == Severity::Error
+            && p.message.contains("not supported in this version")),
         "{found:?}"
     );
     let (config, found) = parse_service(

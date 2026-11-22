@@ -126,16 +126,16 @@ pub const NEW_HOMES: [(&str, &str); 45] = [
     ),
 ];
 
-/// What a problem says of a 0.9.0 policy key with this new home.
+/// What a problem says of a policy key with this new home.
 pub fn message(home: &str) -> String {
     if home.starts_with("removed") {
-        format!("a 0.9.0 policy key, {home}")
+        format!("a policy key, {home}")
     } else {
-        format!("a 0.9.0 policy key, now {home}")
+        format!("a policy key, now {home}")
     }
 }
 
-/// The new home of a 0.9.0 policy key, or of its whole table.
+/// The new home of a policy key, or of its whole table.
 pub fn new_home(key: &str) -> Option<&'static str> {
     NEW_HOMES
         .iter()

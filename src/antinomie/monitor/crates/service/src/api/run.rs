@@ -165,7 +165,7 @@ pub struct PresetRef {
 
 /// One permission a run's options use: the permission, the preset key that
 /// uses it, and where the caller's permission came from (`caller`: the
-/// permission set of the caller, the only source before 0.9.1's roles and
+/// permission set of the caller, the only source until roles and
 /// grants).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PermissionUse {

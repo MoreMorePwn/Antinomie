@@ -304,6 +304,135 @@ Two small helpers keep slow disks and programs off the frame (`monitor-ui/src/ba
 * The memory result view looks up the run's files folder once, when the result loads,
   not on every frame.
 
+### Headless foundations: shared settings, data-folder owner, `antinomie-cli` and `antinomie-service` (0.9.1)
+
+Cards of the headless/CLI work (design: `Headless and Auto Mode`). What a user can
+run is in `docs/usage.md`, "Command line (0.9.1)"; this section is the contract
+behind it.
+
+* **Crates and dependency direction.** `antinomie-cli` (binary `antinomie-cli`,
+  `crates/cli/`) depends on `antinomie-service` (`crates/service/`),
+  `antinomie-triage` (`crates/triage/`) and `antinomie-monitor-core`. The service
+  and the triage crate depend on core. None of them links egui, eframe, winit or
+  `antinomie-monitor-ui`; `crates/cli/tests/dependency_tree.rs` runs `cargo tree`
+  and fails if one of them appears. The window depends on core and triage. Every
+  binary hosts the earlier-bytes copier: `antinomie_triage::copier::host_copier()`
+  first thing in `main` serves `--copy-earlier-bytes` or registers the running
+  program with `file_before_store::register_copier_host()` (`ANTINOMIE_COPIER`
+  still overrides it). Triage of a saved run needs no window either: a
+  `RunSummary` becomes Triage's input and scan request through
+  `antinomie_triage::SavedRun` (`TriageInput::for_run`, `ScanRequest::for_run`,
+  the run's capture from its `artifacts.json`, `TriageSettings::headless` from
+  `settings.json` with `dig` and `whois` off), which the window's own selection
+  path uses too. The report the Export report dialog writes is
+  `antinomie_triage::report_export` (the job, the builder, the run facts, the
+  not-started report), the run digest is `antinomie_triage::digest`, and the
+  Detection tab's evidence key, scan request, frozen rule selection and run
+  identity are `antinomie_triage::detection`; the dialog and the tab keep only
+  their state and drawing. `analysis::detection::run_unsaved` runs an engine
+  without writing its result, manifest or log into the run's folder.
+  `antinomie-cli triage`, `detect` and `report` (`crates/cli/src/commands/`)
+  find the run read-only (`recording::list_runs_read_only`, `find_run_read_only`),
+  index it through `SavedRun`, and run `report_export::Job::for_saved` /
+  `build_report` / `write_built` and `detection::scan`; `detect --save` takes the
+  data-folder lock and writes the digest with `digest::Update`, as the window's
+  digest tick does.
+  The CLI is not a second implementation: every engine step it takes
+  (`Command::AnalyzeSample`, the rule registry, the sample library, custody) is a
+  core function the window calls too.
+* **Data-folder owner (`data_owner.rs`).** The lock on `.app-owner.lock` stays the
+  authority. The process that takes it also writes `run/owner.json` (atomic
+  replace, mode 0600: pid, kind `gui`, `daemon` or `cli`, start time) and removes
+  it on a clean exit. A record whose process is gone, or that no lock backs, is
+  stale and ignored; the file describes the owner and is never a lock. A second
+  process that finds the lock taken reports "data folder is already in use" with
+  the owner's description (the CLI exits 21, `busy`), and the migration of an old
+  data folder first checks the owner. `doctor` reports `data_dir.owner`.
+* **Lane data folders (`lanes.rs`, multi-lane M1, ANT-T0455 card B).** Groundwork
+  for a daemon with several lanes, one engine and one VM each, in one process
+  (`daemon.lanes` stays 1 by default; the daemon side is card C). Lane 1 is the
+  data folder the operator chose (the daemon's `lane-1`). Lane N (2 to 64) has
+  its own data folder, `<lane 1>/lanes/N/` (the daemon's `lane-N`; `lanes/1/` is
+  never a lane), for its VMs, runs and settings, and shares lane 1's
+  `bases`, `samples`, `ioc`, `rules`, `tools` and `volatility-plugins` and the
+  known false positives, with no symbolic links:
+  * Its engine starts with `BackendOptions::shared_root` set to lane 1's folder
+    and an owner claim with `lane: Some(N)` (recorded in `run/owner.json`, so a
+    refusal names "lane N of the Antinomie daemon"). The start checks that the
+    data folder is exactly `<shared_root>/lanes/N`, that the shared root is not
+    a lane itself and that a root and a lane come together, then writes
+    `<lane>/lane.json` (`{"schema":1,"lane":N}`) once it holds the lane's lock.
+  * Every path helper that takes a data folder (`samples::samples_dir`,
+    `ruleset::rules_root`, `analysis_tools::tools_dir`, `ioc::feeds::root`,
+    `lanes::bases_dir`, `memory::plugins_dir`) reads `lane.json` and resolves a
+    lane folder into lane 1's, in any process. The shared root is the lane
+    folder's grandparent, not a stored path, so a moved tree keeps its lanes
+    and `data_move::repair` re-points a lane VM at the moved shared base. A
+    folder without `lane.json` resolves to itself, as before.
+  * Only lane 1 changes the shared folders. A lane engine refuses `ImportBase`,
+    `DeleteBase`, `DownloadBase`, `BuildBase`, `InstallTool` and `RemoveTool`,
+    and the rule pack and group writers, the rules catalog, the strings regex
+    patterns, the IOC dataset writers, the known false positives, tool install
+    and remove and the GeoIP update refuse a lane folder. Every refusal is a
+    `lanes::LaneRefusal` whose text contains `lanes::SHARED_WRITER` ("only lane 1
+    (the main data folder) changes the folders the lanes share"). A lane skips the rule index
+    migration and the staging sweep, which lane 1 does. The sample library is
+    shared and written by every lane; its in-process writer lock is keyed by the
+    database's canonical path, so all engines of a process share it.
+  * `DeleteBase` on lane 1 also checks the VMs of every lane folder and is
+    refused while one is built on the base ("used by … Lane 2 (lane 2)"), or
+    while a lane's record or VM list does not read.
+  * The window (or any plain engine) is refused on a lane folder and sent to
+    lane 1, and the old-data-folder migration refuses a folder with lanes.
+* **Shared settings (`settings.rs`).** `<data>/settings.json` holds the engine
+  settings every front end needs (triage and detection options, quotas, limits,
+  report export, disk view and so on). Version 1; written only by the process
+  that holds the data lock (mode 0600, atomic replace); a field that is absent
+  reads as its default; fields this version does not know are kept on rewrite; a
+  file that cannot be read is an error and is never replaced by defaults, and a
+  newer `settings_version` is refused for writing. The window reads and writes
+  it (a read error is shown as a warning and the file is left alone);
+  `antinomie-cli config get` reads it without a lock and `config set` takes the
+  lock.
+* **CLI contract.** Every reply is one object with `api_version` 1. JSON mode
+  prints `{"ok":true,"result":...}` or `{"ok":false,"error":{code,message,
+  retryable,details}}`; ndjson prints list items one per line and a closing
+  `{"result":{"count","next_cursor"}}`; log lines go to standard error. Error
+  codes map to the fixed exit codes of the usage guide (`exit.rs`). `--direct`
+  takes the data lock in the process; `--daemon` and `--socket` are accepted but
+  nothing listens yet. Commands that only read (`sample`, `custody verify`,
+  `config get`, `config validate`, `rules list`) take no lock.
+* **`antinomie-service`.** `api/` holds the run and query objects, errors and
+  `run-api-1.schema.json` (generated with `schemars`; a test fails when the
+  checked-in file is stale). `config/` loads and validates `service.toml` and
+  `policies/*.toml` (unknown keys are errors, ceilings, the v1 routes `drop` and
+  `inet_sim`, the lane VM); `antinomie-cli config validate` is its only caller
+  today. `store/` is the job store under `<data>/service/`: SQLite in WAL mode
+  with one writer, the `runs` table as queue and source of truth, every state
+  change one transaction that also inserts its event rows, an events mirror in
+  `jobs/<id>/events.ndjson` appended after the commit, idempotency keys, and a
+  recovery pass that repairs the mirror and requeues runs a dead process left
+  running. `intake/` stages uploads and applies the common checks (regular file
+  opened without following links, size ceiling, type and architecture
+  acceptance, library add with origin `Added`, de-duplication by SHA-256). A
+  staged file never runs on the host. `custody.rs` names the custody actor of
+  a run (`local:<uid>`, `web:<user>` or `auto:preset-<name>`, its `client_id`),
+  sets it for the length of the run so the engine's own threads record it too,
+  and writes one `automation` entry per run with the preset digest, the route
+  and the submitter (the kind and its verifier support are in core). `query/` is the read-only recording API (run lists, calls, process and
+  file reads, safe artifact reads, packet reads through the no-cache packet
+  worker, cursors with generations and row and byte limits). The Triage reads
+  (`query/{scan,tables,triage,files,network,timeline}.rs`) run the same
+  `SavedRun` scan the window makes, with `ScanRequest::read_only` set so it writes
+  no journal, on a thread of its own: the first read answers `building` with the
+  scan's progress, two scans stay in memory, and filter, sort and paging run over
+  the whole row set with the Triage crate's `FieldSpec` lists (the catalogue's
+  tables are those lists). The summary and indicators come from
+  `report_export::build_report`, so counts equal the export's. `antinomie-cli`
+  reaches the query API in `commands/query.rs` (`recording list`, `recording show`, `run
+  export` in `run_read.rs`, and `triage`).
+* **Tests.** `cargo test --release -p antinomie-cli -p antinomie-service`.
+
 ### Statistics window (0.9.0)
 
 The Statistics window (ANT-T0477) is `monitor-ui/src/statistics.rs` and its
@@ -400,6 +529,7 @@ estimate in the design stays an estimate.
 - **Limits.** `MAX_SHOTS` 500 and `MAX_BYTES` 256 MiB per run; reaching one ends the series with a reason. `screenshots/series.json` keeps the counts (`taken`, `unchanged`, `dropped`, `no_screen`, `bytes`, `stopped`); the same line goes into the run's notes.
 - **End.** When the tree ends (`apply_run_status` -> `record_tree_completion`) the worker is asked to stop (it takes a last picture); `collect_shots` joins it from `release_completed_runs` once it has finished and adds the note, and `begin_finalize` joins it at the VM stop. Nothing blocks the control thread for more than one finished join.
 - **Readers.** `timed_shots::list` reads the folder (the file name is the index; the `.part` files are not listed). The Summary strip (`triage/summary/strip.rs`) decodes only the pictures in view; Library > Screenshots reads the runs' folders on its scan (`TimedRun`) and steps through a run with the arrow keys; the report export adds a note and up to 100 pictures (`bundle::pick_screenshots`, 64 MiB) to the evidence bundle; the service lists them as `RecordingArtifactKind::Screenshot` with `run_time_ms`.
+- **Headless.** `BackendOptions::run_screen` (set by the CLI whenever it is headless) makes `vm::in_app_screen` true for a headless engine, which adds `-vnc unix:...` beside `-display none`; the guest's devices do not change. The service takes `[record] screenshot_every_s` of the run's frozen preset (0 off, 1 to 999, checked by `config::validate::check_preset` against `MAX_SCREENSHOT_EVERY_S`, the same bound; a run may set any value in range as a Custom run, `invalid_argument` outside it), and `stages/plan.rs::effective` puts it in the `ExecRequest`.
 
 ## Accepted aligned VM status cards (0.6.1)
 

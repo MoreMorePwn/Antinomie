@@ -144,7 +144,7 @@ pub(crate) fn to_value(value: &impl Serialize) -> Result<Value, ApiError> {
 
 /// The names reserved for a later contract version: the rest of the `run.*`
 /// and `preset.*` namespaces (`run.end`, `run.annotate`, `run.share`,
-/// `preset.put`, `preset.retire` arrive with 0.9.1) and the namespaces of
+/// `preset.put`, `preset.retire` arrives in a later version) and the namespaces of
 /// 5.11. Checked after the served operations.
 fn reserved(op: &str) -> bool {
     [
@@ -500,7 +500,7 @@ impl Service {
                 }
             }
         }
-        // The routes this node runs: none is live before 0.9.1.
+        // The routes this node runs: none is live in this version.
         for route in [Route::Drop, Route::InetSim] {
             if !caps.routes.contains(&route) {
                 caps.routes.push(route);

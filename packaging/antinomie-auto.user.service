@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Antinomie Auto mode daemon as a user service (a user of your own on a machine
+# you can rebuild). The system variant, with a dedicated user and a device
+# policy, is antinomie-auto.service; prefer it for an unattended host.
+#
+# Install as the user that runs the daemon (it must be in the kvm group):
+#   install -D -m 0755 antinomie-cli ~/.local/bin/antinomie-cli   # or ./install.sh
+#   install -D -m 0644 antinomie-auto.user.service ~/.config/systemd/user/antinomie-auto.service
+#   systemctl --user daemon-reload
+# Prepare the lane once with the daemon stopped (docs/auto-mode.md), using the data
+# folder below, then:
+#   systemctl --user enable --now antinomie-auto.service
+#   loginctl enable-linger "$USER"      # keep it running without a login session
+#
+# The data folder is ~/antinomie-auto, never the one the window uses (~/antinomie).
+# To use another one, edit the three paths below (`systemctl --user edit` does it).
+
+[Unit]
+Description=Antinomie Auto mode daemon (unattended malware analysis in VMs)
+Documentation=https://github.com/MoreMorePwn/antinomie/blob/main/docs/auto-mode.md
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/antinomie-cli --data-dir %h/antinomie-auto --log-format text auto daemon
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+
+# See antinomie-auto.service: SIGTERM to the daemon, then SIGKILL to everything
+# left (QEMU included) after the time. 360 s is the floor.
+KillMode=mixed
+TimeoutStopSec=360
+OOMPolicy=continue
+
+# Hardening. A user manager cannot set a device policy, so /dev/kvm needs only
+# your kvm group. Your home stays readable (the program sits in ~/.local/bin and the
+# window's data is there), but only the data folder is writable.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/antinomie-auto
+PrivateTmp=yes
+UMask=0077
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=user mnt pid ipc uts net
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

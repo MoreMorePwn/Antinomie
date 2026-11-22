@@ -4,6 +4,708 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.9.1 — 2026-MM-DD
+
+Antinomie 0.9.1 brings back the command line, Auto mode and the run API that 0.9.0
+left out of its archive. `antinomie-cli` is in the release archive again, with
+the `antinomie-auto` systemd units and the example configuration, and the
+documents for the command line (`docs/usage.md`), Auto mode (`docs/auto-mode.md`),
+`service.toml` (`docs/service-config.md`) and the run API (`docs/run-api-1.md`
+with its JSON Schema) are back. The window is the 0.9.0 window; it runs the same
+bases (contract revision 22, `min_app_version` 0.9.0). Everything below is new in
+0.9.1: no earlier release shipped the command line, the daemon or the run API, so
+their entries are listed in full.
+
+### Host
+
+- **Check online in Auto runs (ANT-T0548 F2).** A preset with `[detection]
+  check_online = true` (off in every built-in preset; needs `lookup.online`)
+  now asks abuse.ch about the run's indicators, as the window's Triage › IOC ›
+  Check online does and with the same code: after the Triage scan, the public
+  values the downloaded datasets do not list go to ThreatFox and URLhaus from
+  the host, at most 50 values and 300 seconds per run, one run at a time on
+  the node, stopped by a cancel. The answers go into the recording's
+  `ioc-online.json` before the label and the reports, which show them as
+  `Matched · online` with dataset, family or tags and link. The new host work
+  item `online` carries the step's account (`status`, `reason`, `asked`,
+  `found`, `left_out`, `error`); a step that did not finish is a warning
+  (`online_skipped`, `online_incomplete`) and never changes the outcome. The
+  key is the node's abuse.ch Auth-Key in `<data>/api-keys.json` (0600), stored
+  with the new `antinomie-cli config api-key set abusech` from standard input
+  (`clear`, `show`); without a key the step is skipped with `no_key` and the
+  run is not refused. The key never appears in a log, an error, a run or an
+  artifact.
+- **IOC datasets from the command line (ANT-T0548 F2b).** `antinomie-cli ioc
+  datasets list`, `update [NAME...]`, `enable NAME` and `disable NAME` download
+  and refresh the abuse.ch datasets on a headless node with the window's own
+  code: the same sources and checks, the same files in `<data>/ioc/feeds/`, so
+  the desktop and the daemon see the same datasets and an Auto run's Check
+  online has something to compare with (without datasets it is skipped with
+  `no_datasets`). `update` needs `outbound_catalog` (the window's Allow
+  outbound catalog and rule downloads); the abuse.ch key for ThreatFox and
+  URLhaus comes from `api-keys.json` and reaches `curl` on standard input only. A missing key
+  downloads nothing (exit 5), a failed download keeps the previous copy (exit
+  21). No engine lock: it runs while a daemon serves, from cron or a systemd
+  timer if the admin wants one. One dataset update runs at a time per data
+  folder, the window's included.
+- **The daemon never turns on an automatic lookup from `settings.json`
+  (ANT-T0548 F2b, decision B-H16).** The daemon now builds its engine settings
+  through `for_daemon`: the online symbol lookup and the MalwareBazaar hash
+  lookup are off and an address lookup that asks another machine (`dig`,
+  `whois`) falls back to TShark's installed GeoIP fields, whatever the file
+  says; the address lookup is `service.toml [privacy]`'s. No daemon code read
+  those switches before either; Check online stays a preset's choice.
+- **Auto mode's API speaks of runs, not jobs (ANT-T0492).**
+  - The contract is `docs/run-api-1.md` with its schema
+    `docs/run-api-1.schema.json` (was the job API). A run is one analysis of
+    one sample; "job" is left for work the engine still has to do. The old
+    names are not accepted (no job API was released).
+  - Operations: `run.submit`, `run.get`, `run.list`, `run.cancel`, `run.rerun`
+    (was `job.retry`; it also takes another `preset`), `run.delete`;
+    `preset.list` (was `policy.list`, now needs `runs.submit`) and the new
+    `preset.get` (every option of one preset). Events: `run.created`,
+    `run.state`, `run.stage`, `run.progress`, `run.program` (was `job.run`),
+    `run.warning`, `run.artifact`, `run.trigger`, `run.assessment`,
+    `run.requeued`, `run.finished`, `run.metrics`; an event's scope is `run` or
+    `engine`.
+  - The run object: `request` (was `spec`), `preset` (was `policy`),
+    `program` (was `run`, with `id` for the engine's run id), and the new
+    `settings` (every resolved option) and `permissions_used` (each
+    permission its options use, with the preset key). `job_id` is `run_id`
+    everywhere; new run ids are `r_...` (a `j_...` id still resolves).
+  - Recordings: `recording.list` and `recording.get` (were
+    `recording.run.list` and `.get`), addressed by `recording_key` (was
+    `run_key`); a recording names the run that made it in `from_run`. The
+    service log names a recording read `recording=` and a run artifact read
+    `run=`; the retention and `run.delete` lines name the run `run=` and its
+    recording `recording=`. A host work item's `basis` for a fixed limit is
+    `preset`. Every daemon log line names a run `run=<id>` (the lane, host
+    pool, result file, hook and shutdown lines said `job=`).
+  - The run store's layout is 2. A store written by a test build before
+    the run API (layout 1) is not converted: the daemon and the `auto`
+    commands refuse it with a message naming `<data>/service/jobs.sqlite` and
+    `jobs/`, which must be moved away (data folders of
+    pre-release tests are recreated).
+  - Command line: `auto preset list|show NAME` (was `auto policy list`),
+    `auto submit --preset`, `auto rerun` (was `auto retry`), run words in the
+    output; `recording list|show|export` (was `run list|show|export`; `run
+    exec` stays). The watch folder client and custody actor is
+    `auto:preset-<name>`; the hook gets `ANTINOMIE_RUN_ID`. The exit names
+    are `run_failed`, `run_partial`, `run_cancelled` and `run_rejected` (the
+    numbers 10 to 13 are unchanged). `waiting_for:
+    quota` also means the caller already has `max_running` runs running.
+- **Presets replace policies in Auto mode (ANT-T0490).**
+  - A preset is a named set of run options to start from, in the format the web layer
+    will use: one table per part of Submit (`[program]`, `[network]`,
+    `[dumps]`, `[static_analysis]`, `[detection]`, `[report]` ...), every key with
+    the app's label and Standard's value as its default. Five presets are built
+    in and read-only: Standard (the `default` of the first test builds), Quick look, Deep,
+    Interactive and Live network; more are `<data>/presets/<name>.toml`.
+    `packaging/presets/standard.toml.example` is Standard with every key.
+  - A preset grants nothing and locks nothing. `overrides` in a submit are a
+    partial preset (`{"program": {"run_time_s": 600}}`); a run whose overrides
+    change a value is Custom and records `custom`, `based_on` (the preset's name
+    and digest) and the keys it changed. Arguments, environment, the user (now
+    also `nobody` and custom ids), routes, dumps and engines are no longer policy
+    switches: only permissions, the node and the caller's limits refuse a run.
+  - Keys the engine cannot act on yet are accepted at their default only
+    (else `unsupported`, "arrives in a later version"); a live route in a preset file is
+    "not set up on this node". An unknown preset is `preset_denied`.
+  - The run takes the preset's working directory, user, guest path, core budget
+    and deadline, dump count and spacing, static analysis size limits and Ghidra
+    choice instead of fixed values. `vm.revert_after`, which was never acted on,
+    is gone: a lane is cleaned when the next run starts.
+  - The lane properties move to `[lanes]` of `service.toml` (`group`, `vm`,
+    `revert`, `revert_to`, `stealth`, `network`) and the run wait to
+    `[queue] wait_s`; `[access]`, `[limits]`, `allow_root`, `args_allowed`,
+    `env_allowed`, `allowed_routes` and `allow_keep_on_failure` leave. Watch
+    folders take `preset` and `preset_by_dir`. A waiting run keeps the preset it
+    froze when the file changes or goes.
+  - A `policies/` folder is refused: `config validate` names the new home of each
+    old key and the daemon does not start until the folder is gone.
+    `config validate --preset NAME`, `auto preset list` (the presets with what
+    they need) and `auto rerun --override program.run_time_s=60` follow.
+- **Limits per caller (ANT-T0491).**
+  - `service.toml` sets a caller's limits: `[limits.local]` for the owner on the
+    local socket (`priority_max`, `max_run_s`, `max_queued`, `max_running`,
+    `max_runs_per_day`, each optional) and `priority_max` per watch folder. A
+    value of 0 is an error; a key left out is no limit of its own.
+  - A run asking for a priority above the caller's `priority_max` is refused
+    `limit_exceeded` naming the limit; it is never lowered silently and waiting
+    never raises a priority. The app's levels are Low 2, Normal 5, Urgent 8,
+    and any value 0 to 9 is allowed up to the ceiling.
+  - `max_queued` and `max_running` count per caller (client id), not per
+    preset: a caller at `max_running` waits `queued` with `waiting_for`
+    `quota` while other callers' runs start.
+  - `max_runs_per_day` is optional and counted only when set (the policy
+    key `max_jobs_per_day` was never counted); runs past it are refused
+    `limit_exceeded`, counted per caller over the last 24 hours, with
+    `details.next_at_ms`, the time the next run becomes possible.
+  - A Custom value above a node ceiling (run time above 1800 s, largest sample
+    above 256 MiB, a static size limit above its maximum) is refused
+    `limit_exceeded` with `details.source: "node"`, like a caller's limit; the
+    smaller of the two answers. Below the lowest value it stays
+    `invalid_argument`.
+  - `[retry]` of a preset or of a run's overrides is bounded: `max_attempts` 1
+    to 10, at most 10 `backoff_s` delays of 0 to 3600 s. `on_duplicate =
+    "reuse"` returns only a run the caller may see (its own, or any with
+    `runs.see_all`); otherwise a new run starts.
+  - `run.rerun` and `auto rerun` take `priority`; without it the old run's
+    priority is kept, lowered to the rerunning caller's `priority_max` when
+    above it.
+- **Auto mode checks permissions, not scopes (ANT-T0489).**
+  - The engine checks a list of permissions (`runs.submit`, `route.tor`,
+    `run.as_root`, `evidence.core_dump`, `evidence.view` and 30 more) instead of the
+    four scopes. A caller carries its permissions and its limits. The owner on the local socket holds every permission. A
+    watch folder submits with `runs.submit` and the folder's new `permissions` list in
+    `service.toml`: a folder whose preset takes cores needs
+    `permissions = ["evidence.core_dump"]`. The old scopes keep their meaning:
+    `read` is `runs.see_all`, `submit` is `samples.add` and `runs.submit`,
+    `artifacts:sensitive` is `evidence.view`, `evidence.download` and
+    `samples.download`, `manage` is `runs.manage_any`, `samples.tag`, `runs.delete`,
+    `queue.manage`, `lanes.reset` and `custody.verify`.
+  - `run.submit` checks, in order: the preset exists, every value is valid, each
+    run option that adds risk has its permission (a live route, root or an id
+    below 1000, core and memory dumps, also those of the dump trigger, Check
+    online, keeping the VM), the node has it, then the limits. Each refusal names
+    what is missing.
+  - New error and failure codes `permission_denied` (with `details.needs`),
+    `preset_denied`, `limit_exceeded` and `unavailable_on_node`; `policy_denied` is
+    gone. A failure now carries `field` and `details`.
+  - A live route asked by a run is refused `unavailable_on_node` (no route is set
+    up for the service yet), after its `route.*` permission.
+    `keep_on_failure: true` is refused `unavailable_on_node`: keeping a VM arrives
+    in a later version.
+  - When a run starts, prechecks asks again whether its client still holds every
+    permission the run uses: one taken away while the run waited ends it `failed`
+    with `permission_denied`.
+  - `run.cancel` of another client's run needs `runs.manage_any`; `run.rerun`
+    needs `runs.submit`, and `runs.see_all` for another client's run. Events are
+    sent only with the permission of their type (`runs.see_all` for all of them,
+    since no caller has roles yet). `capabilities.queries[].scope` is now `permission`. The CLI reports
+    the new codes (exit 5); `base list --remote` with the catalog off answers
+    `unavailable_on_node`.
+- **Security tests, fuzzing and the process-start gate for Auto mode (ANT-T0387).** New cross-surface tests cover unknown spec members, route and privilege escalation, hostile watch-folder names and links, and log injection. Fuzz targets `job_spec`, `config_toml`, `watch_names` and `label_expr` join `socket_frames`. A watched file name that began with a dot could be stored 101 bytes long; it is now cut to 100. A verdict `when` expression is now limited to 2048 bytes and 32 nested parentheses (a hostile policy overflowed the stack). CI runs `scripts/check-command-new.py`, which fails on a process start that is not on `scripts/command-new-allowlist.txt`.
+- **Tests: the Auto mode VM tiers (ANT-T0388).** `tests/monitor/test-auto-smoke.py` (T5: one full job, its events, reports, run and custody; `--lanes 2` for two lanes), `test-auto-isolation.py` (T6: the revert proof for `snapshot_disk` and `snapshot_full`; `reset` is not available on Auto lanes), `test-auto-faults.py` (T7: QEMU and the daemon killed mid-run, a full disk, a guest kernel panic and a corrupt clean snapshot, each with the job state it expects) and `test-auto-soak.py` (T8: sequential jobs for a set time, a growth table of descriptors, memory, snapshot tree, `service/` and recordings, resumable). They run under TCG too, with longer waits. `--random-guest-password` gives a base that needs a guest account (Debian minimal) a random throwaway password per run on `auto init --password-stdin`, never written to a log or a file. The nightly VM check also runs one Auto job; `tests/monitor/test-auto-harness.py` (Python 3.11 or later) checks the scripts without a VM.
+- **Auto mode pipelines the host work: the VM starts the next job while the last one is analysed (ANT-T0454).**
+  - Once `collect` has finished, the lane releases the VM and claims the next job. The
+    job's host work goes to a host work pool, split into items: each static tool
+    (`static:floss`, `static:decompilation`, ...; Regex with Strings), the Triage scan,
+    detection (YARA, Sigma, IDS), the digest and label (`assess`) and the report, which
+    waits for the others.
+  - At most `[daemon] host_workers` items run at once (now 2 by default, 1 to 8), across
+    every job, strictly first come, first served by job arrival: an older job's items all
+    start before a newer job's. Inside a job, an item whose dependencies have ended starts
+    while an earlier item waits for its own (ANT-T0464). An item starts only with 2048 MiB
+    of memory available.
+  - Each item may take `[daemon] host_time_factor` (new, default 2) times its expected
+    time: its recent median on this host, else an estimate from the sample or recording
+    size, else the stage's fixed limit. Time in the queue does not count. A policy's
+    `analysis.static_time_limit_min` still sets a fixed limit when it is given; it is no
+    longer set in the default policy.
+  - `auto status <job>` and the job's `host_work` list every item with its state, expected
+    time and limit; `auto status` and `queue.status` (`host_pool`) show the pool's queue.
+  - **A deadline stops the work gracefully (ANT-T0471).** When a job's host stages pass
+    their deadline, its running items are stopped: SIGTERM to each sandboxed tool's process
+    group, `[daemon] stop_grace_s` (new, default 30 s, 0 to 600) to end, then SIGKILL, by
+    the recorded process group only; in-process steps get their cancel flag. Its queued
+    items never start, the job fails `deadline_exceeded` (a new failure code), what had
+    finished is kept, and the stopped items are `timed_out` in `host_work`, `auto status`
+    and the job's `job.json`. An item past its own time limit gets the same SIGTERM, grace,
+    SIGKILL instead of an immediate kill. The desktop app keeps its immediate stop.
+    The lane and the workers share the one engine through a connection that routes each
+    command's result to the thread that sent it.
+  - A stop lets the pool work on for `shutdown_host_grace_s`; what is left resumes in the
+    same order at the next start, keeping static tools that had finished.
+- **Lane data folders share lane 1's bases, samples, rules, tools and IOC data (ANT-T0455, part B).**
+  - Groundwork for several lanes in one daemon (`daemon.lanes` stays 1 by default). Lane 1 is
+    the data folder; lane N (2 and up) keeps its VMs and runs in `<data>/lanes/N/` and uses
+    lane 1's `bases`, `samples`, `ioc`,
+    `rules`, `tools`, `volatility-plugins` and known false positives directly, without
+    symbolic links. A lane does not change them: base import, delete, download and build,
+    tool install and remove, and rule, IOC dataset, known false positive and GeoIP updates
+    are refused there with "only lane 1 (the main data folder) changes the folders the lanes share".
+  - Deleting a base is refused while a VM of any lane is built on it. The window refuses to
+    open a lane's folder and names lane 1's instead.
+- **Auto mode runs up to four lanes at once (`[daemon] lanes`, ANT-T0455, part C).** One lane
+  stays the default.
+  - `auto init --lane N` (2 to 4) makes lane N's VM (`auto-N`) in `<data>/lanes/N/` on a base of
+    the data folder; with `[daemon] lanes = N` the daemon runs one engine and one VM per lane.
+    `daemon.lanes` accepts 1 to 4.
+  - A lane starts only when `MemAvailable` covers the RAM of every lane VM before it plus its own
+    floor (VM RAM + 2048 MiB, or `min_free_ram_mib`); the log and `auto lane list` say how many
+    lanes started and why the others did not.
+  - A job goes to a free lane whose base (that of the policy's `vm.lane_vm`) and architecture can
+    run it, the least recently used first, so jobs spread over the lanes. Each lane has its own
+    floors and quarantine: a quarantined lane holds back only what no other lane can run.
+  - All lanes share one host work pool (first come, first served by job arrival,
+    `host_workers` in total), one job store and the data folder's engine and route settings
+    (a lane reads lane 1's `settings.json` and `network/routes.json`). After a crash every
+    lane's jobs are recovered and the collected ones resume in arrival order.
+  - `auto status`, `capabilities` (`lanes`), `auto lane list` and `vm list` show every lane;
+    `auto lane reset/unquarantine --lane lane-N` reaches that lane's engine. Deleting a base waits
+    for a lane that is creating a VM from it (and refuses), so the two cannot cross.
+- **Reads find the runs of every lane (ANT-T0455, part D).** A run stays in the folder of the lane
+  that recorded it; `run list/show/export`, `triage`, `detect`, `report`, `sample show --runs` and
+  the daemon's `recording.*` reads, given the data folder, find the runs of every lane folder,
+  through the daemon and directly. A run found in two lanes' folders (a copied VM folder) is
+  refused, not guessed. Retention and `auto job delete --with-recording` delete a lane's run in
+  its own folder, and a sample report names a lane's paths the way lane 1 does.
+  - With several lanes, a lane no longer stalls in `collect` after a run: each lane's engine
+    finishes the disk layer of its own VM (one lane's engine could take another lane's VM, not
+    find it in its own folder, and leave that layer "saving" until the daemon restarted).
+- **Commands find a daemon at the configured socket, and the CLI documents match the code (ANT-T0451).**
+  - A command that reaches the daemon now resolves the socket as the daemon does:
+    `--socket`, else `[daemon] socket` of `<data>/service.toml`, else
+    `<data>/run/antinomie.sock`. Before, only the daemon read the key, so a configured
+    socket needed `--socket` on every client command. A missing or faulty `service.toml`
+    gives the default path.
+  - `docs/usage.md` no longer says watch folders, `auto gc`, result files and the
+    `--daemon` mode are not shipped, names `start.network_wait_secs` among the start waits
+    and says `auto submit --route` takes only `drop` and `inet_sim` by design.
+    `docs/service-config.md` lists `[daemon] host_workers`, `[privacy]`, `[query]` and
+    `[log]` (checked, not yet applied) and says plainly that `[[notify.webhooks]]` sends
+    nothing yet. `docs/run-api-1.md` states the default page sizes and the CLI name
+    `run_limit`. The `--yes` help of `auto lane` says `unquarantine` accepts it and does not need it.
+- **`service.toml` `[query]`, `[privacy]` and `[log]` now do what they say, and the keys that cannot are refused (ANT-T0456).**
+  - `[query]` `light_concurrency`, `heavy_concurrency`, `light_timeout_s` and `heavy_timeout_s` set the
+    daemon's read pools and deadlines (they showed the defaults whatever the file said), and
+    `capabilities.queries.limits` reports them.
+  - `[privacy] address_lookup` (default `off`) now decides what a Triage scan of the daemon looks up:
+    `off` makes no lookup, not even TShark's local GeoIP fields; `tshark` uses them. Before, the daemon
+    always used them.
+  - `[log] level`, `format` and `file` apply to the daemon's log (a file rotates at 10 MiB, 5 kept, mode
+    0600). `-q`, `-v` and `--log-format` win over the file; `--log-format` no longer has a default of its
+    own, so an `auto daemon` without it takes the file's. The audit lines of sensitive reads are written at
+    every level.
+  - `[[notify.webhooks]]` and a `[query] scan_cache_mib` other than 1024 are not built: `config validate`
+    reports "not supported in this version" and the daemon will not start with them.
+- **Headless runs can read non-resident pages, and their launch has the library's host copy (ANT-T0449).**
+  - `run exec --core-nonresident` and the Auto policy key `evidence.core_nonresident`
+    (default off, checked by `config validate`) make the cores the dump trigger takes
+    read the pages that are not in memory too, as the window's **Read non-resident
+    pages** does. They need a core trigger (`--dump-trigger` with core or both; an
+    exit core always reads resident pages): the command refuses the flag without one
+    and the policy check warns. On a base below revision 22 the engine reads resident
+    pages only and a job says so in a warning.
+  - `run exec` and the Auto lane now give the launch the library's copy of the sample as
+    the host copy, so the guest's specimen digest vouches for it at once (T0344) and a
+    refused launch still gets static analysis. The library file is only read: the plain
+    copy lives in a private file under `host-copy/` of the data directory, removed when
+    the launch (Auto) or the run (`run exec`) ends.
+- **`run export` with many parts no longer fails on a slow read, and `run exec` no longer
+  fails a complete run for a slow static check (ANT-T0434).** Every read of an export has its
+  own deadline; a read that passed it is asked again (twice, with a fresh deadline) before the
+  export stops, and an export that still stops says which part and read ran out
+  (`details.part`, `details.op`, `details.parts_done`; the parts already written stay).
+  When the run, the network capture, the memory dump and the core are all finished and only
+  the guest-side static analysis is still running after the 300 s collect wait, `run exec` and
+  the Auto lane save the recording without it and end `succeeded`, not `recording_failed`:
+  the result lists `pending: ["analysis"]` (`run.pending` on a job) and a progress line says
+  so. Any other evidence still pending at 300 s still fails the recording.
+- **Runs of a sample are counted without the window (ANT-T0441).** `antinomie-cli sample
+  show` and `sample list` printed `run_count` 0 for every sample the window had not
+  opened, and the sidebar said "No recent run" for a VM that was not selected and had only
+  command-line runs. The seen-run index is now also filled when a run ends in the engine
+  (for the sample and for the libraries it preloaded), and the command line and the daemon
+  count the runs of all VMs from the recordings on read, writing nothing. The sidebar finds
+  the newest run of every VM with one background read of the recordings.
+- **An optional static check that times out no longer fails an Auto job (ANT-T0452).** With
+  the default `static_checks = "triage"` every job failed `analysis_failed` ("a tool ran
+  out of time") on a loaded host. A check that runs out of time or stops short now ends
+  the job `partial` with a `static_check_incomplete` warning naming the check. The new
+  policy key `analysis.required_checks` (default none) lists checks whose timeout still
+  fails the stage; an analysis the engine cannot run at all still does. The static tools'
+  time limit is stretched with the host load, like the guest waits.
+- **A slow TCG boot no longer fails the VM Start at 180 s (ANT-T0442).** The service's
+  180 s limit on the VM `Start` command was fixed, so on a busy host the engine's own
+  TCG wait for the guest to connect could outlast it and the job failed with "the VM did
+  not start in time". The limit is now a silence limit: under TCG, while the engine
+  reports that it waits for the guest to connect, it does not run, and a Start still
+  ends at 30 minutes at the latest or 180 s after the engine goes quiet. KVM keeps its
+  180 s, and a QEMU that exits still fails the start at once.
+- **A snapshot restore under TCG is no longer cut at 180 s (ANT-T0446).** The headless
+  lane restores its clean snapshot before every job, and the service waited for that
+  restore with a fixed 180 s, so on a slow emulated boot (an arm64 guest on a busy host)
+  the restore could fail the job even though the engine was still working. The restore
+  is now waited for like a VM Start: under TCG, while the engine reports that it boots
+  or loads the guest, the wait does not run (30 minutes at the latest, 180 s after the
+  engine goes quiet); KVM keeps its 180 s. A Full-snapshot resume now says "Restoring
+  the snapshot…" and publishes its accelerator at once, so the launch that follows is
+  stretched for TCG too.
+- **Headless runs can take a dump on suspicious activity (ANT-T0439).** The
+  live Triage judge was registered only by the window, so `run exec` and Auto
+  jobs could not use the dump trigger. The run lane of the service now registers
+  the same rule engine before a launch that asks for a trigger (one set of rules;
+  the service and the CLI still do not depend on the window's crate).
+  `run exec --dump-trigger low|medium|high` (default off) with `--dump-kind
+  core|memory|both` (default `core`) and the Auto policy keys
+  `evidence.dump_trigger` (`off`, `low`, `medium`, `high`) and
+  `evidence.dump_trigger_kind` (checked by `config validate`; a core uses
+  `evidence.core_max_mib` and needs a revision-16 base, which `auto init` asks
+  for) turn it on; both default to off, so nothing changes until asked. The
+  result of `run exec` has a `triggers` object (what was armed, whether it fired,
+  each match with its rule, tier, process and call, and the state, size and path
+  of its core or memory dump, or the note that it was armed and nothing matched).
+  An Auto job's `run.triggers` and `run.trigger_notes` say the same (no host
+  paths for a remote caller), and `job.trigger` events report each match and each
+  note as it is known. The collect stage now waits for a trigger dump that is still
+  being written.
+- **`run exec --start` no longer loses Debian arm64 launches under TCG
+  (ANT-T0425).** About 30% of launches failed with "the engine did not answer
+  Execute within 60 seconds": the launch waits for a Debian guest to finish booting
+  (the boot wait, stretched by the TCG multiplier), and the fixed minute of engine
+  silence ran out first. The silence now ignores the time the engine reports waiting
+  for the boot and is stretched under TCG by the engine's own factor (the TCG
+  multiplier times the host load), as are the upload, launch and guest-answer waits
+  and the host's own guest commands ("the guest's control worker made 0 passes in
+  12000 ms" on a busy host); KVM keeps its times. A launch the engine answers after
+  the job gave up on it no longer leaves an unreported run: the VM is stopped, the
+  result (or the Auto job) names the run and warns `late_launch`. The boot wait and the
+  TCG multiplier are now in `settings.json` (`start`, shared with the window) and
+  `--boot-wait` and `--tcg-multiplier` set them for one command. The "guest is not
+  ready for files yet" progress is said at most every five seconds with a count,
+  instead of four times a second, and the upload retries once a second. A VM whose
+  QEMU exits before it opens its monitor socket now fails its start at once with
+  QEMU's own words, instead of after the whole startup wait.
+- **Runs know their job, sensitive reads reach the service log, `sample add` goes
+  through the daemon, and `run export --sensitive` writes packet and call bytes
+  (ANT-T0421).** `run list` showed `job_id: null` and `--job` found nothing; the
+  reads now take the job from the job store (the job records its run), in the
+  daemon and in direct mode alike. Every served read of the sample's own bytes
+  (`recording.captured.read`, `files.content`, `network.packet`,
+  `artifact.get` of a capture or core, a sensitive job artifact, `sample.download`)
+  writes one line with the caller, the operation, the run or sample and the size to
+  the daemon's service log, never the bytes. With a daemon, `sample add FILE` uploads
+  the file and calls `sample.add`. `run export --sensitive` also writes the frames of
+  the recorded packets and the captured bytes of calls under `--out`.
+- **Retention clears `processed/`; result files can be group-readable
+  (ANT-T0422).** `[inbox] processed_keep_days` (default 7) makes `auto gc` and the
+  daemon remove files of `<inbox>/processed/` older than that, with the same dry run
+  and log lines. `[results] mode = "group"` writes result drops 0640/0750 instead of
+  0600/0700; `config validate` refuses any other value. Documented: retention leaves
+  the VM-wide captures and dumps of a deleted run alone, and a failed `on_finish`
+  hook is not retried.
+- **`antinomie-cli`, a headless command line.** A new binary beside the window
+  (`antinomie-cli --help`) with `doctor`, `capabilities` and `config`
+  (`path`, `get`, `set`, `validate`), the output formats human, json and
+  ndjson, and fixed exit codes. It does not link the GUI libraries. See
+  "Command line" in docs/usage.md. `--daemon`, `--direct` and `--socket` choose
+  how an `auto` command reaches the job daemon; the other commands run in the
+  calling process.
+- **Service configuration and the job API contract.** The new
+  `antinomie-service` library holds what the coming daemon, command line and
+  web layer share: the job and query API types (docs/run-api-1.md, with its
+  JSON Schema), `service.toml` and `policies/*.toml` (docs/service-config.md),
+  the job store (SQLite, the state machine, the queue and its recovery),
+  uploads and sample intake, read-only recording queries, and the `automation`
+  custody actor with its frozen-policy entry. Of these only
+  `antinomie-cli config validate` is reachable by a user in this build: it
+  checks the configuration files without starting anything.
+- **The Triage scan runs without the window.** The scan, the activity rules,
+  the filter language and the eBPF decoder are a library of their own
+  (`antinomie-triage`) that `antinomie-cli` links too. Any Antinomie program
+  now copies the earlier bytes of the files a run changed into the recording
+  when its boot ends (only a program named `antinomie-monitor` used to), so a
+  recording made from the command line is as complete as one made in the
+  window; `ANTINOMIE_COPIER` still names another program for it. Triage looks
+  and works as before: its rows name a colour role (good, warning, bad,
+  muted...) and the theme picks the colour.
+- **Samples and custody from the command line.** `antinomie-cli sample add, list,
+  show, tag, verify, remove` and `custody verify` (with export and signing) work
+  on the sample library without the engine lock, so they run beside the window.
+- **Static analysis and rule selection from the command line.** `antinomie-cli
+  analyze FILE` runs the static analysis of a host file and prints a summary;
+  `rules list, enable, disable` use the rule registry of the data directory.
+- **Bases, VMs and snapshots from the command line.** `antinomie-cli base list,
+  install, download, build, delete`, `vm list, create, start, stop, status, reset,
+  duplicate, delete` and `snapshot list, create, restore, delete` run the engine
+  in the command and print the same objects in human, json or ndjson. Destructive
+  commands refuse without `--yes`, a guest password is read from standard input
+  only, Ctrl-C stops the VM cleanly, and a VM ends with the command that started
+  it (`vm start --hold` keeps it up). See "Command line" in docs/usage.md.
+- **`antinomie-cli run exec`.** Uploads a library sample into a VM, runs it,
+  waits until its evidence is complete (the 300-second rule the window uses), stops
+  the VM and waits until the recording is final, then prints the outcome, the run,
+  the evidence, the time per stage and the end of the program's output. A run limit
+  (`--timeout-run`) stops a program that never ends; `--events` streams the progress
+  as it happens. The exit code is 0, 11 for partial evidence, 10 for a failure.
+- **`antinomie-cli triage`, `detect` and `report`.** Triage of a saved run from
+  the command line: `triage RUN` prints its Summary (assessment, counts, key
+  behaviours), `detect RUN` runs YARA, Sigma and IDS over its evidence as the
+  Detection tab does (`--save` keeps the results in the recording), and `report
+  RUN` writes the report in HTML, PDF, JSON, MISP, STIX or Markdown. The report
+  is built by the same code as the window's Export report, so the files are the
+  same for the same run and choices; the window's dialog and Detection tab work
+  as before. See "Command line" in docs/usage.md.
+- **The Auto mode daemon (ANT-T0380).** `antinomie-cli auto daemon` owns a
+  data folder (`run/owner.json` says "daemon" and names its socket; the window,
+  a command or a second daemon is refused with the owner named), runs the job
+  queue on its lane and serves the job API on a local socket,
+  `<data>/run/antinomie.sock`. The socket is for its owner only: mode 0600 in a
+  0700 folder, and the peer's user id is checked on every connection. Requests are
+  checked strictly and bounded (2 MiB per line, 16 in flight and 50 a second per
+  connection, 64 connections, 64 event subscriptions per client, idle and slow
+  clients closed), files arrive by upload rather than by a path the client names,
+  and an event stream resumes from a sequence number with no gap and no
+  duplicate. SIGTERM lets a job that is past its VM stages finish its analysis
+  and report (up to 120 s, `[daemon] shutdown_host_grace_s`) and puts a job in
+  its VM stages back in the queue; a second signal within 5 s stops at once;
+  SIGHUP reloads the policies. See docs/run-api-1.md and docs/service-config.md.
+- **`antinomie-cli auto init` and the lane commands (ANT-T0378).** `auto init`
+  makes the Auto mode lane on an installed base: it creates a routed VM, boots it
+  once until the guest answers, stops it, waits until its disk has settled, takes
+  the clean snapshot every job starts from, records the lane, and writes a default
+  policy pointed at it when the folder has none. `auto lane list` shows the lane and
+  what would keep it from a job; `auto lane reset --yes` reverts it to its clean
+  snapshot now (lifting a quarantine when that works); `auto lane unquarantine`
+  lifts a quarantine without reverting when the checks pass. With a daemon running,
+  the lane commands go to it and run when no job does.
+- **Submitting jobs: `antinomie-cli auto submit` and friends (ANT-T0381).** `auto
+  submit FILE` uploads the file to the daemon and queues a job (`--policy`,
+  `--timeout-run`, `--args`, `--route drop|inet_sim`, `--formats`,
+  `--evidence-bundle` and more, within the policy's ceilings); `--wait` exits with
+  the job's code, `--follow` streams its events as NDJSON, `--verdict-exit` exits
+  30, 31 or 32 for a succeeded job labelled suspicious, malicious or inconclusive
+  (a partial or failed job keeps 11 or 10), and `--out DIR` copies the reports.
+  Without a daemon `auto submit` runs the job in the command and exits with its
+  code. `auto status`, `list`, `wait`, `events` (`--since`, `--follow`, `--all`),
+  `result` (the label, its basis and the report paths), `artifacts`, `fetch`,
+  `cancel`, `retry`, `queue status|pause|resume` and `policy list` complete it; the
+  reading ones work without a daemon. A policy's `[verdict] tag_library = true`
+  tags the sample `auto:label=...` and `auto:policy=...` in the library, with the
+  automation actor in its custody chain. See "Auto mode" in docs/usage.md.
+- **Watch folders (ANT-T0383).** A file that appears in a folder named under
+  `[[inbox.watch]]` in `service.toml` becomes a job, as the actor
+  `auto:policy-<policy>` (the label `watch` names the folder). The folder is
+  scanned every 2 seconds; a file is taken only after its size and times have
+  been steady for 3 seconds, and never while its name starts with a dot or ends
+  in `.part`, `.tmp` or `.crdownload`. Nothing is followed out of the folder: a
+  symbolic link, device, FIFO, socket or file with a second hard link is refused
+  and left where it is, a file of another user is refused, and a folder that is
+  writable by everyone, owned by another user, or (without `allow_group_write`)
+  writable by its group is not used at all (`engine.alert`
+  `watch_folder_refused`). Each file is opened relative to its folder without
+  following links and read from that descriptor. After intake the file moves to
+  `inbox/processed/`, is deleted, or is kept (`delete_after`); a file that fails
+  intake moves to `inbox/rejected/` with a `.reason` file and is not tried
+  again. `policy_by_dir` picks the policy from a subfolder named after one
+  (other folders are ignored), `recursive` follows subfolders (8 deep at most),
+  and `watch_rate` jobs a minute is the limit: above it the folder pauses for a
+  minute and `engine.alert` `watch_flood` is raised. `antinomie-cli auto watch
+  list` shows each folder, what it took and what it refused; `auto watch scan`
+  scans now. See "Auto mode" in docs/usage.md and docs/service-config.md.
+- **Retention and `auto gc` (ANT-T0384).** The daemon removes what Auto mode
+  leaves behind: recordings of finished jobs after `[retention] recordings_days`
+  (14), through the same run deletion the window uses (a failed job keeps its
+  recording while `keep_failed` is set), the oldest recordings first when they
+  exceed `max_recordings_gib` (200), job records, events and artifacts after
+  `jobs_days` (90), staged uploads after 24 hours and rejected inbox files after
+  7 days. It never touches a job that has not ended, a recording with an open
+  read or whose artifacts are still being written, the sample library or its
+  custody chain; each deletion is logged with the job and run id and recorded in
+  the sample's custody chain under `auto:policy-<name>`. `antinomie-cli auto gc
+  --dry-run` prints the plan; `auto gc` applies it now (with a daemon, or on its
+  own when none runs); `auto delete JOB [--with-recording]` removes one finished
+  job. The daemon runs a pass an hour. See "Auto mode" in docs/usage.md.
+- **Result files and the command hook (ANT-T0385).** With `[results] dir` set,
+  every job that ends leaves `<dir>/<yyyy-mm-dd>/<sha8>-<jobid>/` with a copy of
+  its `job.json` and its (non-sensitive) report files, written under a hidden name
+  and renamed into place so a poller never sees half of it. With `[notify]
+  on_finish = ["/abs/path", "arg", ...]` the daemon runs that command when a job
+  ends: directly, without a shell, with an empty environment holding only
+  `ANTINOMIE_JOB_ID`, `ANTINOMIE_STATE`, `ANTINOMIE_LABEL`, `ANTINOMIE_SHA256` and
+  `ANTINOMIE_RESULT_JSON`, as the daemon's user, with no input, a 30-second limit
+  (its process group is killed past it) and its output kept in the job's
+  `job.log`. A failing drop or hook is a log line and an `engine.alert`
+  (`result_drop_failed`, `hook_failed`); it never fails the job. See "Auto mode"
+  in docs/usage.md and docs/service-config.md.
+- **`antinomie-cli` in the release archive, a systemd unit and the Auto mode guide
+  (ANT-T0389, ANT-T0390).** The release archive carries `antinomie-cli` beside
+  `antinomie-monitor`, and `./install.sh` installs both (`~/.local/bin/antinomie`
+  and `antinomie-cli`; `--uninstall` removes both). The archive also holds
+  `packaging/`: `antinomie-auto.service`, a hardened system unit for a dedicated
+  user (`Type=simple`, `Restart=on-failure`, `KillMode=mixed`, `TimeoutStopSec=360`,
+  `NoNewPrivileges`, `ProtectSystem=strict`, a closed device policy with `/dev/kvm`),
+  `antinomie-auto.user.service` for a user manager, and an example `service.toml`
+  and `policies/default.toml`. New guide `docs/auto-mode.md` (pipeline, policies,
+  revert, watch folders, retention, failure codes, troubleshooting, systemd), a
+  "Command line and automation" section in `docs/usage.md`, an "Unattended use"
+  section in `docs/security.md`, and the dependencies the headless crates added
+  (`toml`, `schemars` and their helpers) in the licence notices.
+- **`antinomie-cli run list`, `run show` and `run export`, and Triage reads
+  through the query API (ANT-T0367, ANT-T0369).** `run list` lists the recorded
+  runs of the data directory (`--vm`, `--sample`, `--job`, `--state`, `--since`,
+  `--limit`, `--cursor`), `run show RUN [--summary]` shows one run and, with
+  `--summary`, its Triage summary, and `run export RUN --out DIR [--part
+  LIST] [--sensitive]` writes the trace, processes, findings, indicators, files,
+  network, timeline, analysis, custody and artifacts of a run as NDJSON and
+  evidence files into `DIR` only (the bytes the sample produced need
+  `--sensitive`). They need no engine lock, so they work while the window is
+  open. `triage RUN` now reads its summary through the same read-only query the
+  web pages will use (`recording.summary`) and writes nothing into the
+  recording; it prints the summary's counts, families, techniques, key
+  behaviours and detections, and `--parts` still adds report parts. The query
+  API (`docs/run-api-1.md`) serves the Triage reads: the summary, findings,
+  indicators, files, network and a merged timeline, with the window's filter
+  language, server-side sort and paging, and the `trace.page` filter (`q`). Their
+  counts are the window's: a test compares them with the report builder.
+- **The daemon serves the reads (ANT-T0417).** Beside the job operations the
+  local socket now answers every `recording.*` read (the Triage ones too, with
+  the same `building` answer while the scan is made), `sample.list`,
+  `sample.get`, `sample.add` (a finished upload, never a path),
+  `sample.download` (a range of the AES archive, `artifacts:sensitive`, one
+  `exported` custody entry), `sample.tag`, `custody.verify`, `vm.list` and
+  `base.list`. With a daemon at the socket, `run list`, `run show`, `run
+  export`, `triage`, `sample list|show|tag`, `custody verify` (without
+  `--export`), `vm list` and `base list` ask it and print what direct mode
+  prints; without one they work as before. `run export` still writes only into
+  the folder you give with `--out`: the command pages through the daemon's
+  reads and writes the files itself, so no path is ever sent to the daemon. New
+  `run export --no-triage` leaves out the parts that need the Triage index
+  (findings, indicators, files, network, timeline) so a very large recording is
+  not indexed in full. `sample.list` also takes `tags`, `all` and `custody`,
+  and `sample.get` takes `origins`, `events` and `runs` (additive).
+- **The command line and Auto mode follow the 0.9.0 features.** The new
+  commands and options that go with what the window of 0.9.0 does:
+  - `run exec --screenshot-max-pictures` and `--screenshot-max-mib` set the limits of timed
+    screenshots as the window does; Auto presets keep the defaults. `run exec --load-into PROGRAM`
+    is Load into... of Run program.
+  - `antinomie-cli config set live_detection_minutes off` turns the periodic scan off; the daemon has no live scans.
+  - `doctor` lists `binwalk` with its install command, and it is a `doctor --require` name.
+  - `digest RUN` and `digest --pending` build a run's Triage digest as the window does; Auto mode builds the
+    digest of any run the scan left none for and warns when it is partial.
+  - `recording list` shows `held` (query API `RunInfo.held`); `recording export --part trace` writes the number the guest used
+    for each call in `nr` (it was 4294967295 on arm64, arm and i386), and its `args_preview` holds the
+    engine's raw argument previews. `vm create` and `snapshot create` print the created VM or snapshot.
+  - The `run exec` result and an Auto run's `failure` carry `run_id` (and `run.id`) of the "Failed to start"
+    record in Run History when the launch kept one.
+  - The query API's `recording.network.captures` and `recording.network.packets` expose a capture's link type
+    and the program that made it (`link`, `made_by`).
+  - `antinomie-cli config get` and `config set` read and write `<data>/settings.json`; the daemon never takes a
+    lookup switch from it (see below).
+  - `report` prints the large-recording warning on standard error and as `large_recording` in its JSON result,
+    and it reuses an Auto run's finished report.
+  - `vm create --stealth iot` is taken; on an x86-64 base the VM starts as Normal QEMU and the reply says so.
+  - A BusyBox base that lists `program_interpreters` makes Auto mode refuse a program whose loader the base
+    lacks before the VM starts (`unavailable_on_node`, naming the loader and its C library).
+  - The data folder's owner record can name the window, the daemon or a command, and the busy messages say which.
+  - On a node whose lanes run under TCG the code-analysis tools' time limit is multiplied by the TCG
+    multiplier, and capa and FLOSS items on a non-x86 ELF are skipped as "not applicable to this architecture".
+
+### Fixed
+
+- **The Auto-mode label reads the family evidence (ANT-T0556, A50, A11).** Runs
+  with a strong family rule (MIRAI_OHSHIT_payload, Gafgyt rules) were
+  `clean_observed`, and one rule's own "high" severity made a low-tier run
+  `malicious`. The default mapping now reads the behaviour tier and the family
+  evidence of the run's own detections and behaviour (`summary.family_evidence`):
+  a strong family rule with medium or high behaviour is `malicious`, any family
+  rule `suspicious`, a rule's severity alone at most `suspicious`. A run whose
+  program made no system call (a crash while loading, or a time-limit stop before
+  the first call) is `inconclusive`, "No behaviour was recorded", with the reason;
+  a program stopped before its first call is "No call before the stop", not a crash.
+  The table is in docs/auto-mode.md.
+- **A failed analysis is tried again, and says when the disk was full.** The
+  presets' default `retry_on` includes `analysis_failed` (design: the host stages run
+  again on the saved recording, the VM does not); an analysis step that failed on a
+  full disk adds the floor's words to the failure; at start the daemon removes the
+  index temporaries an interrupted scan left in the recordings it resumes.
+- **`queue status` says why a lane is quarantined, and `auto lane reset` waits for
+  a pending disk layer.** Each lane row of `queue status` (and `reason` in its JSON)
+  has the quarantine's reason and words, and the `lane_quarantined` alert names them
+  with the reset command. A reset whose lane VM still saves its last recording
+  (`disk layer pending`, after a daemon restart) waits up to 10 minutes for it before
+  the revert, instead of timing out on the restore, and names the layer when it does
+  not settle.
+- **A cancelled run ends `cancelled` when the cancel is seen.** A run cancelled
+  while its VM was stopping or its big recording was being saved stayed `cancelling`,
+  with no finish time, for as long as the saving took. It now ends `cancelled` at
+  once; the lane keeps the VM until the recording is saved, so no other run starts on
+  it before.
+- **A per-run trace cap.** `[resources] trace_cap_mib` (default 2048, 0 for none)
+  bounds what one run's recording takes on disk: at the cap the program is stopped,
+  the run ends `partial` with the warning `trace_cap_reached` (the cap, what was
+  recorded and when) and its report reads "Trace cap (2048 MiB) reached". The
+  engine's per-boot quota is no longer silent either: `trace_reduced` when it
+  switched to keeping only the calls the rules read, `trace_quota_reached` when it
+  stopped recording.
+- **A run the service stopped is not "Stopped by you".** A run that reached its
+  time limit reads "Time limit (2 min) reached at 2 min 0 s" in the report, the
+  Markdown, the run's state line and the window, and its `run.json` and the report's
+  `run` record `stop_reason` (`time_limit`, `trace_cap`, `low_disk` or `cancelled`)
+  instead of `stopped_by_user`; MISP calls it a finished analysis. The engine takes a
+  `StopRunFor` command for a stop with a reason.
+- **A missing optional tool no longer makes a run `partial`.** A static check whose
+  tool is not installed (capa, a rule pack) is the warning `static_check_unavailable`
+  and the run keeps its outcome; list the check in `static_analysis.required_checks`
+  to make it a failure. A check that ran out of time is still `partial`
+  (`static_check_incomplete`).
+- **Queued runs no longer fail together after `[queue] wait_s`.** A run waiting for
+  disk or memory held by the runs in front of it now stays queued: the wait counts
+  only while no run is in progress, a shortage that is gone when the wait is up keeps
+  the run queued, and a run that does fail (`host_resources`) names the resource and
+  its numbers in `failure.detail`. The alert `queue_waiting` says what queued runs
+  wait for, with the numbers, when they start waiting and hourly while they do.
+- **A busy lane no longer runs the daemon out of open files.** Every lane's engine
+  runs in the daemon's process, and a guest that scans the network opened up to 256
+  connections per lane, each holding four or five descriptors; two such runs at once
+  used up a 1,024 limit and failed every analysis in progress with "Too many open
+  files". A guest connection now holds one descriptor (two for a built-in InetSim
+  service), the lanes' gateways together stay below what the open-file limit leaves
+  after 512 for the rest of the process (a connection over it goes unanswered, as one
+  over a lane's own limit), and `auto daemon` and the command line raise their soft
+  open-file limit to the hard limit (at most 65,536) at start and log it. `doctor`
+  has an `open-files` row: a warning when the limit stays below 4,096.
+- **`antinomie-cli report` reuses an Auto run's finished report (ANT-T0556, A45).**
+  For a run an Auto job made, the formats are written from the job's JSON report
+  when it is current, instead of reading the whole recording again (over 20
+  minutes for a 2.5 GB run); a missing or stale report, `--evidence-bundle` and
+  `--include-content` index the run as before, and the command says why.
+- **The command line installs analysis tools and rule packs (ANT-T0556).**
+  `antinomie-cli tools list|install|update` downloads, checks and unpacks capa,
+  FLOSS, Ghidra, Detect It Easy and the other optional tools as Tools > Analysis
+  tools does, and `antinomie-cli rules catalog|install|update` installs and updates
+  the catalog's rule packs as Tools > Detection rules does, with the same code.
+- **Auto mode runs arm64 programs with no preset file (ANT-T0556).** `auto init`
+  sets the lane group from the base's architecture (`arm64` for an arm64 base)
+  and writes it as `[lanes] group` of `service.toml` (a new file, or a table added
+  to one without `[lanes]`); the five built-in presets take the node's lane group
+  and accept its architecture. An architecture has one spelling in
+  `service.toml`, the presets, the CLI and the run API (`x86_64`, `x86`, `arm64`,
+  `arm`, `mips`, ...); `AArch64`, `aarch64`, `ARM`, `x86-64`, `amd64` and the other
+  old spellings are still read. `auto preset show` prints valid TOML that can be
+  saved as a preset file (it printed `static_analysis.limits = {...}` JSON).
+- **A number in a run request reads back as the same number.** A very long number
+  in a request's `overrides` (found by the `job_spec` fuzz target: a 73-digit
+  integer) was read as a floating-point value that, written again by the service,
+  read back as a slightly different one. serde_json's `float_roundtrip` is now on
+  for every crate.
+- **`auto init` takes the clean snapshot only after the guest has finished booting (ANT-T0476).** The guest answers from its initramfs, which may still be growing the root file system to the lane disk; `auto init` stopped it then, so `auto-clean` could hold a half-grown file system, and every job's boot from it hit a guest kernel `BUG` (`fs/ext4/resize.c`) while the guest still reported ready and the job said nothing. `auto init` and `auto lane reset` now wait until the guest's own root is mounted (and a Debian guest's start-up has finished), so are `vm start`, `snapshot restore` and `snapshot create --mode full`, through the engine's new boot wait (`start.boot_wait_secs`, stretched under TCG). A guest kernel crash on the console fails `auto init` and `lane reset`, a crash while the job's VM booted fails the job `guest_unreachable` before the program is started, and one during the run is the warning `guest_kernel_crashed`. A lane made by an earlier `auto init` may hold such a snapshot: make it again with `auto init --replace`.
+- **A `snapshot_full` lane can run jobs (ANT-T0472).** `snapshot create --mode full` saved the guest as soon as it answered, still in its initramfs, and after a resume the sample upload failed `upload_failed` "No such file or directory" at once. The Full snapshot is now taken once the guest has finished booting, and the upload treats "no such file or directory" like "read-only file system": the guest is not ready yet, and it is tried again inside `upload_s`.
+- **A restarted daemon no longer fails its requeued job with `lane_changed` (ANT-T0474).** The job could start before the engine had listed the lane VM's snapshots, and the clean snapshot then counted as gone. `prechecks` now asks the engine for the list and waits for it; without a list the job waits for the lane instead of failing.
+- **A lane no longer leaves one disk layer behind per job (ANT-T0480).** Every snapshot restore lays a new working disk on the checkpoint's layer, and the working disk it replaced (the discarded unsaved changes) stayed in the VM's `snapshots/` folder: a lane that reverts before every job grew by one file per job, about 5.5 GB an hour in a soak of short jobs, until the free-space floor paused the queue. The replaced disk is now removed when the restore is committed, in Auto mode and in the app's own snapshot restore, unless a checkpoint's chain or a run layer still being saved needs it; the layers of a boot that ended with a restore go once that layer settles, and a snapshot taken during the boot keeps them. When the engine starts it removes, in bounded passes, layers an earlier version or a crash left that nothing refers to, and the memory files (`<id>.state`) a failed Full snapshot left behind. Deleting a VM accepts up to 65,536 entries in `snapshots/` (was 4,096), so a lane that ran for days before this fix can still be deleted. The Auto soak (T8) reports the `snapshots/` file count and size after each job.
+- **A guest that stops answering during an Auto run is a lost guest, not an internal failure (ANT-T0479).** While the engine reconnects to a guest that stopped answering (a guest kernel panic with QEMU alive, a guest held on a full disk) or restores a snapshot, it refuses guest commands ("guest transition in progress"); the lane took that refusal for an engine failure and failed the run `internal`, not retried. The run stage now goes on through it within its own limits (the run limit, then 120 s after `StopRun`), sends a refused or cancelled `StopRun` again once the guest is back, and ends `guest_lost` (retried once) when the guest does not come back; the upload and the launch ask again until their own limits and end `guest_unreachable` (the sample has not run yet). `run exec` goes on through it too. A program stopped for the disk floor now always ends `stopped` and the run `partial` with `low_disk`, also when the guest on the full disk never confirms the stop or the VM fails after it (the missing evidence is the warning `evidence_incomplete`); it was `failed internal`, or `guest_lost` and a retry.
+- **A QEMU that dies in the run stage is a lost guest (Auto).** The engine closes the run of a VM that ended (`Finalized`), which the lane read as the program's normal end: the job went on and ended `partial` on attempt 1 with `end_reason: exited`, no exit code, and no retry. A run the engine closed with the VM before the guest reported the end of the program's tree is now `guest_lost` (the VM stopped while the program was running), retried as the policy says; `run exec` reads it the same way. A run that ended before the VM, or one the lane had told to stop, is unchanged.
+- **A full disk in the run stage no longer hangs an Auto job and the daemon.** When the data folder filled up, the job store and the lane file could not be written: the run's end was lost and the job failed `internal` without a record, the `low_disk` pause was lost with its write, the lane then waited the whole 1800 s for a recording the engine could not finish on the full disk (twice, then quarantined itself), and the daemon did not stop on `SIGTERM`. Now the pause holds in the daemon when it cannot be written; the writes a job cannot do without (the run's end, the job's end or retry, the lane's end of work) are tried again every 5 s until the disk has room, with the queue paused `low_disk`; the wait for the recording ends after a minute below the floor (the job is `recording_failed`, the lane is not quarantined and takes the next job once the engine has finished the recording); the engine tries a recording's disk layer again 30 s after it found the disk full, instead of at the next start; and a job cancelled for shutdown that has not left its lane stages after 240 s has its waits interrupted, so the daemon exits within its unit's `TimeoutStopSec` and recovery requeues the job.
+- **`vm.revert = "reset"` is not offered for Auto lanes.** Every lane keeps its clean snapshot, so the engine would refuse a reset; `config validate` now says so and points at `snapshot_disk`, which gives the same clean disk. The Auto docs and the T6 isolation tier no longer list `reset`.
+- **YARA runs in Auto mode.** A job launches without the guest-side static analysis, and YARA waited for that analysis's specimen, so every job got `detection_skipped` ("hash check pending") and the default mapping's "high or critical YARA hit gives `malicious`" never applied. A job's YARA scan (and `antinomie-cli detect` on a saved run without that analysis) now reads the run's sample from the library in its place, with the files the run wrote and the dumps. Runs made in the window are scanned as before.
+- **Host work pool time limits no longer shrink after a few small jobs.** An item's expected time was its recent median once it ran three times, whatever the size of its input, so after three small jobs a large one got their time; and a job's deadline had no floor, so it could be shorter than its first item's 30 s minimum and the job failed `internal` (`watchdog`) during Triage. The expected time is now the larger of the median and the size estimate, and a job's deadline is at least the factor times the work ahead plus its own items' limits. The pool order is unchanged.
+- **A free lane finds a job it can run behind any number it cannot.** The queue claim read only the first 64 queued jobs, so with several lanes (an arm64 lane and an x86-64 lane, say) a free lane stayed idle while a job it could run waited behind 64 for another lane, or behind 64 in `backoff`. It now reads the whole queue, a page at a time, in the same order.
+- **`run/PAUSE`, low disk and a missing KVM stop every lane.** With several lanes only lane 1's loop looked at them, between its own jobs: while lane 1 ran a job, lanes 2 to 4 went on starting jobs after the PAUSE file appeared, and stayed paused after it was removed. Every lane now looks before it claims a job, so the pause and its end reach every free lane within five seconds. One lane is unchanged.
+- **`[retention] max_recordings_gib = 0` is refused.** It was accepted as a cap of 0 bytes, so every retention pass deleted every finished job's recording, `keep_failed` ones included. `config validate` and the daemon's start now refuse it (at least 1); it does not mean "no cap".
+- **The CLI and the daemon use `settings.json`'s capture quota and shutdown timeout.** `quota_gib`, `shutdown_timeout_s` and the earlier-file-bytes caps (`file_before_file_mib`, `file_before_run_mib`) set in the window or with `antinomie-cli config set` were ignored by every CLI command and by `auto daemon`, which always used the defaults (4 GiB, 10 s); only the start waits were read. They now apply, as in the window.
+- **Retention and `auto delete --with-recording` delete every attempt's run.** A job retried after its launch (a lost guest, a stop, a daemon restart) recorded a run per attempt, but only the last was known to the job, so the earlier runs were never deleted and the size cap did not count them. Each run is now remembered with its attempt (a new `job_recordings` table, created when missing) and all of them are deleted; the job record waits until they are gone.
+- **Retention keeps a job record whose recording it cannot read.** A run in a VM's recordings folder outside the data folder (`recording_root`) was refused as "outside the data folder", and after `jobs_days` the job record was deleted anyway, leaving the run on disk with nothing naming it. Such runs are now read and deleted like the others, and a job whose recording cannot be read keeps its record.
+- **A decrypted sample left by a killed launch is removed.** The plain host copy staged under `<data>/host-copy/` during a launch was removed only when the launch ended, so a daemon or CLI killed meanwhile (SIGKILL, the OOM killer, a power loss) left it there. The daemon's start and every later staging now remove copies whose process is gone.
+- **With several lanes, a job only a quarantined lane can run shows `waiting_for: lane_quarantined`.** It showed `lane` (a busy lane) for as long as the quarantine lasted, a wait that never expires. The free lane that cannot run it now passes on the wait of the lanes that can.
+- **`config validate` refuses `vm.revert = "snapshot_full"` over a disk-only snapshot, and the daemon does not load such a policy (ANT-T0465).** `auto init` takes a disk snapshot, and a full revert to it restored the disk and booted the guest cold, as `snapshot_disk` does, with nothing said. The policy check now gives an error that names the snapshot: use `snapshot_disk`, or take a full snapshot with memory.
+- **Auto mode's custody entries for sending a sample, a run's start and its end name the job's caller (ANT-T0467).** They named `app`, so one sample's custody chain switched from `local:<uid>` or `auto:policy-<name>` (the `added` and `automation` entries) to `app` within a single job, and the process-wide actor meant for them was never set (with several lanes one slot could not have served them anyway). Each engine now has its own custody actor, which the lane sets to the job's caller for the job; the window still writes `app`.
+- **A filtered `recording.trace.page` no longer reads the whole trace on every page.** With `q` or `hide_groups`, each page counted the matching calls over the whole recording for its `total`, so on a large recording every filtered page could pass the 10 s light read deadline (`unavailable/read_timeout`). The count now runs on the first page only, within a quarter of the light deadline, and is kept for the later pages of the same filter and generation; a page whose count did not finish, or a cursor page with none kept, has no `total` (the field is optional, as for other reads).
+- **A job resumed at `analyse` lists each report file once.** A job resumed after a daemon stop or crash wrote its report again under the same names and added a second set of artifact rows; the first rows kept the old hash, so `artifact.get` of their ids served the new file under a hash it did not have. Writing an artifact at the same place now replaces its row.
+- **An event subscription may filter on `job.trigger`.** `{"op":"subscribe","types":["job.trigger"]}` was refused with `invalid_argument`; an unfiltered subscription received it.
+- **`capabilities.queries.limits` reports the `[query]` settings in force.** It reported the defaults, so a client sizing its read concurrency from it used the wrong numbers when `service.toml` set them.
+
 ## 0.9.0 — 2026-11-23
 
 Antinomie 0.9.0 runs arm64 programs: BusyBox, Debian 13 Minimal and Debian 13

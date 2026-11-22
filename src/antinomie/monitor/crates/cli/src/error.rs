@@ -16,7 +16,7 @@ pub enum ErrorCode {
     /// The caller lacks a permission (`details.needs`), or a local file or
     /// directory refuses access (exit 5).
     PermissionDenied,
-    /// The preset (in 0.9.0 the policy) is not offered to the caller (exit 5).
+    /// The preset (the policy of the first test builds) is not offered to the caller (exit 5).
     PresetDenied,
     /// A value above the caller's limit (exit 5).
     LimitExceeded,

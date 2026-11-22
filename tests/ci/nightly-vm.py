@@ -9,8 +9,7 @@ sheds; and a network capture records packets. With the CLI given, one Auto
 job also runs end to end: `auto init` makes a lane on the base and a benign
 shell script goes through every stage in the command itself (no daemon) to a
 report. Needs KVM, QEMU, bubblewrap (for the Auto job) and the release
-guest-run example (and antinomie-cli, which 0.9.0 does not ship: the Auto
-job runs only when a CLI binary is given, which 0.9.1 does again).
+guest-run example (and antinomie-cli).
 
     nightly-vm.py GUEST_RUN WORK_DIR [CLI]
 

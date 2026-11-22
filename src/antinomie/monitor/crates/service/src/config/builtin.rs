@@ -24,7 +24,7 @@ on_duplicate = "run"                           # run | reuse | reject
 reuse_across_presets = false
 
 [program]                                      # Run program: Program, Arguments, Session
-source = "upload"                              # Source: upload (guest_path arrives with 0.9.1)
+source = "upload"                              # Source: upload (guest_path arrives in a later version)
 executable = ""                                # Executable, with source = "guest_path"
 guest_path = "/tmp/{name}"                     # Upload > Guest path ({name}: the sample's file name)
 arguments = []                                 # Arguments, one per entry
@@ -33,20 +33,20 @@ environment = ["PATH=/bin:/sbin:/usr/bin:/usr/sbin", "TERM=xterm"]
 user = "normal"                                # User: normal | root | nobody | custom (root needs run.as_root)
 uid = 1000                                     # UID, GID with user = "custom" (below 1000 needs run.as_root)
 gid = 1000
-run_in = "app_terminal"                        # Run in: app_terminal (the desktop values arrive with 0.9.1)
+run_in = "app_terminal"                        # Run in: app_terminal (the desktop values arrive in a later version)
 run_time_s = 300                               # Run time, 5 to 1800 seconds
-preload = []                                   # [{ sample = "<sha256>", how = "ld_preload" }] (0.9.1)
-extra_files = []                               # [{ sample = "<sha256>", guest_path = "/tmp/lib.so" }] (0.9.1)
+preload = []                                   # [{ sample = "<sha256>", how = "ld_preload" }] (later)
+extra_files = []                               # [{ sample = "<sha256>", guest_path = "/tmp/lib.so" }] (later)
 
 [record]
-scope = "program"                              # program | whole_vm (Capture all, 0.9.1)
+scope = "program"                              # program | whole_vm (Capture all, later)
 screenshot_every_s = 0                         # Screenshot every N s (1 to 999), 0 = off
 
 [network]
 capture = true                                 # Capture network
 route = "drop"                                 # Route: drop | inet_sim (live routes need route.* and node setup)
-private_addresses = false                      # Allow private network addresses (route.lan, 0.9.1)
-abuse_filter = true                            # false needs route.unfiltered (0.9.1)
+private_addresses = false                      # Allow private network addresses (route.lan, later)
+abuse_filter = true                            # false needs route.unfiltered (later)
 
 [dumps]
 memory_dump_on_exit = false                    # needs evidence.memory_dump
@@ -60,11 +60,11 @@ trigger_core = true                            # Core of the process that trigge
 read_non_resident_pages = false
 max_dumps = 1                                  # At most N dump(s) per run, 1..8
 dumps_apart_s = 30                             # at least N s apart, 0..3600
-disk_dump = false                              # Dump disk (needs evidence.disk_dump, 0.9.1)
+disk_dump = false                              # Dump disk (needs evidence.disk_dump, later)
 
 [vm]
 lane_group = "x86_64"                          # a lane group from node setup ([lanes] group)
-keep_on_failure = false                        # Keep the VM after a failure (needs run.keep_vm, 0.9.1)
+keep_on_failure = false                        # Keep the VM after a failure (needs run.keep_vm, later)
 allow_control = true                           # Allow taking control (people with interactive.control)
 
 [static_analysis]
@@ -75,7 +75,7 @@ deep_checks = []                               # disassembly | decompilation | f
 time_limit_per_tool_min = 0                    # Time limit per tool: 0 = each tool's own, up to 480
 ghidra_disassembly = false                     # Ghidra for Disassembly
 required_checks = []
-rebuilt_file_mib = 16                          # Rebuilt file bytes (Triage), per file (0.9.1)
+rebuilt_file_mib = 16                          # Rebuilt file bytes (Triage), per file (later)
 rebuilt_run_mib = 256                          #   and per run
 
 [static_analysis.limits]                       # Size limits (each within the engine's range)
@@ -90,21 +90,21 @@ floss_largest_file_mib = 16
 
 [triage]
 enabled = true
-written_per_file_mib = 64                      # File activity: written content kept (0.9.1)
+written_per_file_mib = 64                      # File activity: written content kept (later)
 written_per_run_mib = 1024
-earlier_per_file_mib = 64                      # File activity: earlier bytes kept (0.9.1)
+earlier_per_file_mib = 64                      # File activity: earlier bytes kept (later)
 earlier_per_run_mib = 1024
 
 [detection]
 yara = true
 sigma = true
 ids = true
-scan_every_min = 0                             # Scan every N min while the program runs (0.9.1)
+scan_every_min = 0                             # Scan every N min while the program runs (later)
 check_online = false                           # Check online at abuse.ch (needs lookup.online and the node's abuse.ch key)
 
 [report]
 formats = ["html", "json"]                     # html | pdf | json | misp | stix | md
-sections = "all"                               # (a list of sections arrives with 0.9.1)
+sections = "all"                               # (a list of sections arrives in a later version)
 bundle = false                                 # Evidence bundle
 defang = true                                  # Defang indicators in HTML, PDF and Markdown
 

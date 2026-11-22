@@ -63,7 +63,7 @@ pub struct SpecError {
 /// `internet`, `nat`, `tor`, `vpn[:NAME]`, `socks5[:NAME]` (NAME a profile of
 /// node setup). `drop` and `inet_sim` need no permission; a live route needs
 /// its `route.*` permission and is then refused `unavailable_on_node` (no
-/// route is set up for the service before 0.9.1).
+/// route is set up for the service in this version).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Route {
     #[default]
@@ -164,7 +164,7 @@ impl JsonSchema for Route {
     }
 }
 
-/// How the program is run in the guest. 0.9.0 runs `app_terminal` only; the
+/// How the program is run in the guest. This version runs `app_terminal` only; the
 /// other two are reserved preset values (refused `unsupported`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

@@ -56,7 +56,7 @@ fn core_kind(route: &Route) -> RouteKind {
         Route::Tor => RouteKind::Tor,
         Route::Vpn(_) => RouteKind::Vpn,
         Route::Socks5(_) => RouteKind::Socks5,
-        // Refused at submit (no NAT lane before 0.9.1): never planned.
+        // Refused at submit (no NAT lane in this version): never planned.
         Route::Nat => RouteKind::Drop,
     }
 }
