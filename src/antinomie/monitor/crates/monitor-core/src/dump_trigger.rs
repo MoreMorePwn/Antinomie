@@ -39,6 +39,9 @@ pub const RECORDS_MAX: usize = 32;
 /// kept for a match that may still arrive before it is let go: calls of one
 /// process can reach the host through more than one ring.
 pub(crate) const HOLD_GRACE: Duration = Duration::from_millis(15);
+/// How long a match at an exec call waits for the new program's first call
+/// before its core is asked for anyway (a failed exec never makes one).
+pub(crate) const EXEC_WAIT: Duration = Duration::from_millis(1500);
 /// The note of a run whose base cannot hold a process at its exit.
 pub const NO_EXIT_HOLD: &str = "Dump trigger: this base cannot hold a process at its exit (that needs a base of guest contract revision 22), so a process that exits within milliseconds of a match ends before its core can be taken.";
 
@@ -202,7 +205,7 @@ impl DumpTrigger {
     /// than `max_memory_dumps` were. `(core, memory)`.
     pub fn room(&self, log: &TriggerLog) -> (bool, bool) {
         let limit = |count: u32| count.min(RECORDS_MAX as u32) as usize;
-        let cores = log.records.iter().filter(|r| r.core.is_some()).count();
+        let cores = log.records.iter().filter(|r| r.core_counts()).count();
         let memory = log.records.iter().filter(|r| r.memory.is_some()).count();
         (
             self.core && cores < limit(self.max_cores),
@@ -316,6 +319,12 @@ pub struct TriggerDump {
     /// and in records saved before it existed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The guest could not pause the process just then (it was replacing its
+    /// program, or waiting for a program it started, or busy, or out of
+    /// time): that is not a core taken, so it does not use up the trigger's
+    /// cores and does not start its cooldown; the next match may try again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refused: bool,
 }
 
 /// One trigger that took (or tried to take) dumps.
@@ -350,6 +359,18 @@ impl TriggerRecord {
         run_id: &str,
     ) -> crate::provenance::Provenance {
         crate::provenance::Provenance::trigger(vm_id, boot_id, run_id, &self.finding, self.at_ms)
+    }
+
+    /// This record's core is one the trigger's `max_cores` counts: asked for
+    /// and not refused for a reason that may pass.
+    pub fn core_counts(&self) -> bool {
+        self.core.as_ref().is_some_and(|core| !core.refused)
+    }
+
+    /// This record used up something of the trigger: a core that counts, or
+    /// a memory dump. The cooldown runs from the last such record.
+    pub fn counts(&self) -> bool {
+        self.core_counts() || self.memory.is_some()
     }
 
     pub fn pending(&self) -> bool {
@@ -406,6 +427,14 @@ pub(crate) struct Watch {
     pub(crate) hold_grace: Duration,
     /// The run is over and its notes say what the trigger did.
     pub settled: bool,
+    /// The latest (call id, phase) seen from each process, whatever the call:
+    /// says whether a process that executed a program has gone on to run it.
+    seen: HashMap<u32, (u64, u8)>,
+    /// Matches at an exec call whose program has not started yet (ANT-T0591):
+    /// a process inside `execve` cannot be paused for a core, so the match
+    /// waits for the new image's first call, or for [`EXEC_WAIT`].
+    deferred: VecDeque<(LiveFinding, Instant)>,
+    exec_wait: Duration,
 }
 
 impl Watch {
@@ -429,6 +458,9 @@ impl Watch {
             held: HashMap::new(),
             hold_grace: HOLD_GRACE,
             settled: false,
+            seen: HashMap::new(),
+            deferred: VecDeque::new(),
+            exec_wait: EXEC_WAIT,
         }
     }
 
@@ -444,6 +476,7 @@ impl Watch {
     /// held process's last calls.
     pub(crate) fn scale_hold_grace(&mut self, scale: u32) {
         self.hold_grace = HOLD_GRACE * scale.max(1);
+        self.exec_wait = EXEC_WAIT * scale.max(1);
     }
 
     /// The guest holds process `pid` at its exit (its task `cookie` said so):
@@ -453,6 +486,8 @@ impl Watch {
             self.held.clear();
         }
         self.held.insert(pid, (cookie, Instant::now()));
+        // It is ending, not executing: nothing more to wait for.
+        self.release_deferred(Some(pid));
         let mut entries: Vec<EventSummary> = Vec::new();
         self.pending.retain(|_, entry| {
             if entry.pid == pid {
@@ -490,6 +525,13 @@ impl Watch {
 
     /// An entry or exit that has been received whole.
     pub(crate) fn event(&mut self, event: EventSummary) {
+        if matches!(event.phase, 1 | 2) && event.pid != 0 {
+            if self.seen.len() >= PENDING_MAX {
+                self.seen.clear();
+            }
+            let at = self.seen.entry(event.pid).or_default();
+            *at = (*at).max((event.call_id, event.phase));
+        }
         if !matches!(event.phase, 1 | 2)
             || (!self.keep.is_empty() && !self.keep.contains(&event.syscall_nr))
         {
@@ -513,8 +555,41 @@ impl Watch {
         }
     }
 
+    /// An exec call's match whose program has run on: the exec call returned
+    /// (or failed) or the process made a later call.
+    fn progressed(&self, finding: &LiveFinding) -> bool {
+        self.seen
+            .get(&finding.pid)
+            .is_some_and(|at| *at >= (finding.call_id, 2))
+    }
+
+    /// The match is at an exec call that has not finished: the process is
+    /// inside `execve`, which the guest cannot pause.
+    pub(crate) fn exec_unfinished(&self, finding: &LiveFinding) -> bool {
+        is_exec(finding) && !self.progressed(finding)
+    }
+
+    /// Move the deferred matches whose wait is over (all of `pid`'s when it is
+    /// named, every one when the run is over) to the queue.
+    fn release_deferred(&mut self, pid: Option<u32>) {
+        let mut waiting = VecDeque::new();
+        while let Some((finding, at)) = self.deferred.pop_front() {
+            let due = pid.is_some_and(|pid| pid == finding.pid)
+                || self.progressed(&finding)
+                || at.elapsed() >= self.exec_wait
+                || self.exits.contains_key(&finding.pid);
+            if due {
+                self.queue.push_back(finding);
+            } else {
+                waiting.push_back((finding, at));
+            }
+        }
+        self.deferred = waiting;
+    }
+
     /// Judge the entries whose exit did not come in time.
     pub(crate) fn tick(&mut self) {
+        self.release_deferred(None);
         while let Some((key, at)) = self.order.front().copied() {
             if !self.pending.contains_key(&key) {
                 self.order.pop_front();
@@ -538,6 +613,8 @@ impl Watch {
         for entry in entries {
             self.judge_events(&[entry]);
         }
+        self.exec_wait = Duration::ZERO;
+        self.release_deferred(None);
     }
 
     fn judge_events(&mut self, events: &[EventSummary]) {
@@ -546,14 +623,78 @@ impl Watch {
                 if finding.tier < self.plan.min_tier {
                     continue;
                 }
-                if self.queue.len() >= QUEUE_MAX {
+                if self.queue.len() + self.deferred.len() >= QUEUE_MAX {
                     self.lost += 1;
+                } else if self.exec_unfinished(&finding) && !self.held.contains_key(&finding.pid) {
+                    self.deferred.push_back((finding, Instant::now()));
                 } else {
                     self.queue.push_back(finding);
                 }
             }
         }
     }
+}
+
+/// Refused cores the log keeps, newest last; older ones are dropped, so a
+/// process the guest keeps refusing cannot fill the log.
+const REFUSED_KEPT: usize = 8;
+
+/// Whether a core that failed for `code` was a refusal that may pass (the
+/// process was busy, not pausable just then, or the guest ran out of time)
+/// and so does not count as a core taken (ANT-T0591).
+pub fn retryable_core_refusal(code: crate::core_limits::CoreReasonCode) -> bool {
+    use crate::core_limits::CoreReasonCode::{Deadline, Interrupted, Unsupported};
+    matches!(code, Unsupported | Interrupted | Deadline)
+}
+
+/// The words for a core the guest could not take just then. `exec`: the
+/// process was inside `execve`. `started`: a program it started is running
+/// (process id and name). `guest`: the core's own reason, which ends with the
+/// guest's raw state and status; it is kept when nothing more is known.
+pub fn refused_core_text(exec: bool, started: Option<(u32, &str)>, guest: &str) -> String {
+    let raw = guest
+        .rfind(" (guest state")
+        .map_or("", |at| guest[at..].trim_end());
+    let raw = raw.trim_end_matches('.');
+    let kept = "This did not use up the trigger's cores: the next match may take one.";
+    if exec {
+        format!(
+            "The process was replacing its program (execve) when the core was asked for, \
+             so it could not be paused{raw}. {kept}"
+        )
+    } else if let Some((pid, name)) = started {
+        format!(
+            "The process had just started another program ({name}, process {pid}) and was \
+             waiting for it: a program started with vfork or posix_spawn shares its \
+             starter's memory until it runs, so the process could not be paused{raw}. {kept}"
+        )
+    } else {
+        format!("{} {kept}", guest.trim_end())
+    }
+}
+
+/// Keep the newest [`REFUSED_KEPT`] refused cores of a log.
+pub(crate) fn trim_refused(log: &mut TriggerLog) {
+    let mut extra = log
+        .records
+        .iter()
+        .filter(|record| record.memory.is_none() && record.core.as_ref().is_some_and(|c| c.refused))
+        .count()
+        .saturating_sub(REFUSED_KEPT);
+    log.records.retain(|record| {
+        let old = extra > 0
+            && record.memory.is_none()
+            && record.core.as_ref().is_some_and(|core| core.refused);
+        if old {
+            extra -= 1;
+        }
+        !old
+    });
+}
+
+/// A match at `execve` or `execveat`.
+fn is_exec(finding: &LiveFinding) -> bool {
+    matches!(finding.syscall.as_str(), "execve" | "execveat")
 }
 
 /// The note of a run whose trigger never matched: a trigger that was armed

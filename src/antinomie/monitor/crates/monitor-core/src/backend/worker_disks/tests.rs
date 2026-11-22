@@ -215,6 +215,8 @@ fn blank_worker(root: PathBuf) -> Worker {
         build: None,
         tool: None,
         last_publish: Instant::now(),
+        core_retries: Vec::new(),
+        core_refusals: Default::default(),
         layer_scan: Instant::now(),
         layer_sweep: Vec::new(),
         latest_snapshot: Arc::new(Mutex::new(None)),

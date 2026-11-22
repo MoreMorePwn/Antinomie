@@ -22,6 +22,20 @@
 //!   millisecond later): the guest holds it at its exit (EXEC_EXIT_HOLD), so
 //!   its core is still taken, and the run's note says it was held.
 //!
+//! * `dropexec-plain`, `-fork`, `-vfork` (ANT-T0591): FIXTURE copies itself to
+//!   /tmp/.ntmrun.PID, makes it executable and executes it, itself, from a
+//!   forked child or from a vfork child: execution.dropped_exec, fired at the
+//!   execve. The core must be taken after the exec has finished, so it is of
+//!   the new image (its process name is the dropped file's), and a core the
+//!   guest cannot take must not use up the trigger's one core.
+//!
+//! * `dropexec-threads` (three more threads end inside the exec) and
+//!   `dropexec-spawn` (the new image starts a helper with vfork and waits
+//!   for it; the guest refuses the core until the helper starts a program,
+//!   and the host asks again: the core is of the new image) and
+//!   `dropexec-spawnlong` (the helper outlasts the retries: the refusal names
+//!   it and is not counted, and the next match takes the core).
+//!
 //! The first three and `fast` must have one trigger record whose core was written
 //! (complete, or partial: pages not resident have no bytes; ia32 `compat`:
 //! failed, as above); the
@@ -206,6 +220,59 @@ fn describe(run: &RunSummary) -> String {
     )
 }
 
+/// The core of a dropped program is of the new image: its process name, in
+/// the notes at the start of the file, is the dropped file's.
+fn new_image(core: &antinomie_monitor_core::dump_trigger::TriggerDump) -> Result<(), String> {
+    let path = core.path.as_ref().ok_or("no core file")?;
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let head = &bytes[..bytes.len().min(16 << 10)];
+    if head.windows(8).any(|w| w == b".ntmrun.") {
+        Ok(())
+    } else {
+        Err("the core is of the dropper, not of the dropped program".into())
+    }
+}
+
+/// `dropexec-spawnlong`: the dropped program starts a helper with vfork at
+/// once that outlasts the host's retries, and while it waits for it the guest
+/// cannot pause it (`dropexec-spawn`, whose helper starts a program after
+/// 1.5 s, gets its core on a retry). The first core is refused, and the reason names the started program; the refusal does not
+/// use up the trigger's one core, so the later match (the program writes a
+/// cron entry once the helper is done) takes it.
+fn spawned(run: &RunSummary) -> Result<(), String> {
+    let log = run.triggers.as_ref().ok_or("no trigger log")?;
+    let first = log.records.first().ok_or("no trigger record")?;
+    let core = first.core.as_ref().ok_or("no core asked")?;
+    if first.finding.rule != "execution.dropped_exec" {
+        return Err(format!("first trigger by {}", first.finding.rule));
+    }
+    if !(core.refused && matches!(core.state, RunArtifactState::Failed)) {
+        return Err(format!(
+            "the first core {:?} (refused {}): {:?}, expected a refused one",
+            core.state, core.refused, core.error
+        ));
+    }
+    let error = core.error.as_deref().unwrap_or_default();
+    if !error.contains("another program") || !error.contains("did not use up") {
+        return Err(format!("the refusal does not say what it was: {error}"));
+    }
+    let taken = log
+        .records
+        .iter()
+        .skip(1)
+        .filter_map(|record| record.core.as_ref())
+        .any(|core| {
+            matches!(
+                core.state,
+                RunArtifactState::Complete | RunArtifactState::Partial
+            ) && core.path.as_ref().is_some_and(|path| path.is_file())
+        });
+    if !taken {
+        return Err("no later match took the core the refusal left".into());
+    }
+    Ok(())
+}
+
 /// One trigger record of `rule`, whose core was written.
 fn fired(run: &RunSummary, rule: &str, ia32: bool) -> Result<(), String> {
     let log = run.triggers.as_ref().ok_or("no trigger log")?;
@@ -324,6 +391,21 @@ fn check(bundle: &str, data: &str, native: &str, compat: Option<&str>) -> Result
             Some("persistence.cron"),
         ));
     }
+    for mode in ["plain", "fork", "vfork", "threads", "spawn", "spawnlong"] {
+        cases.push((
+            match mode {
+                "plain" => "dropexec-plain",
+                "fork" => "dropexec-fork",
+                "threads" => "dropexec-threads",
+                "spawn" => "dropexec-spawn",
+                "spawnlong" => "dropexec-spawnlong",
+                _ => "dropexec-vfork",
+            },
+            "/tmp/trigger-native".into(),
+            vec!["--dropexec".into(), mode.into(), "20".into()],
+            Some("execution.dropped_exec"),
+        ));
+    }
     cases.push((
         "quiet",
         "/bin/sh".into(),
@@ -346,13 +428,38 @@ fn check(bundle: &str, data: &str, native: &str, compat: Option<&str>) -> Result
     } else {
         println!("SKIP fast: the base has no exit hold (revision 22)");
     }
+    // TRIGGER_CHECK_ONLY=prefix keeps the cases whose name starts with it.
+    let only = std::env::var("TRIGGER_CHECK_ONLY").unwrap_or_default();
     for (name, path, args, rule) in cases {
+        if !name.starts_with(only.as_str()) {
+            continue;
+        }
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let outcome = d.start(&path, &args).and_then(|id| {
             let run = d.settled(&vm_id, &id)?;
             println!("RUN {name} {id}: {}", describe(&run));
             match rule {
+                Some(_) if name == "dropexec-spawnlong" => spawned(&run),
                 Some(rule) => fired(&run, rule, name == "compat" && !arm64).and_then(|()| {
+                    if name.starts_with("dropexec") {
+                        let core = run.triggers.as_ref().and_then(|log| log.records.first());
+                        new_image(core.and_then(|r| r.core.as_ref()).ok_or("no core")?)?;
+                        // The trigger's one core: a refused try that was asked
+                        // again must not leave a second core beside it.
+                        let taken = run.triggers.as_ref().map_or(0, |log| {
+                            log.records
+                                .iter()
+                                .filter(|r| {
+                                    r.core.as_ref().is_some_and(|c| {
+                                        matches!(c.state, RunArtifactState::Complete)
+                                    })
+                                })
+                                .count()
+                        });
+                        if taken > 1 {
+                            return Err(format!("{taken} cores taken, the trigger allows one"));
+                        }
+                    }
                     // The exit hold is what made the core possible.
                     if name == "fast"
                         && !run
