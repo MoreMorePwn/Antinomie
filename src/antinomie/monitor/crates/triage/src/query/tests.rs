@@ -533,3 +533,17 @@ pub fn completions_keep_the_surrounding_clause_and_follow_the_registry() {
     let tags = completions_with("tag == mal", 10, FilterScope::Record, &["malware".into()]);
     assert!(tags.iter().any(|item| item.insert == "malware"));
 }
+
+#[test]
+pub fn a_dotted_file_name_is_a_text_search_and_a_dotted_field_is_still_an_expression() {
+    for text in ["ld.so.cache", "/etc/ld.so.cache", "libc.so.6"] {
+        assert!(!validate::is_expression(text), "{text}");
+        assert!(
+            matches!(validate::compiled(text, false), Ok(Mode::Text(_))),
+            "{text}"
+        );
+    }
+    for field in ["process.exe", "args.0", "syscall.name", "Process.Exe"] {
+        assert!(validate::is_expression(field), "{field}");
+    }
+}

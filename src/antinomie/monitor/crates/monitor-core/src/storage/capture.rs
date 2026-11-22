@@ -190,8 +190,10 @@ impl RawCapture {
                 let (handed_bytes, handed_packets) = self.written;
                 self.packets = match handed_bytes {
                     0 => 0,
-                    _ => (u128::from(handed_packets) * u128::from(kept.min(handed_bytes))
-                        / u128::from(handed_bytes)) as u64,
+                    _ => {
+                        (u128::from(handed_packets) * u128::from(kept.min(handed_bytes))
+                            / u128::from(handed_bytes)) as u64
+                    }
                 };
                 self.bytes = kept;
             }

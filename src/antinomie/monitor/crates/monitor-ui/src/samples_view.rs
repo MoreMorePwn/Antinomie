@@ -476,7 +476,7 @@ fn guest_path(sample: &SampleInfo, sent: usize) -> String {
     };
     format!(
         "/tmp/{}-{copy}{}",
-        &identity[..12.min(identity.len())],
+        identity.chars().take(12).collect::<String>(),
         if name.is_empty() {
             "sample".into()
         } else {
@@ -583,10 +583,16 @@ impl SamplesView {
                 ),
                 // A cancel is the person's own action: information, nothing kept.
                 Err(error) if antinomie_monitor_core::cancel::is_cancelled(&error) => (
-                    format!("{}: download cancelled", &hash[..12.min(hash.len())]),
+                    format!(
+                        "{}: download cancelled",
+                        hash.chars().take(12).collect::<String>()
+                    ),
                     false,
                 ),
-                Err(error) => (format!("{}: {error}", &hash[..12.min(hash.len())]), true),
+                Err(error) => (
+                    format!("{}: {error}", hash.chars().take(12).collect::<String>()),
+                    true,
+                ),
             });
         }
         if self.searching.is_some() || !self.downloads.is_empty() {
@@ -1051,6 +1057,16 @@ mod tests {
             guest_path(&sample, 2),
             "/tmp/abababababab-3-.._evil_name_rm.elf"
         );
+    }
+
+    #[test]
+    fn a_non_ascii_hash_from_a_service_does_not_panic_the_name() {
+        let sample = SampleInfo {
+            sha256_hash: "héllo wörld, a hash that is no hash".into(),
+            file_name: "x.bin".into(),
+            ..SampleInfo::default()
+        };
+        assert!(guest_path(&sample, 0).starts_with("/tmp/héllo wörld"));
     }
 
     #[test]
