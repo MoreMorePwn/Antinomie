@@ -780,6 +780,9 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **A long URL or file path in the Triage summary no longer pushes the page off the window (ANT-T0589).** The Indicators rows did not shorten a long value, so a run with long URLs made the whole Summary wider than the window. A long value is now cut to its box with the full text on hover.
+- **Detection no longer says "Partial" when a run has no packet capture by design (ANT-T0589).** A VM with no network or a run with Capture network off now shows a neutral line that says why, that the network (Suricata) rules did not run and how to fix it; a capture that went missing still warns.
+- **The VM summary no longer shows SeaBIOS or empty "()" firmware text on arm64 (ANT-T0589).** The Device profile card names the arm64 firmware (device tree or UEFI AAVMF), leaves out empty fields, and drops the PC-only ACPI OEM, HPET, VMware port and USB entries on arm64.
 - **Statistics, Latency: the Calls table shows 20 rows before it scrolls (ANT-T0589).** It held about 10 at a fixed pixel height; the limit is now 20 rows of the current text size.
 - **The Syscall Trace no longer has a "Statistics of these calls" button (ANT-T0589).** Statistics still opens from its menu, Ctrl+Shift+T and the tab entries.
 - **A second VM started with a realistic profile no longer "times out waiting for the guest" in the VM check tools (ANT-T0587).** A kernel message printed in the middle of the guest's "BusyBox guest ready" line hid it from the serial-console wait in the check examples, so a healthy, connected guest looked like one that never started; the checks now ignore kernel lines inside the banner. The app waits for the transport, not that line, and was not affected.

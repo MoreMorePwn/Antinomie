@@ -152,6 +152,7 @@ pub fn collect(
         http,
         http_omitted,
         network_warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
+        network_note: None,
     })
 }
 

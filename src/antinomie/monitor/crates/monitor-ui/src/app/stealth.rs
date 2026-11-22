@@ -542,7 +542,7 @@ fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 "vm_stealth_firmware_kind",
                 &mut profile.firmware,
                 Firmware::ALL,
-                Firmware::label,
+                Firmware::label_arm64,
                 |firmware| firmware_unavailable(firmware, &base, fit.host),
             );
         });

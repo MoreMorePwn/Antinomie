@@ -609,6 +609,9 @@ pub struct ScanData {
     /// process made a packet (the Packets list's Source column).
     pub attribution: Option<Arc<net_attr::NetAttribution>>,
     pub network_warning: Option<String>,
+    /// Why the run has no network capture when that was by design (the VM
+    /// had no network, or Capture network was off): information, not a gap.
+    pub network_note: Option<String>,
     /// The run's program died of a signal before its first recorded system
     /// call: "the sample crashed before its first system call: SIGSEGV".
     pub root_crash: Option<String>,
@@ -658,6 +661,7 @@ pub struct PacketIndex {
     pub http: Vec<Vec<Cell>>,
     pub http_omitted: u64,
     pub network_warning: Option<String>,
+    pub network_note: Option<String>,
 }
 
 #[derive(Default)]

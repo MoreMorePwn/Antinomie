@@ -799,6 +799,10 @@ impl View {
             self.scan_progress(ui, index);
         }
         self.notes_line(ui, index);
+        // No capture by design is information, not a limit of the scan.
+        if let Some(note) = scan.and_then(|scan| scan.network_note.as_deref()) {
+            crate::activity::notice(ui, crate::activity::Level::Info, note);
+        }
         self.coverage_section(ui, index);
 
         if self.selected == Engine::Sigma {
