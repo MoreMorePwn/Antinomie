@@ -118,7 +118,10 @@ pub fn endpoint(data: &[u8], complete: bool) -> Option<String> {
             if let Some((0, rest)) = name.split_first() {
                 // An abstract name runs the captured length; trailing zero
                 // padding of the structure is not part of it.
-                let end = rest.iter().rposition(|byte| *byte != 0).map_or(0, |at| at + 1);
+                let end = rest
+                    .iter()
+                    .rposition(|byte| *byte != 0)
+                    .map_or(0, |at| at + 1);
                 let text = String::from_utf8_lossy(&rest[..end]).into_owned();
                 return Some(format!("@{}", text.escape_default()));
             }
@@ -262,7 +265,7 @@ pub fn remember(files: &mut FdState, call: &InvocationSummary, event: &EventSumm
             let listener = files
                 .opened
                 .get(&key(args[0]))
-                .and_then(|label| parts(label).map(|(protocol, named)| (protocol, named)))
+                .and_then(|label| parts(label))
                 .map(|(protocol, named)| {
                     (protocol.to_owned(), named.map(|(_, name)| name.to_owned()))
                 });
@@ -275,7 +278,12 @@ pub fn remember(files: &mut FdState, call: &InvocationSummary, event: &EventSumm
                 .and_then(|(data, complete)| endpoint(&data, complete))
                 .or(local);
             let label = socket_label(peer.as_deref().map(|peer| ("←", peer)), &protocol);
-            made(files, fd, label, name == "accept4" && args[3] & CLOEXEC != 0);
+            made(
+                files,
+                fd,
+                label,
+                name == "accept4" && args[3] & CLOEXEC != 0,
+            );
         }
         "eventfd" | "eventfd2" => made(
             files,
@@ -311,7 +319,11 @@ pub fn remember(files: &mut FdState, call: &InvocationSummary, event: &EventSumm
 
 /// The two descriptors a `pipe` or `socketpair` call stored in the array at
 /// `argument`.
-fn descriptor_pair(call: &InvocationSummary, event: &EventSummary, argument: usize) -> Option<[u64; 2]> {
+fn descriptor_pair(
+    call: &InvocationSummary,
+    event: &EventSummary,
+    argument: usize,
+) -> Option<[u64; 2]> {
     let field = call
         .entry
         .iter()

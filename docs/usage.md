@@ -1095,6 +1095,7 @@ The network capture is the guest's own view on every route.
   Tags column after Path), their times are seconds from the start of the run (the absolute time on hover),
   **Process** is `name (pid · tid)`, and Changed files has **Changes** (`3 writes ·
   4.1 KiB`), **Type** and **SHA-256** where it had Diff count.
+  A read or write on a descriptor that is no file is named by the call that made it: `socket → 1.2.3.4:80 (tcp)`, `socket ← 10.0.2.15:23 (tcp)`, `pipe (write end)`, `eventfd`. Socket reads and writes are network traffic, so they are listed in **Other** as Socket I/O (not under Read or Written); `file.descriptor` filters them. A descriptor opened before the recording shows `—`, with the reason on hover.
 - **Triage › Files › Per-file history** is the second tab of Files, before Opened, with
   the number of files the run touched on it (it was a floating window). The
   left list holds every file the run touched, in order of the first call (also

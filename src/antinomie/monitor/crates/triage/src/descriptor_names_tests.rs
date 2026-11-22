@@ -58,7 +58,10 @@ fn connected(fd: i64) -> Vec<InvocationSummary> {
     vec![
         with_args(tests::call(1, SOCKET, "socket", fd), [2, 1, 0, 0, 0, 0]),
         with_address(
-            with_args(tests::call(1, CONNECT, "connect", 0), [fd as u64, 0, 16, 0, 0, 0]),
+            with_args(
+                tests::call(1, CONNECT, "connect", 0),
+                [fd as u64, 0, 16, 0, 0, 0],
+            ),
             "arg1.uservaddr",
             2,
             [189, 53, 235, 111],
@@ -77,7 +80,10 @@ pub fn a_connected_socket_is_named_by_its_peer() {
     assert_eq!(categories, [Category::Socket]);
     let write = calls.last().unwrap();
     let event = trace::representative(write).unwrap();
-    assert_eq!(file_category::access(&files, write, event), Access::ByDescriptor);
+    assert_eq!(
+        file_category::access(&files, write, event),
+        Access::ByDescriptor
+    );
     let row = file_category::category_row(
         &files,
         write,
@@ -133,7 +139,10 @@ pub fn a_bound_and_an_accepted_socket_are_named_by_where_they_listen_and_who_cam
 #[test]
 pub fn udp_unix_and_netlink_sockets_say_what_they_are() {
     let socket = |domain: u64, kind: u64| {
-        with_args(tests::call(1, SOCKET, "socket", 7), [domain, kind, 0, 0, 0, 0])
+        with_args(
+            tests::call(1, SOCKET, "socket", 7),
+            [domain, kind, 0, 0, 0, 0],
+        )
     };
     for (domain, kind, label) in [
         (2, 2, "socket (udp)"),
@@ -169,7 +178,10 @@ pub fn pipes_eventfds_and_memfds_are_named_and_stay_in_the_written_tab() {
     assert_eq!(path, "pipe (write end)");
     assert_eq!(categories, [Category::Written]);
     let read_end = files.opened.iter().find(|(key, _)| key.2 == 5);
-    assert_eq!(read_end.map(|(_, label)| label.as_str()), Some("pipe (read end)"));
+    assert_eq!(
+        read_end.map(|(_, label)| label.as_str()),
+        Some("pipe (read end)")
+    );
     // O_CLOEXEC on the pipe is remembered for exec.
     assert!(files.cloexec.iter().any(|key| key.2 == 5));
     let (_, path, _) = shown(&[pipe, io(READ, "read", 5, 3)]);
@@ -177,7 +189,11 @@ pub fn pipes_eventfds_and_memfds_are_named_and_stay_in_the_written_tab() {
     let event = with_args(tests::call(1, EVENTFD2, "eventfd2", 8), [0, 0, 0, 0, 0, 0]);
     let (_, path, _) = shown(&[event, io(WRITE, "write", 8, 8)]);
     assert_eq!(path, "eventfd");
-    let memfd = with_path(tests::call(1, MEMFD, "memfd_create", 9), "arg0.uname", "payload");
+    let memfd = with_path(
+        tests::call(1, MEMFD, "memfd_create", 9),
+        "arg0.uname",
+        "payload",
+    );
     let (_, path, categories) = shown(&[memfd, io(WRITE, "write", 9, 100)]);
     assert_eq!(path, "memfd:payload");
     assert_eq!(categories, [Category::Written]);
@@ -191,7 +207,10 @@ pub fn a_duplicate_keeps_the_name_and_a_close_drops_it() {
     let (_, path, _) = shown(&calls);
     assert_eq!(path, "socket → 189.53.235.111:8080 (tcp)");
     let mut calls = connected(4);
-    calls.push(with_args(tests::call(1, CLOSE, "close", 0), [4, 0, 0, 0, 0, 0]));
+    calls.push(with_args(
+        tests::call(1, CLOSE, "close", 0),
+        [4, 0, 0, 0, 0, 0],
+    ));
     calls.push(io(WRITE, "write", 4, 5));
     let (_, path, _) = shown(&calls);
     assert_eq!(path, "—");
