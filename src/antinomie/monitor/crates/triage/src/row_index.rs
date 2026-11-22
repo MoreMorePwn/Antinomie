@@ -33,8 +33,8 @@ pub const LOGGED: [usize; 14] = [
     TLS_SLOT,
 ];
 
-/// Pages one table's log may hold, 512 MiB: more than the whole index may.
-pub const LOG_PAGES: u64 = 131_072;
+/// Pages one table's log may hold, 768 MiB: the rows the index may hold, with the fields a filter reads beside each.
+pub const LOG_PAGES: u64 = 196_608;
 /// Bytes of rows all the logs of one index may hold together.
 pub const INDEX_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -55,7 +55,7 @@ impl RowLog {
             .map_err(|error| error.to_string())?;
         connection
             .execute_batch(&format!(
-                "PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA max_page_count={LOG_PAGES}; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; CREATE TABLE rows(seq INTEGER PRIMARY KEY, payload BLOB NOT NULL); BEGIN;"
+                "PRAGMA trusted_schema=OFF; PRAGMA page_size=4096; PRAGMA max_page_count={LOG_PAGES}; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; CREATE TABLE rows(seq INTEGER PRIMARY KEY, fields BLOB NOT NULL, payload BLOB NOT NULL); BEGIN;"
             ))
             .map_err(|error| error.to_string())?;
         Ok(Self {
@@ -69,10 +69,16 @@ impl RowLog {
 
     fn push(&mut self, row: &[Cell]) -> Result<u64, String> {
         let payload = self.codec.encode(row)?;
+        // The fields a filter reads, beside the row: a filter change decodes
+        // these and only the rows it keeps in full (ANT-T0592).
+        let fields = self
+            .codec
+            .encode_values(row.first().map_or(&[][..], |cell| cell.values.as_slice()))?;
+        // The index's cap counts the rows, as before the fields were kept.
         let size = payload.len() as u64;
         self.connection
-            .prepare_cached("INSERT INTO rows(payload) VALUES(?1)")
-            .and_then(|mut insert| insert.execute(rusqlite::params![payload]))
+            .prepare_cached("INSERT INTO rows(fields,payload) VALUES(?1,?2)")
+            .and_then(|mut insert| insert.execute(rusqlite::params![fields, payload]))
             .map_err(|error| error.to_string())?;
         self.rows += 1;
         self.bytes += size;
@@ -107,6 +113,59 @@ impl RowLog {
             visit(self.codec.decode(payload)?)?;
         }
         Ok(())
+    }
+}
+
+/// One field of a row's first cell.
+pub type RowField = (&'static str, RowValue);
+
+/// One table's row, read back by its number in the log.
+type RowAt<'a> = &'a dyn Fn() -> Result<Vec<Cell>, String>;
+
+impl RowLog {
+    /// The rows whose fields `keep` accepts, in scan order, each with its
+    /// number in the log and a way to decode it in full: a row that is not
+    /// wanted is never decoded.
+    pub fn each_matching(
+        &self,
+        cancel: &AtomicBool,
+        keep: &dyn Fn(&[RowField]) -> bool,
+        mut visit: impl FnMut(u64, RowAt) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut query = self
+            .connection
+            .prepare_cached("SELECT seq, fields, payload FROM rows ORDER BY seq")
+            .map_err(|error| error.to_string())?;
+        let mut rows = query.query([]).map_err(|error| error.to_string())?;
+        let mut counted = 0u32;
+        while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+            counted = counted.wrapping_add(1);
+            if counted.is_multiple_of(1024) && cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".into());
+            }
+            let blob = |at| {
+                row.get_ref(at)
+                    .and_then(|value| value.as_blob().map_err(Into::into))
+                    .map_err(|error: rusqlite::Error| error.to_string())
+            };
+            let values = self.codec.decode_values(blob(1)?)?;
+            if keep(&values) {
+                let seq: i64 = row.get(0).map_err(|error| error.to_string())?;
+                let payload = blob(2)?;
+                visit(seq as u64, &|| self.codec.decode(payload))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Row number `seq`, in full.
+    pub fn row(&self, seq: u64) -> Result<Vec<Cell>, String> {
+        let payload: Vec<u8> = self
+            .connection
+            .prepare_cached("SELECT payload FROM rows WHERE seq=?1")
+            .and_then(|mut query| query.query_row([seq as i64], |row| row.get(0)))
+            .map_err(|error| error.to_string())?;
+        self.codec.decode(&payload)
     }
 }
 
@@ -248,6 +307,39 @@ impl RowIndex {
         log.lock()
             .map_err(|_| "row log lock poisoned".to_owned())?
             .each(cancel, visit)
+    }
+
+    /// The rows of table `slot` whose fields `keep` accepts, in scan order
+    /// ([`RowLog::each_matching`]).
+    pub fn each_matching(
+        &self,
+        slot: usize,
+        cancel: &AtomicBool,
+        keep: &dyn Fn(&[RowField]) -> bool,
+        visit: impl FnMut(u64, RowAt) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let (_, log) = self
+            .tap
+            .logs
+            .iter()
+            .find(|(at, _)| *at == slot)
+            .ok_or("table has no kept rows")?;
+        log.lock()
+            .map_err(|_| "row log lock poisoned".to_owned())?
+            .each_matching(cancel, keep, visit)
+    }
+
+    /// Row number `seq` of table `slot`, in full.
+    pub fn row(&self, slot: usize, seq: u64) -> Result<Vec<Cell>, String> {
+        let (_, log) = self
+            .tap
+            .logs
+            .iter()
+            .find(|(at, _)| *at == slot)
+            .ok_or("table has no kept rows")?;
+        log.lock()
+            .map_err(|_| "row log lock poisoned".to_owned())?
+            .row(seq)
     }
 
     /// Rows of every log.

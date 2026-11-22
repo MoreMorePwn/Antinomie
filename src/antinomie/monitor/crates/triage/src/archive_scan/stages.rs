@@ -1040,6 +1040,7 @@ impl Scan {
             None
         };
         Ok(ArchiveScan::new(ScanData {
+            shown: rows.is_some().then(|| requery::Shown::of(request)),
             rows,
             stamp,
             whole_run: crate::is_whole_run(request),

@@ -10,6 +10,31 @@
 //! filter, sort or page, and is copied from the index the rows belong to.
 use super::*;
 
+/// The filter, sort and page each table of an index was made with.
+#[derive(Clone, PartialEq)]
+pub struct Shown {
+    filters: [String; SLOTS],
+    sorts: [Option<sorting::Spec>; SLOTS],
+    offsets: [usize; SLOTS],
+}
+
+impl Shown {
+    pub fn of(request: &ScanRequest) -> Self {
+        Self {
+            filters: request.filters.clone(),
+            sorts: request.sorts,
+            offsets: request.offsets,
+        }
+    }
+
+    /// Table `slot` is asked for as it was made.
+    fn same(&self, slot: usize, request: &ScanRequest) -> bool {
+        self.filters[slot] == request.filters[slot]
+            && self.sorts[slot] == request.sorts[slot]
+            && self.offsets[slot] == request.offsets[slot]
+    }
+}
+
 /// The index `base` made, as `request` asks to see it; `None` when `base` kept
 /// no rows or `request` has other toggles than the rows were made under.
 pub fn answer(
@@ -29,6 +54,15 @@ fn derive(
 ) -> Result<ArchiveScan, String> {
     let mut data: ScanData = (*base.0).clone();
     data.whole_run = is_whole_run(request);
+    // A file table whose filter, sort and page are those it was made with is
+    // not read from its log again (the Read log alone is hundreds of
+    // thousands of rows).
+    let unchanged = |slot: usize| {
+        base.shown
+            .as_ref()
+            .is_some_and(|shown| shown.same(slot, request))
+    };
+    data.shown = Some(Shown::of(request));
 
     // The findings table, the behaviour tally and the graph: the engine's rows
     // narrowed by the chips and the filter.
@@ -58,21 +92,32 @@ fn derive(
     let page_of = |slot: usize, fields: &[FieldSpec<'static>]| -> Result<_, String> {
         let query = query::compile_table(&request.filters[slot], fields);
         let mut page = sorting::Page::<Vec<Cell>>::new(request, slot, cancel);
-        index.each(slot, cancel, |row| {
-            if query.keep_table(&row[0].values) {
-                page.push(row)?;
+        let keep = |values: &[row_index::RowField]| query.keep_table(values);
+        index.each_matching(slot, cancel, &keep, |seq, row| {
+            // A row outside an unsorted page is only counted; a sorted table
+            // spools its key and reads the page's rows back from the log.
+            if page.needs_row() {
+                page.push_at(row()?, Some(seq))
+            } else {
+                page.count_only();
+                Ok(())
             }
-            Ok(())
         })?;
-        page.finish()
+        page.finish_with(Some(&|seq| index.row(slot, seq)))
     };
-    (data.read, data.read_omitted, _) = page_of(5, FILE_FIELDS)?;
-    let (opened, opened_omitted, _) = page_of(1, FILE_FIELDS)?;
-    data.opened = opened;
-    data.opened_omitted = opened_omitted;
+    if !unchanged(5) {
+        (data.read, data.read_omitted, _) = page_of(5, FILE_FIELDS)?;
+    }
+    if !unchanged(1) {
+        let (opened, opened_omitted, _) = page_of(1, FILE_FIELDS)?;
+        data.opened = opened;
+        data.opened_omitted = opened_omitted;
+    }
     for at in 0..FILE_TABS {
-        let (rows, omitted, _) = page_of(8 + at, FILE_FIELDS)?;
-        data.file_tabs[at] = FileRows { rows, omitted };
+        if !unchanged(8 + at) {
+            let (rows, omitted, _) = page_of(8 + at, FILE_FIELDS)?;
+            data.file_tabs[at] = FileRows { rows, omitted };
+        }
     }
 
     // The Changed files table, from the files themselves.
