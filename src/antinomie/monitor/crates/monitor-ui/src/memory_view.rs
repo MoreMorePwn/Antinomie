@@ -458,7 +458,14 @@ impl MemoryView {
     fn poll(&mut self, ctx: &egui::Context, data_dir: &Path) {
         self.poll_result();
         let listed = match &self.catalog {
-            Catalog::Loading(receiver) => receiver.try_recv().ok(),
+            Catalog::Loading(receiver) => match receiver.try_recv() {
+                Ok(listed) => Some(listed),
+                Err(mpsc::TryRecvError::Empty) => None,
+                // The worker ended without an answer: say so, do not wait.
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Some(Err("the plugin list worker stopped unexpectedly".into()))
+                }
+            },
             _ => None,
         };
         if let Some(listed) = listed {

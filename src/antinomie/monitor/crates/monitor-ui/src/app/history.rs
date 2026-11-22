@@ -575,7 +575,7 @@ impl MonitorApp {
 
     /// What Run History's listing depends on: the selected VM, the Live/Past
     /// filter, and each of that VM's runs as far as a row shows it.
-    fn run_list_key(&self, vm_id: &str) -> u64 {
+    pub(super) fn run_list_key(&self, vm_id: &str) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         vm_id.hash(&mut hasher);
@@ -598,6 +598,19 @@ impl MonitorApp {
             run.request.path.hash(&mut hasher);
             run.recording_error.hash(&mut hasher);
             run.notes.hash(&mut hasher);
+            // Root exit and the task counts a row's tooltip shows.
+            run.execution
+                .as_ref()
+                .map(|execution| {
+                    (
+                        execution.generation,
+                        execution.flags,
+                        execution.live_task_count,
+                        execution.total_task_count,
+                        execution.root_wait_status,
+                    )
+                })
+                .hash(&mut hasher);
             run.analysis
                 .as_ref()
                 .map(|report| (&report.id, std::mem::discriminant(&report.state)))

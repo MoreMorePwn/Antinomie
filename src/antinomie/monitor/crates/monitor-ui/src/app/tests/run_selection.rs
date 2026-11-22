@@ -1051,3 +1051,27 @@ fn a_selected_capture_keeps_its_process_tree_when_it_is_finalized() {
         "the tree vanished when the capture was finalized"
     );
 }
+
+#[test]
+fn the_run_list_key_follows_the_guest_status_of_a_run() {
+    use antinomie_monitor_core::{RunExecution, WaitStatus};
+    let mut app = running_app();
+    let mut run = past_run("exec", "/bin/x", 1);
+    run.vm_id = "vm".into();
+    app.history = vec![run];
+    let before = app.run_list_key("vm");
+    app.history[0].execution = Some(RunExecution {
+        generation: 1,
+        live_task_count: 0,
+        pending_async_count: 0,
+        flags: 1,
+        root_wait_status: Some(0),
+        root_exit: Some(WaitStatus::Exited { code: 0 }),
+        async_loss_count: 0,
+        total_task_count: 3,
+    });
+    let after = app.run_list_key("vm");
+    assert_ne!(before, after, "a new root exit rebuilds the listing");
+    // The same status again leaves it as it was.
+    assert_eq!(after, app.run_list_key("vm"));
+}

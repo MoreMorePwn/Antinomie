@@ -162,18 +162,22 @@ pub fn tokenize_with_positions(input: &str) -> Result<(Vec<Token>, Vec<usize>), 
         } else if byte == b'-' || byte.is_ascii_digit() {
             let start = index;
             index += 1;
-            if rest.starts_with("0x") || rest.starts_with("0X") {
-                index += 1;
+            // The digits start after a minus sign.
+            let digits = if byte == b'-' { start + 1 } else { start };
+            let after_sign = input.get(digits..).unwrap_or("");
+            if after_sign.starts_with("0x") || after_sign.starts_with("0X") {
+                index = digits + 2;
                 while index < bytes.len() && bytes[index].is_ascii_hexdigit() {
                     index += 1;
                 }
                 let text = &input[start..index];
-                let value = i128::from_str_radix(
-                    text.trim_start_matches("0x").trim_start_matches("0X"),
-                    16,
-                )
-                .map_err(|_| format!("Invalid number {text}"))?;
-                tokens.push(Token::Number(value));
+                let magnitude = i128::from_str_radix(&input[digits + 2..index], 16)
+                    .map_err(|_| format!("Invalid number {text}"))?;
+                tokens.push(Token::Number(if byte == b'-' {
+                    -magnitude
+                } else {
+                    magnitude
+                }));
             } else {
                 while index < bytes.len() && (bytes[index].is_ascii_digit()) {
                     index += 1;
