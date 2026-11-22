@@ -22,6 +22,10 @@
 //! connects while the old one is still leaving (it waits its turn).
 use super::*;
 use crate::app::debugger::{panes::Pane, GdbFlavour};
+// The banner wait the VM check examples share: a kernel line printed inside
+// the banner does not hide it.
+#[path = "../../../../monitor-core/examples/support/serial_ready.rs"]
+mod serial_ready;
 use antinomie_monitor_core::GuestProcessIdentity;
 use std::time::{Duration, Instant};
 
@@ -79,7 +83,7 @@ fn guest_ready(app: &MonitorApp) -> bool {
             .serial_log
             .as_ref()
             .and_then(|path| std::fs::read(path).ok())
-            .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
+            .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
 }
 
 /// The address of `name` in the static fixture.
