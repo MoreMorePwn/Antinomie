@@ -124,6 +124,29 @@ fn a_paused_guest_makes_requests_wait_not_time_out() {
 }
 
 #[test]
+fn a_nested_pause_holds_requests_until_the_last_guard_is_dropped() {
+    let (service, link) = DebugService::new();
+    let outer = service.pause();
+    let inner = service.pause();
+    drop(inner);
+    assert_eq!(service.paused.load(std::sync::atomic::Ordering::Acquire), 1);
+    let mut link = link;
+    let asker = thread::spawn(move || link.request(wire::STATUS, &[1]));
+    thread::sleep(Duration::from_millis(350));
+    assert!(
+        !asker.is_finished(),
+        "the outer guard still holds the guest paused"
+    );
+    drop(outer);
+    let request = service
+        .requests
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    request.reply.send(Ok(vec![7])).unwrap();
+    assert_eq!(asker.join().unwrap().unwrap(), vec![7]);
+}
+
+#[test]
 fn only_launch_sessions_nobody_adopted_are_ended_after_a_refused_launch() {
     let info = |session, state, child_pending, parent_session| SessionInfo {
         session,

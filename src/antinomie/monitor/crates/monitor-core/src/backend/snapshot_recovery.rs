@@ -693,7 +693,14 @@ impl Worker {
         let resume = (|| -> Result<(), String> {
             if full {
                 session.forget_unanswered();
-                session.transport.begin_resume()?;
+                if let Err(error) = session.transport.begin_resume() {
+                    // The VM state is Failed either way; do not also leave
+                    // the guest stopped for good.
+                    if was_running {
+                        let _ = session.process.resume();
+                    }
+                    return Err(error);
+                }
                 session.process.resume()?;
                 let report = session
                     .transport

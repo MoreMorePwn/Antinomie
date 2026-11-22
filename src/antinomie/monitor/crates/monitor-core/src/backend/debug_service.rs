@@ -9,7 +9,7 @@ use crate::debug::{
     SessionInfo, wire,
 };
 use sha2::{Digest, Sha256};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 
 /// Guest debug opcodes the server thread may send; everything else is refused.
 fn allowed(opcode: u32) -> bool {
@@ -35,7 +35,7 @@ pub struct DebugLink {
     requests: SyncSender<LinkRequest>,
     /// The guest is being snapshotted, restored or reconnected: a request waits
     /// for it (the wait does not count against its deadline).
-    paused: Arc<AtomicBool>,
+    paused: Arc<AtomicUsize>,
 }
 impl GuestLink for DebugLink {
     fn request(&mut self, opcode: u32, args: &[u8]) -> Result<Vec<u8>, LinkError> {
@@ -55,7 +55,7 @@ impl GuestLink for DebugLink {
                     return Err(LinkError::transport("the app is closing"));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if !self.paused.load(Ordering::Acquire) {
+                    if self.paused.load(Ordering::Acquire) == 0 {
                         waited += LINK_SLICE;
                     }
                     if waited >= LINK_DEADLINE {
@@ -75,11 +75,12 @@ impl GuestLink for DebugLink {
 }
 
 /// While alive, debug requests wait instead of timing out: the guest is being
-/// snapshotted, restored or reconnected.
-pub(super) struct DebugPause(Arc<AtomicBool>);
+/// snapshotted, restored or reconnected. Guards nest (a restore that saves the
+/// current state holds two); requests wait until the last is dropped.
+pub(super) struct DebugPause(Arc<AtomicUsize>);
 impl Drop for DebugPause {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -137,7 +138,7 @@ pub(super) struct DebugService {
     /// The panel view last published, by epoch.
     last_view: Option<u64>,
     /// Debug requests wait while the guest moves (snapshot, restore, reconnect).
-    paused: Arc<AtomicBool>,
+    paused: Arc<AtomicUsize>,
     /// When a debug client last had a request served. A client of the debug link
     /// that is not the loopback server (the in-app debugger, a test) keeps the
     /// worker loop on its short wait for a while after each request.
@@ -146,7 +147,7 @@ pub(super) struct DebugService {
 impl DebugService {
     pub(super) fn new() -> (Self, DebugLink) {
         let (sender, requests) = mpsc::sync_channel(64);
-        let paused = Arc::new(AtomicBool::new(false));
+        let paused = Arc::new(AtomicUsize::new(0));
         let link = DebugLink {
             requests: sender,
             paused: paused.clone(),
@@ -169,7 +170,7 @@ impl DebugService {
     }
     /// Hold debug requests until the returned guard is dropped.
     pub(super) fn pause(&self) -> DebugPause {
-        self.paused.store(true, Ordering::Release);
+        self.paused.fetch_add(1, Ordering::AcqRel);
         DebugPause(self.paused.clone())
     }
     /// The worker loop should wait briefly between passes: a debugger's round
