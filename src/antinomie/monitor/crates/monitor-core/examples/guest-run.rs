@@ -866,15 +866,17 @@ fn screen_check(session: &mut Session, seconds: u64) -> Result<Value, String> {
 
 /// Find the exact QMP endpoint of the QEMU process owning this serial log.
 /// Long recording paths cause the app to place its socket in a short private dir.
+/// QEMU's serial output goes either straight to the log or (F-04) through a
+/// pipe whose reading end this process holds while it copies into the log.
 fn owned_qmp(serial: &std::path::Path) -> Result<PathBuf, String> {
+    let own_pipes = owned_pipes();
     let mut found = None;
     for entry in std::fs::read_dir("/proc").map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
-        if std::fs::read_link(entry.path().join("fd/1"))
-            .ok()
-            .as_deref()
-            != Some(serial)
-        {
+        let Ok(stdout) = std::fs::read_link(entry.path().join("fd/1")) else {
+            continue;
+        };
+        if stdout != serial && !own_pipes.contains(&stdout) {
             continue;
         }
         let command =
@@ -891,6 +893,18 @@ fn owned_qmp(serial: &std::path::Path) -> Result<PathBuf, String> {
         }
     }
     found.ok_or_else(|| "test-owned QEMU QMP socket not found".into())
+}
+
+/// The pipes this process has open (`pipe:[INODE]` as /proc shows them): a
+/// child whose stdout is one of them writes to this process.
+fn owned_pipes() -> std::collections::BTreeSet<PathBuf> {
+    std::fs::read_dir("/proc/self/fd")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+        .filter(|target| target.to_string_lossy().starts_with("pipe:["))
+        .collect()
 }
 
 fn qmp_option(argument: &[u8]) -> Result<PathBuf, String> {

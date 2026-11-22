@@ -136,16 +136,32 @@ impl Harness {
     }
 }
 
+/// QEMU's serial output goes either straight to the log or (F-04) through a
+/// pipe whose reading end this process holds while it copies into the log.
 fn owned_qmp(serial: &Path) -> Result<PathBuf, String> {
+    let own_pipes: Vec<PathBuf> = fs::read_dir("/proc/self/fd")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| fs::read_link(entry.path()).ok())
+        .filter(|target| target.to_string_lossy().starts_with("pipe:["))
+        .collect();
     for entry in fs::read_dir("/proc").map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
-        if fs::read_link(entry.path().join("fd/1")).ok().as_deref() != Some(serial) {
+        let Ok(stdout) = fs::read_link(entry.path().join("fd/1")) else {
+            continue;
+        };
+        if stdout != serial && !own_pipes.contains(&stdout) {
             continue;
         }
         let Ok(command) = fs::read(entry.path().join("cmdline")) else {
             continue;
         };
         let arguments: Vec<_> = command.split(|&byte| byte == 0).collect();
+        // Another child writing into one of this process's pipes is not the VM.
+        if stdout != serial && !arguments.contains(&b"-qmp".as_slice()) {
+            continue;
+        }
         if !arguments
             .windows(2)
             .any(|pair| pair == [b"-nic".as_slice(), b"none".as_slice()])
