@@ -48,6 +48,31 @@ pub(crate) fn flock_within(
         }
     }
 }
+/// Give up the `flock` of `file` now. Closing the file is not enough while a
+/// process another thread forked in that moment still holds a copy of the
+/// descriptor until its `exec`: the lock lives with the open file, not with
+/// one descriptor. Unlocking ends it for every copy.
+pub fn unlock(file: &fs::File) {
+    let _ = rustix::fs::flock(file, rustix::fs::FlockOperation::Unlock);
+}
+
+/// A file whose `flock` is held, given up at once when this drops (see
+/// [`unlock`]).
+#[derive(Debug)]
+pub struct HeldFlock(fs::File);
+
+impl HeldFlock {
+    pub fn new(file: fs::File) -> Self {
+        Self(file)
+    }
+}
+
+impl Drop for HeldFlock {
+    fn drop(&mut self) {
+        unlock(&self.0);
+    }
+}
+
 const RECORD_MAX: u64 = 16 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,7 +290,9 @@ impl OwnerGuard {
 impl Drop for OwnerGuard {
     fn drop(&mut self) {
         remove_record(&self.data_dir);
-        self.lock.take();
+        if let Some(lock) = self.lock.take() {
+            unlock(&lock);
+        }
     }
 }
 
@@ -444,19 +471,35 @@ mod tests {
     }
 
     #[test]
-    fn a_relock_waits_for_a_forked_child_that_still_holds_the_lock() {
+    fn a_relock_is_free_at_once_even_while_a_forked_child_still_holds_the_descriptor() {
         let root = scratch("fork");
         let first = lock_data_dir(&root, &claim(OwnerKind::Cli)).unwrap();
         // Forked while the lock file is open: the child's copy outlives the owner.
         let spawner = fork_holding(&root, 700);
         drop(first);
-        // Without a wait the re-lock is refused although nobody owns the folder.
-        let error = lock_data_dir_within(&root, &claim(OwnerKind::Gui), std::time::Duration::ZERO)
-            .err()
-            .unwrap();
-        assert!(error.starts_with(IN_USE), "{error}");
-        assert!(lock_data_dir(&root, &claim(OwnerKind::Gui)).is_ok());
+        // The owner unlocks explicitly: no wait is needed although the child
+        // still has the descriptor.
+        assert!(
+            lock_data_dir_within(&root, &claim(OwnerKind::Gui), std::time::Duration::ZERO).is_ok()
+        );
         spawner.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_held_flock_is_free_at_once_even_while_a_forked_child_holds_the_descriptor() {
+        let root = scratch("heldflock");
+        let held = HeldFlock::new(hold_lock(&root));
+        // What a process forked by another thread holds until its exec.
+        let inherited = held.0.try_clone().unwrap();
+        let other = fs::OpenOptions::new()
+            .write(true)
+            .open(root.join(LOCK_FILE))
+            .unwrap();
+        assert!(!flock_within(&other, std::time::Duration::ZERO).unwrap());
+        drop(held);
+        assert!(flock_within(&other, std::time::Duration::ZERO).unwrap());
+        drop(inherited);
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -96,7 +96,7 @@ pub fn pending(runs: impl IntoIterator<Item = RunSummary>) -> Vec<RunSummary> {
 
 /// An advisory lock on a run's digest build, held until dropped. Taken by the
 /// build, so two builds of one run, in this process or two, never both read it.
-struct Held(#[allow(dead_code)] std::fs::File);
+struct Held(#[allow(dead_code)] antinomie_monitor_core::data_owner::HeldFlock);
 
 impl Held {
     fn take(directory: &Path) -> Option<Self> {
@@ -109,7 +109,9 @@ impl Held {
             .open(lock_path(directory))
             .ok()?;
         rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).ok()?;
-        Some(Self(file))
+        Some(Self(antinomie_monitor_core::data_owner::HeldFlock::new(
+            file,
+        )))
     }
 }
 

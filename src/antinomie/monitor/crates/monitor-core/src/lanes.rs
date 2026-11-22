@@ -273,7 +273,7 @@ pub const BASE_LOCK_FILE: &str = "base.lock";
 /// this process or another, waits for it.
 #[derive(Debug)]
 pub struct BaseLock {
-    _file: fs::File,
+    _file: crate::data_owner::HeldFlock,
 }
 
 /// Take the base lock of the folder `data_dir` shares, waiting up to `wait`
@@ -292,7 +292,9 @@ pub fn base_lock(data_dir: &Path, wait: std::time::Duration) -> Result<Option<Ba
         .open(&path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     match crate::data_owner::flock_within(&file, wait) {
-        Ok(true) => Ok(Some(BaseLock { _file: file })),
+        Ok(true) => Ok(Some(BaseLock {
+            _file: crate::data_owner::HeldFlock::new(file),
+        })),
         Ok(false) => Ok(None),
         Err(error) => Err(format!("{}: {error}", path.display())),
     }
