@@ -1,0 +1,315 @@
+Description: antinomie: hide a process held at its exit from the rest of its run
+ With the dump trigger's core on, a run holds every process that ends
+ (patch 55, exit_hold.c) until the host has judged it: hundreds of
+ milliseconds under TCG. All that time the process was still in /proc,
+ with its exe link, and answered kill(pid, 0). A sample that daemonizes
+ (fork, fork, the parents exit) and scans /proc/*/exe for a running copy
+ of itself found its own exiting grandparent and quit.
+ .
+ From the moment it is held until it has been reaped, the process is now
+ gone for the other processes of its run, as if it had exited and been
+ reaped at once:
+ .
+ - ant_exit_hold() stores the run's root cookie in the leader's state
+   (exit_hidden) before it publishes the hold record, and counts it;
+   ant_monitor_release() uncounts it when the leader is freed.
+ - ant_task_hidden(task): one atomic read while nothing is hidden; else
+   whether the task's leader is hidden, the caller is a user task of the
+   same run and not of the task's own thread group.
+ - fs/proc/base.c: proc_pid_lookup() and next_tgid() (readdir) skip it,
+   pid_revalidate() drops a cached dentry of it (/proc/<pid> and the
+   files under it), so every path through /proc/<pid> answers ENOENT,
+   and proc_single_show() (stat, status, statm, ...) answers ESRCH on a
+   file opened before the hold. get_proc_task() (fs/proc/internal.h) is
+   left alone: a hook there changes the stock kernel's inlining in
+   fs/proc/fd.c and so its BTF, which must stay Debian's.
+ - kernel/signal.c check_kill_permission(): ESRCH for a signal from user
+   space (kill, tgkill, tkill, rt_sigqueueinfo, pidfd_send_signal).
+ - kernel/pid.c pidfd_open(): ESRCH.
+ .
+ Its own threads (still running while it is held), the kernel (the
+ host's PROCESS_LIST and the core claim) and processes of other runs see
+ it as before, so the trigger's core still reaches it. Still observable:
+ the parent's wait() and SIGCHLD come only after the hold, and until
+ then a child's getppid() names the held process; a zombie of it is
+ hidden too; system-wide counts (sysinfo, /proc/loadavg) include it;
+ lookups by number other than these (getpgid, getsid, getpriority,
+ sched_*, prlimit, ptrace, process_vm_readv) still find it, and so does
+ a lookup relative to a /proc/<pid> directory opened before the hold.
+ .
+ ANT-T0596. No contract change (revision 22).
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-23
+
+---
+diff --git a/fs/proc/base.c b/fs/proc/base.c
+index cea11a1..1044fb7 100644
+--- a/fs/proc/base.c
++++ b/fs/proc/base.c
+@@ -98,6 +98,7 @@
+ #include <linux/cn_proc.h>
+ #include <linux/ksm.h>
+ #include <uapi/linux/lsm.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/antinomie_stealth.h>
+ #include <trace/events/oom.h>
+ #include "internal.h"
+@@ -808,6 +809,11 @@ static int proc_single_show(struct seq_file *m, void *v)
+ 	int ret;
+ 
+ 	task = get_pid_task(pid, PIDTYPE_PID);
++	/* Antinomie: a process held at its exit is gone for its run. */
++	if (task && ant_task_hidden(task)) {
++		put_task_struct(task);
++		task = NULL;
++	}
+ 	if (!task)
+ 		return -ESRCH;
+ 
+@@ -2076,7 +2082,7 @@ static int pid_revalidate(struct dentry *dentry, unsigned int flags)
+ 		goto out;
+ 	task = pid_task(proc_pid(inode), PIDTYPE_PID);
+ 
+-	if (task) {
++	if (task && !ant_task_hidden(task)) {
+ 		pid_update_inode(task, inode);
+ 		ret = 1;
+ 	}
+@@ -3521,6 +3527,9 @@ struct dentry *proc_pid_lookup(struct dentry *dentry, unsigned int flags)
+ 	ns = fs_info->pid_ns;
+ 	rcu_read_lock();
+ 	task = find_task_by_pid_ns(tgid, ns);
++	/* Antinomie: a process held at its exit is gone for its run. */
++	if (task && ant_task_hidden(task))
++		task = NULL;
+ 	if (task)
+ 		get_task_struct(task);
+ 	rcu_read_unlock();
+@@ -3561,7 +3570,7 @@ retry:
+ 	if (pid) {
+ 		iter.tgid = pid_nr_ns(pid, ns);
+ 		iter.task = pid_task(pid, PIDTYPE_TGID);
+-		if (!iter.task) {
++		if (!iter.task || ant_task_hidden(iter.task)) {
+ 			iter.tgid += 1;
+ 			goto retry;
+ 		}
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index c1b1f92..1b83b5a 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -176,6 +176,11 @@ void ant_monitor_specimen_exec(struct file *file);
+ bool ant_monitor_core_armed(struct task_struct *task);
+ bool ant_monitor_core_pending(struct task_struct *task);
+ bool ant_monitor_core_exit(int wait_status, const struct kernel_siginfo *siginfo);
++/* Whether task's process was held at its exit for the dump trigger and the
++ * caller is another process of its run: /proc, signals and pidfd_open() then
++ * answer as for a process that has exited and been reaped (exit_hold.c).
++ */
++bool ant_task_hidden(struct task_struct *task);
+ void ant_monitor_core_unavailable(int wait_status);
+ void ant_monitor_task_exit(bool group_dead);
+ void ant_monitor_files_closed(void);
+@@ -306,6 +311,10 @@ static inline bool ant_monitor_core_exit(int wait_status,
+ {
+ 	return false;
+ }
++static inline bool ant_task_hidden(struct task_struct *task)
++{
++	return false;
++}
+ static inline void ant_monitor_core_unavailable(int wait_status) {}
+ static inline void ant_monitor_task_exit(bool group_dead) {}
+ static inline void ant_monitor_files_closed(void) {}
+diff --git a/kernel/antinomie/exit_hold.c b/kernel/antinomie/exit_hold.c
+index 81a40e7..9763dfc 100644
+--- a/kernel/antinomie/exit_hold.c
++++ b/kernel/antinomie/exit_hold.c
+@@ -16,10 +16,21 @@
+  * task with no address space are never held; a killed or stopped run releases
+  * at once. At most ANT_EXIT_HOLD_SLOTS tasks wait at a time; the next ones
+  * exit unheld.
++ *
++ * From the moment it is held until it has been reaped, the process is gone for
++ * the other processes of its run, as if it had exited and been reaped at once:
++ * /proc does not list it or find it by number, its /proc/<pid> files answer as
++ * for a process that has exited, and kill(), tgkill(), sigqueue and
++ * pidfd_open() give ESRCH (ant_task_hidden()). A sample that daemonizes and
++ * looks for a running copy of itself must not find its own exiting parent.
++ * Its own threads, the kernel and processes of other runs see it as before;
++ * its parent's wait() reaps it as usual, once the hold has ended.
+  */
+ #include <linux/antinomie_monitor.h>
++#include <linux/atomic.h>
+ #include <linux/completion.h>
+ #include <linux/jiffies.h>
++#include <linux/rcupdate.h>
+ #include <linux/sched.h>
+ #include <linux/sched/signal.h>
+ #include <linux/spinlock.h>
+@@ -46,6 +57,32 @@ struct ant_exit_hold {
+ 
+ static DEFINE_SPINLOCK(hold_lock);
+ static struct ant_exit_hold holds[ANT_EXIT_HOLD_SLOTS];
++/* Processes hidden from their run (each leader's exit_hidden set) and not
++ * yet freed: zero nearly always, so the hooks in /proc and the signal path
++ * cost one read.
++ */
++static atomic_t hidden_count = ATOMIC_INIT(0);
++
++void ant_exit_hold_task_free(struct task_struct *task)
++{
++	if (READ_ONCE(ant_state(task)->exit_hidden))
++		atomic_dec(&hidden_count);
++}
++
++bool ant_task_hidden(struct task_struct *task)
++{
++	u64 root;
++
++	if (likely(!atomic_read(&hidden_count)) || !task || (current->flags & PF_KTHREAD))
++		return false;
++	smp_rmb();
++	/* An exec can replace the leader: the old one stays valid in RCU. */
++	rcu_read_lock();
++	root = READ_ONCE(ant_state(READ_ONCE(task->group_leader))->exit_hidden);
++	rcu_read_unlock();
++	return root && root == READ_ONCE(ant_state(current)->root_cookie) &&
++	       !same_thread_group(task, current);
++}
+ 
+ static struct ant_exit_hold *hold_find(const struct ant_core_identity *identity)
+ {
+@@ -68,6 +105,7 @@ bool ant_exit_hold(int wait_status, const kernel_siginfo_t *siginfo)
+ 	struct ant_core *core;
+ 	u32 hold_ms = ant_run_holds_exit(current);
+ 	unsigned int i;
++	u64 root;
+ 
+ 	if (READ_ONCE(state->exit_held) || !hold_ms || !current->mm ||
+ 	    (current->flags & (PF_KTHREAD | PF_USER_WORKER)) || ant_monitor_core_pending(current))
+@@ -96,6 +134,15 @@ bool ant_exit_hold(int wait_status, const kernel_siginfo_t *siginfo)
+ 	spin_unlock(&hold_lock);
+ 	if (!hold)
+ 		return false;
++	/* Gone for the run before the host hears of it, and for good: the exit
++	 * goes on after the hold. A hidden leader is freed after its threads.
++	 */
++	root = READ_ONCE(ant_state(current)->root_cookie);
++	if (root) {
++		WRITE_ONCE(state->exit_hidden, root);
++		smp_wmb();
++		atomic_inc(&hidden_count);
++	}
+ 	/* The host learns of the hold from the record, then decides. */
+ 	ant_monitor_lifecycle_note("lifecycle.exit_hold", hold_ms | (u64)(u32)wait_status << 32);
+ 	wait_for_completion_killable_timeout(&hold->done, msecs_to_jiffies(hold_ms));
+diff --git a/kernel/antinomie/exit_hold.h b/kernel/antinomie/exit_hold.h
+index 99e49cf..c259ac7 100644
+--- a/kernel/antinomie/exit_hold.h
++++ b/kernel/antinomie/exit_hold.h
+@@ -6,6 +6,7 @@
+ #include <linux/types.h>
+ 
+ struct ant_core_identity;
++struct task_struct;
+ 
+ /* exit_hold.c: park a process of an armed run at its exit until the host asks
+  * for its core or lets it go. True when the parked task wrote a core.
+@@ -19,5 +20,7 @@ int ant_exit_hold_claim(const struct ant_core_identity *identity, void *reply);
+ int ant_exit_hold_command(const u8 *args, size_t args_len);
+ /* Let every held process of a run go (STOP_RUN, DISARM). */
+ void ant_exit_hold_release_run(u64 root_cookie);
++/* A task's last reference is gone (ant_monitor_release()). */
++void ant_exit_hold_task_free(struct task_struct *task);
+ 
+ #endif
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 5c1e7cc..0d3aa53 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -60,6 +60,7 @@
+ #include "async_capture.h"
+ #include "observer.h"
+ #include "control_wire.h"
++#include "exit_hold.h"
+ #include "hash.h"
+ #include "notes.h"
+ #include "fileops.h"
+@@ -3293,6 +3294,7 @@ void ant_monitor_release(struct task_struct *task)
+ {
+ 	struct ant_task *ctx = ant_state(task)->monitor;
+ 
++	ant_exit_hold_task_free(task);
+ 	if (ctx) {
+ 		ant_capture_set_state(ctx, NULL, NULL);
+ 		operand_clear(ctx);
+diff --git a/kernel/antinomie/state.h b/kernel/antinomie/state.h
+index 0b5b58f..76bffe4 100644
+--- a/kernel/antinomie/state.h
++++ b/kernel/antinomie/state.h
+@@ -64,6 +64,11 @@ struct ant_task_state {
+ 	bool counted;
+ 	/* The process's exit was offered to the dump trigger's hold (exit_hold.c). */
+ 	bool exit_held;
++	/* In the leader's state: the run's root cookie once the process was held
++	 * at its exit (exit_hold.c), else 0. The run's other processes no longer
++	 * see it (ant_task_hidden()).
++	 */
++	u64 exit_hidden;
+ 	/* The task left its run and its files are still to be closed: the run
+ 	 * counts one pending operation for it (run.c, ant_run_exit()).
+ 	 */
+diff --git a/kernel/pid.c b/kernel/pid.c
+index 8552cc7..34635eb 100644
+--- a/kernel/pid.c
++++ b/kernel/pid.c
+@@ -31,6 +31,7 @@
+ #include <linux/export.h>
+ #include <linux/slab.h>
+ #include <linux/init.h>
++#include <linux/antinomie_monitor.h>
+ #include <linux/rculist.h>
+ #include <linux/memblock.h>
+ #include <linux/pid_namespace.h>
+@@ -627,6 +628,7 @@ SYSCALL_DEFINE2(pidfd_open, pid_t, pid, unsigned int, flags)
+ {
+ 	int fd;
+ 	struct pid *p;
++	bool hidden;
+ 
+ 	if (flags & ~(PIDFD_NONBLOCK | PIDFD_THREAD))
+ 		return -EINVAL;
+@@ -638,6 +640,15 @@ SYSCALL_DEFINE2(pidfd_open, pid_t, pid, unsigned int, flags)
+ 	if (!p)
+ 		return -ESRCH;
+ 
++	/* Antinomie: a process held at its exit is gone for its run. */
++	rcu_read_lock();
++	hidden = ant_task_hidden(pid_task(p, PIDTYPE_PID));
++	rcu_read_unlock();
++	if (hidden) {
++		put_pid(p);
++		return -ESRCH;
++	}
++
+ 	fd = pidfd_create(p, flags);
+ 
+ 	put_pid(p);
+diff --git a/kernel/signal.c b/kernel/signal.c
+index 1b7c136..46a84a1 100644
+--- a/kernel/signal.c
++++ b/kernel/signal.c
+@@ -840,6 +840,10 @@ static int check_kill_permission(int sig, struct kernel_siginfo *info,
+ 	if (!si_fromuser(info))
+ 		return 0;
+ 
++	/* Antinomie: a process held at its exit is gone for its run. */
++	if (ant_task_hidden(t))
++		return -ESRCH;
++
+ 	error = audit_signal_info(sig, t); /* Let audit system see the signal */
+ 	if (error)
+ 		return error;

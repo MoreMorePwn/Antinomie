@@ -1376,9 +1376,56 @@ ms under load).
   A process whose exit core is armed (Core dump on exit, the root) is not held:
   its exit core is its dump. A process that other processes share memory with
   is written as the exit core always is.
+* **Hidden from its run (0.9.1 bases, patch 108, no contract change).** On the
+  0.9.0 bases a held process was still in `/proc` with its exe link and
+  answered `kill(pid, 0)`, for hundreds of ms under TCG: a sample that
+  daemonizes and looks for a running copy of itself found its own exiting
+  parent and quit (ANT-T0596). From the moment it is held until it is reaped,
+  a process is now gone for the other processes of its run, as if it had
+  exited and been reaped at once: `ant_exit_hold()` stores the run's root
+  cookie in the leader's state (`exit_hidden`) before it publishes the hold
+  record, and `ant_task_hidden()` (one atomic read while nothing is hidden)
+  answers for the caller: a user task of the same run, not of the process's
+  own thread group. Hooks: `proc_pid_lookup()` and `next_tgid()` (readdir) skip
+  it, `pid_revalidate()` drops a cached dentry of it (`/proc/<pid>` and the
+  files under it), so every path through `/proc/<pid>` is ENOENT;
+  `proc_single_show()` gives ESRCH on a file opened before the hold;
+  `check_kill_permission()` (kill, tgkill, tkill, sigqueue, pidfd_send_signal)
+  and `pidfd_open()` give ESRCH. `get_proc_task()` (`fs/proc/internal.h`) is
+  left alone: a hook there changed the stock kernel's inlining in
+  `fs/proc/fd.c`, so its BTF was no longer Debian's (check-kernel-abi). Its own
+  threads, the kernel (PROCESS_LIST, the core claim) and other runs see it as
+  before, so the trigger's core still reaches it. Still observable: the
+  parent's `wait()` and SIGCHLD come only after the hold, and until then a
+  child's `getppid()` (and the PPid of its `/proc` status) names the held
+  process; a zombie of it stays hidden until it is reaped (a native zombie is
+  listed); system-wide counts (`sysinfo`, `/proc/loadavg`) include it; other
+  lookups by number (`getpgid`, `getsid`, `getpriority`, `sched_*`, `prlimit`,
+  `ptrace`, `process_vm_readv`) still find it, as does a lookup relative to a
+  `/proc/<pid>` directory opened before the hold; `kill(-1, sig)` can return
+  ESRCH when the held process is the last one it tries.
 * **Tools.** `trigger-check` (triage example) has a `fast` case on a revision-22
   base: the fixture writes its cron entry and exits at once (`SECONDS` 0); its
-  core must be written and its note must say it was held.
+  core must be written and its note must say it was held. Its `selfscan` case
+  (0.9.1 bases) starts as a daemon (fork, fork, both parents exit) and the
+  grandchild, 3 ms (24 ms under TCG) after its parent's exit began, looks for
+  a running copy of itself in `/proc/*/exe` and by its parents' numbers: it
+  must find none and see its parent hidden (`getppid()` still names it while
+  `/proc` and `kill(pid, 0)` do not), then write its cron entry and stay, so
+  the trigger takes its core. On a 0.9.0 base it finds its parents and exits.
+
+### Guest fixes for the 0.9.1 bases (no contract change)
+
+Patches 99-107 (the low findings of the 0.9.0 bug hunt, ANT-T0582) and 108-109;
+revision 22 unchanged, so only the series hash moves.
+
+* **Exit hold hidden from the run (108, ANT-T0596).** See the exit hold above.
+* **A file truncated during its hash is CHANGED (109, ANT-T0597).** The hash worker
+  reads the size once and then the file up to it; an early end of file (the file
+  was truncated meanwhile) gave READ_ERROR -ENODATA, which the host showed as
+  "read error -61". It now ends the read: the digest covers what was read, the
+  record is OK with CHANGED ("the file changed while it was being read") and the
+  digest is not cached. A read that fails is still READ_ERROR with its error.
 
 ### Guest fixes from the arm64 evaluation (0.9.0, no contract change)
 

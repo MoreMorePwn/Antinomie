@@ -12,7 +12,8 @@ the `antinomie-auto` systemd units and the example configuration, and the
 documents for the command line (`docs/usage.md`), Auto mode (`docs/auto-mode.md`),
 `service.toml` (`docs/service-config.md`) and the run API (`docs/run-api-1.md`
 with its JSON Schema) are back. The window is the 0.9.0 window; it runs the same
-bases (contract revision 22, `min_app_version` 0.9.0). Everything below is new in
+bases (contract revision 22, `min_app_version` 0.9.0), and 0.9.1's rebuilt bases
+(still revision 22) carry the guest fixes listed under Guest. Everything below is new in
 0.9.1: no earlier release shipped the command line, the daemon or the run API, so
 their entries are listed in full.
 
@@ -708,9 +709,11 @@ their entries are listed in full.
 
 ### Guest
 
-Guest fixes that ship with 0.9.1's bases (guest patches 99-107, no contract
+Guest fixes that ship with 0.9.1's bases (guest patches 99-109, no contract
 change); the 0.9.0 bases keep the old behavior.
 
+- **A process held at its exit for a dump trigger's core is hidden from the sample (ANT-T0596).** It was still listed in `/proc` with its `exe` link and answered `kill(pid, 0)`, for up to a few hundred milliseconds on a TCG guest, so a program that daemonizes and checks for a running copy of itself saw its own exiting parent and quit. For the run's other processes it is now gone from the moment it is held, as if it had exited and been reaped: `/proc` does not list or find it, and `kill`, `tgkill`, `sigqueue` and `pidfd_open` give ESRCH. The parent's `wait()` still returns only after the hold.
+- **A file truncated while the guest hashes it is reported as changed, not as "read error -61" (ANT-T0597).**
 - **A forked child no longer dies of SIGTRAP when the debugger cannot follow it (ANT-T0582).** With children followed and all 16 debug sessions in use, a new child ran with the debugger's breakpoint bytes still in its memory; it now gets the program's own bytes back.
 - **Stopping a run whose debugger could not detach no longer waits for the kill (ANT-T0582).** A Stop that came together with a detach that could not stop the program was dropped, and the run ended only through SIGKILL.
 - **Pause right after Continue no longer goes unanswered (ANT-T0582).** A stop that reached the guest while the program was still being resumed was acknowledged and dropped, and the debugger waited for a stop that never came.

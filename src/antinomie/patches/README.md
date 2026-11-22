@@ -1,7 +1,7 @@
 # The Antinomie guest kernel patch series
 
 The guest kernel is Debian's `linux` 6.12.94-1 (trixie) with Antinomie's own
-patch series on top. The series is sixty-nine topic patches; each one adds one
+patch series on top. The series is seventy-one topic patches; each one adds one
 part of the design and says, in its description, what it adds, why, which
 existing kernel files it hooks and why there, and which contract revision it
 belongs to.
@@ -104,6 +104,8 @@ changes. Line counts are added/removed lines of the patch.
 | 105 | record no system call that seccomp or a tracer skipped (no contract change) | +6 | none (`recorder.c`: `selected()` is false for a negative number) | none |
 | 106 | keep BPF_TASK_FD_QUERY's name ceiling from wrapping (no contract change) | +4 -1 | none (`native_capture.c`: the ceiling in 64 bits) | none |
 | 107 | record the completion of an io_uring IOPOLL request (no contract change) | +4 | none | `io_uring/rw.c` (`io_do_iopoll()` calls `ant_uring_complete()` for each completed request before the flush posts it) |
+| 108 | hide a process held at its exit from the rest of its run (no contract change) | +92 -2 | none (`exit_hold.c`: the leader's `exit_hidden`, `ant_task_hidden()`, uncounted in `ant_monitor_release()`) | `fs/proc/base.c` (`proc_pid_lookup()`, `next_tgid()`, `pid_revalidate()`, `proc_single_show()`), `kernel/signal.c` (`check_kill_permission()`), `kernel/pid.c` (`pidfd_open()`): a held process is gone for the other processes of its run until it is reaped |
+| 109 | report a file truncated during its hash as changed (no contract change) | +13 -4 | none (`hash.c`: an early end of file is OK with CHANGED, not READ_ERROR -ENODATA) | none |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`

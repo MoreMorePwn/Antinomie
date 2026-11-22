@@ -2097,7 +2097,7 @@ longer on an emulated arm64 guest) and asks for the core of the new program; a c
 the guest cannot take just then is kept in the trigger's `core` record as `failed`
 with the reason in `error`, does not count against `max_dumps` and does not start
 `dumps_apart_s`, and is asked for again every half second (up to eight times). The
-exit hold and its known issue below apply to `run exec --dump-trigger` and to a
+exit hold and how it hides a held process (below) apply to `run exec --dump-trigger` and to a
 preset's `trigger_core` alike.
 
 In **Run program > Dumps**, a core that cannot be taken because the process
@@ -2117,16 +2117,21 @@ then gone as before. On an older base the run's notes say the base cannot hold
 a process at its exit, and a program that matches and exits within a few tens of
 milliseconds can be gone before the guest can pause it.
 
-**Known issue (0.9.0): the sample can see a held process.** While a process is
-held at its exit it is still listed in `/proc`, with its `/proc/<pid>/exe` link,
-and on a TCG guest that can last a few hundred milliseconds. A program that
-daemonizes (forks, lets its parent exit, forks again) and then checks whether a
-copy of itself is already running sees its own exiting parent or grandparent and
-quits at once. An arm64 IoT bot did exactly that: it scanned every
-`/proc/<pid>/exe`, found its grandparent, and exited after half a second with no
-network activity. If a sample forks and exits right away, untick the trigger's
-core (the memory dump does not hold processes) and take a core by hand from the
-process list once it has settled.
+**A held process is hidden from the sample (0.9.1 bases).** On a 0.9.1 base, a
+process held at its exit is gone for the run's other processes from the moment it
+is held, as if it had exited and been reaped at once: `/proc` does not list it or
+find it by number, and `kill`, `tgkill`, `sigqueue` and `pidfd_open` give "no such
+process". A program that daemonizes and checks whether a copy of itself is already
+running no longer sees its own exiting parent. What a program can still notice:
+its parent's `wait()` and SIGCHLD come only after the hold (up to 50 ms, 400 ms on
+a TCG guest), and until then `getppid()` still names the exiting parent; a few
+lookups by number (`getpgid`, `getsid`, `getpriority`, `ptrace`) still find it;
+system-wide process counts include it. On a 0.9.0 base the held process is still
+listed in `/proc` with its `/proc/<pid>/exe` link: an arm64 IoT bot scanned every
+`/proc/<pid>/exe`, found its own grandparent and exited with no network activity.
+There, if a sample forks and exits right away, untick the trigger's core (the
+memory dump does not hold processes) and take a core by hand from the process list
+once it has settled.
 
 The guest copies only the pages that are in memory when it reads a live core
 (never swapped-out or untouched pages) and the thread contexts it could park. A

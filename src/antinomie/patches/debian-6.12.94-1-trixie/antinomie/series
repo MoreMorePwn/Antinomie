@@ -126,3 +126,7 @@
 0105-antinomie-record-no-system-call-that-seccomp-or-a-tracer-skipped.patch
 0106-antinomie-keep-bpf-task-fd-query-s-name-ceiling-from-wrapping.patch
 0107-antinomie-record-the-completion-of-an-io-uring-iopoll-request.patch
+# 0.9.1 guest round (no contract change): a process held at its exit for the dump trigger is
+# gone for the rest of its run, a file truncated during its hash is reported as changed
+0108-antinomie-hide-a-process-held-at-its-exit-from-the-rest-of-its-run.patch
+0109-antinomie-report-a-file-truncated-during-its-hash-as-changed.patch
