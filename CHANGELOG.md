@@ -706,6 +706,21 @@ their entries are listed in full.
 - **An event subscription may filter on `job.trigger`.** `{"op":"subscribe","types":["job.trigger"]}` was refused with `invalid_argument`; an unfiltered subscription received it.
 - **`capabilities.queries.limits` reports the `[query]` settings in force.** It reported the defaults, so a client sizing its read concurrency from it used the wrong numbers when `service.toml` set them.
 
+### Guest
+
+Guest fixes that ship with 0.9.1's bases (guest patches 99-107, no contract
+change); the 0.9.0 bases keep the old behavior.
+
+- **A forked child no longer dies of SIGTRAP when the debugger cannot follow it (ANT-T0582).** With children followed and all 16 debug sessions in use, a new child ran with the debugger's breakpoint bytes still in its memory; it now gets the program's own bytes back.
+- **Stopping a run whose debugger could not detach no longer waits for the kill (ANT-T0582).** A Stop that came together with a detach that could not stop the program was dropped, and the run ended only through SIGKILL.
+- **Pause right after Continue no longer goes unanswered (ANT-T0582).** A stop that reached the guest while the program was still being resumed was acknowledged and dropped, and the debugger waited for a stop that never came.
+- **Pausing a program no longer fails its blocked io_uring requests (ANT-T0582).** The debugger stopped io_uring's kernel workers too, and a request blocked on one (opening a FIFO, say) failed with EINTR.
+- **A program started with posix_spawn or system() is no longer held by the parent's debugger after its exec (ANT-T0582).** A vfork child that had stopped in the parent's memory stayed one of the parent's threads after it executed a new program, which was then paused with the parent and listed among its threads.
+- **Analyze Only no longer opens a path before checking that it names a regular file (ANT-T0582).** A device node, FIFO or network file was opened first, and an open that blocked kept every later acquisition refused.
+- **A system call seccomp refused is no longer recorded as an unsupported x32 call (ANT-T0582).**
+- **A BPF_TASK_FD_QUERY name is no longer captured empty when the program changes its buffer length meanwhile (ANT-T0582).**
+- **Reads and writes of an io_uring ring with IORING_SETUP_IOPOLL are recorded as completed, not abandoned (ANT-T0582).**
+
 ## 0.9.0 — 2026-11-23
 
 Antinomie 0.9.0 runs arm64 programs: BusyBox, Debian 13 Minimal and Debian 13

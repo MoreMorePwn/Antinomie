@@ -1,0 +1,42 @@
+From 8de18920ccbb166eb29e9da0caf56ddc0fad54bf Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 22 Nov 2026 14:36:09 +0700
+Subject: [PATCH] antinomie: keep BPF_TASK_FD_QUERY's name ceiling from
+ wrapping
+
+The exit capture of BPF_TASK_FD_QUERY reads buf_len back from the
+program's memory and captured the name with the ceiling
+min(count + 1, buf_len), in 32 bits: a thread that set buf_len to
+U32_MAX between the kernel's write and the read made the ceiling 0,
+and the name was captured as empty.
+
+- The sum is taken in 64 bits.
+
+Found by the 0.9.0 bug hunt (K1-08b). No contract change (revision 22).
+---
+ kernel/antinomie/native_capture.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
+index 08a82a89e..69b5ad143 100644
+--- a/kernel/antinomie/native_capture.c
++++ b/kernel/antinomie/native_capture.c
+@@ -2873,11 +2873,14 @@ static void capture_bpf_exit(struct ant_task *ctx, struct ant_bpf_state *state,
+ 			   a->query.link_attach_flags, count, sizeof(u32), MAX_RW_COUNT);
+ 		return;
+ 	case BPF_TASK_FD_QUERY:
++		/* buf_len is read back from the program's memory: one past
++		 * U32_MAX must not wrap to a ceiling of nothing.
++		 */
+ 		if (!result && a->task_fd_query.buf &&
+ 		    bpf_rewritten(ctx, state, attr, offsetof(union bpf_attr, task_fd_query.buf_len),
+ 				  "arg1.attr.buf_len", &count) && !ant_capture_lost(ctx))
+ 			ant_capture_string(ctx, 1, "arg1.attr.buf", a->task_fd_query.buf,
+-					   min(count + 1, a->task_fd_query.buf_len));
++					   min_t(u64, (u64)count + 1, a->task_fd_query.buf_len));
+ 		return;
+ 	default:
+ 		return;
+-- 
+2.53.0
+

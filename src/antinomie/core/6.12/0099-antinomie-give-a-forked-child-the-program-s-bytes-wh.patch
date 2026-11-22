@@ -1,0 +1,69 @@
+From b4b1f4f60e5c72d6128c190da918fccb0bcf5c53 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 22 Nov 2026 14:33:01 +0700
+Subject: [PATCH] antinomie: give a forked child the program's bytes when no
+ session can follow it
+
+With the FORK option on, ant_dbg_fork() makes a session for a forked
+child, which parks at its first instruction holding a copy of the
+engine's bytes until the debugger adopts it or lets it go. When that
+session could not be made (no record for the forking thread, no
+memory, or all 16 sessions in use: publish_session() said -ENOSPC),
+the child ran free with the engine's bytes still in its own copy of
+the memory, and the first one it reached was its SIGTRAP (x86-64), or
+a trap at the same BRK for ever (arm64).
+
+- Every failure path after the FORK test gives a child with its own
+  memory (no CLONE_VM) the program's own bytes back, as the FORK-off
+  path already does. A vfork child that shares the memory keeps meeting
+  the parent's session there.
+- The helper, unfollowed_child_bytes(), now has two callers and is
+  emitted out of line: it is renamed ant_dbg_unfollowed_bytes(), named
+  like the recorder.
+
+Found by the 0.9.0 bug hunt (KDBG-1, residual). No contract change
+(revision 22).
+---
+ kernel/antinomie/debug.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 4ea77ef0c..52b9a346a 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -2809,7 +2809,7 @@ static void step_not_inherited(struct ant_dbg *s, struct task_struct *child)
+  * program's own. A child that met one would take a SIGTRAP; under a handler,
+  * trap at the same BRK for ever (arm64) or resume inside an INT3's instruction.
+  */
+-static void unfollowed_child_bytes(struct ant_dbg *s, struct task_struct *child)
++static void ant_dbg_unfollowed_bytes(struct ant_dbg *s, struct task_struct *child)
+ {
+ 	struct ant_dbg_bp *bps;
+ 	struct ant_dbg_as *as;
+@@ -2860,7 +2860,7 @@ void ant_dbg_fork(struct task_struct *child, u64 clone_flags)
+ 	}
+ #ifdef ANT_DBG_FORK_REPAIR
+ 	if (!(READ_ONCE(s->opts) & ANTC_DEBUG_OPT_FORK) && !(clone_flags & CLONE_VM))
+-		unfollowed_child_bytes(s, child);
++		ant_dbg_unfollowed_bytes(s, child);
+ #endif
+ 	/* A shared address space that is not a vfork has no owner to follow. */
+ 	if (!(READ_ONCE(s->opts) & ANTC_DEBUG_OPT_FORK) ||
+@@ -2914,6 +2914,14 @@ void ant_dbg_fork(struct task_struct *child, u64 clone_flags)
+ 	queue_thread_mode(c, list_first_entry(&c->threads, struct ant_dbg_thread, node), TWA_RESUME);
+ 	goto out;
+ fail:
++#ifdef ANT_DBG_FORK_REPAIR
++	/* No session could be made for the child (no record, no memory, no
++	 * free session): nobody follows it after all, and a copy of the memory
++	 * of its own gets the program's bytes back, as with FORK off.
++	 */
++	if (!(clone_flags & CLONE_VM))
++		ant_dbg_unfollowed_bytes(s, child);
++#endif
+ 	kfree(ev);
+ 	kfree(done);
+ out:
+-- 
+2.53.0
+

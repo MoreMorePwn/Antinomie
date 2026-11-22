@@ -1,0 +1,41 @@
+From f4cc3234826a40cc45cdcfa5b853347e9be0fa29 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 22 Nov 2026 14:36:34 +0700
+Subject: [PATCH] antinomie: record the completion of an io_uring IOPOLL
+ request
+
+A ring set up with IORING_SETUP_IOPOLL completes its reads and writes
+in io_do_iopoll(): the completed requests are cut from the poll list
+and posted by __io_submit_flush_completions(), which does not pass
+through io_req_complete_defer(), where the recorder's completion hook
+sits. The recorder never saw the completion, and when the request was
+freed it was recorded as ABANDONED with no result. io_complete_rw_iopoll()
+captured the data, so only the completion record was missing.
+
+- io_do_iopoll() calls ant_uring_complete() for each completed request,
+  with the result and flags the CQE gets, before the flush posts it.
+
+Found by the 0.9.0 bug hunt (K1-08e). No contract change (revision
+22).
+---
+ io_uring/rw.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/io_uring/rw.c b/io_uring/rw.c
+index 848cc40ce..ce3fdd7bc 100644
+--- a/io_uring/rw.c
++++ b/io_uring/rw.c
+@@ -1246,6 +1246,10 @@ int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
+ 			break;
+ 		nr_events++;
+ 		req->cqe.flags = io_put_kbuf(req, req->cqe.res, NULL);
++		/* Posted by __io_submit_flush_completions() below, which skips
++		 * io_req_complete_defer(): the recorder's completion is here.
++		 */
++		ant_uring_complete(req, req->cqe.res, req->cqe.flags, true);
+ 		if (req->opcode != IORING_OP_URING_CMD)
+ 			io_req_rw_cleanup(req, 0);
+ 	}
+-- 
+2.53.0
+

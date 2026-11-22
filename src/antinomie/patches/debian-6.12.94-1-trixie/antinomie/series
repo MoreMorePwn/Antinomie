@@ -112,3 +112,17 @@
 0096-antinomie-let-a-session-that-is-over-hold-no-thread.patch
 0097-antinomie-read-at-most-256-entries-of-an-io-submit-array.patch
 0098-antinomie-size-recvmmsg-s-capture-state-by-at-most-uio-maxiov-messages.patch
+# From the 0.9.0 bug hunt, its low guest findings (0.9.1 bases; no contract change): a forked
+# child no session can follow, requests taken with a detach or a run's stop, a stop asked for
+# during a continue, io_uring's workers under a stop, a vfork child's record after its exec, a
+# specimen's path looked up before it is opened, skipped system calls, BPF_TASK_FD_QUERY's
+# name ceiling, IOPOLL completions
+0099-antinomie-give-a-forked-child-the-program-s-bytes-when-no-session-can-follow-it.patch
+0100-antinomie-keep-the-debugger-s-requests-that-came-with-a-detach-or-a-run-s-stop.patch
+0101-antinomie-stop-a-group-that-was-asked-to-stop-during-any-continue.patch
+0102-antinomie-leave-io-uring-s-kernel-workers-of-a-debugged-program-running.patch
+0103-antinomie-let-a-vfork-child-s-record-go-when-its-exec-leaves-the-program.patch
+0104-antinomie-look-a-specimen-s-path-up-before-opening-it.patch
+0105-antinomie-record-no-system-call-that-seccomp-or-a-tracer-skipped.patch
+0106-antinomie-keep-bpf-task-fd-query-s-name-ceiling-from-wrapping.patch
+0107-antinomie-record-the-completion-of-an-io-uring-iopoll-request.patch

@@ -49,6 +49,13 @@
  *                    holding two datagrams it sent itself; the headers end at an
  *                    unmapped page; prints "MMSG FLOOD rc=R errno=E", exit 0 when
  *                    both were received
+ *   seccomp-skip     a seccomp filter makes getppid fail with EPERM (the call is
+ *                    skipped: x86-64's hook sees number -1), called three times;
+ *                    prints "SECCOMP SKIP rc=R errno=E", exit 0 when it was EPERM
+ *   iopoll           an IORING_SETUP_IOPOLL ring reads 4096 bytes O_DIRECT from a
+ *                    file on an ext4 disk; prints "IOPOLL res=R" (exit 0 when
+ *                    it is 4096), or "IOPOLL UNSUPPORTED why" and exit 0 when
+ *                    the guest has no such file system or ring
  *
  * Build: cc -static -O2 -pthread -Wall -Wextra -Werror tests/monitor/uring-fixture.c
  */
@@ -57,7 +64,12 @@
 #include <fcntl.h>
 #include <linux/aio_abi.h>
 #include <linux/io_uring.h>
+#include <linux/filter.h>
 #include <linux/openat2.h>
+#include <linux/seccomp.h>
+#include <stddef.h>
+#include <sys/prctl.h>
+#include <sys/vfs.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -820,6 +832,99 @@ static int mode_mmsg_flood(void)
 	return 0;
 }
 
+/* The bug hunt's K1-08a: a call seccomp skips reaches x86-64's hook as -1,
+ * which has the x32 bit set; it was recorded as an x32 call
+ * (schema.unsupported_abi) that never ran.
+ */
+static int mode_seccomp_skip(void)
+{
+	struct sock_filter filter[] = {
+		BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_getppid, 0, 1),
+		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)),
+		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+	};
+	struct sock_fprog program = { .len = sizeof(filter) / sizeof(filter[0]), .filter = filter };
+	long rc = 0;
+	int saved = 0;
+	char line[96];
+
+	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) ||
+	    prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program))
+		return 2;
+	say("URING READY\n");
+	for (int i = 0; i < 3; i++) {
+		rc = syscall(__NR_getppid);
+		saved = rc < 0 ? errno : 0;
+	}
+	snprintf(line, sizeof(line), "SECCOMP SKIP rc=%ld errno=%d\n", rc, saved);
+	say(line);
+	if (rc != -1 || saved != EPERM)
+		return 1;
+	say("URING DONE\n");
+	return 0;
+}
+
+/* The bug hunt's K1-08e: an IOPOLL ring's reads complete in io_do_iopoll(),
+ * past the recorder's completion hook; they were recorded as abandoned.
+ */
+static int mode_iopoll(void)
+{
+	static const char *const dirs[] = { "/root", "/var/tmp", "/var", "/" };
+	struct ring ring;
+	struct statfs disk;
+	char path[96], line[96];
+	void *buffer = NULL;
+	unsigned head;
+	int fd = -1, res;
+
+	for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]) && fd < 0; i++) {
+		if (statfs(dirs[i], &disk) || disk.f_type != 0xEF53)
+			continue;
+		snprintf(path, sizeof(path), "%s/uring-iopoll.%d", strcmp(dirs[i], "/") ? dirs[i] : "",
+			 (int)getpid());
+		fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	}
+	if (fd < 0) {
+		say("IOPOLL UNSUPPORTED no writable ext4 directory\n");
+		return 0;
+	}
+	memset(block, 'P', sizeof(block));
+	if (write(fd, block, sizeof(block)) != (ssize_t)sizeof(block) || fsync(fd))
+		return 2;
+	close(fd);
+	fd = open(path, O_RDONLY | O_DIRECT | O_CLOEXEC);
+	unlink(path);
+	if (fd < 0 || posix_memalign(&buffer, 4096, 4096))
+		return 2;
+	if (ring_open(&ring, 4, IORING_SETUP_IOPOLL) < 0) {
+		snprintf(line, sizeof(line), "IOPOLL UNSUPPORTED ring %d\n", errno);
+		say(line);
+		return 0;
+	}
+	say("URING READY\n");
+	queue_rw(&ring, IORING_OP_READ, fd, buffer, 4096, 0, 0, 7);
+	ring.pending = 0;
+	if (syscall(__NR_io_uring_enter, ring.fd, 1, 1, IORING_ENTER_GETEVENTS, NULL, 0) < 0)
+		return 2;
+	head = *ring.cq_head;
+	while (head == __atomic_load_n(ring.cq_tail, __ATOMIC_ACQUIRE))
+		if (syscall(__NR_io_uring_enter, ring.fd, 0, 1, IORING_ENTER_GETEVENTS, NULL, 0) < 0)
+			return 2;
+	res = ring.cqes[head & *ring.cq_mask].res;
+	__atomic_store_n(ring.cq_head, head + 1, __ATOMIC_RELEASE);
+	if (res == -EOPNOTSUPP) {
+		say("IOPOLL UNSUPPORTED the file cannot be polled\n");
+		return 0;
+	}
+	snprintf(line, sizeof(line), "IOPOLL res=%d\n", res);
+	say(line);
+	if (res != 4096)
+		return 1;
+	say("URING DONE\n");
+	return 0;
+}
+
 /* Fill an entry, then publish it: the SQPOLL thread may take it at once. */
 static void sq_queue(struct ring *ring, const struct io_uring_sqe *entry)
 {
@@ -1054,6 +1159,10 @@ int main(int argc, char **argv)
 		return mode_aio_flood();
 	if (!strcmp(mode, "mmsg-flood"))
 		return mode_mmsg_flood();
-	say("usage: uring-fixture pairs|cancel|drain|sqpoll|threads|crash|hold|hold-ignore|files|syncfiles|sqfiles|morefiles|aio|aio-flood|mmsg-flood|script FILE\n");
+	if (!strcmp(mode, "seccomp-skip"))
+		return mode_seccomp_skip();
+	if (!strcmp(mode, "iopoll"))
+		return mode_iopoll();
+	say("usage: uring-fixture pairs|cancel|drain|sqpoll|threads|crash|hold|hold-ignore|files|syncfiles|sqfiles|morefiles|aio|aio-flood|mmsg-flood|seccomp-skip|iopoll|script FILE\n");
 	return 64;
 }
