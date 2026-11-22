@@ -139,22 +139,6 @@ fn the_menu_bar_still_fits_in_the_narrowest_window() {
 }
 
 #[test]
-fn the_trace_button_opens_the_window_on_the_traces_filter() {
-    let ctx = context();
-    let mut app = app();
-    app.selected = Some("vm".into());
-    let mut past = run("past");
-    past.state = RunState::Finalized;
-    app.history.push(past);
-    app.select_run(Some("past".into()));
-    app.filter = "syscall.name == openat".into();
-    app.applied_filter = "syscall.name == openat".into();
-    click_label(&mut app, &ctx, SIZE, "Statistics of these calls");
-    assert!(app.statistics.open);
-    assert_eq!(app.statistics.applied_filter(), "syscall.name == openat");
-}
-
-#[test]
 fn the_size_and_pop_out_state_are_settings_that_older_files_lack() {
     let settings: Settings = serde_json::from_str("{}").expect("an empty settings file loads");
     assert_eq!(settings.statistics_window, crate::statistics::DEFAULT_SIZE);

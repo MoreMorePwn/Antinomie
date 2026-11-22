@@ -780,6 +780,8 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **Statistics, Latency: the Calls table shows 20 rows before it scrolls (ANT-T0589).** It held about 10 at a fixed pixel height; the limit is now 20 rows of the current text size.
+- **The Syscall Trace no longer has a "Statistics of these calls" button (ANT-T0589).** Statistics still opens from its menu, Ctrl+Shift+T and the tab entries.
 - **A second VM started with a realistic profile no longer "times out waiting for the guest" in the VM check tools (ANT-T0587).** A kernel message printed in the middle of the guest's "BusyBox guest ready" line hid it from the serial-console wait in the check examples, so a healthy, connected guest looked like one that never started; the checks now ignore kernel lines inside the banner. The app waits for the transport, not that line, and was not affected.
 - **Capture no longer slows to a crawl on calls with thousands of fields (ANT-T0585).** A large writev, sendmmsg or execve made the host rebuild the whole call's summary for every packet, so each packet cost more than the last (about 12,000 fields took 115 s in a test, and the guest's ring stayed full). A packet now costs only the field it touches: the same call takes 0.05 s. Nothing is dropped and the summaries are unchanged.
 - **Sigma rules without an `id:` can be enabled (ANT-T0579).** They all shared the id `missing-id`, so none could be turned on and the profile held no rules. Each now gets a stable id made from its text.

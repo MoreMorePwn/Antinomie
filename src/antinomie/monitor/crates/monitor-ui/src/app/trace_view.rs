@@ -330,10 +330,6 @@ impl MonitorApp {
                 self.select_process(selection);
             }
             self.trace_archive_pager(ui);
-            if ui.button("Statistics of these calls").clicked() {
-                let filter = self.applied_filter.clone();
-                self.statistics.open_with_filter(&filter);
-            }
         });
         // The filter box has a row of its own below the toolbar, as before
         // egui 0.36, at every window and text size.

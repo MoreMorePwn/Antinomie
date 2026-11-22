@@ -290,6 +290,9 @@ pub(super) fn show(ui: &mut egui::Ui, state: &mut State, input: &Inputs<'_>) -> 
     pick
 }
 
+/// Rows of a Calls table shown before it scrolls.
+const ROWS_BEFORE_SCROLL: f32 = 20.0;
+
 fn latency_table(
     ui: &mut egui::Ui,
     state: &mut State,
@@ -315,6 +318,8 @@ fn latency_table(
         "Mean",
     ];
     let height = theme::row_height(ui.text_style_height(&egui::TextStyle::Body) + 2.0);
+    // Twenty rows show before the table scrolls, at any font size.
+    let shown = (height + ui.spacing().item_spacing.y) * ROWS_BEFORE_SCROLL;
     let mut pick = None;
     let mut select = None;
     FitBuilder::new(ui)
@@ -330,7 +335,7 @@ fn latency_table(
         .column(Col::fixed(92.0))
         .column(Col::fixed(92.0))
         .column(Col::fixed(92.0))
-        .max_scroll_height(250.0)
+        .max_scroll_height(shown)
         .min_scrolled_height(0.0)
         .auto_shrink([false, true])
         .header(26.0, |mut header| {

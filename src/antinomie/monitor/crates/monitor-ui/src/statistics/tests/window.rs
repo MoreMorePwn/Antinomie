@@ -262,21 +262,6 @@ fn b7_use_trace_filter_copies_it_and_an_invalid_filter_keeps_the_old_result_grey
 }
 
 #[test]
-fn b8_the_trace_button_opens_the_window_with_the_traces_filter() {
-    let mut window = StatisticsWindow::default();
-    window.open_with_filter("syscall.success == false");
-    assert!(window.open);
-    assert_eq!(window.applied_filter(), "syscall.success == false");
-    assert_eq!(window.filter, "syscall.success == false");
-    // A filter that does not compile is not applied, and the window still opens.
-    let mut window = StatisticsWindow::default();
-    window.open_with_filter("syscall.typo == 9");
-    assert!(window.open);
-    assert_eq!(window.applied_filter(), "");
-    assert!(window.filter_error.is_some());
-}
-
-#[test]
 fn b9_copy_puts_tab_separated_text_on_the_clipboard_and_export_writes_under_exports_statistics() {
     let (mut rig, _fixture) = rig_with_run();
     rig.window.request_open(Some(Tab::Hierarchy));

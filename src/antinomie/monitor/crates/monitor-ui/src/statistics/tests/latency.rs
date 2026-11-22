@@ -268,3 +268,37 @@ fn e_the_histogram_has_bars_in_log_order_and_a_table_toggle() {
     let shown = rig.texts();
     assert!(shown.iter().any(|(t, _)| t == "Up to"), "{shown:?}");
 }
+
+/// ANT-T0589: the Calls table lists 20 rows before it scrolls.
+#[test]
+fn e_the_calls_table_shows_twenty_rows_before_it_scrolls() {
+    let mut calls = Vec::new();
+    let mut t = 1_000 * MS;
+    for number in 0..30_u64 {
+        for i in 1..=2_u64 {
+            t += MS;
+            calls.push(Call::new(number, 2).pid(2).returns(0).at(t, i * 1_000));
+        }
+    }
+    let fixture = Fixture::new(&calls);
+    let stats = stats_of(&fixture, "");
+    let all = rows(&stats, false, None);
+    assert!(all.len() > 22, "{} rows", all.len());
+    let mut rig = tall_rig(&fixture);
+    rig.settle();
+    let shown = rig.texts();
+    // Each drawn row of the Calls table has its distribution button; the
+    // table of calls that wait by design comes below it.
+    let below = shown
+        .iter()
+        .find(|(t, _)| t == "Calls that wait by design")
+        .map_or(f32::MAX, |(_, rect)| rect.top());
+    let buttons = shown
+        .iter()
+        .filter(|(t, rect)| t == egui_phosphor::regular::CHART_BAR && rect.top() < below)
+        .count();
+    assert!(
+        (20..=21).contains(&buttons),
+        "{buttons} rows drawn: {shown:?}"
+    );
+}
