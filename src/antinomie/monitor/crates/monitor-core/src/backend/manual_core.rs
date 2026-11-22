@@ -33,6 +33,9 @@ fn new_id() -> String {
 /// The issue of a core asked to read non-resident pages on a guest that cannot.
 pub(super) const NO_NONRESIDENT: &str = "Read non-resident pages needs a base of guest contract revision 22: this guest copied only the pages that were in memory.";
 
+/// How long a cancelled capture keeps polling a status the guest refuses.
+const STATUS_GIVE_UP: Duration = Duration::from_secs(30);
+
 pub(super) struct Owner {
     pub summary: ProcessCoreCapture,
     sink: Sink,
@@ -41,6 +44,8 @@ pub(super) struct Owner {
     lookup_required: bool,
     status: Option<CoreStatus>,
     known_absent: bool,
+    /// Since when every status poll has failed.
+    status_failing: Option<Instant>,
     cancel_requested: bool,
     cancel_sent: bool,
     release_attempted: bool,
@@ -109,6 +114,7 @@ impl Owner {
             lookup_required: false,
             status: None,
             known_absent: false,
+            status_failing: None,
             cancel_requested: false,
             cancel_sent: false,
             release_attempted: false,
@@ -189,6 +195,33 @@ impl Owner {
     }
     fn issue(&mut self, issue: impl Into<String>) {
         self.summary.issue = Some(issue.into().chars().take(2048).collect());
+    }
+    /// A status poll failed. Once the capture is being cancelled and the guest
+    /// has refused every poll for `STATUS_GIVE_UP`, the guest side is given up
+    /// on: the owner no longer holds the guest or blocks snapshots. Returns
+    /// whether it did.
+    fn status_unanswerable(&mut self, error: &str) -> bool {
+        let since = *self.status_failing.get_or_insert_with(Instant::now);
+        if !self.cancel_requested || since.elapsed() < STATUS_GIVE_UP {
+            return false;
+        }
+        self.known_absent = true;
+        let why = format!(
+            "the guest kept refusing the core status ({error}); the capture is given up and its host prefix kept"
+        );
+        if self.desired.is_none() {
+            let state = if self.summary.stored_size > 0 {
+                RunArtifactState::Partial
+            } else {
+                RunArtifactState::Failed
+            };
+            self.finish(state, why);
+        } else {
+            self.issue(why);
+        }
+        self.done = true;
+        self.summary.phase = ProcessCorePhase::Finished;
+        true
     }
     fn fail_disk(&mut self, error: String) {
         self.disk_failed = true;
@@ -691,12 +724,7 @@ impl Session {
             }
             return Ok(());
         }
-        if owner.status.as_ref().is_none_or(|status| status.state <= 2) || owner.lookup_required {
-            self.manual_status(owner, snapshot, sender)?;
-        }
-        if owner.known_absent {
-            return Ok(());
-        }
+        // A cancellation does not wait for a status the guest keeps refusing.
         if owner.cancel_requested
             && !owner.cancel_sent
             && owner.summary.guest_handle.is_some()
@@ -706,6 +734,20 @@ impl Session {
             match self.request_typed(control::CORE_CANCEL,&control::with_session(owner.summary.guest_handle.ok_or("manual cancel handle missing")?),snapshot,sender,IO_TIMEOUT) {
                 Ok(reply) if reply.is_empty()=>{},Ok(_)=>owner.issue("manual cancel reply malformed; cancellation is not replayed"),Err(error)=>owner.issue(format!("manual cancellation acknowledgement unavailable; cancellation is not replayed: {}",error.into_message())),
             }
+            return Ok(());
+        }
+        if owner.status.as_ref().is_none_or(|status| status.state <= 2) || owner.lookup_required {
+            match self.manual_status(owner, snapshot, sender) {
+                Ok(_) => owner.status_failing = None,
+                Err(error) => {
+                    if !owner.status_unanswerable(&error) {
+                        return Err(error);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        if owner.known_absent {
             return Ok(());
         }
         let Some(status) = owner.status.as_ref() else {
@@ -1208,6 +1250,22 @@ mod tests {
             wire[72..76].copy_from_slice(&1u32.to_le_bytes());
         }
         wire
+    }
+    #[test]
+    fn a_cancelled_capture_gives_up_on_a_guest_that_refuses_every_status() {
+        let mut owner = Owner::new(request(), PathBuf::from("/nonexistent/core"), "id".into());
+        owner.admission_sent = true;
+        owner.summary.guest_handle = Some(5);
+        assert!(owner.guest_busy());
+        // Not cancelled yet: the failure is the caller's to report.
+        assert!(!owner.status_unanswerable("rejected"));
+        owner.cancel_requested = true;
+        assert!(!owner.status_unanswerable("rejected"), "refused only now");
+        owner.status_failing = Instant::now().checked_sub(STATUS_GIVE_UP + Duration::from_secs(1));
+        assert!(owner.status_unanswerable("rejected"));
+        assert!(owner.done, "the owner no longer holds the guest");
+        assert!(!owner.guest_busy());
+        assert!(!owner.snapshot_busy());
     }
     #[test]
     fn manual_wire_has_exact_identity_nonce_policy_and_limits() {
