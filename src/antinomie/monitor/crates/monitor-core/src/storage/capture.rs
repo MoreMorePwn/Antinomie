@@ -33,6 +33,9 @@ pub struct RawCapture {
     /// The writer thread's first error for this file, reported once.
     write_error: crate::writer::ErrorSlot,
     write_error_seen: bool,
+    /// The writer's error, kept apart from `error` so an earlier quota error
+    /// cannot hide that data was lost (`sync` reports it).
+    write_failure: Option<String>,
     quota: u64,
     pub packets: u64,
     pub bytes: u64,
@@ -57,9 +60,7 @@ impl RawCapture {
         self.flush_blocking();
         crate::writer::wait_for(self.ticket);
         self.flush_blocking();
-        if let Some(error) = &self.error
-            && error.starts_with("capture write failed")
-        {
+        if let Some(error) = &self.write_failure {
             return Err(error.clone());
         }
         self.file.sync_all().map_err(|error| {
@@ -89,6 +90,7 @@ impl RawCapture {
             ticket: 0,
             write_error: crate::writer::error_slot(),
             write_error_seen: false,
+            write_failure: None,
             quota,
             packets: 0,
             bytes: 0,
@@ -114,6 +116,7 @@ impl RawCapture {
             ticket: 0,
             write_error: crate::writer::error_slot(),
             write_error_seen: false,
+            write_failure: None,
             quota,
             packets: 0,
             bytes: 0,
@@ -176,10 +179,21 @@ impl RawCapture {
             && let Some(error) = crate::writer::error_of(&self.write_error)
         {
             self.write_error_seen = true;
+            self.write_failure = Some(error.clone());
             self.error.get_or_insert(error);
             self.buffer.clear();
+            // The writer cut the file back to the last whole block: count
+            // only what is still there (the share of the handed-over packets
+            // that the file kept; blocks hold similar packets).
             if let Ok(metadata) = self.file.metadata() {
-                self.bytes = metadata.len();
+                let kept = metadata.len();
+                let (handed_bytes, handed_packets) = self.written;
+                self.packets = match handed_bytes {
+                    0 => 0,
+                    _ => (u128::from(handed_packets) * u128::from(kept.min(handed_bytes))
+                        / u128::from(handed_bytes)) as u64,
+                };
+                self.bytes = kept;
             }
             return false;
         }
@@ -270,5 +284,45 @@ impl RawCapture {
             health: &self.final_health,
             guest_kernel: &self.guest_kernel,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn full_disk_capture(name: &str, quota: u64) -> (RawCapture, PathBuf) {
+        let path = std::env::temp_dir().join(format!("ant-capture-{name}-{}", unique_id()));
+        let mut c = RawCapture::new(path.clone(), quota).unwrap();
+        c.file = std::sync::Arc::new(OpenOptions::new().write(true).open("/dev/full").unwrap());
+        (c, path)
+    }
+
+    #[test]
+    fn a_failed_write_does_not_leave_lost_packets_in_the_count() {
+        let (mut c, path) = full_disk_capture("count", 1 << 30);
+        for _ in 0..5 {
+            assert!(c.append(&[1; 128]));
+        }
+        assert!(c.flush());
+        crate::writer::barrier();
+        assert!(!c.flush());
+        assert_eq!((c.packets, c.bytes), (0, 0));
+        assert!(c.error.is_some());
+        drop(c);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn sync_still_reports_a_failed_write_after_an_earlier_quota_error() {
+        let (mut c, path) = full_disk_capture("sync", 140);
+        assert!(c.append(&[1; 128]));
+        assert!(c.flush());
+        assert!(!c.append(&[2; 128]));
+        assert!(c.error.as_deref().is_some_and(crate::quota::is_quota_error));
+        let error = c.sync().unwrap_err();
+        assert!(error.starts_with("capture write failed"), "{error}");
+        drop(c);
+        std::fs::remove_dir_all(path).unwrap();
     }
 }
