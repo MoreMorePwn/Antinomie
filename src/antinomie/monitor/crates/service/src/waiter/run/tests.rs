@@ -1031,6 +1031,7 @@ mod dump_trigger {
                 size: Some(4096),
                 error: None,
                 note: None,
+                refused: false,
             }),
             held: false,
         }
