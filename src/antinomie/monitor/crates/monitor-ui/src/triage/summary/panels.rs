@@ -121,12 +121,17 @@ fn key_row(
                             .small()
                             .color(theme::muted()),
                     );
-                    ui.label(
+                    let at = ui.label(
                         RichText::new(process_cells::relative(Some(key.first_ns), start))
                             .small()
                             .monospace()
                             .color(theme::muted()),
                     );
+                    if let Some(start) = start {
+                        at.on_hover_text(antinomie_monitor_core::time_span::exact_ns(
+                            key.first_ns.saturating_sub(start),
+                        ));
+                    }
                 })
                 .response
                 .rect;

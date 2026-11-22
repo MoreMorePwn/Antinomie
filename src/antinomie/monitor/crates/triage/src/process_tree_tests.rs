@@ -416,7 +416,7 @@ pub fn a_started_time_and_a_running_lifetime_read_from_the_run_start() {
         .iter()
         .find(|row| files::number(&row[0].values, "process.pid") == Some(2))
         .unwrap();
-    assert_eq!(ls[4].text, "+1.204 s");
+    assert_eq!(ls[4].text, "+1.2 s");
     assert!(cell_hover(4, &ls[4], &ls[0]).unwrap().starts_with('~'));
     assert_eq!(ls[5].text, "running");
     assert_eq!(ls[6].text, "no exit recorded");

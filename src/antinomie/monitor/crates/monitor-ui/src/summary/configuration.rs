@@ -281,7 +281,7 @@ fn wait_label(microseconds: u32) -> String {
     match microseconds {
         0..1_000 => format!("{microseconds} µs"),
         1_000..1_000_000 => format!("{} ms", microseconds / 1_000),
-        _ => format!("{:.0} s", f64::from(microseconds) / 1e6),
+        _ => antinomie_monitor_core::time_span::seconds(u64::from(microseconds) / 1_000_000),
     }
 }
 

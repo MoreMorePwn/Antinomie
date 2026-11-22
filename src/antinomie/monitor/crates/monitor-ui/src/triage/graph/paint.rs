@@ -582,9 +582,13 @@ pub(in crate::triage) fn axis_label(
         None => {
             let seconds = ns.saturating_sub(origin) as f64 / 1e9;
             if step >= 1e9 {
-                format!("+{seconds:.0} s")
+                antinomie_monitor_core::time_span::relative_ns(
+                    ns.saturating_sub(origin) / 1_000_000_000 * 1_000_000_000,
+                )
             } else if step >= 1e6 {
-                format!("+{seconds:.3} s")
+                antinomie_monitor_core::time_span::relative_precise_ms(
+                    ns.saturating_sub(origin) / 1_000_000,
+                )
             } else if step >= 1e3 {
                 format!("+{:.0} µs", seconds * 1e6)
             } else {

@@ -229,10 +229,12 @@ pub fn exec_chain(images: &[String]) -> String {
     names.join(" \u{2192} ")
 }
 
-/// "+1.204 s": where the task started, from the start of the run.
+/// "+1.2 s", "+3 min 05 s": where the task started, from the start of the run.
 pub fn relative(ns: Option<u64>, start: Option<u64>) -> String {
     match (ns, start) {
-        (Some(ns), Some(start)) => format!("+{:.3} s", ns.saturating_sub(start) as f64 / 1e9),
+        (Some(ns), Some(start)) => {
+            antinomie_monitor_core::time_span::relative_ns(ns.saturating_sub(start))
+        }
         _ => "\u{2014}".into(),
     }
 }
@@ -428,10 +430,7 @@ pub mod tests {
 
     #[test]
     fn times_are_relative_to_the_start_of_the_run() {
-        assert_eq!(
-            relative(Some(2_204_000_000), Some(1_000_000_000)),
-            "+1.204 s"
-        );
+        assert_eq!(relative(Some(2_204_000_000), Some(1_000_000_000)), "+1.2 s");
         assert_eq!(
             relative(Some(1_000_000_000), Some(1_000_000_000)),
             "+0.000 s"

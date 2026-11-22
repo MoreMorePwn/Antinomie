@@ -147,11 +147,7 @@ pub fn who(node: &ProcessNode) -> String {
 }
 
 pub fn millis(ns: u64) -> String {
-    if ns < 1_000_000_000 {
-        format!("{} ms", ns / 1_000_000)
-    } else {
-        format!("{:.1} s", ns as f64 / 1e9)
-    }
+    antinomie_monitor_core::time_span::span_ns(ns, true)
 }
 
 /// What the end of the run says.

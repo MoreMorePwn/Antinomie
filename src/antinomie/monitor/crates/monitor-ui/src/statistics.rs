@@ -205,10 +205,13 @@ pub(crate) fn time_text(
 ) -> String {
     match base {
         TimeBase::RunTime => run_time(ns.saturating_sub(first_ns.unwrap_or(0))),
-        TimeBase::Guest => format!("{:.3} s", ns as f64 / 1e9),
+        TimeBase::Guest => antinomie_monitor_core::time_span::precise_ns(ns),
         TimeBase::Host => match anchor.and_then(|anchor| anchor.host_us(ns)) {
             Some(us) => format!("≈ {}", crate::time_format::local_seconds(us / 1_000_000)),
-            None => format!("{:.3} s (no host clock for this run)", ns as f64 / 1e9),
+            None => format!(
+                "{} (no host clock for this run)",
+                antinomie_monitor_core::time_span::precise_ns(ns)
+            ),
         },
     }
 }

@@ -780,6 +780,7 @@ x86 programs by their own table.
 
 ### Fixed
 
+- **Times and durations move to minutes and hours (ANT-T0589).** Run-relative times (`+3 min 05 s`, `+1 h 02 min`), the Statistics guest time base, report tables, the "ago" and wait texts, probe uptimes and the health totals showed only seconds, so a long run read like `+3725.123 s`. One shared helper now writes them, the Key findings times show the exact value on hover, and "ago" goes on to hours.
 - **A long URL or file path in the Triage summary no longer pushes the page off the window (ANT-T0589).** The Indicators rows did not shorten a long value, so a run with long URLs made the whole Summary wider than the window. A long value is now cut to its box with the full text on hover.
 - **Detection no longer says "Partial" when a run has no packet capture by design (ANT-T0589).** A VM with no network or a run with Capture network off now shows a neutral line that says why, that the network (Suricata) rules did not run and how to fix it; a capture that went missing still warns.
 - **The VM summary no longer shows SeaBIOS or empty "()" firmware text on arm64 (ANT-T0589).** The Device profile card names the arm64 firmware (device tree or UEFI AAVMF), leaves out empty fields, and drops the PC-only ACPI OEM, HPET, VMware port and USB entries on arm64.

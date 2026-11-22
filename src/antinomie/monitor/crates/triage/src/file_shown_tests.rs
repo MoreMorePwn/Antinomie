@@ -142,7 +142,7 @@ pub fn a_path_is_only_the_path_and_its_tags_are_in_the_next_column() {
     assert_eq!(headers[3], "Path");
     assert_eq!(headers[4], "Tags");
     // The time is from the start of the run, the absolute one on hover.
-    assert_eq!(shown[0][0].text, "+1.204 s");
+    assert_eq!(shown[0][0].text, "+1.2 s");
     assert_eq!(shown[0][0].note.as_deref(), Some("~12:00:01.000"));
     // The row keeps what it is found by.
     assert!(shown[0][0].values.iter().any(|(key, _)| *key == "event.id"));
