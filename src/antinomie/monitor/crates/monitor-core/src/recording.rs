@@ -589,6 +589,7 @@ impl Recording {
         tracker.name_launched(root_pid, path);
         let mut issues = Vec::new();
         let mut truncated = false;
+        let mut skipped_packet = false;
         let mut reader = BufReader::new(archive_io::open_regular(
             &self.directory,
             Path::new("telemetry.raw"),
@@ -613,8 +614,17 @@ impl Recording {
                 }
                 Err(e) => return Err(e),
             };
-            let (header, _) = parser::parse_packet(&packet)
-                .map_err(|_| RecordingError::Limit("invalid process-tree packet"))?;
+            let Ok((header, _)) = parser::parse_packet(&packet) else {
+                // One unreadable packet leaves out its own event, not the tree.
+                if !skipped_packet {
+                    skipped_packet = true;
+                    issues.push(
+                        "Some packets could not be read and were left out of the process tree"
+                            .into(),
+                    );
+                }
+                continue;
+            };
             if tracker.tracked_count() >= limit && !tracker.tracks(header.pid) {
                 // Later processes are left out, not an error: the rest still reads.
                 truncated = true;
@@ -1685,6 +1695,35 @@ mod tests {
             recording
                 .matching_totals_cancellable(None, &cancel, |_| true)
                 .is_err()
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_packet_is_left_out_of_the_process_tree_not_fatal() {
+        let directory = std::env::temp_dir().join(format!("ant-bad-pkt-{}", storage::unique_id()));
+        storage::private_dir(&directory).unwrap();
+        let mut raw = File::create(directory.join("telemetry.raw")).unwrap();
+        for pid in 1..=3_u32 {
+            let mut packet = event_packet(u64::from(pid), 1, 1, 1);
+            packet[72..76].copy_from_slice(&pid.to_le_bytes());
+            if pid == 2 {
+                packet[..4].copy_from_slice(b"XXXX");
+            }
+            raw.write_all(&(packet.len() as u32).to_le_bytes()).unwrap();
+            raw.write_all(&packet).unwrap();
+        }
+        raw.sync_all().unwrap();
+        storage::atomic_json(&directory.join("manifest.json"), &serde_json::json!({})).unwrap();
+        let recording = open_recording(&directory).unwrap();
+        let (tree, issues) = recording
+            .process_tree_within(1, "/bin/first", &AtomicBool::new(false), 100)
+            .unwrap();
+        assert_eq!(tree.len(), 2);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("could not be read"))
         );
         fs::remove_dir_all(directory).unwrap();
     }
