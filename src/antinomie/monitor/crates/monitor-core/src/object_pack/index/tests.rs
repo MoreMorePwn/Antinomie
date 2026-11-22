@@ -284,3 +284,23 @@ fn malformed_chunk_lengths_and_field_extents_fail_before_payload_allocation() {
     let error = lookup(&fixture.root, &key(4), u64::MAX).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
+
+#[test]
+fn a_segment_replaced_under_its_name_is_read_from_the_new_file() {
+    // The segment read last stays open between reads (ANT-T0588); a file that
+    // takes its name is not served from the old one.
+    let fixture = Fixture::new();
+    fs::write(fixture.segment(), b"oldold").unwrap();
+    one_chunk_index(&fixture.index(), &key(1), 3, 0);
+    let read = || {
+        read_field_range(&fixture.root, &key(1), 0, 3)
+            .unwrap()
+            .unwrap()
+    };
+    assert_eq!(read(), b"old");
+    assert_eq!(read(), b"old");
+    let replacement = fixture.root.join("replacement.seg");
+    fs::write(&replacement, b"newnew").unwrap();
+    fs::rename(replacement, fixture.segment()).unwrap();
+    assert_eq!(read(), b"new");
+}
