@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::{
     AnalysisKind, AnalysisReport, AnalysisSelection, AnalysisState, Backend, BackendOptions,
     Command, ExecRequest, Notification, RunSummary, Snapshot, VmConfig,
@@ -175,10 +178,7 @@ fn exercise(
             .serial_log
             .as_ref()
             .and_then(|path| fs::read(path).ok())
-            .is_some_and(|data| {
-                data.windows(b"BusyBox guest ready".len())
-                    .any(|part| part == b"BusyBox guest ready")
-            })
+            .is_some_and(|data| serial_ready::ready(&data, b"BusyBox guest ready"))
     })?;
     for (source, destination, executable) in [
         (probe.to_path_buf(), "/tmp/static-probe", true),

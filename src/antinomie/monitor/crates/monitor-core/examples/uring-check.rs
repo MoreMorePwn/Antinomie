@@ -34,6 +34,9 @@
 //! `recvmmsg` is recorded at entry and exit, and the guest kernel log has no
 //! warning. The data folder must be new and disposable. Every result is a
 //! `RESULT` line.
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -214,7 +217,7 @@ fn setup(bundle: &str, data: &str, name: &str, cpus: u16) -> Result<Driver, Stri
             && s.serial_log
                 .as_ref()
                 .and_then(|p| fs::read(p).ok())
-                .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
+                .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
     })?;
     Ok(driver)
 }
@@ -977,9 +980,7 @@ fn boots(
                     && s.serial_log
                         .as_ref()
                         .and_then(|p| fs::read(p).ok())
-                        .is_some_and(|log| {
-                            log.windows(19).any(|part| part == b"BusyBox guest ready")
-                        })
+                        .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
             })?;
             upload(&mut d, workload, WORKLOAD)?;
             upload(&mut d, fixture, FIXTURE)?;

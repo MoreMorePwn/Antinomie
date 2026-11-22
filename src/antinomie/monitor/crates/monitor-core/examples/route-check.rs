@@ -52,6 +52,9 @@
 //!
 //! Started as `route-check -c CONFIG` the program is the fake wireproxy of
 //! the VPN route: a SOCKS5 server on the `BindAddress` of CONFIG.
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::route::{
     EgressFilter, RouteConfig, RouteKind, RouteStats, RouteVia, Socks5Config, TorConfig, TorMode,
     VpnConfig,
@@ -444,7 +447,7 @@ impl Driver {
                 && s.serial_log
                     .as_ref()
                     .and_then(|p| fs::read(p).ok())
-                    .is_some_and(|log| log.windows(19).any(|w| w == b"BusyBox guest ready"))
+                    .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
         })?;
         thread::sleep(Duration::from_secs(3));
         self.command_for(

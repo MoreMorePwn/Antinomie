@@ -8,6 +8,9 @@
 //! plaintext copy anywhere in the data folder.
 //!
 //! usage: samples-check BUNDLE NEW_DATA_DIR PROGRAM
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig, samples,
 };
@@ -168,7 +171,7 @@ fn run() -> Result<(), String> {
             .serial_log
             .as_ref()
             .and_then(|path| fs::read(path).ok())
-            .is_some_and(|log| log.windows(19).any(|w| w == b"BusyBox guest ready"))
+            .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
         {
             break;
         }

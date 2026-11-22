@@ -2,6 +2,9 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Real host-only lifecycle qualification with an existing revision-14 BusyBox base.
 //! Usage: host-lifecycle-check BUNDLE NEW_DATA_DIR
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -210,7 +213,7 @@ fn run() -> Result<(), String> {
                 .serial_log
                 .as_ref()
                 .and_then(|path| fs::read(path).ok())
-                .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
+                .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
     })?;
     driver.command(Command::StartNetworkCapture)?;
     let manual = driver

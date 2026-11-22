@@ -2,6 +2,9 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Real four-vCPU process-core acquisition qualification in a fresh data folder.
 //! Usage: process-core-check BUNDLE NEW_DATA_DIR STATIC_FIXTURE
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -169,7 +172,7 @@ fn check() -> Result<(), String> {
                     .serial_log
                     .as_ref()
                     .and_then(|path| fs::read(path).ok())
-                    .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
+                    .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
         })?;
         driver.wait("host resources", 5, |snapshot| {
             snapshot.vm_resources.as_ref().is_some_and(|resources| {

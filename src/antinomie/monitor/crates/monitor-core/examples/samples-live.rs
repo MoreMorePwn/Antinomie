@@ -10,6 +10,9 @@
 //! newest ELF samples instead of Mirai).
 //!
 //! usage: samples-live NEW_DATA_DIR [BUNDLE] < key
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig,
     samples::{self, Query, Source},
@@ -221,7 +224,7 @@ fn run() -> Result<(), String> {
             .serial_log
             .as_ref()
             .and_then(|path| fs::read(path).ok())
-            .is_some_and(|log| log.windows(19).any(|w| w == b"BusyBox guest ready"))
+            .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
         {
             if Instant::now() >= deadline {
                 return Err("guest readiness deadline".into());

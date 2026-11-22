@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::{
     APP_REVISION, Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig,
     VmLaunchOptions, VmState, recording::open_recording,
@@ -202,10 +205,7 @@ fn run() -> Result<(), String> {
             .serial_log
             .as_ref()
             .and_then(|p| std::fs::read(p).ok())
-            .is_some_and(|data| {
-                data.windows(b"BusyBox guest ready".len())
-                    .any(|w| w == b"BusyBox guest ready")
-            })
+            .is_some_and(|data| serial_ready::ready(&data, b"BusyBox guest ready"))
         {
             break;
         }

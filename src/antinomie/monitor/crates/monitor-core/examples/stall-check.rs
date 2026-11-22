@@ -14,6 +14,9 @@
 //! check itself stops reading the backend's notifications for 10 s, as a busy
 //! frontend does. No guest command may time out ("outcome unknown") and the
 //! terminal output received must have every line.
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig, VmState,
 };
@@ -240,7 +243,7 @@ fn run() -> Result<(), String> {
             .serial_log
             .as_ref()
             .and_then(|path| fs::read(path).ok())
-            .is_some_and(|log| log.windows(19).any(|w| w == b"BusyBox guest ready"))
+            .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
     })?;
     let echo = |marker: &str| ExecRequest {
         path: "/bin/sh".into(),

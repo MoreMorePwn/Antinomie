@@ -12,6 +12,9 @@
 //!          --ready TEXT (manual: terminal text that says the program is ready)
 //!          --cancel-at capture|PERCENT   --tcg (force software emulation)
 //!          --uid N (0)   --quota MIB (4096, the recording quota)
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -222,7 +225,7 @@ fn boot(
                 .serial_log
                 .as_ref()
                 .and_then(|path| fs::read(path).ok())
-                .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
+                .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
     })?;
     driver.command(Command::Upload {
         source: PathBuf::from(program),
