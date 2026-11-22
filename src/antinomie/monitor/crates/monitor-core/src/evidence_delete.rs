@@ -145,10 +145,18 @@ fn remove_entry(path: &Path) -> Result<(), String> {
 fn update_runs(roots: &[PathBuf], edit: impl Fn(&mut RunArtifacts) -> bool) -> Result<(), String> {
     let mut changed = Vec::new();
     for root in roots {
-        for run in fs::read_dir(root.join("runs"))
+        // Runs continued or restored after a reconnect live under boots/<boot>/runs.
+        let mut run_folders = vec![root.join("runs")];
+        run_folders.extend(
+            fs::read_dir(root.join("boots"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|boot| boot.path().join("runs")),
+        );
+        for run in run_folders
             .into_iter()
-            .flatten()
-            .flatten()
+            .flat_map(|folder| fs::read_dir(folder).into_iter().flatten().flatten())
         {
             let directory = run.path();
             let Ok(Some(mut artifacts)) = RunArtifacts::load(&directory) else {
@@ -335,6 +343,11 @@ pub(crate) fn remove_process_core(roots: &[PathBuf], directory: &Path) -> Result
                 Some(run.clone()),
             )
         }
+        [boots, boot, folder, run, core]
+            if boots == "boots" && folder == "runs" && core == "core" =>
+        {
+            (run.clone(), Some(boot.clone()), Some(run.clone()))
+        }
         [folder, id] if folder == "core-dumps" => (id.clone(), None, None),
         _ => return Err("this is not a core of the recording".into()),
     };
@@ -520,6 +533,27 @@ mod tests {
         assert_eq!(artifacts.network_state, RunArtifactState::Complete);
         assert!(artifacts.network_deleted);
         assert_eq!(artifacts.network_label(), "Deleted");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_continued_run_under_its_boot_reads_a_deleted_capture_and_core_as_deleted() {
+        let root = temp_root();
+        let file = capture(&root, "b1", "abc");
+        let run_dir = run(&root, "r1", vec![file.clone()]);
+        let moved = root.join("boots/b1/runs/r1");
+        fs::create_dir_all(moved.parent().unwrap()).unwrap();
+        fs::rename(&run_dir, &moved).unwrap();
+        fs::create_dir_all(moved.join("core")).unwrap();
+        fs::write(moved.join("core/process.elf"), b"elf").unwrap();
+        let roots = std::slice::from_ref(&root);
+        remove_network_capture(roots, &file).unwrap();
+        let artifacts = RunArtifacts::load(&moved).unwrap().unwrap();
+        assert!(artifacts.network_deleted && artifacts.network_captures.is_empty());
+        let removed = remove_process_core(roots, &moved.join("core")).unwrap();
+        assert_eq!(removed.run_id.as_deref(), Some("r1"));
+        assert!(!moved.join("core").exists());
+        assert!(RunArtifacts::load(&moved).unwrap().unwrap().core_deleted);
         fs::remove_dir_all(root).unwrap();
     }
 
