@@ -188,3 +188,22 @@ fn bad_destinations_are_refused() {
     assert!(run(&link).contains("the image itself"));
     assert!(fs::metadata(&image).unwrap().len() > 0);
 }
+
+#[test]
+fn an_export_to_a_file_name_near_the_limit_works() {
+    require_tools!();
+    let fixture = Fixture::new();
+    let image = big_image(&fixture);
+    // 250 bytes: the old temporary name (a dot, this name, a suffix) was over 255.
+    let target = fixture.path(&format!("{}.img", "n".repeat(246)));
+    export(
+        Path::new("qemu-img"),
+        &image,
+        &target,
+        ExportFormat::SparseRaw,
+        &never(),
+        |_| {},
+    )
+    .unwrap();
+    assert!(target.is_file());
+}

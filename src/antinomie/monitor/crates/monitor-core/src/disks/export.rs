@@ -106,11 +106,8 @@ pub fn export(
             crate::byte_size::short_size(free)
         ));
     }
-    let temporary = folder.join(format!(
-        ".{}.part-{}",
-        name.to_string_lossy(),
-        crate::storage::unique_id()
-    ));
+    // Not built from the file's name: a long name would not fit a file name.
+    let temporary = folder.join(format!(".export.part-{}", crate::storage::unique_id()));
     let result =
         convert(qemu_img, source, &temporary, format, cancel, &mut progress).and_then(|()| {
             let file = File::open(&temporary).map_err(|error| error.to_string())?;
