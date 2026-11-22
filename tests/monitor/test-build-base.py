@@ -111,7 +111,14 @@ class BuildBaseTests(unittest.TestCase):
                     # Both ways out: register the handler, or the QEMU builder.
                     message = str(caught.exception)
                     self.assertIn("Register it (docker run --privileged --rm tonistiigi/binfmt@sha256:", message)
-                    self.assertIn("--install arm64) or build in the QEMU builder", message)
+                    self.assertIn("--install arm64), build in the QEMU builder, or build only "
+                                  "the kernel with --kernel-only", message)
+                    # It names what needs the emulator: the image stage, not the kernel.
+                    self.assertIn("image stage", message)
+                    # A kernel-only build runs no foreign program: no handler is demanded.
+                    base.require_foreign_builder("debian-minimal", "arm64", container=True,
+                                                 kernel_only=True)
+                    base.require_foreign_builder("debian-minimal", "arm64", kernel_only=True)
                 handler.write_text("enabled\ninterpreter /usr/bin/qemu-aarch64\nflags: POCF\n"
                                    "offset 0\nmagic 7f454c46\n")
                 base.require_foreign_builder("debian-minimal", "arm64", container=True)
@@ -196,7 +203,8 @@ exit 0
                 job.write_text("{}")
                 args = unittest.mock.Mock(
                     job=job, inputs=root / "inputs", work=root / "work", output=root / "o/out",
-                    jobs=3, keep_kernel_build=False, kernel_cache=root / "k/kernel.tar",
+                    jobs=3, keep_kernel_build=False, kernel_only=False,
+                    kernel_cache=root / "k/kernel.tar",
                     image_cache=root / "i/rootfs.tar", ccache=root / "cc")
                 self.assertEqual(base.run_in_container(args, engine), 0)
                 calls = log.read_text().splitlines()
@@ -224,6 +232,24 @@ exit 0
                 self.assertTrue(any(c.startswith("rm -f antinomie-build-") for c in calls))
                 self.assertIn("rm -f stale1", calls)
                 self.assertNotIn("mine", " ".join(c for c in calls if c.startswith("rm -f")))
+
+    def test_a_kernel_only_container_build_has_no_output_and_asks_no_handler(self):
+        with tempfile.TemporaryDirectory() as name, \
+                unittest.mock.patch.dict("os.environ", {"PATH": name}):
+            log = self.fake_engine(name, "podman", rootless="true")
+            root = Path(name)
+            job = root / "job.json"
+            job.write_text("{}")
+            args = unittest.mock.Mock(
+                job=job, inputs=root / "inputs", work=root / "work", output=None, jobs=2,
+                keep_kernel_build=False, kernel_only=True, kernel_cache=root / "k/kernel.tar",
+                image_cache=None, ccache=None)
+            self.assertEqual(base.run_in_container(args, "podman"), 0)
+            (run,) = [c for c in log.read_text().splitlines() if c.startswith("run ")]
+            self.assertIn("--kernel-only", run)
+            self.assertNotIn("--output", run)
+            self.assertNotIn(":/out:", run)
+            self.assertNotIn("ANTINOMIE_FOREIGN_BINFMT", run)
 
     def test_a_kernel_cached_by_the_container_builder_serves_other_builders(self):
         with tempfile.TemporaryDirectory() as name:
