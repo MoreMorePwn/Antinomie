@@ -427,7 +427,18 @@ impl PackWriter {
 
 impl Drop for PackWriter {
     fn drop(&mut self) {
-        let _ = self.flush();
+        // Callers `sync()` before the writer goes; what is left here is lost,
+        // and the log says so.
+        let flushed = self.flush();
+        if flushed.is_err() || !self.buffer.is_empty() {
+            eprintln!(
+                "antinomie: a packed-object writer ended with {} bytes not saved{}",
+                self.buffer.len(),
+                flushed
+                    .err()
+                    .map_or_else(String::new, |error| format!(": {error}"))
+            );
+        }
     }
 }
 

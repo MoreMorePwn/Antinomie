@@ -184,3 +184,19 @@ fn queued_json_stays_fast_while_recording_saturates_the_disk() {
         "queueing took {worst:?} under recording load (quiet disk fsync: {quiet:?})"
     );
 }
+
+#[test]
+fn failures_of_paths_nobody_queues_again_do_not_fill_the_limit_for_good() {
+    let mut queue = JsonQueue::default();
+    for number in 0..MAX_PENDING_PATHS {
+        queue
+            .errors
+            .insert(PathBuf::from(format!("/gone/{number}")), "failed".into());
+    }
+    // Every slot holds an old failure; a new path still gets one.
+    queue
+        .insert_pending(PathBuf::from("/fresh/status.json"), b"{}".to_vec())
+        .unwrap();
+    assert!(queue.pending.contains_key(Path::new("/fresh/status.json")));
+    assert!(queue.errors.len() < MAX_PENDING_PATHS);
+}

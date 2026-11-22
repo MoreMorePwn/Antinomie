@@ -93,7 +93,23 @@ impl JsonQueue {
             .len()
             .saturating_add(self.errors.len())
             .saturating_add(usize::from(self.writing.is_some()));
-        let replaces_error = usize::from(self.errors.contains_key(&path));
+        let mut replaces_error = usize::from(self.errors.contains_key(&path));
+        // Failures of paths nobody queues again would fill the limit for good:
+        // under pressure the oldest-named ones are let go (a failure is only
+        // reported to the next write of its own path anyway).
+        let mut tracked = tracked;
+        while tracked
+            .saturating_add(new_pending_path)
+            .saturating_sub(replaces_error)
+            > MAX_PENDING_PATHS
+        {
+            let Some(drop_path) = self.errors.keys().find(|key| **key != path).cloned() else {
+                break;
+            };
+            self.errors.remove(&drop_path);
+            tracked -= 1;
+            replaces_error = usize::from(self.errors.contains_key(&path));
+        }
         if tracked
             .saturating_add(new_pending_path)
             .saturating_sub(replaces_error)
