@@ -173,6 +173,7 @@ impl Source {
 
 /// Assembles one indexed call at a time from its packets.
 pub(super) struct CallReader<'a> {
+    connection: &'a rusqlite::Connection,
     queries: Queries<'a>,
     source: Source,
 }
@@ -183,6 +184,29 @@ pub(super) struct Window {
     pub(super) next: Option<i64>,
     /// Observations read.
     pub(super) seen: usize,
+}
+
+/// A read transaction that ends when it goes out of scope, when the
+/// connection was not in one already.
+struct ReadTransaction<'a>(Option<&'a rusqlite::Connection>);
+
+impl<'a> ReadTransaction<'a> {
+    fn begin(connection: &'a rusqlite::Connection) -> Self {
+        if connection.is_autocommit() && connection.execute_batch("BEGIN DEFERRED").is_ok() {
+            Self(Some(connection))
+        } else {
+            Self(None)
+        }
+    }
+}
+
+impl Drop for ReadTransaction<'_> {
+    fn drop(&mut self) {
+        if let Some(connection) = self.0 {
+            // A read transaction has nothing to keep; its end only lets go.
+            let _ = connection.execute_batch("ROLLBACK");
+        }
+    }
 }
 
 const NOT_LIFECYCLE: &str =
@@ -201,6 +225,7 @@ impl<'a> CallReader<'a> {
             .map_err(|_| RecordingError::Limit("cannot open archived objects"))?;
         let file = archive_io::open_regular(directory, &directory.join("telemetry.raw"))?;
         Ok(Self {
+            connection,
             queries: Queries {
                 ends: connection.prepare(
                     "SELECT offset FROM packets WHERE key=?1 AND phase<3 AND offset<?2 \
@@ -345,6 +370,12 @@ impl<'a> CallReader<'a> {
         key: &[u8],
         cancel: &AtomicBool,
     ) -> Result<Option<InvocationSummary>, RecordingError> {
+        // One read transaction for the call's lookups: each statement of its
+        // own took the file's lock, checked it for a journal and read its
+        // change counter again, a few times for every call of a walk
+        // (ANT-T0588). The transaction ends with the call, so a builder of
+        // the index waits for no more than one call.
+        let _read = ReadTransaction::begin(self.connection);
         let mut preview = self.preview();
         let boundary = self.source.boundary as i64;
         let mut rows = self.queries.ends.query(rusqlite::params![key, boundary])?;

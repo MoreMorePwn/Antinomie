@@ -10,6 +10,8 @@ import sys
 import time
 
 MAX_EVENTS = 1_000_000
+# Events inserted per statement run while the journal is loaded.
+LOAD_BATCH = 2000
 MAX_FINDINGS = 10_000
 MAX_EVIDENCE = 10_000
 MAX_RULE_SIZE = 1024 * 1024
@@ -85,9 +87,17 @@ def load_events(connection, path, expected):
     connection.execute("PRAGMA cache_size=-2048")
     connection.execute("PRAGMA temp_store=FILE")
     connection.execute("PRAGMA max_page_count=65536")
+    # A scratch database that is rebuilt from the journal on every scan: nothing to protect with a journal or a sync.
+    connection.execute("PRAGMA journal_mode=OFF")
+    connection.execute("PRAGMA synchronous=OFF")
     create_logs(connection)
     count = 0
     footer = None
+    # One statement for every event, run in batches: building and compiling one per event cost more than the rules did.
+    names = sorted(SCHEMA)
+    columns = ["_category", "_evidence", "_inferred"] + names
+    insert = "INSERT INTO logs(" + ",".join(quoted(name) for name in columns) + ") VALUES(" + ",".join("?" for _ in columns) + ")"
+    pending = []
     with Path(path).open("rb") as source:
         header = json.loads(source.readline(65537))
         if header.get("format_version") not in JOURNAL_VERSIONS or header.get("identity") != expected:
@@ -107,22 +117,29 @@ def load_events(connection, path, expected):
             fields = event["fields"]
             if event["category"] not in SUPPORTED_CATEGORIES:
                 raise ValueError("unknown normalized category")
-            names, values = [], []
+            values = {}
             for name, value in fields.items():
                 if name not in SCHEMA:
                     continue
                 if not isinstance(value, (str, int, float, bool)) or isinstance(value, int) and not -(2 ** 63) <= value < 2 ** 63:
                     continue
-                names.append(name)
-                values.append(value)
+                values[name] = value
             inferred = event.get("_inferred") or []
             if not isinstance(inferred, list) or len(inferred) > MAX_INFERRED or not all(isinstance(name, str) for name in inferred):
                 raise ValueError("normalized event _inferred is not a bounded list of field names")
-            columns = ["_category", "_evidence", "_inferred"] + names
-            connection.execute("INSERT INTO logs(" + ",".join(quoted(name) for name in columns) + ") VALUES(" + ",".join("?" for _ in columns) + ")", [event["category"], json.dumps(event["evidence"]), json.dumps(inferred) if inferred else None] + values)
+            # A field the event lacks stays NULL, as when it was left out of the statement.
+            pending.append([event["category"], json.dumps(event["evidence"]), json.dumps(inferred) if inferred else None] + [values.get(name) for name in names])
+            if len(pending) >= LOAD_BATCH:
+                connection.executemany(insert, pending)
+                pending.clear()
             count += 1
+    if pending:
+        connection.executemany(insert, pending)
     if footer is None or footer.get("events") != count:
         raise ValueError("normalized event index is unfinished or inconsistent")
+    connection.commit()
+    # The rules ask for one category at a time.
+    connection.execute("CREATE INDEX logs_category ON logs(_category)")
     connection.commit()
     reasons = footer.get("reasons")
     reasons = [reason for reason in reasons if isinstance(reason, str)][:16] if isinstance(reasons, list) else []
@@ -164,33 +181,51 @@ def select_query(connection, query):
     return query, fields
 
 
-def inferred_note(connection, selection, parameters, fields):
-    """Matched events whose rule fields include a value the journal marks inferred, and which fields."""
-    wanted = {name.lower() for name in fields}
-    events, names = 0, set()
-    for inferred, count in connection.execute("SELECT _inferred, COUNT(*) FROM (" + selection + ") WHERE _inferred IS NOT NULL GROUP BY _inferred", parameters):
-        used = wanted & {name.lower() for name in json.loads(inferred)}
-        if used:
-            events += count
-            names |= used
-    return events, sorted(names)
+SELECT_PREFIX = "SELECT _event_id FROM logs WHERE "
+# Matched events looked up per statement when their evidence is read back.
+EVIDENCE_BATCH = 500
 
 
-def matching_rows(connection, queries, category):
+def matching_rows(connection, queries, category, observed_counts=None):
+    """Events of `category` the rule's queries match, with the counts the report needs.
+
+    One pass over the category's events finds the matches (their ids, in order, and which of them rely on inferred
+    fields); the evidence of at most MAX_EVIDENCE of them is then read by id. Every query is confined to the category
+    inside as well as outside, so a rule is not run against the events of the other categories (ANT-T0588)."""
     converted = [select_query(connection, query) for query in queries]
     fields = set().union(*(fields for _, fields in converted))
     # This conservative evidence guard is deliberate: unavailable telemetry is
     # not a confirmed absent/null field, including inside a negated condition.
     guard = " AND ".join(quoted(name) + " IS NOT NULL" for name in sorted(fields)) or "1"
-    union = " UNION ".join(query for query, _ in converted)
-    eligible = connection.execute("SELECT COUNT(*) FROM logs WHERE _category=? AND (" + guard + ")", (category,)).fetchone()[0]
-    observed = connection.execute("SELECT COUNT(*) FROM logs WHERE _category=?", (category,)).fetchone()[0]
-    selection = "SELECT _event_id, _evidence, _inferred FROM logs WHERE _category=? AND (" + guard + ") AND _event_id IN (" + union + ")"
-    total = connection.execute("SELECT COUNT(*) FROM (" + selection + ")", (category,)).fetchone()[0]
+    union = " UNION ".join(SELECT_PREFIX + "_category=?1 AND (" + query[len(SELECT_PREFIX):] + ")" for query, _ in converted)
+    eligible = connection.execute("SELECT COUNT(*) FROM logs WHERE _category=?1 AND (" + guard + ")", (category,)).fetchone()[0]
+    if observed_counts is None:
+        observed_counts = {}
+    if category not in observed_counts:
+        observed_counts[category] = connection.execute("SELECT COUNT(*) FROM logs WHERE _category=?1", (category,)).fetchone()[0]
+    observed = observed_counts[category]
+    matched = connection.execute("SELECT _event_id, _inferred FROM logs WHERE _category=?1 AND (" + guard + ") AND _event_id IN (" + union + ") ORDER BY _event_id", (category,)).fetchall()
+    total = len(matched)
     # `_event_id` is the one-based position in the journal, so a finding can name the exact event it matched.
-    rows = connection.execute(selection + " ORDER BY _event_id LIMIT ?", (category, min(total, MAX_EVIDENCE))).fetchall()
-    inferred = inferred_note(connection, selection, (category,), fields) if total else (0, [])
-    return total, [json.loads(row[1]) for row in rows], eligible, observed - eligible, [row[0] for row in rows], inferred
+    event_ids = [row[0] for row in matched[:MAX_EVIDENCE]]
+    evidence_by_id = {}
+    for start in range(0, len(event_ids), EVIDENCE_BATCH):
+        batch = event_ids[start:start + EVIDENCE_BATCH]
+        for event_id, evidence in connection.execute("SELECT _event_id, _evidence FROM logs WHERE _event_id IN (" + ",".join(str(int(item)) for item in batch) + ")"):
+            evidence_by_id[event_id] = evidence
+    wanted = {name.lower() for name in fields}
+    inferred_events, inferred_names = 0, set()
+    counts = {}
+    for _, inferred in matched:
+        if inferred is not None:
+            counts[inferred] = counts.get(inferred, 0) + 1
+    for inferred, count in counts.items():
+        used = wanted & {name.lower() for name in json.loads(inferred)}
+        if used:
+            inferred_events += count
+            inferred_names |= used
+    inferred = (inferred_events, sorted(inferred_names)) if total else (0, [])
+    return total, [json.loads(evidence_by_id[event_id]) for event_id in event_ids], eligible, observed - eligible, event_ids, inferred
 
 
 def attack_tags(tags):
@@ -309,6 +344,7 @@ def scan(request, events_path):
             rules = list(collection.rules)
             rule_total += len(rules)
             prepared.append((source, data, sha256, rules))
+        observed_counts = {}
         seen = 0
         partial_limit_noted = False
         failure_noted = False
@@ -338,7 +374,7 @@ def scan(request, events_path):
                         report["backend_rejected"] += 1
                         raise NotApplicable("backend", "rule produced no supported query")
                     try:
-                        total, evidence, evaluated, missing, event_ids, inferred = matching_rows(connection, queries, category)
+                        total, evidence, evaluated, missing, event_ids, inferred = matching_rows(connection, queries, category, observed_counts)
                     except sqlite3.OperationalError as error:
                         if "interrupted" in str(error):
                             raise TimeoutError("Sigma rule evaluation reached its 90 second budget") from error

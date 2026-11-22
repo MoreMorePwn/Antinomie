@@ -111,11 +111,43 @@ pub(crate) fn read_at(objects: &Path, location: ChunkLocation, len: usize) -> io
     if len == 0 {
         return Ok(Vec::new());
     }
-    let file =
-        crate::archive_io::open_regular(objects, Path::new(&segment_name(location.segment())))?;
+    let segment = segment_name(location.segment());
     let mut data = vec![0; len];
-    file.read_exact_at(&mut data, location.offset())?;
+    SEGMENT.with(|held| -> io::Result<()> {
+        let mut held = held.borrow_mut();
+        let path = objects.join(&segment);
+        // The segment this thread read last stays open, while the name still
+        // leads to the file that was opened and checked: a walk reads one
+        // segment for thousands of fields, and opening it each time made
+        // half a dozen system calls (ANT-T0588).
+        let current = held.as_ref().is_some_and(|(kept, file)| {
+            *kept == path
+                && std::fs::symlink_metadata(&path)
+                    .ok()
+                    .zip(file.metadata().ok())
+                    .is_some_and(|(named, open)| {
+                        use std::os::unix::fs::MetadataExt;
+                        named.is_file() && (named.dev(), named.ino()) == (open.dev(), open.ino())
+                    })
+        });
+        if !current {
+            *held = Some((
+                path.clone(),
+                crate::archive_io::open_regular(objects, Path::new(&segment))?,
+            ));
+        }
+        if let Some((_, file)) = held.as_ref() {
+            file.read_exact_at(&mut data, location.offset())?;
+        }
+        Ok(())
+    })?;
     Ok(data)
+}
+
+thread_local! {
+    /// The segment file this thread read last, with the path it was opened by.
+    static SEGMENT: std::cell::RefCell<Option<(std::path::PathBuf, std::fs::File)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn validate_location(location: ChunkLocation, len: u64) -> io::Result<()> {

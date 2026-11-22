@@ -9,6 +9,7 @@ use crate::{archive_io, storage};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::{
+    ffi::OsString,
     fs::{self, File},
     io::{self, BufReader, Read, Seek, SeekFrom},
     os::unix::{
@@ -47,7 +48,47 @@ pub(super) fn sql_error(error: rusqlite::Error) -> io::Error {
     io::Error::other(format!("packed-object index cache: {error}"))
 }
 
+/// Cache locations worked out already, by archive and by the environment they
+/// were worked out in: every read of a packed field asks for its location, and
+/// making the directory, resolving the archive and hashing its path each time
+/// cost more than the read (ANT-T0588).
+type RememberedPaths = Mutex<Vec<((PathBuf, Option<OsString>, Option<OsString>), PathBuf)>>;
+static REMEMBERED_PATHS: OnceLock<RememberedPaths> = OnceLock::new();
+const REMEMBERED_PATH_LIMIT: usize = 16;
+
 fn cache_path(objects: &Path) -> io::Result<PathBuf> {
+    let key = (
+        objects.to_path_buf(),
+        std::env::var_os("XDG_CACHE_HOME"),
+        std::env::var_os("HOME"),
+    );
+    let remembered = REMEMBERED_PATHS.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(known) = remembered.lock()
+        && let Some((_, path)) = known.iter().find(|(known, _)| *known == key)
+    {
+        return Ok(path.clone());
+    }
+    let path = resolve_cache_path(objects)?;
+    if let Ok(mut known) = remembered.lock() {
+        if known.len() >= REMEMBERED_PATH_LIMIT {
+            known.remove(0);
+        }
+        known.retain(|(known, _)| *known != key);
+        known.push((key, path.clone()));
+    }
+    Ok(path)
+}
+
+/// Forget the remembered location of `objects` (its cache directory is gone).
+fn forget_cache_path(objects: &Path) {
+    if let Some(remembered) = REMEMBERED_PATHS.get()
+        && let Ok(mut known) = remembered.lock()
+    {
+        known.retain(|((known, _, _), _)| known != objects);
+    }
+}
+
+fn resolve_cache_path(objects: &Path) -> io::Result<PathBuf> {
     let cache_root = match std::env::var_os("XDG_CACHE_HOME") {
         Some(path) if Path::new(&path).is_absolute() => PathBuf::from(path),
         Some(_) => {
@@ -218,13 +259,15 @@ fn update(
     }
 }
 
-fn update_piece(
-    objects: &Path,
-    connection: &mut Connection,
-    file: &File,
+/// Whether the cache already holds every record of the source as it is now.
+/// `with_index` checks the source again after its query, which covers a
+/// replacement before it as well.
+fn unchanged(
+    connection: &Connection,
+    file: Option<&File>,
     identity: &str,
     source_len: u64,
-) -> io::Result<(bool, bool)> {
+) -> io::Result<bool> {
     let cached: Option<(String, Vec<u8>, Vec<u8>, i64)> = connection
         .query_row(
             "SELECT identity, source_len, indexed, stopped FROM metadata WHERE id=?1",
@@ -233,30 +276,42 @@ fn update_piece(
         )
         .optional()
         .map_err(sql_error)?;
-    if let Some((cached_identity, cached_len, cached_cursor, stopped)) = &cached {
-        let prior_len = u64::from_be_bytes(
-            cached_len
-                .as_slice()
-                .try_into()
-                .map_err(|_| invalid_cache_data("invalid source length"))?,
-        );
-        let cursor = u64::from_be_bytes(
-            cached_cursor
-                .as_slice()
-                .try_into()
-                .map_err(|_| invalid_cache_data("invalid index cursor"))?,
-        );
-        let unchanged = cached_identity == identity
-            && source_len == prior_len
-            && (cursor == source_len || source_len < HEADER_SIZE || *stopped != 0);
-        if unchanged {
-            if file.metadata()?.len() < source_len {
-                return Err(invalid_cache("object index shrank while being read"));
-            }
-            // `with_index` checks the source again after its query, which
-            // covers a replacement before it as well.
-            return Ok((true, false));
-        }
+    let Some((cached_identity, cached_len, cached_cursor, stopped)) = &cached else {
+        return Ok(false);
+    };
+    let prior_len = u64::from_be_bytes(
+        cached_len
+            .as_slice()
+            .try_into()
+            .map_err(|_| invalid_cache_data("invalid source length"))?,
+    );
+    let cursor = u64::from_be_bytes(
+        cached_cursor
+            .as_slice()
+            .try_into()
+            .map_err(|_| invalid_cache_data("invalid index cursor"))?,
+    );
+    let same = cached_identity == identity
+        && source_len == prior_len
+        && (cursor == source_len || source_len < HEADER_SIZE || *stopped != 0);
+    if same
+        && let Some(file) = file
+        && file.metadata()?.len() < source_len
+    {
+        return Err(invalid_cache("object index shrank while being read"));
+    }
+    Ok(same)
+}
+
+fn update_piece(
+    objects: &Path,
+    connection: &mut Connection,
+    file: &File,
+    identity: &str,
+    source_len: u64,
+) -> io::Result<(bool, bool)> {
+    if unchanged(connection, Some(file), identity, source_len)? {
+        return Ok((true, false));
     }
 
     let transaction = connection
@@ -465,10 +520,10 @@ fn validate_record_chunk(size: u32, location: u64) -> io::Result<()> {
 }
 
 fn verify_source(objects: &Path, identity: &str, source_len: u64) -> io::Result<()> {
-    let current = archive_io::open_regular(objects, Path::new(INDEX_FILE))?;
-    let metadata = current.metadata()?;
+    // The member's own status: a link in its place has another identity.
+    let metadata = fs::symlink_metadata(objects.join(INDEX_FILE))?;
     let current_identity = format!("{}:{}", metadata.dev(), metadata.ino());
-    if current_identity != identity || metadata.len() < source_len {
+    if !metadata.is_file() || current_identity != identity || metadata.len() < source_len {
         return Err(invalid_cache(
             "object index was replaced or shrank while being read",
         ));
@@ -508,24 +563,73 @@ fn encode_key(key: &FieldKey) -> [u8; 37] {
 
 /// Read and update the disposable index for `objects`, then query it.
 /// `None` means the archive has no packed-object index.
+///
+/// A read of an index that is up to date, the usual one, makes one read
+/// transaction and opens nothing but the database: the source is looked at by
+/// its status, and opened only when the cache has to catch up with it
+/// (ANT-T0588: a field read made some forty system calls here, on every call
+/// of a recording that holds hundreds of thousands).
 pub(super) fn with_index<R>(
     objects: &Path,
     read: impl FnOnce(&Connection) -> io::Result<R>,
 ) -> io::Result<Option<R>> {
-    let file = match archive_io::open_regular(objects, Path::new(INDEX_FILE)) {
-        Ok(file) => file,
+    let mut opened = None;
+    let metadata = match fs::symlink_metadata(objects.join(INDEX_FILE)) {
+        Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => {
+            // A link or another kind of member takes the full check.
+            let file = match archive_io::open_regular(objects, Path::new(INDEX_FILE)) {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            let metadata = file.metadata()?;
+            opened = Some(file);
+            metadata
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    let metadata = file.metadata()?;
     let source_len = metadata.len();
     let identity = format!("{}:{}", metadata.dev(), metadata.ino());
-    let path = cache_path(objects)?;
-    let handle = cached_connection(&path).map_err(|error| cache_database_error(error, &path))?;
+    let mut path = cache_path(objects)?;
+    let handle = match cached_connection(&path) {
+        Ok(handle) => handle,
+        Err(_) => {
+            // The directory may have been removed under a remembered location:
+            // work it out again, once.
+            forget_cache_path(objects);
+            path = cache_path(objects)?;
+            cached_connection(&path).map_err(|error| cache_database_error(error, &path))?
+        }
+    };
     let mut connection = handle.lock().map_err(|_| {
         cache_database_error(io::Error::other("archive cache lock poisoned"), &path)
     })?;
     let result: io::Result<Option<R>> = (|| {
+        {
+            let transaction = connection.transaction().map_err(sql_error)?;
+            if unchanged(&transaction, opened.as_ref(), &identity, source_len)? {
+                let result = read(&transaction)?;
+                verify_source(objects, &identity, source_len)?;
+                return Ok(Some(result));
+            }
+        }
+        let file = match opened.take() {
+            Some(file) => file,
+            None => {
+                let file = archive_io::open_regular(objects, Path::new(INDEX_FILE))?;
+                let current = file.metadata()?;
+                if format!("{}:{}", current.dev(), current.ino()) != identity
+                    || current.len() < source_len
+                {
+                    return Err(invalid_cache(
+                        "object index was replaced or shrank while being read",
+                    ));
+                }
+                file
+            }
+        };
         update(objects, &mut connection, &file, &identity, source_len)?;
         let result = read(&connection)?;
         verify_source(objects, &identity, source_len)?;
