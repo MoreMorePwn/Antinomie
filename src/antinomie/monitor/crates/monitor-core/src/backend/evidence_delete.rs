@@ -132,10 +132,16 @@ impl Worker {
     /// answer their commands.
     pub(super) fn finish_evidence_deletes(&mut self) {
         self.evidence.jobs = None;
-        if let Some(thread) = self.evidence.thread.take()
-            && thread.join().is_err()
-        {
-            self.snapshot.last_error = Some("evidence deletion thread panicked".into());
+        if let Some(thread) = self.evidence.thread.take() {
+            // Keep taking finished results: the thread blocks on a full
+            // `done` channel, and joining first would wait for it forever.
+            while !thread.is_finished() {
+                self.poll_evidence_deletes();
+                thread::sleep(std::time::Duration::from_millis(2));
+            }
+            if thread.join().is_err() {
+                self.snapshot.last_error = Some("evidence deletion thread panicked".into());
+            }
         }
         self.poll_evidence_deletes();
         self.evidence.done = None;

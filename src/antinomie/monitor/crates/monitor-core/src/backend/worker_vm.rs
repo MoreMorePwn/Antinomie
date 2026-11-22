@@ -259,7 +259,12 @@ impl Worker {
             Ok(session) => {
                 self.session = Some(session);
                 self.snapshot.state = VmState::Running;
-                self.refresh_vm_snapshots(id)?;
+                // The VM runs: a snapshot list that cannot be read is a warning,
+                // not a failed start.
+                if let Err(error) = self.refresh_vm_snapshots(id) {
+                    self.snapshot.last_error =
+                        Some(format!("snapshots could not be listed: {error}"));
+                }
                 Ok("VM running; transport attached".into())
             }
             Err(e) => {

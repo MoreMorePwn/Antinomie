@@ -25,7 +25,8 @@ pub(crate) fn find_strings_min(
     let mut found = Vec::new();
     let mut start = 0;
     for index in 0..=if ascii { specimen.len() } else { 0 } {
-        if index < specimen.len() && (specimen[index].is_ascii_graphic() || specimen[index] == b' ')
+        if index < specimen.len()
+            && (specimen[index].is_ascii_graphic() || matches!(specimen[index], b' ' | b'\t'))
         {
             continue;
         }
@@ -47,7 +48,7 @@ pub(crate) fn find_strings_min(
         let mut text = String::new();
         while index + 1 < specimen.len()
             && specimen[index + 1] == 0
-            && (specimen[index].is_ascii_graphic() || specimen[index] == b' ')
+            && (specimen[index].is_ascii_graphic() || matches!(specimen[index], b' ' | b'\t'))
         {
             if text.len() < value_max {
                 text.push(specimen[index] as char);
@@ -156,4 +157,14 @@ pub(super) fn strings(section: &mut AnalysisSection, specimen: &[u8], listings: 
         "{} strings (printable ASCII of four or more bytes, UTF-16LE of four or more characters); offsets are file offsets",
         found.len()
     );
+}
+
+#[cfg(test)]
+mod tab_tests {
+    #[test]
+    fn a_tab_does_not_split_an_ascii_string() {
+        let found = super::find_strings_min(b"\0key\tvalue\0", 4, true, false);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].3, "key\tvalue");
+    }
 }

@@ -1016,8 +1016,18 @@ pub(crate) fn run_streaming(
     .map(|pipe| {
         let sender = sender.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(pipe).lines().map_while(Result::ok) {
-                let _ = sender.send(line);
+            // Bytes that are not UTF-8 are shown lossily; they never end the log.
+            let mut reader = BufReader::new(pipe);
+            let mut bytes = Vec::new();
+            loop {
+                bytes.clear();
+                match reader.read_until(b'\n', &mut bytes) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        let line = String::from_utf8_lossy(&bytes);
+                        let _ = sender.send(line.trim_end_matches(['\n', '\r']).to_owned());
+                    }
+                }
             }
         })
     })
@@ -1037,7 +1047,17 @@ pub(crate) fn run_streaming(
     for reader in readers {
         let _ = reader.join();
     }
-    let status = child.wait().map_err(|error| error.to_string())?;
+    // The pipes are closed, but the tool may still run: keep watching for a cancel.
+    let status = loop {
+        match child.try_wait().map_err(|error| error.to_string())? {
+            Some(status) => break status,
+            None if cancel.load(Ordering::Relaxed) => {
+                crate::cancel::kill_tree(&mut child);
+                return Err("build cancelled".into());
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    };
     if status.success() {
         Ok(())
     } else {
@@ -1485,6 +1505,39 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_line_that_is_not_utf8_does_not_end_the_log_and_a_late_cancel_is_honoured() {
+        let (log, sink) = collect();
+        run_streaming(
+            Command::new("sh").args(["-c", "printf 'a\\377b\\nsecond\\n'"]),
+            "demo",
+            &AtomicBool::new(false),
+            sink,
+        )
+        .unwrap();
+        let lines = log.lock().unwrap().clone();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].starts_with('a') && lines[1] == "second");
+        // Both pipes closed, the child still running: cancel still stops it.
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            flag.store(true, Ordering::Relaxed);
+        });
+        let (_log, sink) = collect();
+        let started = std::time::Instant::now();
+        let error = run_streaming(
+            Command::new("sh").args(["-c", "exec >&- 2>&-; sleep 30"]),
+            "demo",
+            &cancel,
+            sink,
+        )
+        .unwrap_err();
+        assert_eq!(error, "build cancelled");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
     }
 
     #[test]

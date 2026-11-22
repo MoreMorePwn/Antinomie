@@ -245,9 +245,12 @@ impl SamplesView {
                             if ui
                                 .add(
                                     egui::Label::new(
-                                        RichText::new(format!("{}…", &hash[..16.min(hash.len())]))
-                                            .font(mono.clone())
-                                            .color(theme::value(ValueKind::Number)),
+                                        RichText::new(format!(
+                                            "{}…",
+                                            hash.chars().take(16).collect::<String>()
+                                        ))
+                                        .font(mono.clone())
+                                        .color(theme::value(ValueKind::Number)),
                                     )
                                     .sense(egui::Sense::click()),
                                 )

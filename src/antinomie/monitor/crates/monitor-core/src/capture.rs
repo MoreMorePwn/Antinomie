@@ -112,15 +112,19 @@ impl CaptureSession {
         if let Err(error) = &sync {
             self.storage_error(error.clone());
         }
-        storage::atomic_json(
-            &self.summary.directory.join(PROCESSES_FILE),
-            &fit_processes(self.processes.list(), FINAL_PROCESSES_BYTES),
-        )?;
-        storage::atomic_json(&self.summary.directory.join("capture.json"), &self.summary)?;
-        storage::atomic_json(
+        // Every publication is tried, so one failure cannot leave capture.json
+        // Active and the manifest without its final state.
+        let summary =
+            storage::atomic_json(&self.summary.directory.join("capture.json"), &self.summary);
+        let manifest = storage::atomic_json(
             &self.summary.directory.join("manifest.json"),
             &self.manifest(Some(health)),
-        )?;
+        );
+        let processes = storage::atomic_json(
+            &self.summary.directory.join(PROCESSES_FILE),
+            &fit_processes(self.processes.list(), FINAL_PROCESSES_BYTES),
+        );
+        summary.and(manifest).and(processes)?;
         sync
     }
     #[cfg(test)]
@@ -130,6 +134,8 @@ impl CaptureSession {
     }
 }
 
+/// The newest captures a VM's history lists.
+const MAX_HISTORY_CAPTURES: usize = 1024;
 const PROCESSES_FILE: &str = "processes.json";
 /// Size budgets for processes.json: the queued live copy stays under the JSON
 /// queue's 8 MiB cap, the final one under the reader's 64 MiB cap.
@@ -208,13 +214,16 @@ fn list_vm_captures_inner(
             if !path.exists() {
                 continue;
             }
-            let file = archive_io::open_regular(&root, &path)?;
-            if file.metadata()?.len() > 1024 * 1024 {
-                return Err(RecordingError::Limit(
-                    "capture metadata exceeds reader limit",
-                ));
+            // A damaged capture.json hides only its own capture.
+            let Ok(file) = archive_io::open_regular(&root, &path) else {
+                continue;
+            };
+            if file.metadata().map_or(true, |m| m.len() > 1024 * 1024) {
+                continue;
             }
-            let mut capture: CaptureSummary = serde_json::from_reader(file)?;
+            let Ok(mut capture) = serde_json::from_reader::<_, CaptureSummary>(file) else {
+                continue;
+            };
             if capture.vm_id != vm_id {
                 continue;
             }
@@ -228,11 +237,6 @@ fn list_vm_captures_inner(
             {
                 captures.push(capture);
             }
-            if captures.len() > 1024 {
-                return Err(RecordingError::Limit(
-                    "VM history exceeds 1024 captures; open archive directly",
-                ));
-            }
         }
     }
     captures.sort_by(|a, b| {
@@ -240,6 +244,7 @@ fn list_vm_captures_inner(
             .cmp(&a.started_ms)
             .then_with(|| b.id.cmp(&a.id))
     });
+    captures.truncate(MAX_HISTORY_CAPTURES);
     Ok(captures)
 }
 
@@ -429,5 +434,53 @@ mod tests {
         drop(primary);
         drop(observer);
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_failed_processes_publication_does_not_stop_the_final_state() {
+        let root = std::env::temp_dir().join(format!("ant-capture-final-{}", storage::unique_id()));
+        let mut capture = CaptureSession::new(summary(root.clone()), 1 << 20).unwrap();
+        capture.observe_identity(17, 9).unwrap();
+        capture.begin_finalize();
+        storage::fail_next_json_rename(&root.join(PROCESSES_FILE));
+        assert!(capture.complete_finalize(&Health::default()).is_err());
+        let saved: CaptureSummary =
+            serde_json::from_slice(&fs::read(root.join("capture.json")).unwrap()).unwrap();
+        assert_eq!(saved.state, CaptureState::Finalized);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+        assert!(manifest["health"].is_object());
+        drop(capture);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_damaged_capture_does_not_hide_the_others_and_the_list_keeps_the_newest() {
+        let data = std::env::temp_dir().join(format!("ant-capture-list-{}", storage::unique_id()));
+        let options = BackendOptions {
+            data_dir: data.clone(),
+            ..BackendOptions::default()
+        };
+        let vm_dir = data.join("vm");
+        fs::create_dir_all(&vm_dir).unwrap();
+        let vm = crate::VmConfig {
+            id: "vm".into(),
+            ..crate::VmConfig::default()
+        };
+        storage::atomic_json(&vm_dir.join("config.json"), &vm).unwrap();
+        let captures = vm_dir.join("captures");
+        for n in 0..1100u64 {
+            let dir = captures.join(format!("c{n:05}"));
+            fs::create_dir_all(&dir).unwrap();
+            let mut one = summary(dir.clone());
+            one.id = format!("c{n:05}");
+            one.started_ms = Some(n);
+            fs::write(dir.join("capture.json"), serde_json::to_vec(&one).unwrap()).unwrap();
+        }
+        let broken = captures.join("broken");
+        fs::create_dir_all(&broken).unwrap();
+        fs::write(broken.join("capture.json"), b"{not json").unwrap();
+        let listed = list_vm_captures(&options, "vm").unwrap();
+        assert_eq!(listed.len(), MAX_HISTORY_CAPTURES);
+        assert_eq!(listed[0].id, "c01099");
+        fs::remove_dir_all(data).unwrap();
     }
 }

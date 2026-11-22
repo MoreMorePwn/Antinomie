@@ -156,7 +156,11 @@ pub(super) fn spawn_worker_binary(
     .arg("--ro-bind")
     .arg(job.directory.join("specimen"))
     .arg("/input/specimen");
-    stage_static_rules(&job.directory)?;
+    // A rule registry that cannot be staged costs the rule matches, not the
+    // whole analysis (a Metadata-only job never needed them).
+    if let Err(error) = stage_static_rules(&job.directory) {
+        eprintln!("analysis rules could not be staged: {error}");
+    }
     let rules = job.directory.join("rules");
     if rules.is_dir() {
         cmd.arg("--ro-bind").arg(&rules).arg("/input/rules");

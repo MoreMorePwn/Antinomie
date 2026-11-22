@@ -25,8 +25,10 @@ type Resolved = Vec<(PathBuf, (u64, u64), PathBuf)>;
 static RESOLVED: Mutex<Resolved> = Mutex::new(Vec::new());
 /// Roots remembered at once; the least recently used is forgotten.
 const RESOLVED_ROOTS: usize = 16;
-/// Linux open flags (fcntl-linux.h): no leaf symlink, never block on a FIFO.
-const NOFOLLOW_NONBLOCK: i32 = 0o400000 | 0o4000;
+/// Open flags of this platform (they differ between x86-64 and aarch64): no
+/// leaf symlink, never block on a FIFO.
+const NOFOLLOW_NONBLOCK: i32 =
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32 | rustix::fs::OFlags::NONBLOCK.bits() as i32;
 
 /// The resolved path of directory `root`, as `fs::canonicalize` gives it.
 /// Remembered while `root` names the same directory; `fresh` resolves again.
@@ -126,7 +128,7 @@ fn open_checked(root: &Path, path: &Path) -> io::Result<File> {
     }
     let mut options = OpenOptions::new();
     options.read(true);
-    // Linux flags from fcntl-linux.h: reject a replaced leaf symlink, and never
+    // Reject a replaced leaf symlink, and never
     // block if a regular member is replaced by a FIFO between stat and open.
     options.custom_flags(NOFOLLOW_NONBLOCK);
     let file = options.open(path)?;

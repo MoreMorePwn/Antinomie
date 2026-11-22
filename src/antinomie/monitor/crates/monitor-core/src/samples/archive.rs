@@ -46,8 +46,11 @@ pub(super) fn write_bytes(root: &Path, sha256: &str, bytes: &[u8]) -> Result<Pat
         writer
             .write_all(bytes)
             .map_err(|e| format!("sample archive: {e}"))?;
-        writer
+        let file = writer
             .finish()
+            .map_err(|e| format!("sample archive: {e}"))?;
+        // On disk before the name appears, so a crash cannot leave a short archive.
+        file.sync_all()
             .map_err(|e| format!("sample archive: {e}"))?;
         // Read back as every sample is: the archive must open and match.
         open_sample(&partial, sha256)?;

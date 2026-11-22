@@ -37,7 +37,19 @@ pub fn import_group(
         return Err("group name must be 1–80 characters".into());
     }
     let mut registry = load_registry(data_dir)?;
-    let id = slug(name);
+    // Names that slug alike (all non-ASCII names do) are different groups:
+    // only the same name imports a new revision of an installed one.
+    let base = slug(name);
+    let mut id = base.clone();
+    let mut copy = 1;
+    while registry
+        .groups
+        .iter()
+        .any(|group| group.id == id && !group.deleted && group.name != name)
+    {
+        copy += 1;
+        id = format!("{base}-{copy}");
+    }
     let revision = registry
         .groups
         .iter()

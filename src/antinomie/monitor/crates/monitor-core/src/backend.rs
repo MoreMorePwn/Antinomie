@@ -497,8 +497,11 @@ pub(crate) fn acquire_data_owner_within(
     Ok(guard)
 }
 
-/// Guest host-liveness timeout in never-drop mode (the default is 250 ms).
-const LOSSLESS_HOST_TIMEOUT_MS: u32 = 10_000;
+/// Guest host-liveness timeout in never-drop mode: never shorter than the 60 s
+/// the transport starts with, since a host stall of 17 s was seen and the
+/// guest must wait through it instead of dropping.
+const LOSSLESS_HOST_TIMEOUT_MS: u32 = 60_000;
+const _: () = assert!(LOSSLESS_HOST_TIMEOUT_MS >= 60_000);
 /// Longest a drain pass runs before the transport thread handles commands.
 const PUMP_BUDGET: Duration = Duration::from_millis(20);
 /// Packets per drain pass above which the next pass follows without a wait.

@@ -233,8 +233,32 @@ pub fn is_expression(filter: &str) -> bool {
         || has_filter_word(filter, "and")
         || has_filter_word(filter, "or")
         || has_filter_word(filter, "not")
-        || filter.split_whitespace().any(|word| word.contains('.'))
+        || filter.split_whitespace().any(|word| {
+            // `process.exe` is a field; `ld.so.cache` is a file name to find.
+            word.split_once('.').is_some_and(|(prefix, _)| {
+                FIELD_FAMILIES.contains(&prefix.to_ascii_lowercase().as_str())
+            })
+        })
 }
+
+/// The first part of every dotted filter field.
+const FIELD_FAMILIES: [&str; 15] = [
+    "args",
+    "syscall",
+    "process",
+    "entry",
+    "event",
+    "tcp",
+    "udp",
+    "http",
+    "frame",
+    "call",
+    "task",
+    "ip",
+    "stream",
+    "lifecycle",
+    "dns",
+];
 
 pub fn has_filter_word(filter: &str, word: &str) -> bool {
     filter
