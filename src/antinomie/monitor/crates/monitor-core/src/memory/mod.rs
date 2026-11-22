@@ -749,8 +749,7 @@ impl Volatility {
         if fingerprint.is_some() {
             command.arg(&self.community);
         }
-        let output = command
-            .output()
+        let output = output_within(&mut command, DESCRIBE_TIMEOUT)
             .map_err(|e| format!("{}: {e}", self.python.display()))?;
         if !output.status.success() {
             let message = String::from_utf8_lossy(&output.stderr);
@@ -1357,5 +1356,90 @@ mod tests {
         assert_eq!(read_result(&path, 10).unwrap().rows.len(), 2);
         assert_eq!(count_rows(&path), 2);
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// Longest wait for Volatility to describe its plugins.
+const DESCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `Command::output` that kills the child after `limit` instead of waiting
+/// for it forever.
+fn output_within(
+    command: &mut Command,
+    limit: std::time::Duration,
+) -> std::io::Result<std::process::Output> {
+    use std::io::Read;
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let read = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = read(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let stderr = read(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("did not answer within {} s", limit.as_secs()),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
+#[cfg(test)]
+mod output_within_tests {
+    use super::*;
+
+    #[test]
+    fn a_child_that_never_ends_is_killed_at_the_deadline() {
+        let started = std::time::Instant::now();
+        let error = output_within(
+            Command::new("sleep").arg("30"),
+            std::time::Duration::from_millis(200),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_quick_child_returns_its_output() {
+        let output = output_within(
+            Command::new("sh").args(["-c", "echo out; echo err >&2"]),
+            std::time::Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(output.stdout, b"out\n");
+        assert_eq!(output.stderr, b"err\n");
     }
 }
