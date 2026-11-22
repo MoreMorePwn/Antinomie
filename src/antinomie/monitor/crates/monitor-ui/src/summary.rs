@@ -393,7 +393,7 @@ pub(crate) fn show(
                         },
                     );
                     if let Some(age) = guest.and_then(|guest| guest.age_ms) {
-                        ui.label(format!("Last reading {:.1} s ago", age as f64 / 1000.0));
+                        ui.label(format!("Last reading {} ago", antinomie_monitor_core::time_span::span_ns(age.saturating_mul(1_000_000), false)));
                     }
                 });
                 let stacked = width < ui.text_style_height(&egui::TextStyle::Body) * 32.0;

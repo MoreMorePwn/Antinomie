@@ -291,5 +291,5 @@ fn a_finished_run_says_when_it_was_read_not_a_counter_that_only_grows() {
     );
     // A live run is read every few seconds: the counter is the time since the last read.
     let live = view.refresh_status(&input(&spool.directory, false));
-    assert_eq!(live, "Refreshed 415 s ago");
+    assert_eq!(live, "Refreshed 6 min 55 s ago");
 }

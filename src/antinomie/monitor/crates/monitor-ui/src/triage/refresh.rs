@@ -329,7 +329,10 @@ impl TriageView {
                     crate::time_format::time_of_day(read)
                 );
             }
-            return format!("Refreshed {} s ago{incomplete}", age.as_secs());
+            return format!(
+                "Refreshed {} ago{incomplete}",
+                antinomie_monitor_core::time_span::seconds(age.as_secs())
+            );
         }
         if input.archive.is_some() {
             "Waiting to index the saved recording".into()

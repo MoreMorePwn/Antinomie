@@ -1234,4 +1234,77 @@ mod tests {
         view.live_run = false;
         assert!(view.status_parts(0, false).is_empty());
     }
+    /// A scan of a recording with the given `run.json` and no capture.
+    fn scan_without_capture(run: Option<&str>) -> (antinomie_triage::PacketSpool, ArchiveScan) {
+        let files = antinomie_triage::PacketSpool::new().unwrap();
+        let mut raw = std::fs::File::create(files.directory.join("telemetry.raw")).unwrap();
+        crate::triage::tests::write_rwx_calls(&mut raw, 0..1);
+        raw.sync_all().unwrap();
+        if let Some(run) = run {
+            std::fs::write(files.directory.join("run.json"), run).unwrap();
+        }
+        let scan = antinomie_triage::archive_scan::scan_archive(
+            &files.directory,
+            None,
+            false,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        (files, scan)
+    }
+
+    fn panel_text_for(view: &mut View, scan: &ArchiveScan) -> String {
+        let ctx = egui::Context::default();
+        rendered_text(&frames(&ctx, 1, |root| {
+            egui::CentralPanel::default().show(root, |ui| view.show(ui, Some(scan)));
+        }))
+    }
+
+    /// ANT-T0589: no capture by design (no VM network, Capture network off)
+    /// is a neutral line with its fix and no partial scan; a missing capture
+    /// the run did not rule out keeps its warning.
+    #[test]
+    fn no_capture_by_design_is_a_note_and_a_missing_capture_stays_a_warning() {
+        let cases = [
+            (
+                r#"{"request":{"capture_network":true},"environment":{"network":"Disconnected"}}"#,
+                "This VM has no network",
+                "route (for example InetSim)",
+            ),
+            (
+                r#"{"request":{"capture_network":false},"environment":{"network":"Routed"}}"#,
+                "Network capture was off for this run",
+                "Turn on Capture network",
+            ),
+        ];
+        for (run, why, fix) in cases {
+            let (_files, scan) = scan_without_capture(Some(run));
+            assert!(scan.network_warning.is_none(), "{run}");
+            assert!(
+                !scan.partial_reasons.iter().any(|r| r.contains("network")),
+                "{:?}",
+                scan.partial_reasons
+            );
+            let shown = panel_text_for(&mut View::default(), &scan);
+            assert!(shown.contains(why) && shown.contains(fix), "{shown}");
+            assert!(shown.contains("Suricata"), "{shown}");
+            assert!(!shown.contains("Partial"), "{shown}");
+        }
+        // A capture the run asked for, on a network it had, that is missing.
+        let (_files, scan) = scan_without_capture(Some(
+            r#"{"request":{"capture_network":true},"environment":{"network":"Routed"}}"#,
+        ));
+        assert_eq!(
+            scan.network_warning.as_deref(),
+            Some("No network capture was saved for this run.")
+        );
+        assert!(scan.network_note.is_none());
+        assert!(scan
+            .partial_reasons
+            .iter()
+            .any(|r| r.contains("network warning")));
+        // A run that says nothing keeps the warning too.
+        let (_files, scan) = scan_without_capture(None);
+        assert!(scan.network_warning.is_some() && scan.network_note.is_none());
+    }
 }

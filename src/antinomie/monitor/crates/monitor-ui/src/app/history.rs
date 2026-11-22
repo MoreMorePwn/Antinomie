@@ -862,7 +862,13 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
             .flatten()
             .map(|size| {
                 let deadline = request.core_timeout_ms.map_or(String::new(), |ms| {
-                    format!(" · deadline {:.1} s", f64::from(ms) / 1000.0)
+                    format!(
+                        " · deadline {}",
+                        antinomie_monitor_core::time_span::span_ns(
+                            u64::from(ms) * 1_000_000,
+                            false
+                        )
+                    )
                 });
                 format!(" · budget {} MiB{deadline}", size >> 20)
             })

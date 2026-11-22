@@ -112,13 +112,6 @@ impl StatisticsWindow {
         self.focus = true;
     }
 
-    /// Open the window on `filter` (the Trace's "Statistics of these calls").
-    pub(crate) fn open_with_filter(&mut self, filter: &str) {
-        self.filter = filter.to_owned();
-        self.apply();
-        self.request_open(None);
-    }
-
     #[cfg(test)]
     pub(crate) fn tab(&self) -> Tab {
         self.tab

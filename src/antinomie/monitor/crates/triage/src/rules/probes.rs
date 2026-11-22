@@ -303,7 +303,13 @@ pub fn judge(class: Class, path: &str, bytes: &[u8], cloud: bool) -> (String, Op
                 .next()
                 .and_then(|word| word.parse().ok())
                 .unwrap_or(0.0);
-            (format!("up {seconds:.0} s"), Some(seconds < 1800.0))
+            (
+                format!(
+                    "up {}",
+                    antinomie_monitor_core::time_span::seconds(seconds.round() as u64)
+                ),
+                Some(seconds < 1800.0),
+            )
         }
         Class::Container => {
             let hit = ["docker", "kubepods", "containerd", "lxc", "podman", "crio"]
@@ -570,7 +576,10 @@ pub fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         "sysinfo" if cx.ok && !system_program(cx) => {
             let seconds = cx.member(0, "uptime", 0, 0).unwrap_or(u64::MAX);
             if seconds != u64::MAX {
-                let answer = (format!("up {seconds} s"), Some(seconds < 1800));
+                let answer = (
+                    format!("up {}", antinomie_monitor_core::time_span::seconds(seconds)),
+                    Some(seconds < 1800),
+                );
                 task(st, cx).record(new_probe(cx, Class::Uptime, "sysinfo", Some(answer)));
             }
         }
@@ -764,7 +773,12 @@ impl Follow {
             ));
         }
         if self.longest_sleep >= SLEEP_NOTE {
-            parts.push(format!("slept {:.0} s", self.longest_sleep as f64 / 1e9));
+            parts.push(format!(
+                "slept {}",
+                antinomie_monitor_core::time_span::seconds(
+                    (self.longest_sleep + 500_000_000) / 1_000_000_000
+                )
+            ));
         }
         if self.exited.is_none() {
             if self.network + self.writes + self.spawned == 0 {

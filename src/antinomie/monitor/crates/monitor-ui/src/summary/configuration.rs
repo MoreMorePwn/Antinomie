@@ -3,7 +3,7 @@
 //! selected VM, as cards.
 use super::*;
 use antinomie_monitor_core::stealth::{
-    chassis_label, DiskBus, Fallback, Firmware, StealthPreset, StealthProfile, MACHINES,
+    chassis_label, ArmMachine, DiskBus, Fallback, Firmware, StealthPreset, StealthProfile, MACHINES,
 };
 use egui_phosphor::regular as icon;
 
@@ -83,7 +83,7 @@ pub(super) fn show(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
         vm.ram_mib,
     );
     resource_cards(ui, "summary-stealth", 1, 1, width.max(80.0), 10, |ui, _| {
-        stealth(ui, &shown, narrow, &fallbacks, &giveaways)
+        stealth(ui, &shown, arch, narrow, &fallbacks, &giveaways)
     });
     ui.add_space(10.0);
     resource_cards(
@@ -281,7 +281,7 @@ fn wait_label(microseconds: u32) -> String {
     match microseconds {
         0..1_000 => format!("{microseconds} µs"),
         1_000..1_000_000 => format!("{} ms", microseconds / 1_000),
-        _ => format!("{:.0} s", f64::from(microseconds) / 1e6),
+        _ => antinomie_monitor_core::time_span::seconds(u64::from(microseconds) / 1_000_000),
     }
 }
 
@@ -310,9 +310,47 @@ fn firmware_kind(firmware: Firmware) -> &'static str {
     }
 }
 
+/// "SeaBIOS · SeaBIOS 1.16 (04/01/2014)": the firmware and what its table
+/// names, leaving out what is empty and the separators and brackets with it.
+fn firmware_line(kind: &str, vendor: &str, version: &str, date: &str) -> String {
+    let name = [vendor, version]
+        .iter()
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let date = date.trim();
+    let detail = match (name.is_empty(), date.is_empty()) {
+        (true, true) => return kind.to_owned(),
+        (false, true) => name,
+        (true, false) => format!("({date})"),
+        (false, false) => format!("{name} ({date})"),
+    };
+    format!("{kind} \u{b7} {detail}")
+}
+
+/// The firmware an arm64 VM of `profile` boots: a board's device tree with the
+/// kernel loaded directly, else UEFI (AAVMF). No SeaBIOS exists on arm64.
+fn arm64_boot(profile: &StealthProfile) -> (&'static str, bool) {
+    let machine = profile
+        .identity_enabled
+        .then(|| ArmMachine::find(&profile.identity.profile))
+        .flatten();
+    let tree = match machine {
+        Some(machine) => machine.tree.is_some(),
+        None => !profile.firmware.is_uefi(),
+    };
+    if tree {
+        ("Device tree, kernel booted directly", false)
+    } else {
+        ("UEFI (AAVMF)", true)
+    }
+}
+
 fn stealth(
     ui: &mut egui::Ui,
     profile: &StealthProfile,
+    arch: antinomie_monitor_core::GuestArch,
     narrow: bool,
     fallbacks: &[Fallback],
     giveaways: &[&'static str],
@@ -344,11 +382,23 @@ fn stealth(
     }
     ui.add_space(2.0);
     let identity = &profile.identity;
+    let arm64 = arch == antinomie_monitor_core::GuestArch::AARCH64;
+    let (arm_kind, acpi) = if arm64 {
+        let (kind, uefi) = arm64_boot(profile);
+        (kind, uefi)
+    } else {
+        (firmware_kind(profile.firmware), true)
+    };
     let machine = if profile.identity_enabled {
         let name = MACHINES
             .iter()
             .find(|machine| machine.id == identity.profile)
             .map(|machine| machine.label.to_owned())
+            .or_else(|| {
+                ArmMachine::find(&identity.profile)
+                    .filter(|_| arm64)
+                    .map(|machine| machine.label.to_owned())
+            })
             .unwrap_or_else(|| {
                 format!(
                     "{} {}",
@@ -356,27 +406,37 @@ fn stealth(
                 )
             });
         format!("{name} · {}", chassis_label(identity.chassis_type))
+    } else if arm64 {
+        "QEMU virt (arm64)".to_owned()
     } else {
         "QEMU Standard PC (Q35 + ICH9) · Other".to_owned()
     };
     let mut hardware = vec![("Machine", machine)];
     if profile.identity_enabled {
-        hardware.push(("Serial", identity.system_serial.clone()));
+        if !identity.system_serial.trim().is_empty() {
+            hardware.push(("Serial", identity.system_serial.clone()));
+        }
         hardware.push((
             "Firmware",
-            format!(
-                "{} · {} {} ({})",
-                firmware_kind(profile.firmware),
-                identity.bios_vendor,
-                identity.bios_version,
-                identity.bios_date
+            firmware_line(
+                arm_kind,
+                &identity.bios_vendor,
+                &identity.bios_version,
+                &identity.bios_date,
             ),
         ));
-        hardware.push(("ACPI OEM", identity.acpi_oem_id.trim_end().to_owned()));
+        // A device-tree boot has no ACPI tables.
+        if acpi && !identity.acpi_oem_id.trim().is_empty() {
+            hardware.push(("ACPI OEM", identity.acpi_oem_id.trim_end().to_owned()));
+        }
     } else {
         hardware.push((
             "Firmware",
-            format!("{} · ACPI OEM BOCHS", firmware_kind(profile.firmware)),
+            if acpi {
+                format!("{arm_kind} \u{b7} ACPI OEM BOCHS")
+            } else {
+                arm_kind.to_owned()
+            },
         ));
     }
     let mut cpu = vec![if profile.cpu_passthrough {
@@ -404,24 +464,31 @@ fn stealth(
     if profile.cdrom {
         devices.push("CD-ROM");
     }
-    if profile.usb {
-        devices.push("ICH9 USB");
+    // The PC devices (ICH9 USB, HPET, the VMware port) are not on arm64.
+    if !arm64 {
+        if profile.usb {
+            devices.push("ICH9 USB");
+        }
+        if profile.hpet {
+            devices.push("HPET");
+        }
+        devices.push(if profile.vmport {
+            "VMware port"
+        } else {
+            "no VMware port"
+        });
     }
-    if profile.hpet {
-        devices.push("HPET");
-    }
-    devices.push(if profile.vmport {
-        "VMware port"
-    } else {
-        "no VMware port"
-    });
     let machine_rows = [
         ("CPU", cpu.join(" · ")),
         (
             "Network card",
             format!(
                 "{} · {}",
-                profile.nic.label(),
+                if arm64 {
+                    "Intel igb"
+                } else {
+                    profile.nic.label()
+                },
                 if profile.mac.is_empty() {
                     "QEMU default MAC"
                 } else {
@@ -735,5 +802,85 @@ mod tests {
         assert_eq!(wait_label(250), "250 µs");
         assert_eq!(wait_label(20_000), "20 ms");
         assert_eq!(wait_label(5_000_000), "5 s");
+    }
+    /// The Device profile card as drawn, as its text.
+    fn card_text(profile: &StealthProfile, arch: antinomie_monitor_core::GuestArch) -> String {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    stealth(ui, profile, arch, false, &[], &[]);
+                });
+            },
+        );
+        crate::app::tests::texts(&output)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_firmware_line_leaves_out_what_is_empty() {
+        assert_eq!(firmware_line("UEFI (AAVMF)", "", "", ""), "UEFI (AAVMF)");
+        assert_eq!(
+            firmware_line("SeaBIOS", "SeaBIOS", "1.16", "04/01/2014"),
+            "SeaBIOS \u{b7} SeaBIOS 1.16 (04/01/2014)"
+        );
+        assert_eq!(
+            firmware_line("SeaBIOS", " ", "rel-1.16", ""),
+            "SeaBIOS \u{b7} rel-1.16"
+        );
+        assert_eq!(
+            firmware_line("SeaBIOS", "", "", "2014"),
+            "SeaBIOS \u{b7} (2014)"
+        );
+    }
+
+    /// ANT-T0589: an arm64 IoT VM boots its kernel on a device tree, so the
+    /// card names no SeaBIOS, no empty "\u{b7}   ()", no ACPI row and none of
+    /// the PC devices; an x86 desktop keeps its BIOS strings and ACPI OEM.
+    #[test]
+    fn the_card_names_the_real_firmware_per_arch() {
+        use antinomie_monitor_core::GuestArch;
+        let iot = StealthProfile::iot();
+        let shown = antinomie_monitor_core::stealth::arm64::shown_profile(
+            &iot,
+            GuestArch::AARCH64,
+            &[],
+            2,
+            2048,
+        );
+        let arm = card_text(&shown, GuestArch::AARCH64);
+        assert!(arm.contains("Device tree, kernel booted directly"), "{arm}");
+        assert!(!arm.contains("SeaBIOS") && !arm.contains("BOCHS"), "{arm}");
+        assert!(!arm.contains("()") && !arm.contains("\u{b7}  "), "{arm}");
+        assert!(!arm.contains("ACPI OEM"), "{arm}");
+        assert!(
+            !arm.contains("HPET") && !arm.contains("VMware port") && !arm.contains("ICH9"),
+            "{arm}"
+        );
+        let desktop = StealthProfile::transparent()
+            .for_preset(StealthPreset::RealisticDesktop, "GenuineIntel");
+        let x86 = card_text(&desktop, GuestArch::X86_64);
+        assert!(x86.contains("ACPI OEM"), "{x86}");
+        assert!(x86.contains("Firmware"), "{x86}");
+        assert!(
+            !x86.contains("Device tree") && !x86.contains("AAVMF"),
+            "{x86}"
+        );
+        assert!(!x86.contains("()"), "{x86}");
+        // Without a device identity, arm64 is QEMU's virt machine.
+        let transparent = card_text(&StealthProfile::transparent(), GuestArch::AARCH64);
+        assert!(transparent.contains("QEMU virt (arm64)"), "{transparent}");
+        assert!(!transparent.contains("Q35"), "{transparent}");
     }
 }

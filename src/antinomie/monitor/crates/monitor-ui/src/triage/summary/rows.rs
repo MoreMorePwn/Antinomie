@@ -14,20 +14,68 @@ pub(super) enum Part<'a> {
     Note(&'a str),
 }
 
+/// The width a part takes on one line, unwrapped.
+fn width_of(ui: &egui::Ui, text: egui::WidgetText) -> f32 {
+    text.into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    )
+    .size()
+    .x
+}
+
 /// A clickable item. It does not look like a link; hovering it underlines
-/// its parts and shows the pointing hand. True when it was clicked.
+/// its parts and shows the pointing hand. A value too long for the row is cut
+/// with an ellipsis to the room the notes after it leave (the row never grows
+/// past its box: a long URL or path used to push the whole Summary off the
+/// window), and its full text is in the tooltip. True when it was clicked.
 pub(super) fn item(ui: &mut egui::Ui, parts: &[Part<'_>], hint: &str) -> bool {
+    let cut = std::cell::Cell::new(None);
     let out = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
         let hot = ui.response().hovered();
         ui.spacing_mut().item_spacing.x = 6.0;
+        let gap = ui.spacing().item_spacing.x;
+        let rich = |part: &Part<'_>| match part {
+            Part::Value(text) => RichText::new(*text).monospace().color(theme::text()),
+            Part::Note(text) => RichText::new(*text).color(theme::muted()),
+        };
+        // What the notes need, so the values share the rest.
+        let notes: f32 = parts
+            .iter()
+            .filter(|part| matches!(part, Part::Note(_)))
+            .map(|part| width_of(ui, rich(part).into()) + gap)
+            .sum();
+        let values = parts
+            .iter()
+            .filter(|part| matches!(part, Part::Value(_)))
+            .count()
+            .max(1) as f32;
+        let room = ((ui.available_width() - notes) / values - gap * (values - 1.0)).max(60.0);
         for part in parts {
-            let text = match part {
-                Part::Value(text) => RichText::new(*text).monospace().color(theme::text()),
-                Part::Note(text) => RichText::new(*text).color(theme::muted()),
-            };
-            ui.add(egui::Label::new(if hot { text.underline() } else { text }).selectable(false));
+            let text = rich(part);
+            let text = if hot { text.underline() } else { text };
+            match part {
+                Part::Value(full) => {
+                    if width_of(ui, rich(part).into()) > room {
+                        cut.set(Some((*full).to_owned()));
+                    }
+                    ui.scope(|ui| {
+                        ui.set_max_width(room);
+                        ui.add(egui::Label::new(text).truncate().selectable(false));
+                    });
+                }
+                Part::Note(_) => {
+                    ui.add(egui::Label::new(text).selectable(false));
+                }
+            }
         }
     });
+    let hint = match cut.take() {
+        Some(full) => format!("{full}\n{hint}"),
+        None => hint.to_owned(),
+    };
     let response = out
         .response
         .on_hover_cursor(egui::CursorIcon::PointingHand)

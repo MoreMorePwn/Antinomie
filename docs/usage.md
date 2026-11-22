@@ -1619,8 +1619,7 @@ using it. The default `--graphics-driver system` keeps the existing environment.
 **Statistics** in the menu bar (or **Ctrl+Shift+T**, changeable in Settings >
 Keyboard) opens a menu with **Statistics** (the window on the tab it showed last)
 and one entry per tab (**Properties**, **Hierarchy**, …); each opens the Statistics window on the run or Capture all recording you have
-selected; the **Statistics of these calls** button on the Syscall Trace opens it
-with the Trace's filter. The window floats over the main window; the pop-out icon
+selected. The window floats over the main window; the pop-out icon
 just left of its close button (hover: "Pop out") moves it into its own window (and
 remembers that), **Back into the main window** in its toolbar returns it. It follows the run you select; **Change...** opens Run History. Esc closes it.
 

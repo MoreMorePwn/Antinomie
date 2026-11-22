@@ -29,12 +29,7 @@ pub fn count_text(count: u64, period: Option<u64>) -> String {
 
 /// A moment as an offset from the start of the run: "+1.2 s", "+340 ms".
 pub fn offset(ns: u64, start: u64) -> String {
-    let ns = ns.saturating_sub(start);
-    if ns < 1_000_000_000 {
-        format!("+{} ms", ns / 1_000_000)
-    } else {
-        format!("+{:.1} s", ns as f64 / 1e9)
-    }
+    antinomie_monitor_core::time_span::relative_ns_ms(ns.saturating_sub(start))
 }
 
 /// "+1.2 s \u{2192} +9.8 s"; one moment when the row happened once or all

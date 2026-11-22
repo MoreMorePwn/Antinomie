@@ -704,14 +704,22 @@ impl Scan {
                 )),
                 ..PacketIndex::default()
             }),
-            None => PacketIndex {
-                counts: None,
-                coverage:
-                    "no pcap is recorded for this run; the loaded packet preview was not used"
-                        .into(),
-                network_warning: Some("No network capture was saved for this run.".into()),
-                ..PacketIndex::default()
-            },
+            None => {
+                // No capture by design is a note, not a gap; only a capture
+                // that should have been there is a warning.
+                let note = no_capture_note(&recording.directory);
+                PacketIndex {
+                    counts: None,
+                    coverage:
+                        "no pcap is recorded for this run; the loaded packet preview was not used"
+                            .into(),
+                    network_warning: note
+                        .is_none()
+                        .then(|| "No network capture was saved for this run.".into()),
+                    network_note: note,
+                    ..PacketIndex::default()
+                }
+            }
         };
         if let Some(writer) = &mut event_journal {
             if let Err(error) = normalized::flush_creations(writer, files) {
@@ -1066,6 +1074,7 @@ impl Scan {
             ioc: Some(Arc::new(ioc)),
             launch_image: files.journal.launch_image.clone(),
             network_warning: network.network_warning,
+            network_note: network.network_note,
             root_crash,
             last_failed_step: last_failed.map(|step| step.text),
             signals: {
@@ -1121,4 +1130,35 @@ pub(crate) fn settle_crashed_start(process: &mut [ProcessNode], directory: &Path
             node.state = "task exit, ended with the run".into();
         }
     }
+}
+
+/// Why a run has no packet capture when the run's own record says it was not
+/// to have one: its VM had no network, or Capture network was off. `None`
+/// when the record does not say (a capture that failed or went missing).
+pub(crate) fn no_capture_note(directory: &Path) -> Option<String> {
+    let run: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
+    let no_network = matches!(
+        run.pointer("/environment/network").and_then(|v| v.as_str()),
+        Some("Disconnected" | "Isolated")
+    );
+    let capture_off = run
+        .pointer("/request/capture_network")
+        .and_then(|v| v.as_bool())
+        == Some(false);
+    let why = if no_network {
+        "This VM has no network"
+    } else if capture_off {
+        "Network capture was off for this run"
+    } else {
+        return None;
+    };
+    let fix = if no_network {
+        "Give the VM a route (for example InetSim) and keep Capture network on to scan network traffic."
+    } else {
+        "Turn on Capture network in Run program to scan network traffic."
+    };
+    Some(format!(
+        "{why}, so no network capture was recorded and the network (Suricata) rules did not run. {fix}"
+    ))
 }

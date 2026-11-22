@@ -311,6 +311,16 @@ impl Firmware {
         }
     }
 
+    /// The same choice on an arm64 VM: AAVMF is its UEFI, and "BIOS" boots the
+    /// kernel directly on a device tree (there is no SeaBIOS on arm64).
+    pub fn label_arm64(self) -> &'static str {
+        match self {
+            Self::Bios => "Device tree (kernel booted directly)",
+            Self::Uefi => "UEFI (AAVMF)",
+            Self::UefiSecureBoot => "UEFI with Secure Boot (AAVMF)",
+        }
+    }
+
     pub fn is_uefi(self) -> bool {
         self != Self::Bios
     }

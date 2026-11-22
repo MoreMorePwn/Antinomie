@@ -132,7 +132,7 @@ pub(super) fn held_text(health: &Health) -> Option<String> {
     (health.writer_held_ns > 0).then(|| {
         let show = |ns: u64| {
             if ns >= 1_000_000_000 {
-                format!("{:.1} s", ns as f64 / 1e9)
+                antinomie_monitor_core::time_span::span_ns(ns, false)
             } else {
                 format!("{} ms", ns.div_ceil(1_000_000))
             }
@@ -163,13 +163,15 @@ pub(super) fn shed_text(health: &Health) -> Option<String> {
         if health.shed_ns == 0 {
             format!("{times}, still shedding")
         } else {
-            let seconds = health.shed_ns as f64 / 1e9;
             let ongoing = if health.shedding {
                 " (shedding now)"
             } else {
                 ""
             };
-            format!("{times}, {seconds:.1} s in all{ongoing}")
+            format!(
+                "{times}, {} in all{ongoing}",
+                antinomie_monitor_core::time_span::span_ns(health.shed_ns, false)
+            )
         }
     })
 }

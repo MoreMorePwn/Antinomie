@@ -245,7 +245,10 @@ impl Model {
                     ago(now, checked.at_unix),
                     match checked.wait(now) {
                         0 => String::new(),
-                        wait => format!(" · the next look is possible in {wait} s"),
+                        wait => format!(
+                            " · the next look is possible in {}",
+                            antinomie_monitor_core::time_span::seconds(wait)
+                        ),
                     }
                 ),
             );

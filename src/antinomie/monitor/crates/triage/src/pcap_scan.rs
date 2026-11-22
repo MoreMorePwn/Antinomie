@@ -417,6 +417,7 @@ pub fn scan_pcap_query_observed(
         http: Vec::new(),
         http_omitted: 0,
         network_warning: None,
+        network_note: None,
         ..PacketIndex::default()
     };
     inventory.capture = path.display().to_string();

@@ -837,7 +837,7 @@ pub fn clock(ms: u64) -> String {
 /// the run's first call and the time of day; either alone when the other is
 /// not known, empty when neither is.
 pub fn stamp(relative_ms: Option<u64>, time_ms: Option<u64>) -> String {
-    let relative = relative_ms.map(|ms| format!("+{}.{:03} s", ms / 1000, ms % 1000));
+    let relative = relative_ms.map(crate::time_span::relative_precise_ms);
     match (relative, time_ms) {
         (Some(relative), Some(at)) => format!("{relative} \u{b7} {}", clock(at)),
         (Some(relative), None) => relative,

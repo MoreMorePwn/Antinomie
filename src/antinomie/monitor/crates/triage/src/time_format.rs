@@ -102,13 +102,16 @@ pub fn uptime(milliseconds: u64) -> String {
     )
 }
 
-/// How long ago an instant was: `12 s ago`, `3 m ago`.
+/// How long ago an instant was: `12 s ago`, `3 m ago`, `3 h ago`.
 pub fn age(time: std::time::Instant) -> String {
-    let seconds = time.elapsed().as_secs();
-    if seconds < 60 {
-        format!("{seconds} s ago")
-    } else {
-        format!("{} m ago", seconds / 60)
+    age_seconds(time.elapsed().as_secs())
+}
+
+fn age_seconds(seconds: u64) -> String {
+    match seconds {
+        0..=59 => format!("{seconds} s ago"),
+        60..=3599 => format!("{} m ago", seconds / 60),
+        _ => format!("{} h ago", seconds / 3600),
     }
 }
 
@@ -196,6 +199,15 @@ pub fn guest_ns(anchor: Option<HostClockAnchor>, value: Option<u64>) -> String {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn an_age_moves_on_to_hours() {
+        assert_eq!(age_seconds(59), "59 s ago");
+        assert_eq!(age_seconds(60), "1 m ago");
+        assert_eq!(age_seconds(3599), "59 m ago");
+        assert_eq!(age_seconds(3600), "1 h ago");
+        assert_eq!(age_seconds(3 * 3600 + 120), "3 h ago");
+    }
     #[test]
     fn guest_clock_handles_events_before_anchor_and_missing_history() {
         let clock = HostClockAnchor {
