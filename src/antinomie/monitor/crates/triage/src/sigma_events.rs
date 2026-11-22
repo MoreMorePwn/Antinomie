@@ -579,10 +579,14 @@ pub struct Address {
     pub raw: Vec<u8>,
 }
 
-/// The IP address and port in the `struct sockaddr` a call was given or
-/// filled in. Only a complete AF_INET or AF_INET6 address is decoded; Unix
-/// sockets and short captures give nothing.
-pub fn address(call: &InvocationSummary, nr: u64, name: &str, argument: usize) -> Option<Address> {
+/// The `struct sockaddr` bytes a call was given or filled in, and whether the
+/// capture holds all of it.
+pub fn address_bytes(
+    call: &InvocationSummary,
+    nr: u64,
+    name: &str,
+    argument: usize,
+) -> Option<(Vec<u8>, bool)> {
     // accept4 takes the same address argument as accept.
     let name = if name == "accept4" { "accept" } else { name };
     let field = call
@@ -596,10 +600,22 @@ pub fn address(call: &InvocationSummary, nr: u64, name: &str, argument: usize) -
                 && !field.key.contains("capacity")
                 && trace::field_argument_on(nr, name, field) == Some(argument)
         })?;
-    if !field.complete {
+    Some((trace::covered_preview(field).to_vec(), field.complete))
+}
+
+/// The IP address and port in the `struct sockaddr` a call was given or
+/// filled in. Only a complete AF_INET or AF_INET6 address is decoded; Unix
+/// sockets and short captures give nothing.
+pub fn address(call: &InvocationSummary, nr: u64, name: &str, argument: usize) -> Option<Address> {
+    let (data, complete) = address_bytes(call, nr, name, argument)?;
+    if !complete {
         return None;
     }
-    let data = trace::covered_preview(field);
+    address_from(&data)
+}
+
+/// The address in the bytes of a `struct sockaddr`.
+pub fn address_from(data: &[u8]) -> Option<Address> {
     let family = u16::from_le_bytes(data.get(..2)?.try_into().ok()?);
     let port = u16::from_be_bytes(data.get(2..4)?.try_into().ok()?);
     let (ip, size) = match family {

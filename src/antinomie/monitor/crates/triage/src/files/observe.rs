@@ -502,6 +502,9 @@ pub fn read_cells(
         ),
         cell(format!("call {}", call.call_id), tone::text(), true),
     ];
+    if !path_known {
+        row[1].note = Some(descriptor_names::BEFORE_RECORDING.into());
+    }
     row[0].values = vec![
         (
             "process.exe",
@@ -519,6 +522,14 @@ pub fn read_cells(
             } else {
                 RowValue::Missing
             },
+        ),
+        (
+            "file.descriptor",
+            descriptor_names::kind(path)
+                .filter(|_| path_known)
+                .map_or(RowValue::Missing, |kind| {
+                    RowValue::Text(descriptor_names::kind_tag(kind).into())
+                }),
         ),
         ("event.id", RowValue::Number(i128::from(call.call_id))),
         ("stream.id", RowValue::Number(i128::from(call.stream_id))),

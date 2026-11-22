@@ -113,7 +113,10 @@ impl<'a> Ctx<'a> {
                     .collect();
             if used.is_empty() {
                 let shown = displayed_path(self.call, self.event, self.files);
-                if let Some((path, _)) = sigma_events::clean(&shown) {
+                // A socket or a pipe is no path a rule can match.
+                if let Some((path, _)) =
+                    sigma_events::clean(&shown).filter(|_| descriptor_names::kind(&shown).is_none())
+                {
                     used.push((path, Role::Subject));
                 }
             }

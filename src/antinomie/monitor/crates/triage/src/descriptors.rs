@@ -84,6 +84,9 @@ pub fn succeeded(invocation: &InvocationSummary) -> bool {
 }
 
 pub fn remember_open(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+    if descriptor_names::remember(files, invocation, event) {
+        return;
+    }
     if event.syscall_name == "memfd_create" && succeeded(invocation) {
         if let Some(fd) = invocation.exit.as_ref().and_then(|exit| exit.result) {
             let owner = table_owner(files, invocation.task_cookie, event.tid);

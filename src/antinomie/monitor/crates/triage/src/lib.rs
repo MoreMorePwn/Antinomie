@@ -29,6 +29,9 @@ pub mod attack;
 pub mod auditd_events;
 pub mod bpf_attach;
 pub mod bpf_notes;
+pub mod descriptor_names;
+#[cfg(test)]
+mod descriptor_names_tests;
 pub mod descriptors;
 pub mod detection;
 pub mod digest;

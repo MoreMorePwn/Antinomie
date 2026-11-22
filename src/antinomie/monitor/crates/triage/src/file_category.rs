@@ -31,6 +31,8 @@ pub enum Category {
     Probed,
     DirListing,
     Watched,
+    /// A read or write on a socket: network traffic, not a file change.
+    Socket,
 }
 
 impl Category {
@@ -53,6 +55,7 @@ impl Category {
             Self::Probed => "Metadata probed",
             Self::DirListing => "Directory listing",
             Self::Watched => "Watched / locked",
+            Self::Socket => "Socket I/O",
         }
     }
 
@@ -68,9 +71,12 @@ impl Category {
             Self::Executed => FileTab::Executed,
             Self::Permissions | Self::Timestamps | Self::Xattrs => FileTab::Attributes,
             Self::Probed => FileTab::Probed,
-            Self::Linked | Self::Copied | Self::Mapped | Self::DirListing | Self::Watched => {
-                FileTab::Other
-            }
+            Self::Linked
+            | Self::Copied
+            | Self::Mapped
+            | Self::DirListing
+            | Self::Watched
+            | Self::Socket => FileTab::Other,
         }
     }
 }
@@ -235,6 +241,13 @@ pub fn classify(files: &FdState, call: &InvocationSummary, event: &EventSummary)
             hits
         }
         "memfd_create" | "mkdir" | "mkdirat" | "mknod" | "mknodat" => vec![hit(Category::Created)],
+        // A socket's reads and writes are the network's: the Other tab names
+        // the peer, and the Read and Written tabs stay files.
+        _ if (READS.contains(&name) || WRITES.contains(&name))
+            && descriptor_names::socket_fd(files, call, event) =>
+        {
+            vec![hit(Category::Socket)]
+        }
         _ if READS.contains(&name) => vec![hit(Category::Read)],
         _ if WRITES.contains(&name) => vec![hit(Category::Written)],
         "truncate" | "ftruncate" | "fallocate" => vec![hit(Category::Truncated)],
@@ -403,6 +416,13 @@ pub fn detail(files: &FdState, call: &InvocationSummary, event: &EventSummary, h
         }
         Category::Written => ret_text(call, "bytes written"),
         Category::Read => ret_text(call, "bytes read"),
+        Category::Socket => {
+            if WRITES.contains(&name) {
+                ret_text(call, "bytes sent")
+            } else {
+                ret_text(call, "bytes received")
+            }
+        }
         Category::Truncated => match name {
             "truncate" | "ftruncate" => format!("length {}", arg(1)),
             "fallocate" => format!("mode {:#x} offset {} length {}", arg(1), arg(2), arg(3)),
@@ -597,6 +617,7 @@ pub fn step_label(
         },
         Category::Opened
         | Category::Read
+        | Category::Socket
         | Category::Probed
         | Category::DirListing
         | Category::Watched => return None,
@@ -624,7 +645,10 @@ pub fn locations(files: &FdState, call: &InvocationSummary, event: &EventSummary
         .map(|used| used.name)
         .collect();
     if names.is_empty() {
-        if let Some((path, _)) = sigma_events::clean(&displayed_path(call, event, files)) {
+        let shown = displayed_path(call, event, files);
+        if let Some((path, _)) =
+            sigma_events::clean(&shown).filter(|_| descriptor_names::kind(&shown).is_none())
+        {
             names.push(path);
         }
     }
@@ -782,6 +806,7 @@ pub fn category_row(
         cell(format!("call {}", call.call_id), tone::text(), true),
     ];
     row[0].values = values;
+    row[3].note = base[0].note.clone();
     row
 }
 
@@ -860,6 +885,10 @@ pub const FILE_FIELDS: &[crate::query::FieldSpec<'static>] = &[
     ),
     crate::query::FieldSpec::number("file.offset", "Captured pwrite offset in octets"),
     crate::query::FieldSpec::number("file.count", "One observed operation per evidence row"),
+    crate::query::FieldSpec::text(
+        "file.descriptor",
+        "socket, pipe or anonymous for a descriptor that leads to no file",
+    ),
     crate::query::FieldSpec::number("process.pid", "Observed PID"),
     crate::query::FieldSpec::number("process.tid", "Observed TID"),
     crate::query::FieldSpec::number("process.cookie", "Stable task cookie"),
