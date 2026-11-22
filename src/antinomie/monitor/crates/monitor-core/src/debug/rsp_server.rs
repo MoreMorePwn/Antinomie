@@ -9,7 +9,9 @@ use super::{
     debugger::{AdoptedChild, Debugger},
     inferior::RunState,
     rsp_client::{self, Outcome, Wire},
-    target::{DebugBackend, DebugError, DetachMode, ResumeAction, TargetState},
+    target::{
+        DebugBackend, DebugError, DetachMode, ResumeAction, StopEvent, StopKind, TargetState,
+    },
     ui_control::{PanelControl, PanelHandle, Pump},
 };
 use std::{
@@ -280,8 +282,10 @@ fn socket_path(directory: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
 
 impl Drop for DebugServer {
     fn drop(&mut self) {
-        if self.thread.is_some() {
-            let _ = self.shutdown(DetachMode::Resume, Duration::from_secs(10));
+        // The thread ends on its own: whoever drops the server may not be
+        // serving its guest link any more, and waiting here would stall it.
+        if self.thread.take().is_some() {
+            self.request_stop(DetachMode::Resume);
         }
     }
 }
@@ -559,9 +563,27 @@ fn release(debugger: &mut Debugger) {
         let Some(inferior) = debugger.get(pid) else {
             continue;
         };
-        if inferior.is_stopped() {
-            inferior.with_registry(|registry, backend| registry.clear_client(backend));
-            let _ = debugger.resume(pid, ResumeAction::Continue);
+        if !inferior.is_stopped() {
+            continue;
         }
+        inferior.with_registry(|registry, backend| registry.clear_client(backend));
+        // A thread parked on a signal still gets it: the program would have,
+        // had no debugger been there.
+        let pending = match inferior.run {
+            RunState::Stopped(StopEvent {
+                kind: StopKind::Signal { signal },
+                tid,
+                ..
+            }) => Some((tid, signal)),
+            _ => None,
+        };
+        if let Some((tid, signal)) = pending
+            && debugger
+                .resume(pid, ResumeAction::ContinueSignal { tid, signal })
+                .is_ok()
+        {
+            continue;
+        }
+        let _ = debugger.resume(pid, ResumeAction::Continue);
     }
 }

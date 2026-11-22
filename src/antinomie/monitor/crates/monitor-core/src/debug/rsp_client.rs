@@ -191,6 +191,27 @@ fn action_covers(action: &Action, pid: u32) -> bool {
     }
 }
 
+/// The thread an action names without naming its process.
+fn bare_tid(action: &Action) -> Option<u32> {
+    match action.sel {
+        Some(Sel {
+            pid: None,
+            tid: TidSel::One(tid),
+        }) => Some(tid),
+        _ => None,
+    }
+}
+
+/// Whether an action applies to the process `pid`, whose threads are `owned`
+/// when they were looked up (a bare thread id then needs the process to have it).
+fn action_applies(action: &Action, pid: u32, owned: Option<&[u32]>) -> bool {
+    action_covers(action, pid)
+        && match (bare_tid(action), owned) {
+            (Some(tid), Some(owned)) => owned.contains(&tid),
+            _ => true,
+        }
+}
+
 pub(super) struct Client {
     pub(super) framer: Framer,
     pub(super) no_ack: bool,
@@ -386,12 +407,7 @@ impl<W: Wire> Session<'_, W> {
     pub(super) fn wait_all_stopped(&mut self) -> Result<(), DebugError> {
         let until = Instant::now() + INTERRUPT_DEADLINE;
         loop {
-            let happenings = self.debugger.poll()?;
-            for happening in &happenings {
-                if let Happening::Exited { pid, .. } = happening {
-                    let _ = pid;
-                }
-            }
+            self.debugger.poll()?;
             if !self.debugger.any_running() {
                 return Ok(());
             }
@@ -728,7 +744,10 @@ impl<W: Wire> Session<'_, W> {
             Reply::Packet(payload) => self.reply(&payload)?,
             Reply::Later => {}
             Reply::Then(payload, outcome) => {
-                self.reply(&payload)?;
+                // `k` has no reply: an empty payload here is not a packet.
+                if !payload.is_empty() {
+                    self.reply(&payload)?;
+                }
                 if self.client.nonstop && self.client.held.is_some() {
                     self.answer_last_acknowledgement();
                 }
@@ -853,6 +872,7 @@ impl<W: Wire> Session<'_, W> {
             return self.vcont_nonstop(actions);
         }
         let mut resumed = false;
+        let several = self.debugger.pids().len() > 1;
         for pid in self.debugger.pids() {
             let current = self.debugger.get(pid).map(|inferior| inferior.current_tid);
             let Some(current) = current else { continue };
@@ -866,7 +886,21 @@ impl<W: Wire> Session<'_, W> {
             let mut step: Option<(u32, Option<u8>)> = None;
             let mut cont = false;
             let mut cont_signal: Option<(u32, u8)> = None;
-            for action in actions.iter().filter(|action| action_covers(action, pid)) {
+            // A bare thread id names a thread of one process only; with
+            // several processes, only the one that owns it is addressed.
+            let owned: Option<Vec<u32>> =
+                if several && actions.iter().any(|action| bare_tid(action).is_some()) {
+                    self.debugger
+                        .get(pid)
+                        .and_then(|inferior| inferior.threads().ok())
+                        .map(|threads| threads.iter().map(|thread| thread.tid).collect())
+                } else {
+                    None
+                };
+            for action in actions
+                .iter()
+                .filter(|action| action_applies(action, pid, owned.as_deref()))
+            {
                 let tid = match action.sel.map(|sel| sel.tid) {
                     Some(TidSel::One(tid)) => tid,
                     _ => current,
@@ -1055,5 +1089,28 @@ impl<W: Wire> Session<'_, W> {
             Vec::new(),
             Outcome::TargetGone("killed by the debugger".into()),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_thread_id_reaches_only_the_process_that_owns_it() {
+        let actions = parse_vcont(b"s:4d2;c").unwrap();
+        let (step, rest) = (&actions[0], &actions[1]);
+        assert_eq!(bare_tid(step), Some(0x4d2));
+        assert_eq!(bare_tid(rest), None);
+        // Process 10 has the thread, process 20 does not.
+        assert!(action_applies(step, 10, Some(&[0x4d2, 0x4d3])));
+        assert!(!action_applies(step, 20, Some(&[0x500])));
+        // Without a lookup (one process) and for actions that name no thread.
+        assert!(action_applies(step, 20, None));
+        assert!(action_applies(rest, 20, Some(&[0x500])));
+        // A named process is decided by that name alone.
+        let named = parse_vcont(b"s:p14.4d2").unwrap();
+        assert!(action_applies(&named[0], 0x14, Some(&[1])));
+        assert!(!action_applies(&named[0], 0x15, Some(&[0x4d2])));
     }
 }
