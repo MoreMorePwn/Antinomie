@@ -133,7 +133,7 @@ fn parse(output: &str, specimen_len: u64) -> Vec<(u64, String)> {
             let offset = decimal.parse::<u64>().ok()?;
             let hex = u64::from_str_radix(hex.strip_prefix("0x")?, 16).ok()?;
             let description = description.trim();
-            (hex == offset && offset <= specimen_len && !description.is_empty())
+            (hex == offset && offset < specimen_len && !description.is_empty())
                 .then(|| (offset, description.to_owned()))
         })
         .collect()
@@ -148,7 +148,8 @@ mod tests {
             0             0x0             ELF, 64-bit LSB executable, AMD x86-64\n\
             3000          0xBB8           gzip compressed data, has original file name: \"a b\"\n\
             12            0x99            mismatched offsets\n\
-            90000         0x15F90         past the end\n";
+            90000         0x15F90         past the end\n\
+            5000          0x1388          at the end\n";
         assert_eq!(
             super::parse(output, 5000),
             [

@@ -111,10 +111,7 @@ pub(super) fn extract(
         listed.contains_key(path)
             || (source.rolling
                 && (source.paths.is_empty()
-                    || source
-                        .paths
-                        .iter()
-                        .any(|prefix| path.starts_with(prefix.trim_end_matches('/'))))
+                    || source.paths.iter().any(|prefix| under_prefix(path, prefix)))
                 && accept_unlisted(path))
     };
     match source.format.as_str() {
@@ -146,6 +143,31 @@ pub(super) fn extract(
 }
 
 /// A normal relative member path with `strip` leading components removed.
+/// Whether `path` is `prefix` or lies below that folder: `rules` does not
+/// take `rules-extra/x`.
+fn under_prefix(path: &str, prefix: &str) -> bool {
+    let prefix = prefix.trim_end_matches('/');
+    prefix.is_empty()
+        || path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::under_prefix;
+
+    #[test]
+    fn a_prefix_is_a_folder_boundary_not_a_text_prefix() {
+        assert!(under_prefix("rules/a.yml", "rules"));
+        assert!(under_prefix("rules/a/b.yml", "rules/"));
+        assert!(under_prefix("rules", "rules"));
+        assert!(!under_prefix("rules-extra/a.yml", "rules"));
+        assert!(!under_prefix("rulesets/a.yml", "rules/"));
+    }
+}
+
 fn member_path(raw: &str, strip: u32) -> Option<String> {
     let parts: Vec<&str> = raw.split('/').filter(|part| !part.is_empty()).collect();
     if parts.iter().any(|part| *part == ".." || *part == ".") || raw.starts_with('/') {

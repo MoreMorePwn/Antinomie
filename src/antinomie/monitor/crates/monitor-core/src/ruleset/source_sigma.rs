@@ -61,7 +61,7 @@ pub(super) fn filter_sigma_file(
     report: &mut FilterReport,
 ) -> Option<String> {
     let mut kept = Vec::new();
-    for doc in text.split("\n---\n") {
+    for doc in sigma_documents(text) {
         if !doc.contains("title:") {
             continue;
         }

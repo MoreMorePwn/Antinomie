@@ -458,9 +458,9 @@ impl Jobs {
             .into_iter()
             .map(|name| fs::metadata(job.directory.join(name)).map_or(0, |m| m.len()))
             .sum::<u64>()
-            .saturating_add(directory_len(&job.directory.join("output/listings")).unwrap_or(0))
-            .saturating_add(directory_len(&job.directory.join("output/artifacts")).unwrap_or(0))
-            .saturating_add(directory_len(&job.directory.join("output/progress")).unwrap_or(0));
+            .saturating_add(counted_len(&job.directory.join("output/listings")))
+            .saturating_add(counted_len(&job.directory.join("output/artifacts")))
+            .saturating_add(counted_len(&job.directory.join("output/progress")));
         if let Some(stopping) = self.stopping {
             let ended = job
                 .child
@@ -791,6 +791,13 @@ impl Jobs {
                         }
                     });
                 if let Err(error) = spawn {
+                    // No reaper will ever clear the flag: it must not stay set,
+                    // and the worker handle is released here (its drop ends it).
+                    CLEANUP_CHILD
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .take();
+                    CLEANUP_PENDING.store(false, Ordering::Release);
                     pending_report.reason = Some(format!(
                         "VM ended; worker cleanup pending; reaper start failed: {error}"
                     ));
@@ -863,6 +870,15 @@ fn persist_report(directory: &Path, report: &AnalysisReport) -> Result<(), Strin
         return Err("normalized report exceeded 128 KiB persistence bound".into());
     }
     storage::atomic_bytes(&directory.join("report.json"), &encoded)
+}
+/// What a worker folder holds for its disk limit: nothing when it is not
+/// there yet, and everything the limit allows when it cannot be counted (a
+/// symlink in it), so an uncountable output never reads as an empty one.
+fn counted_len(path: &Path) -> u64 {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        _ => directory_len(path).unwrap_or(u64::MAX),
+    }
 }
 pub(super) fn directory_len(path: &Path) -> Result<u64, String> {
     let mut total = 0u64;

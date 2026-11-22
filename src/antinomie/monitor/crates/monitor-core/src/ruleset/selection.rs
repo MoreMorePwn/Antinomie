@@ -535,8 +535,8 @@ pub(super) fn emitted_ids(engine: &str, text: &str) -> BTreeSet<String> {
             .into_iter()
             .map(|(name, _, _)| name)
             .collect(),
-        "sigma" => text
-            .split("\n---\n")
+        "sigma" => sigma_documents(text)
+            .into_iter()
             .filter(|doc| doc.contains("title:"))
             .map(sigma_rule_id)
             .collect(),
@@ -607,7 +607,7 @@ pub(super) fn filter_rules(engine: &str, text: &str, ids: &[&str]) -> String {
             }
         }
         "sigma" => {
-            for doc in text.split("\n---\n") {
+            for doc in sigma_documents(text) {
                 let id = sigma_rule_id(doc);
                 if ids.contains(&id.as_str()) {
                     if !out.is_empty() {
