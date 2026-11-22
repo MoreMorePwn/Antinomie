@@ -19,7 +19,8 @@
  * An optional argument names a file of symbol names only the recorder has,
  * one per line (the list the guest kernel's build writes:
  * scripts/check-kernel-kallsyms.py --write-names); kallsyms.antinomie then
- * fails on any of them too.
+ * fails on any of them too, among the image's symbols (a module's symbols
+ * are never the recorder's).
  *
  * Build: cc -static -O2 -Wall -Wextra -Werror tests/monitor/stealth-probe.c
  * (also aarch64-linux-gnu-gcc: the CPUID and I/O port checks are x86-64's, and
@@ -1056,14 +1057,19 @@ static void check_kallsyms(void)
 		return;
 	}
 	while (fgets(line, sizeof(line), file)) {
-		char address[32], type[4], name[256];
+		char address[32], type[4], name[256], module[64] = "";
 
-		if (sscanf(line, "%31s %3s %255s", address, type, name) != 3)
+		if (sscanf(line, "%31s %3s %255s %63s", address, type, name, module) < 3)
 			continue;
 		total++;
 		if (strspn(address, "0") == strlen(address))
 			zero++;
-		if (antinomie_symbol(name) || recorder_only_symbol(name)) {
+		/* The recorder is built into the image, never a module: a module's
+		 * symbol ("name [module]") is not one of its names, however it is
+		 * spelled (Debian's irqbypass has a "lock", uhci_hcd a CSWTCH.234
+		 * of its own). A module named like Antinomie still fails. */
+		if (antinomie_symbol(name) || (!*module && recorder_only_symbol(name)) ||
+		    antinomie_word(module)) {
 			hits++;
 			if (strncmp(name, "__pfx_", 6))
 				printf("STEALTH-DETAIL kallsyms %s %s\n", type, name);

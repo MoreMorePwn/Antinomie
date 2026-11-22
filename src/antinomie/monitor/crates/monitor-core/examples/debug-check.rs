@@ -24,6 +24,8 @@ mod a32;
 mod p2;
 #[path = "debug-p3/mod.rs"]
 mod p3;
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
 use std::{
     collections::BTreeMap,
     fs,
@@ -229,7 +231,7 @@ fn boot_with(bundle: &str, data: &str, stop_grace: Option<Duration>) -> Result<D
                     .serial_log
                     .as_ref()
                     .and_then(|path| fs::read(path).ok())
-                    .is_some_and(|log| log.windows(marker.len()).any(|part| part == marker))
+                    .is_some_and(|log| serial_ready::ready(&log, marker))
         },
     )?;
     Ok(driver)
