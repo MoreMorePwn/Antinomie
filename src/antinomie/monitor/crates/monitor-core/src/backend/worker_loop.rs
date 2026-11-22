@@ -653,6 +653,9 @@ impl Worker {
                 }
                 // Waiting to reconnect: the transport would only fail again.
                 Ok(None) if self.reconnect.1.is_some() => {}
+                // Every reconnection failed: the transport stays as it is
+                // until a manual recovery, and its error stays on screen.
+                Ok(None) if reconnect_exhausted(self.reconnect) => {}
                 Ok(None) => {
                     if let Err(e) = session.pump(&mut self.snapshot, &self.sender) {
                         if stalled(&e) && self.reconnect.0 < RECONNECT_ATTEMPTS {

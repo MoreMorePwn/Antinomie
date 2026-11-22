@@ -2,6 +2,8 @@
 //! Telemetry pumping, load shedding, control requests and terminal output.
 use super::*;
 
+mod abandoned;
+pub(super) use abandoned::AbandonedReplies;
 mod arch_probe;
 mod probes;
 #[cfg(test)]
@@ -464,6 +466,8 @@ impl Session {
             {
                 snapshot.last_error = Some(format!("late terminal read: {error}"));
             }
+        } else if self.abandoned_replies.take(reply_id) {
+            // The wait for it timed out; the guest got to it later.
         } else {
             snapshot.last_error = Some(match awaiting {
                 Some(id) => format!("unmatched command reply {reply_id}; awaiting {id}"),
@@ -562,6 +566,7 @@ impl Session {
                     .zip(self.transport.guest_heartbeat().ok())
                     .map_or(u64::MAX, |(sent, seen)| seen.saturating_sub(sent));
                 if turns >= GUEST_TURNS || now >= deadline + grace {
+                    self.abandoned_replies.remember(id);
                     return Err(RequestError::TimedOut(if turns >= GUEST_TURNS {
                         format!("guest command {id} timed out; outcome unknown")
                     } else {
@@ -577,10 +582,14 @@ impl Session {
                 continue;
             }
             let remaining = deadline.saturating_duration_since(now);
-            let poll_timeout = remaining.as_millis().min(10) as i32;
-            self.transport
-                .poll(poll_timeout)
-                .map_err(RequestError::Failed)?;
+            match abandoned::idle_wait(crate::writer::backlogged(), remaining.as_millis()) {
+                abandoned::IdleWait::Poll(timeout) => {
+                    self.transport.poll(timeout).map_err(RequestError::Failed)?;
+                }
+                abandoned::IdleWait::Sleep(millis) => {
+                    std::thread::sleep(Duration::from_millis(millis));
+                }
+            }
         }
     }
     /// Seal the boot on the transport thread: states, times, quota and the

@@ -456,6 +456,7 @@ impl Session {
             terminal_cursor: 0,
             restored_from: snapshot_id.map(str::to_owned),
             late_reads: BTreeMap::new(),
+            abandoned_replies: Default::default(),
             terminal_backlog: Default::default(),
             run_status_poll: RunStatusPoll::default(),
             recorder_poll: recorder_health::RecorderPoll::default(),

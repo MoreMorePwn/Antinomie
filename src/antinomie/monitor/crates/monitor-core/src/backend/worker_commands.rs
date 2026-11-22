@@ -110,7 +110,14 @@ impl Worker {
                 snapshot_id,
                 confirmed,
             } => self.delete_snapshot(vm_id, snapshot_id, confirmed),
-            Command::ReconnectTransport => self.reconnect_transport(),
+            Command::ReconnectTransport => {
+                let reconnected = self.reconnect_transport();
+                if reconnected.is_ok() {
+                    // The automatic attempts start over for the new transport.
+                    self.reconnect = (0, None);
+                }
+                reconnected
+            }
             Command::AwaitBoot { vm_id } => self.await_boot(&vm_id),
             Command::CancelLaunchWait => {
                 self.boot_wait_state.cancel = self.boot_wait_state.waiting;
