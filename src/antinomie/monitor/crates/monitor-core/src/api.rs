@@ -2266,6 +2266,16 @@ impl RunState {
         matches!(self, RunState::Running | RunState::TerminalClosed)
     }
 
+    /// The state once a Stop was sent: a run that ended while the Stop was
+    /// in flight keeps the state its own status gave it.
+    pub fn after_stop_request(&self) -> RunState {
+        if self.can_stop() {
+            RunState::StopRequested
+        } else {
+            self.clone()
+        }
+    }
+
     /// The program ended and its recording was closed normally: finished,
     /// stopped or finalized. Interrupted and never-started runs are not
     /// counted: they leave nothing new to show in the history.
@@ -3467,6 +3477,20 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stop_does_not_undo_a_status_that_arrived_while_it_was_sent() {
+        use super::RunState;
+        assert_eq!(
+            RunState::Running.after_stop_request(),
+            RunState::StopRequested
+        );
+        assert_eq!(
+            RunState::TerminalClosed.after_stop_request(),
+            RunState::StopRequested
+        );
+        assert_eq!(RunState::Finished.after_stop_request(), RunState::Finished);
+        assert_eq!(RunState::Stopped.after_stop_request(), RunState::Stopped);
+    }
     use super::*;
     #[test]
     fn exec_request_validate_refuses_what_no_guest_could_launch() {

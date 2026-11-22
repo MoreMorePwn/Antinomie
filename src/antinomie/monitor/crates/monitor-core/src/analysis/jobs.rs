@@ -561,6 +561,13 @@ impl Jobs {
             }
         }
     }
+    /// The guest did not answer a read in time: the same read is asked again.
+    /// The transfer's own deadline ends it if the guest never does.
+    pub fn chunk_timed_out(&mut self) {
+        if let Some(job) = self.acquiring.take() {
+            self.queue.push_back(job);
+        }
+    }
     pub fn chunk(
         &mut self,
         result: Result<Vec<u8>, String>,

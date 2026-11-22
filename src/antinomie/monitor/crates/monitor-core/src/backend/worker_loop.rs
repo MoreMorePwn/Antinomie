@@ -746,6 +746,13 @@ impl Worker {
     /// The VM exited by itself: seal its recording and return to the stopped state.
     fn end_exited_session(&mut self) {
         if let Some(mut session) = self.session.take() {
+            // What the guest wrote before it went is still in the rings: take
+            // it (a few bounded passes) before the recording is sealed.
+            for _ in 0..4 {
+                if session.pump(&mut self.snapshot, &self.sender).is_err() {
+                    break;
+                }
+            }
             let steps = session.seal("unexpected-exit", &mut self.snapshot);
             self.carry_analyses(&mut session);
             self.submit_sealed_flush(session.boot_id.clone(), steps);
