@@ -183,6 +183,26 @@ fn disabled_helper_is_not_reported_as_a_successful_compile() {
 }
 
 #[test]
+fn two_names_with_the_same_slug_are_two_groups_and_the_same_name_a_new_revision() {
+    let dir = std::env::temp_dir().join(format!("ant-rules-slug-{}", crate::storage::unique_id()));
+    let source = dir.join("incoming");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("a.yar"), "rule A { condition: true }\n").unwrap();
+    let first = import_group(&dir, "Sigma 规则", "yara", &source).unwrap();
+    let second = import_group(&dir, "YARA 规则", "yara", &source).unwrap();
+    assert_ne!(first, second);
+    let again = import_group(&dir, "Sigma 规则", "yara", &source).unwrap();
+    assert_eq!(again, first);
+    let registry = load_registry(&dir).unwrap();
+    assert_eq!(registry.groups.len(), 2);
+    let named = |id: &str| registry.groups.iter().find(|g| g.id == id).unwrap().clone();
+    assert_eq!(named(&first).name, "Sigma 规则");
+    assert_eq!(named(&first).revision, 2);
+    assert_eq!(named(&second).name, "YARA 规则");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn engine_sets_count_enabled_rules_and_keep_a_disabled_group() {
     let dir = std::env::temp_dir().join(format!("ant-rules-{}", crate::storage::unique_id()));
     let source = dir.join("incoming");
@@ -456,6 +476,16 @@ fn group_revisions_keep_the_previous_directory() {
         3
     );
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_division_is_not_a_regex_but_matches_still_takes_one() {
+    let text = "rule A { condition: filesize / 2 > 1 }\nrule B { strings: $a = /x}y/ condition: $a }\nrule C { condition: pe.version matches /a}/ }\n";
+    let names: Vec<_> = yara_blocks(text)
+        .into_iter()
+        .map(|(name, _, _)| name)
+        .collect();
+    assert_eq!(names, ["A", "B", "C"]);
 }
 
 #[test]

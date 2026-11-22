@@ -165,7 +165,11 @@ fn yara_rule_end(bytes: &[u8], brace: usize) -> Option<usize> {
         }
         let byte = bytes[i];
         if byte == b'/' {
-            i = skip_regex(bytes, i);
+            if is_division(bytes, i, last_code) {
+                i += 1;
+            } else {
+                i = skip_regex(bytes, i);
+            }
             last_code = b'/';
             continue;
         }
@@ -188,6 +192,22 @@ fn yara_rule_end(bytes: &[u8], brace: usize) -> Option<usize> {
         i += 1;
     }
     None
+}
+
+/// A `/` after an operand (name, number, closing bracket) divides; a regex
+/// literal follows `=`, an opening bracket, `,`, an operator or `matches`.
+fn is_division(bytes: &[u8], at: usize, last_code: u8) -> bool {
+    let operand = last_code.is_ascii_alphanumeric()
+        || matches!(last_code, b'_' | b')' | b']' | b'$' | b'#' | b'@' | b'!');
+    if !operand {
+        return false;
+    }
+    let before = bytes[..at].trim_ascii_end();
+    let word_start = before
+        .iter()
+        .rposition(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
+        .map_or(0, |p| p + 1);
+    &before[word_start..] != b"matches"
 }
 
 fn skip_line(bytes: &[u8], mut index: usize) -> usize {

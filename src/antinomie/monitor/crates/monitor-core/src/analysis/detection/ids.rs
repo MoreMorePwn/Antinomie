@@ -276,10 +276,26 @@ fn read_eve(
             return Ok(());
         }
         if line.len() > 128 * 1024 {
-            return Err("EVE record exceeds 128 KiB".into());
+            // One oversize record is skipped to its end, not the whole file.
+            if line.last() != Some(&b'\n') {
+                let mut rest = Vec::new();
+                loop {
+                    rest.clear();
+                    let more = (&mut reader)
+                        .take(128 * 1024)
+                        .read_until(b'\n', &mut rest)
+                        .map_err(|error| error.to_string())?;
+                    if more == 0 || rest.last() == Some(&b'\n') {
+                        break;
+                    }
+                }
+            }
+            continue;
         }
-        let event: serde_json::Value = serde_json::from_slice(&line)
-            .map_err(|error| format!("invalid EVE record: {error}"))?;
+        // A malformed record likewise leaves out only itself.
+        let Ok(event) = serde_json::from_slice::<serde_json::Value>(&line) else {
+            continue;
+        };
         alert(&event, capture, rules, budget, report);
     }
     Err("EVE output exceeds one million records".into())
@@ -855,6 +871,49 @@ mod tests {
         assert_eq!(report.omitted_evidence, 1);
         assert!(report.findings[0].rule_text.contains("sid:99"));
         assert!(!report.findings[0].details.contains("sid:99"));
+    }
+
+    #[test]
+    fn a_bad_or_oversize_eve_record_leaves_out_only_itself() {
+        let dir = std::env::temp_dir().join(format!("ant-eve-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&dir).unwrap();
+        let alert_line = |sid: u64| {
+            format!(
+                "{{\"event_type\":\"alert\",\"pcap_cnt\":1,\"alert\":{{\"signature_id\":{sid},\"signature\":\"t\"}}}}\n"
+            )
+        };
+        let mut text = alert_line(1);
+        text.push_str("{not json\n");
+        text.push_str(&format!("{{\"pad\":\"{}\"}}\n", "x".repeat(300 * 1024)));
+        text.push_str(&alert_line(2));
+        let path = dir.join("eve.json");
+        fs::write(&path, text).unwrap();
+        let mut report = Report::empty(
+            Engine::Ids,
+            Identity {
+                vm_id: "v".into(),
+                boot_id: "b".into(),
+                run_id: "r".into(),
+                root_cookie: 1,
+            },
+        );
+        let capture = Capture {
+            path: "/snapshot".into(),
+            original: "/first.pcap".into(),
+            complete: true,
+            packets: 10,
+        };
+        let mut budget = super::RuleTextBudget::new();
+        read_eve(
+            &path,
+            &capture,
+            &std::collections::BTreeMap::new(),
+            &mut budget,
+            &mut report,
+        )
+        .unwrap();
+        assert_eq!(report.findings.len(), 2);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
