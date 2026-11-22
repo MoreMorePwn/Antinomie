@@ -247,8 +247,13 @@ impl TabSink {
                 show,
             );
             let keeps = request.file_visibility.keeps_with(&row, show);
-            if keeps && self.queries[at].keep_table(&row[0].values) {
-                self.pages[at].push(row)?;
+            if keeps {
+                if let Some(tap) = &request.tap {
+                    tap.push(if at == 0 { 1 } else { at + 7 }, &row);
+                }
+                if self.queries[at].keep_table(&row[0].values) {
+                    self.pages[at].push(row)?;
+                }
             }
         }
         Ok(())

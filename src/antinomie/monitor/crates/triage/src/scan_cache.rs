@@ -41,7 +41,8 @@ pub fn current_stamp(
 
 /// Keep `scan`, the index of `directory`, when it read the run whole.
 pub fn remember(directory: &Path, scan: &ArchiveScan) {
-    if !scan.whole_run {
+    // A scan with its rows can answer any filter, sort or page of the run.
+    if !scan.whole_run && scan.rows.is_none() {
         return;
     }
     if let Ok(mut last) = LAST.lock() {
@@ -64,6 +65,22 @@ pub fn recall(
     if !is_whole_run(request) {
         return None;
     }
+    let kept = kept_current(directory, pcap, pcap_open, request)?;
+    if kept.whole_run {
+        return Some(kept);
+    }
+    // The index on screen is of a filtered view: the whole run is in its rows.
+    requery::answer(&kept, request, &Arc::new(AtomicBool::new(false)))?.ok()
+}
+
+/// The kept index of `directory` when the recording and the request facts are
+/// as it saw them, whatever filter, sort and page it was made with.
+fn kept_current(
+    directory: &Path,
+    pcap: Option<&Path>,
+    pcap_open: bool,
+    request: &ScanRequest,
+) -> Option<ArchiveScan> {
     let directory_key = folder(directory);
     let kept = LAST
         .lock()
@@ -72,6 +89,29 @@ pub fn recall(
         .find(|(kept, _)| *kept == directory_key)
         .map(|(_, scan)| scan.clone())?;
     (kept.stamp == current_stamp(directory, pcap, pcap_open, request)).then_some(kept)
+}
+
+/// The kept index of `directory` made over for `request`, which differs from
+/// the one kept only in filters, sorts and pages: no read of the recording.
+/// `None` when nothing kept fits, and the caller scans. A timer refresh of a
+/// recording that did not change says so, as the scan would.
+pub fn derive(
+    directory: &Path,
+    pcap: Option<&Path>,
+    pcap_open: bool,
+    cancel: &Arc<AtomicBool>,
+    request: &ScanRequest,
+) -> Option<Result<ArchiveScan, String>> {
+    let kept = kept_current(directory, pcap, pcap_open, request)?;
+    kept.rows.as_ref().filter(|rows| rows.fits(request))?;
+    if request.unchanged_since.as_deref() == Some(kept.stamp.as_str()) {
+        return Some(Err(UNCHANGED.into()));
+    }
+    let answer = requery::answer(&kept, request, cancel)?;
+    if let (Ok(done), true) = (&answer, request.keep_index) {
+        remember(directory, done);
+    }
+    Some(answer)
 }
 
 /// Drop the kept indexes (a caller that wants the memory back).

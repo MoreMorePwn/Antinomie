@@ -151,12 +151,91 @@ pub struct StoredCell {
     pub values: Vec<(usize, RowValue)>,
 }
 
+/// The stored form of a row: its cells with field names as small indexes.
+#[derive(Default)]
+pub struct Codec {
+    pub names: Vec<&'static str>,
+    pub lookup: BTreeMap<&'static str, usize>,
+}
+
+impl Codec {
+    pub fn encode(&mut self, cells: &[Cell]) -> Result<Vec<u8>, String> {
+        #[derive(serde::Serialize)]
+        struct StoredCellRef<'a> {
+            text: &'a str,
+            tone: Tone,
+            mono: bool,
+            values: Vec<(usize, &'a RowValue)>,
+        }
+        let stored: Vec<_> = cells
+            .iter()
+            .map(|cell| {
+                let values = cell
+                    .values
+                    .iter()
+                    .map(|(name, value)| {
+                        let next = self.names.len();
+                        let index = *self.lookup.entry(name).or_insert_with(|| {
+                            self.names.push(name);
+                            next
+                        });
+                        (index, value)
+                    })
+                    .collect();
+                StoredCellRef {
+                    text: &cell.text,
+                    tone: cell.tone,
+                    mono: cell.mono,
+                    values,
+                }
+            })
+            .collect();
+        if self.names.len() > 512 {
+            return Err("sort field registry exceeds bound".into());
+        }
+        let payload = serde_json::to_vec(&stored).map_err(|error| error.to_string())?;
+        if payload.len() > 512 * 1024 {
+            return Err("sorted row exceeds 512 KiB".into());
+        }
+        Ok(payload)
+    }
+
+    pub fn decode(&self, payload: &[u8]) -> Result<Vec<Cell>, String> {
+        let stored: Vec<StoredCell> =
+            serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+        stored
+            .into_iter()
+            .map(|cell| {
+                let values = cell
+                    .values
+                    .into_iter()
+                    .map(|(index, value)| {
+                        self.names
+                            .get(index)
+                            .copied()
+                            .map(|name| (name, value))
+                            .ok_or("invalid sorted field index")
+                    })
+                    .collect::<Result<_, &str>>()?;
+                Ok(Cell {
+                    text: cell.text,
+                    tone: cell.tone,
+                    mono: cell.mono,
+                    values,
+                    badges: Vec::new(),
+                    note: None,
+                })
+            })
+            .collect::<Result<_, &str>>()
+            .map_err(str::to_owned)
+    }
+}
+
 pub struct Spool {
     pub connection: rusqlite::Connection,
     // Connection drops before this directory and its temporary database.
     pub _directory: PacketSpool,
-    pub names: Vec<&'static str>,
-    pub lookup: BTreeMap<&'static str, usize>,
+    pub codec: Codec,
 }
 
 impl Spool {
@@ -171,41 +250,11 @@ impl Spool {
         Ok(Self {
             connection,
             _directory: directory,
-            names: Vec::new(),
-            lookup: BTreeMap::new(),
+            codec: Codec::default(),
         })
     }
     pub fn push(&mut self, key: Atom, cells: Vec<Cell>) -> Result<(), String> {
-        let stored: Vec<_> = cells
-            .into_iter()
-            .map(|cell| {
-                let values = cell
-                    .values
-                    .into_iter()
-                    .map(|(name, value)| {
-                        let next = self.names.len();
-                        let index = *self.lookup.entry(name).or_insert_with(|| {
-                            self.names.push(name);
-                            next
-                        });
-                        (index, value)
-                    })
-                    .collect();
-                StoredCell {
-                    text: cell.text,
-                    tone: cell.tone,
-                    mono: cell.mono,
-                    values,
-                }
-            })
-            .collect();
-        if self.names.len() > 512 {
-            return Err("sort field registry exceeds bound".into());
-        }
-        let payload = serde_json::to_vec(&stored).map_err(|error| error.to_string())?;
-        if payload.len() > 512 * 1024 {
-            return Err("sorted row exceeds 512 KiB".into());
-        }
+        let payload = self.codec.encode(&cells)?;
         let missing = key == Atom::Missing;
         let encoded = match key {
             Atom::Number(number) => format!("n{:039}", (number as u128) ^ (1u128 << 127)),
@@ -245,32 +294,7 @@ impl Spool {
             if retained_size > 16 * 1024 * 1024 {
                 return Err("sorted page exceeds 16 MiB preview bound".into());
             }
-            let stored: Vec<StoredCell> =
-                serde_json::from_slice(&row).map_err(|error| error.to_string())?;
-            let cells = stored
-                .into_iter()
-                .map(|cell| {
-                    let values = cell
-                        .values
-                        .into_iter()
-                        .map(|(index, value)| {
-                            self.names
-                                .get(index)
-                                .copied()
-                                .map(|name| (name, value))
-                                .ok_or("invalid sorted field index")
-                        })
-                        .collect::<Result<_, _>>()?;
-                    Ok(Cell {
-                        text: cell.text,
-                        tone: cell.tone,
-                        mono: cell.mono,
-                        values,
-                        badges: Vec::new(),
-                        note: None,
-                    })
-                })
-                .collect::<Result<_, &str>>()?;
+            let cells = self.codec.decode(&row)?;
             result.push(T::from_cells(cells)?);
         }
         Ok(result)

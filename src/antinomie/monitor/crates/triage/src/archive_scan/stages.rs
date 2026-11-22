@@ -429,10 +429,13 @@ impl Scan {
                         &row,
                         true,
                     );
-                    if request.file_visibility.keeps_with(&row, true)
-                        && read_query.keep_table(&row[0].values)
-                    {
-                        read_page.push(row)?;
+                    if request.file_visibility.keeps_with(&row, true) {
+                        if let Some(tap) = &request.tap {
+                            tap.push(5, &row);
+                        }
+                        if read_query.keep_table(&row[0].values) {
+                            read_page.push(row)?;
+                        }
                     }
                 }
             }
@@ -516,7 +519,7 @@ impl Scan {
         // attempts at such files when failures are shown, and standard I/O
         // when it is not hidden; devices, `/proc`, `/sys`, directories and
         // unnamed descriptors are not files the run changed.
-        let file_changes: Vec<_> = all_changes
+        let visible: Vec<_> = all_changes
             .into_iter()
             .filter(|change| {
                 change.standard_io
@@ -535,11 +538,25 @@ impl Scan {
                         request.file_visibility.show_failed,
                     );
                 }
-                request.file_visibility.keeps(&row) && change_query.keep_table(&row[0].values)
+                request.file_visibility.keeps(&row)
             })
             .collect();
-        for change in &file_changes {
-            change_page.push(change.row(clock_anchor))?;
+        let mut listed = Vec::new();
+        for (at, change) in visible.iter().enumerate() {
+            let row = change.row(clock_anchor);
+            if change_query.keep_table(&row[0].values) {
+                change_page.push(row)?;
+                listed.push(at);
+            }
+        }
+        let file_changes: Vec<_> = listed
+            .iter()
+            .skip(request.offsets[2])
+            .take(request.rows())
+            .map(|at| visible[*at].clone())
+            .collect();
+        if let Some(tap) = &request.tap {
+            tap.keep_changes(visible);
         }
         let (read, read_omitted, _) = read_page.finish()?;
         let (mut changed, changed_omitted, _) = change_page.finish()?;
@@ -879,6 +896,9 @@ impl Scan {
         ioc_scan::list_findings(&mut engine, &ioc, &verdicts, clock_anchor);
         ioc_scan::annotate(&mut network.new_tabs, &network.http, &ioc, &verdicts);
         let output = engine.finish(&files);
+        // What a later filter, sort or page of this run is answered from.
+        let kept_findings = request.tap.as_ref().map(|_| output.rows.clone());
+        let kept_marks = request.tap.as_ref().map(|_| output.info.clone());
         let mut process = finish_processes(nodes);
         if root_crash.is_some() {
             settle_crashed_start(&mut process, &recording.directory);
@@ -983,6 +1003,12 @@ impl Scan {
         }
         let stable_source =
             source_key == normalized::source_key(&recording.directory, pcap, pcap_open, request);
+        let rows = match (&request.tap, kept_findings, kept_marks) {
+            (Some(tap), Some(findings), Some(marks)) if complete => {
+                tap.seal(request, findings, marks, verdicts)
+            }
+            _ => None,
+        };
         let mut reasons = incomplete_reasons(&Source {
             scan_complete: complete,
             stable: stable_source,
@@ -1014,6 +1040,7 @@ impl Scan {
             None
         };
         Ok(ArchiveScan::new(ScanData {
+            rows,
             stamp,
             whole_run: crate::is_whole_run(request),
             ended_ms: run_ended_ms,
@@ -1027,11 +1054,7 @@ impl Scan {
             bpf_omitted,
             written_files,
             file_activity: Arc::new(activity),
-            file_changes: file_changes
-                .into_iter()
-                .skip(request.offsets[2])
-                .take(request.rows())
-                .collect(),
+            file_changes,
             read,
             read_omitted,
             budget_reached: budget_reached.is_some(),

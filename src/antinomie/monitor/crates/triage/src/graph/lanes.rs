@@ -29,7 +29,7 @@ pub struct Lane {
 pub type Siblings<'a> = (Option<usize>, &'a str, &'a [String]);
 
 /// Lane 0 stands for findings with no process of the run: the capture's own.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Lanes {
     pub list: Vec<Lane>,
     pub lookup: HashMap<(u64, u32), u32>,

@@ -84,8 +84,13 @@ pub fn collect(
             &mut inventory,
             &mut |kind, row, destination, port| {
                 observe(path, kind, row, destination, port)?;
-                if kind == RowKind::Http && http_query.keep_table(&row[0].values) {
-                    http_page.push(row.to_vec())?;
+                if kind == RowKind::Http {
+                    if let Some(tap) = &request.tap {
+                        tap.push(3, row);
+                    }
+                    if http_query.keep_table(&row[0].values) {
+                        http_page.push(row.to_vec())?;
+                    }
                 }
                 Ok(())
             },
@@ -132,6 +137,9 @@ pub fn collect(
         let query = query::compile_table(&request.filters[slot], fields);
         let mut page = sorting::Page::new(request, slot, cancel);
         for row in rows {
+            if let Some(tap) = &request.tap {
+                tap.push(slot, &row);
+            }
             if query.keep_table(&row[0].values) {
                 page.push(row)?;
             }

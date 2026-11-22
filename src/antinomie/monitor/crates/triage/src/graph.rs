@@ -22,7 +22,7 @@ pub use lanes::Lanes;
 pub use notify::HighRule;
 
 /// What one scan hands the UI for the graph.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct GraphScan {
     /// The findings the Suspicious table is filtered to, on lanes.
     pub index: GraphIndex,

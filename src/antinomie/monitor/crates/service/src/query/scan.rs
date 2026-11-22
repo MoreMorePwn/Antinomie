@@ -186,7 +186,11 @@ impl ScanStore {
         progress: Arc<scan_progress::ScanProgress>,
     ) {
         let slots = Arc::clone(&self.slots);
-        let deadline = self.deadline;
+        // A big recording needs longer than the fixed deadline (ANT-T0590).
+        let deadline = super::limits::scan_deadline_for(
+            self.deadline,
+            std::fs::metadata(dir.join("telemetry.raw")).map_or(0, |meta| meta.len()),
+        );
         std::thread::spawn(move || {
             let cancel = Arc::new(AtomicBool::new(false));
             let finished = Arc::new(AtomicBool::new(false));

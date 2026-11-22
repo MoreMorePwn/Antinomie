@@ -61,6 +61,21 @@ impl QuerySettings {
     }
 }
 
+/// Seconds a Triage scan may take for each MiB of `telemetry.raw`, once the
+/// recording is bigger than the fixed `scan_s` covers (ANT-T0590). The zerobot
+/// run (589 MiB) took 417 s on a loaded machine after the T0588 fixes, 0.7 s
+/// a MiB; 3 s a MiB leaves four times that.
+pub const SCAN_SECONDS_PER_MIB: u64 = 3;
+/// The longest a scan's deadline scales to.
+pub const SCAN_DEADLINE_CAP: Duration = Duration::from_secs(4 * 3600);
+
+/// The deadline of a scan of a recording of `bytes`: `base` (`scan_s`), or
+/// [`SCAN_SECONDS_PER_MIB`] a MiB up to [`SCAN_DEADLINE_CAP`] when that is longer.
+pub fn scan_deadline_for(base: Duration, bytes: u64) -> Duration {
+    let scaled = Duration::from_secs((bytes >> 20).saturating_mul(SCAN_SECONDS_PER_MIB));
+    base.max(scaled.min(SCAN_DEADLINE_CAP))
+}
+
 /// How many leading items of `sizes` fit in [`PAGE_BYTES`]; at least one when
 /// there is one, because a single row is bounded by the engine's previews.
 pub fn fit_in_page(sizes: impl IntoIterator<Item = usize>) -> usize {
@@ -79,6 +94,23 @@ pub fn fit_in_page(sizes: impl IntoIterator<Item = usize>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_big_recording_gets_a_longer_scan_deadline_and_a_small_one_keeps_scan_s() {
+        let base = Duration::from_secs(900);
+        let mib = 1u64 << 20;
+        assert_eq!(scan_deadline_for(base, 0), base);
+        assert_eq!(scan_deadline_for(base, 100 * mib), base);
+        // 589 MiB (the zerobot run): 1767 s instead of 900.
+        assert_eq!(
+            scan_deadline_for(base, 589 * mib),
+            Duration::from_secs(1767)
+        );
+        assert_eq!(scan_deadline_for(base, 1_000_000 * mib), SCAN_DEADLINE_CAP);
+        // A configured deadline longer than the cap stays.
+        let long = Duration::from_secs(10 * 3600);
+        assert_eq!(scan_deadline_for(long, 1_000_000 * mib), long);
+    }
 
     #[test]
     fn service_toml_sets_the_pools_the_deadlines_and_the_lookup_mode() {
