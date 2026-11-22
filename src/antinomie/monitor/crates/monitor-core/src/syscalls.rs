@@ -1165,6 +1165,12 @@ impl Table {
             ("memfd_secret", 0, "unknown") => "cloexec",
             _ => group,
         };
+        // A 32-bit C argument sits in the low half of its register; the
+        // upper half is whatever the caller left there.
+        let value = match info.arguments[index].c_type.as_str() {
+            "int" | "unsigned int" | "unsigned" | "u32" | "__u32" | "rwf_t" => value & 0xffff_ffff,
+            _ => value,
+        };
         Some(self.flag_group(group, value))
     }
 
@@ -1230,8 +1236,12 @@ mod tests {
         assert!(!tmpfile.names.contains(&"O_DIRECTORY".into()));
         assert!(tmpfile.names.contains(&"O_RDWR".into()));
         assert_eq!(tmpfile.unknown_bits, 0);
-        let future = argument_flags(2, 1, 1 << 63).unwrap();
-        assert_eq!(future.unknown_bits, 1 << 63);
+        // `open`'s flags are an `int`: a dirty upper register half is not shown.
+        let dirty = argument_flags(2, 1, 0xffff_ffff_0000_0000).unwrap();
+        assert_eq!(dirty.names, ["O_RDONLY"]);
+        assert_eq!(dirty.unknown_bits, 0);
+        let future = argument_flags(2, 1, 1 << 31).unwrap();
+        assert_eq!(future.unknown_bits, 1 << 31);
         assert!(argument_flags(0, 0, 0).is_none());
     }
 

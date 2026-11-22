@@ -88,6 +88,8 @@ pub(crate) fn materialize(root: &Path) -> Result<PathBuf, String> {
 
 const SERIES_DIR: &str = "src/antinomie/core/6.12/";
 const KERNEL_SCRIPT: &str = "scripts/build-monitor-kernel.sh";
+/// The script that turns the built kernel into the symbol table it ships with.
+const KERNEL_SYMBOLS_SCRIPT: &str = "scripts/make-kernel-symbols.py";
 
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -123,17 +125,40 @@ pub(crate) fn kernel_cache_for(
     kernel_profile: &str,
     arch: crate::api::GuestArch,
 ) -> Result<PathBuf, String> {
-    let script = sha256_hex(kit_file(KERNEL_SCRIPT)?);
-    let mut text = format!("{kernel_profile}\n{}\n{script}", series_hash());
+    let key = kernel_cache_key(
+        kernel_profile,
+        arch,
+        kit_file(KERNEL_SCRIPT)?,
+        kit_file(KERNEL_SYMBOLS_SCRIPT)?,
+    );
     let mut name = kernel_profile.to_owned();
     if arch != crate::api::GuestArch::X86_64 {
-        text.push_str(&format!("\n{}", arch.label()));
         name.push_str(&format!("-{}", arch.label()));
     }
-    let key = sha256_hex(text.as_bytes());
     Ok(root
         .join("kernels")
         .join(format!("kernel-{name}-{}.tar", &key[..16])))
+}
+
+/// The cache key of a kernel: the series, the profile, the architecture and
+/// both scripts that make the kernel (build and symbols), so a change to
+/// either one builds a new kernel instead of reusing a stale one.
+fn kernel_cache_key(
+    kernel_profile: &str,
+    arch: crate::api::GuestArch,
+    build_script: &[u8],
+    symbols_script: &[u8],
+) -> String {
+    let mut text = format!(
+        "{kernel_profile}\n{}\n{}",
+        series_hash(),
+        sha256_hex(build_script)
+    );
+    text.push_str(&format!("\nsymbols {}", sha256_hex(symbols_script)));
+    if arch != crate::api::GuestArch::X86_64 {
+        text.push_str(&format!("\n{}", arch.label()));
+    }
+    sha256_hex(text.as_bytes())
 }
 
 /// Where the Debian root filesystem bootstrapped for `name` (a desktop, or
@@ -478,6 +503,15 @@ mod tests {
             )
         );
         assert_eq!(toolchain_of("Linux version 6.12.94 (a@b) #1 SMP"), None);
+    }
+
+    #[test]
+    fn the_kernel_cache_key_follows_both_kernel_scripts() {
+        let x86 = crate::api::GuestArch::X86_64;
+        let key = kernel_cache_key("stock", x86, b"build", b"symbols");
+        assert_eq!(key, kernel_cache_key("stock", x86, b"build", b"symbols"));
+        assert_ne!(key, kernel_cache_key("stock", x86, b"build2", b"symbols"));
+        assert_ne!(key, kernel_cache_key("stock", x86, b"build", b"symbols2"));
     }
 
     #[test]
