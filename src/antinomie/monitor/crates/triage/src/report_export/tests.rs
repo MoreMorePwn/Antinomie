@@ -460,7 +460,7 @@ fn an_export_that_asked_for_no_kept_index_leaves_none() {
 }
 
 #[test]
-fn a_filtered_screen_index_is_never_the_report_input() {
+fn a_filtered_screen_index_gives_the_report_the_whole_run_from_its_rows() {
     let (temp, pcap) = fixture();
     let mut job = job(&temp, &pcap, json_only());
     job.pcap = None;
@@ -470,7 +470,13 @@ fn a_filtered_screen_index_is_never_the_report_input() {
     let cancel = Arc::new(AtomicBool::new(false));
     let screen = scan_archive_query(&temp.directory, None, false, &cancel, &filtered).unwrap();
     assert!(!screen.whole_run);
-    assert_eq!(statuses(&job).0[0], "Indexing the whole run...");
+    assert!(screen.findings.is_empty());
+    // The report is of the whole run, not of what the table shows: it is made
+    // from the screen's kept rows without reading the recording (ANT-T0590).
+    let (said, json) = statuses(&job);
+    assert_eq!(said[0], "Using the index Triage already made...");
+    let json: serde_json::Value = serde_json::from_str(&read(&json)).unwrap();
+    assert!(!json["findings"]["rows"].as_array().unwrap().is_empty());
 }
 
 #[test]

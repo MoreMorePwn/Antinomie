@@ -225,7 +225,7 @@ pub struct Injection {
 }
 
 /// The whole index of one view of the findings.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct GraphIndex {
     pub geometry: Option<Geometry>,
     pub lanes: Lanes,

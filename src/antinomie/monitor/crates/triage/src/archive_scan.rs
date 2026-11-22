@@ -3,6 +3,13 @@
 use super::*;
 
 pub mod stages;
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// Scans of a recording this thread has started (the kept index answers
+    /// without one); tests bound a filter change by it.
+    pub static READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 #[cfg(test)]
 mod timing;
 
@@ -109,6 +116,24 @@ pub fn scan_archive_query(
     if let Some(done) = &request.reuse {
         return Ok(done.clone());
     }
+    // Only the filters, sorts and pages differ from an index kept in this
+    // process: its rows answer them without reading the recording (ANT-T0590).
+    if let Some(answer) = scan_cache::derive(directory, pcap, pcap_open, cancel, request) {
+        return answer;
+    }
+    scan_archive_uncached(directory, pcap, pcap_open, cancel, request)
+}
+
+/// [`scan_archive_query`] without the kept index: the recording is read.
+pub fn scan_archive_uncached(
+    directory: &Path,
+    pcap: Option<&Path>,
+    pcap_open: bool,
+    cancel: &Arc<AtomicBool>,
+    request: &ScanRequest,
+) -> Result<ArchiveScan, String> {
+    #[cfg(any(test, feature = "test-support"))]
+    READS.with(|reads| reads.set(reads.get() + 1));
     // A read that waits for the run's index (another reader or a build of it
     // holds it) says so instead of freezing on its count (ANT-T0575).
     match &request.progress {
@@ -130,6 +155,23 @@ fn scan_with_progress(
     cancel: &Arc<AtomicBool>,
     request: &ScanRequest,
 ) -> Result<ArchiveScan, String> {
+    // A scan that keeps its index records the rows its tables are made from, so
+    // a later filter, sort or page of this recording is answered from them.
+    let tapped;
+    let request = if request.keep_index && request.stop.is_none() && request.tap.is_none() {
+        match row_index::Tap::new() {
+            Ok(tap) => {
+                tapped = ScanRequest {
+                    tap: Some(tap),
+                    ..request.clone()
+                };
+                &tapped
+            }
+            Err(_) => request,
+        }
+    } else {
+        request
+    };
     // The index of a large recording is built on this thread, in the first
     // call that counts the calls: it tells the request's progress as it goes.
     let opened = match &request.progress {

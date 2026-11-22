@@ -72,6 +72,7 @@ pub struct Output {
 }
 
 /// One INFO match kept as a count at a time, not as a row.
+#[derive(Clone)]
 pub struct InfoMark {
     pub ns: u64,
     pub count: u32,

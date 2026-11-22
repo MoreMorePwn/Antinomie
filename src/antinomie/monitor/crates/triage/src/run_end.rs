@@ -28,6 +28,7 @@ pub const KILL_ESCALATED: u64 = 32;
 pub const LISTED: usize = 4;
 
 /// One recorded call that sent a signal.
+#[derive(Clone)]
 pub struct SignalCall {
     pub time_ns: u64,
     pub sender: u32,
@@ -38,7 +39,7 @@ pub struct SignalCall {
 }
 
 /// What the scan saw of signals, for explaining how tasks ended.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SignalNotes {
     pub sent: Vec<SignalCall>,
     pub omitted: u64,

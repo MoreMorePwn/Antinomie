@@ -77,6 +77,10 @@ pub mod process_tree;
 pub mod process_tree_tests;
 pub mod refresh;
 pub mod report_export;
+pub mod requery;
+#[cfg(test)]
+mod requery_tests;
+pub mod row_index;
 pub mod rules;
 pub mod run_end;
 pub mod run_state;
@@ -243,7 +247,7 @@ pub enum Spawn {
     Skip,
 }
 
-#[cfg_attr(any(test, feature = "test-support"), derive(Clone))]
+#[derive(Clone)]
 pub struct ProcessNode {
     pub parent: Option<TaskKey>,
     pub call_id: Option<trace::InvocationKey>,
@@ -412,6 +416,8 @@ pub struct ScanRequest {
     /// A budget the passes over the calls stop at, leaving a partial index
     /// ([`scan_progress::ScanStop`]); `None` reads the whole run.
     pub stop: Option<Arc<scan_progress::ScanStop>>,
+    /// Set by the scan when it keeps its rows ([`row_index`]); not a caller's.
+    pub tap: Option<Arc<row_index::Tap>>,
 }
 
 impl ScanRequest {
@@ -514,7 +520,7 @@ pub struct FindingJournal {
 }
 
 /// One file tab's rows kept in memory, and the matches left out of them.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct FileRows {
     pub rows: Vec<Vec<Cell>>,
     pub omitted: u64,
@@ -546,7 +552,12 @@ impl std::ops::DerefMut for ArchiveScan {
     }
 }
 
+#[derive(Clone)]
 pub struct ScanData {
+    /// The rows of the query tables before their filter, sort and page, when
+    /// the scan kept them: a request that differs only in filters, sorts and
+    /// pages is answered from them ([`requery`]).
+    pub rows: Option<Arc<row_index::RowIndex>>,
     /// [`source_stamp`] of the recording when this index began.
     pub stamp: String,
     /// The index was made with no filter, sort, page or toggle: the whole run
@@ -623,7 +634,7 @@ pub struct ScanData {
 }
 
 /// The rows of the rebuilt Network tabs and what their pages left out.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct NewTabs {
     pub endpoints: Vec<Vec<Cell>>,
     pub endpoints_omitted: u64,
@@ -690,6 +701,7 @@ pub enum DupKind {
     Argument,
 }
 
+#[derive(Clone)]
 pub struct BpfNote {
     pub heading: String,
     /// One-line summary of the step, for the Observation column.

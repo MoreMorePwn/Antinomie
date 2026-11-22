@@ -190,7 +190,7 @@ pub fn cache(
     })
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Counts {
     pub calls: u64,
     /// The badge: rows of LOW and above that are not hidden, and the capped ones.
