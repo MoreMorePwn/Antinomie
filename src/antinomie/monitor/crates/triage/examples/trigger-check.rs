@@ -236,9 +236,13 @@ fn new_image(core: &antinomie_monitor_core::dump_trigger::TriggerDump) -> Result
 /// `dropexec-spawnlong`: the dropped program starts a helper with vfork at
 /// once that outlasts the host's retries, and while it waits for it the guest
 /// cannot pause it (`dropexec-spawn`, whose helper starts a program after
-/// 1.5 s, gets its core on a retry). The first core is refused, and the reason names the started program; the refusal does not
-/// use up the trigger's one core, so the later match (the program writes a
-/// cron entry once the helper is done) takes it.
+/// 1.5 s, gets its core on a retry). Either the first core is refused, the
+/// reason names the started program, the refusal does not use up the
+/// trigger's one core, and the later match (the program writes a cron entry
+/// once the helper is done) takes it; or the core of the new image lands
+/// before the helper's vfork (a race of the fixture, correct behaviour): the
+/// first core is Complete, not refused, and the only one that counts. The
+/// branch taken is printed. Either way at most `max_cores` (1) cores count.
 fn spawned(run: &RunSummary) -> Result<(), String> {
     let log = run.triggers.as_ref().ok_or("no trigger log")?;
     let first = log.records.first().ok_or("no trigger record")?;
@@ -246,9 +250,23 @@ fn spawned(run: &RunSummary) -> Result<(), String> {
     if first.finding.rule != "execution.dropped_exec" {
         return Err(format!("first trigger by {}", first.finding.rule));
     }
+    let counted = log.records.iter().filter(|record| record.counts()).count();
+    if counted > 1 {
+        return Err(format!(
+            "{counted} records count, the trigger allows one core"
+        ));
+    }
+    if !core.refused && matches!(core.state, RunArtifactState::Complete) {
+        if !first.counts() {
+            return Err("the first core is Complete but does not count".into());
+        }
+        new_image(core)?;
+        println!("SPAWNLONG branch: core before the helper's vfork (first core Complete, the only one counted)");
+        return Ok(());
+    }
     if !(core.refused && matches!(core.state, RunArtifactState::Failed)) {
         return Err(format!(
-            "the first core {:?} (refused {}): {:?}, expected a refused one",
+            "the first core {:?} (refused {}): {:?}, expected a refused one or a Complete one",
             core.state, core.refused, core.error
         ));
     }
@@ -270,6 +288,7 @@ fn spawned(run: &RunSummary) -> Result<(), String> {
     if !taken {
         return Err("no later match took the core the refusal left".into());
     }
+    println!("SPAWNLONG branch: first core refused (not counted), a later match took the core");
     Ok(())
 }
 
