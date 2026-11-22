@@ -126,6 +126,8 @@ impl Tap {
 
     /// A tap whose logs may hold `limit` bytes of rows together.
     pub fn with_limit(limit: u64) -> Result<Arc<Self>, String> {
+        static SWEPT: std::sync::Once = std::sync::Once::new();
+        SWEPT.call_once(|| sweep_dead_spools(&std::env::temp_dir()));
         let mut logs = Vec::new();
         for slot in LOGGED {
             logs.push((slot, Mutex::new(RowLog::new()?)));
@@ -269,4 +271,35 @@ fn facts(request: &ScanRequest) -> String {
         request.launch,
         request.identity
     )
+}
+
+/// Remove the spool folders (`antinomie-triage-<pid>-<n>`) of processes that are
+/// gone. The kept index is held by the process until it exits, and a process
+/// that exits (or is killed) does not run its destructors, so its logs would
+/// stay in the temp folder for good. The next process to keep an index clears them.
+pub fn sweep_dead_spools(temp: &Path) {
+    // Without /proc nothing says a process is gone.
+    if !Path::new("/proc/self").exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(temp) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let pid = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("antinomie-triage-"))
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|pid| pid.parse::<u32>().ok());
+        let (Some(pid), Ok(kind)) = (pid, entry.file_type()) else {
+            continue;
+        };
+        if kind.is_dir()
+            && pid != std::process::id()
+            && !Path::new(&format!("/proc/{pid}")).exists()
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }

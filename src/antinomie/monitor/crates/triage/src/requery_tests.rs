@@ -269,3 +269,27 @@ fn a_table_log_replays_its_rows_in_scan_order_through_the_scans_own_pages() {
         assert_eq!((got_omitted, got_total), (want_omitted, want_total));
     }
 }
+
+#[test]
+fn the_logs_of_a_process_that_is_gone_are_swept_and_a_live_one_is_left() {
+    let folder = PacketSpool::new().unwrap();
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    let make = |pid: u32| {
+        let dir = folder.directory.join(format!("antinomie-triage-{pid}-7"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("rows.sqlite"), b"x").unwrap();
+        dir
+    };
+    let (stale, own, other) = (
+        make(dead),
+        make(std::process::id()),
+        folder.directory.join("antinomie-triage-notapid-1"),
+    );
+    std::fs::create_dir_all(&other).unwrap();
+    row_index::sweep_dead_spools(&folder.directory);
+    assert!(!stale.exists(), "a gone process's folder is removed");
+    assert!(own.exists(), "this process's folder stays");
+    assert!(other.exists(), "a name that is not ours stays");
+}
