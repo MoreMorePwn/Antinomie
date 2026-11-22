@@ -41,6 +41,9 @@
 //! disk bus (`transparent disk=sata`). The profile defaults to transparent.
 //!
 //! The data folder must be new and disposable.
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::route::RouteKind;
 use antinomie_monitor_core::stealth::{
     BaseSupport, CLOUDS, DiskBus, Firmware, HostCpu, HostSupport, MACHINES, NatNetwork,
@@ -370,7 +373,7 @@ impl Driver {
                 && s.serial_log
                     .as_ref()
                     .and_then(|p| fs::read(p).ok())
-                    .is_some_and(|log| log.windows(ready.len()).any(|part| part == ready))
+                    .is_some_and(|log| serial_ready::ready(&log, ready))
         })
     }
 

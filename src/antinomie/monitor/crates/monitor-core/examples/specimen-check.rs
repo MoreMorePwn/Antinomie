@@ -19,6 +19,9 @@
 //!
 //! Every check prints a PASS or FAIL line; the data folder must be new and
 //! disposable.
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::*;
 use sha2::{Digest, Sha256};
 use std::{
@@ -131,7 +134,7 @@ impl Driver {
                 .serial_log
                 .as_ref()
                 .and_then(|p| fs::read(p).ok())
-                .is_some_and(|log| log.windows(19).any(|w| w == b"BusyBox guest ready"))
+                .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
         })?;
         Ok(vm_id)
     }

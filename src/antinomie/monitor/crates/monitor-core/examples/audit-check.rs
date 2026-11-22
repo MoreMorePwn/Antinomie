@@ -11,6 +11,9 @@
 //! FIXTURE is the static `tests/monitor/audit-fixture` program (PROBE is
 //! `tests/monitor/creds-hash-probe`). The data folder must be new and
 //! disposable. One BusyBox VM, one vCPU. Every result is a `RESULT` line.
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -191,7 +194,7 @@ fn setup(bundle: &str, data: &str, name: &str) -> Result<Driver, String> {
             && s.serial_log
                 .as_ref()
                 .and_then(|p| fs::read(p).ok())
-                .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
+                .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
     })?;
     Ok(driver)
 }

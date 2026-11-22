@@ -27,6 +27,9 @@
 //! failed, as above); the
 //! last none, and a note saying the trigger was armed but never matched. Every
 //! program is benign. The data folder must be new and disposable.
+#[path = "../../monitor-core/examples/support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::dump_trigger::{DumpTrigger, TriggerTier};
 use antinomie_monitor_core::*;
 use std::{
@@ -119,7 +122,7 @@ impl Driver {
                 && s.serial_log
                     .as_ref()
                     .and_then(|p| fs::read(p).ok())
-                    .is_some_and(|log| log.windows(19).any(|w| w == b"BusyBox guest ready"))
+                    .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
         })?;
         thread::sleep(Duration::from_secs(3));
         Ok(vm_id)

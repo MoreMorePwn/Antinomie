@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
+#[path = "../../monitor-core/examples/support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::{
     recording::{list_runs, open_recording},
     Backend, BackendOptions, Command, ExecRequest, Notification, RunExecution, RunState,
@@ -188,10 +191,7 @@ fn run() -> Result<(), String> {
             .serial_log
             .as_ref()
             .and_then(|path| std::fs::read(path).ok())
-            .is_some_and(|data| {
-                data.windows(b"BusyBox guest ready".len())
-                    .any(|part| part == b"BusyBox guest ready")
-            })
+            .is_some_and(|data| serial_ready::ready(&data, b"BusyBox guest ready"))
         {
             break;
         }

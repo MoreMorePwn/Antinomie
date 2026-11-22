@@ -14,6 +14,9 @@
 //! neighbours along: the kernel's fault-around), carry CORE_NONRESIDENT, and
 //! its file's mapping must hold every page's bytes ("page N" at each page).
 //! Every program is benign; the data folder must be new and disposable.
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
@@ -205,7 +208,7 @@ fn check(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
             && s.serial_log
                 .as_ref()
                 .and_then(|p| fs::read(p).ok())
-                .is_some_and(|log| log.windows(19).any(|w| w == b"BusyBox guest ready"))
+                .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
     })?;
     if !d.snapshot.guest_core_limits.is_some_and(|l| l.nonresident) {
         return Err("this base does not offer the non-resident policy (revision 22)".into());

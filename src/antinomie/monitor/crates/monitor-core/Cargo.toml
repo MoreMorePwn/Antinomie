@@ -52,6 +52,11 @@ path = "examples/snapshot-check.rs"
 test = true
 
 [[example]]
+name = "stealth-check"
+path = "examples/stealth-check.rs"
+test = true
+
+[[example]]
 name = "guest-run"
 path = "examples/guest-run.rs"
 test = true

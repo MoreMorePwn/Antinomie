@@ -11,6 +11,9 @@
 //! own (a call that names a file under /etc/cron.d) in place of the app's
 //! Triage rules and writes the host-side timing of each step to the table.
 //! The data folder must be new and disposable.
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::dump_trigger::{DumpTrigger, LiveFinding, LiveJudge, TriggerTier};
 use antinomie_monitor_core::route::RouteKind;
 use antinomie_monitor_core::stealth::{CLOUDS, StealthProfile};
@@ -163,7 +166,7 @@ impl Driver {
                 && s.serial_log
                     .as_ref()
                     .and_then(|p| fs::read(p).ok())
-                    .is_some_and(|log| log.windows(19).any(|w| w == b"BusyBox guest ready"))
+                    .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
         })?;
         thread::sleep(Duration::from_secs(3));
         Ok(vm_id)

@@ -34,6 +34,9 @@
 //! With `ANTINOMIE_FORCE_TCG` set the VM runs without KVM and the waits are
 //! eight times longer. The data folder must be new and disposable. Every
 //! result is a `RESULT` line.
+#[path = "support/serial_ready.rs"]
+mod serial_ready;
+
 use antinomie_monitor_core::kernel_notes::{self, FileHash, HashKind, HashStatus};
 use antinomie_monitor_core::*;
 use sha2::{Digest, Sha256};
@@ -195,7 +198,7 @@ fn setup(bundle: &str, data: &str, name: &str) -> Result<Driver, String> {
             && s.serial_log
                 .as_ref()
                 .and_then(|p| fs::read(p).ok())
-                .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
+                .is_some_and(|log| serial_ready::ready(&log, b"BusyBox guest ready"))
     })?;
     // The tracer probe follows INFO and CORE_CAPS.
     driver.wait("tracer capabilities", 30, |s| s.guest_tracer.is_some())?;
