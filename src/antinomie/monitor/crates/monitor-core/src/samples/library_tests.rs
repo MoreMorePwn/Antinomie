@@ -1071,7 +1071,7 @@ fn the_custody_writer_retries_a_busy_database_and_drops_nothing() {
 fn added_from_file(name: &str) -> NewSample {
     NewSample {
         origin: NewOrigin {
-            path: format!("/home/someone/{name}"),
+            path: format!("/tmp/inbox/{name}"),
             ..NewOrigin::default()
         },
         ..NewSample::default()
@@ -1132,7 +1132,7 @@ fn a_password_archive_is_unwrapped_and_the_custody_names_the_outer_archive() {
         text.contains("feed.zip") && text.contains(&sha(&outer)),
         "{text}"
     );
-    assert!(!text.contains("/home/someone"));
+    assert!(!text.contains("/tmp/inbox"));
     // The outer ZIP was never added as a sample.
     assert!(library.get(&sha(&outer)).unwrap().is_none());
     // Kept on request.
