@@ -70,9 +70,12 @@ pub enum CollectPart {
     /// Saving the recording after the stop: the writes, `fsync`, the raw
     /// recording's SHA-256 and the final files.
     Saving,
-    /// The VM's disk layer after the boot: the copy of the earlier bytes of
-    /// the files the run changed, and the merge.
+    /// The VM's disk layer after the boot: the merge, and the copy of the
+    /// earlier bytes of the files the run changed when it could not wait.
     DiskLayer,
+    /// After the lane let the VM go: how long the `triage` item waited for
+    /// the copy of the earlier bytes (a scan of the whole recording).
+    EarlierBytes,
 }
 
 /// The `lane.state` values (design 5.4.8).

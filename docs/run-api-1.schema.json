@@ -2052,6 +2052,43 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "run.collect"
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "part": {
+                  "$ref": "#/$defs/CollectPart"
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "detail": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "part",
+                "duration_ms"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "description": "One part of `collect` is over: how long it took, and what it waited\nfor (`detail`). No host paths."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "run.assessment"
             },
             "data": {
@@ -2272,6 +2309,41 @@
       "type": "string",
       "pattern": "^(drop|inet_sim|internet|nat|tor|(vpn|socks5)(:[A-Za-z0-9._-]{1,64})?)$",
       "description": "A network route: drop, inet_sim, internet, nat, tor, vpn[:NAME], socks5[:NAME]."
+    },
+    "CollectPart": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "evidence",
+          "description": "The wait for the network capture, memory dump and core dump."
+        },
+        {
+          "type": "string",
+          "const": "telemetry",
+          "description": "Telemetry the engine still took after the program ended, and the\nrecording writer's backlog (overlaps `evidence`)."
+        },
+        {
+          "type": "string",
+          "const": "stop",
+          "description": "From `Stop` until the VM is stopped."
+        },
+        {
+          "type": "string",
+          "const": "saving",
+          "description": "Saving the recording after the stop: the writes, `fsync`, the raw\nrecording's SHA-256 and the final files."
+        },
+        {
+          "type": "string",
+          "const": "disk_layer",
+          "description": "The VM's disk layer after the boot: the merge, and the copy of the\nearlier bytes of the files the run changed when it could not wait."
+        },
+        {
+          "type": "string",
+          "const": "earlier_bytes",
+          "description": "After the lane let the VM go: how long the `triage` item waited for\nthe copy of the earlier bytes (a scan of the whole recording)."
+        }
+      ],
+      "description": "The parts of `collect` that `run.collect` times (ANT-T0612)."
     },
     "LaneState": {
       "type": "string",

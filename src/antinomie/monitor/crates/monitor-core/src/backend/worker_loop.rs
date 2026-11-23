@@ -165,11 +165,14 @@ impl Worker {
             thread::sleep(Duration::from_millis(50));
         }
         self.poll_flush();
-        // The automatic disk layer of a boot that just ended is finished too
-        // (a limit: what is left goes on at the next start of the app).
+        // The automatic disk layer of a boot that just ended is finished too,
+        // and the copy of its earlier bytes (a limit: a copy left over is
+        // made by the next reader that needs it, `earlier_kept::finish`).
         let deadline = Instant::now() + Duration::from_secs(300);
         let vms: Vec<String> = self.snapshot.vms.iter().map(|vm| vm.id.clone()).collect();
-        while crate::snapshots::run_layer::working(&vms) && Instant::now() < deadline {
+        while (crate::snapshots::run_layer::working(&vms) || crate::earlier_kept::copying())
+            && Instant::now() < deadline
+        {
             self.poll_flush();
             thread::sleep(Duration::from_millis(100));
         }

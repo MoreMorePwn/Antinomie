@@ -31,6 +31,7 @@ mod collect_tests;
 mod drive;
 #[cfg(test)]
 mod drive_tests;
+mod earlier;
 mod finish;
 pub mod host;
 #[cfg(test)]

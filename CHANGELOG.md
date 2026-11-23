@@ -19,6 +19,8 @@ their entries are listed in full.
 
 ### Host
 
+- **A run that reached the trace cap no longer holds its lane for minutes (ANT-T0612).** `collect` waited for the copy of the earlier bytes of changed files, a scan of the whole recording (about 14 minutes for 2 GiB); the lane now lets the VM go once the recording is saved and the disk layer merged, and the `triage` item waits for the copy instead. The raw recording's SHA-256 is summed as it is written, so saving no longer reads the file again.
+- **`collect` says where its time went (ANT-T0612).** Each part is a `run.collect` event (`evidence`, `telemetry`, `stop`, `saving`, `disk_layer`, `earlier_bytes`) and the daemon log has a `collect took` line per run.
 - **The app shows the static analysis of Auto runs (ANT-T0611).** The Triage Summary and the Static analysis tab said no analysis was recorded for a run Auto made, because Auto kept its per-tool reports only in `<data>/analyses/`. The `analyse` stage now joins them into one report in the run's `analysis/` folder, where the window, the run API and the evidence bundle read it. Runs made before 0.9.1 keep showing none.
 - **`auto delete` and `auto gc` clean the static analyses (ANT-T0611).** `auto delete --with-recording` removes the run's `analyses/<id>` folders too; a plain `auto delete` prints what it kept (the recording and the analyses, with paths and sizes, also in JSON); `auto gc` removes the analysis folders of a run whose record is gone, and they go with the run's record at `jobs_days`.
 - **The first run on a fresh lane no longer fails on the core limits (ANT-T0611).** A launch that needs a process core waits up to 10 seconds (longer under TCG) for the guest to report its limits, instead of failing `launch_failed` "retry in a moment".

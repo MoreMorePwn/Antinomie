@@ -79,7 +79,7 @@ impl<E: Engine> LaneStages<'_, E> {
         vm: &str,
         stop_limit: Duration,
         end_cancel: bool,
-        mut clock: Option<&mut CollectClock>,
+        clock: Option<&mut CollectClock>,
     ) -> Result<Stopped, StageStop> {
         self.waiter.drain()?;
         let snapshot = self.waiter.snapshot();
@@ -110,7 +110,7 @@ impl<E: Engine> LaneStages<'_, E> {
                 Err(other) => return Err(StageStop::Abort(other)),
             }
         }
-        self.settle_recording(vm, end_cancel.then_some(job), clock.as_deref_mut())
+        self.settle_recording(vm, end_cancel.then_some(job), clock)
     }
 
     /// Wait until the VM is stopped and its recording final (`layer_s`), or

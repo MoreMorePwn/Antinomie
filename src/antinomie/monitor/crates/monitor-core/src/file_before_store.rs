@@ -252,12 +252,22 @@ pub fn worker_main_if_requested(copy: impl FnOnce(&Job) -> Result<(), String>) -
 /// Run the copy for `record`'s boot in a process of its own. Fails (and the
 /// boot's recording says so) when there is no program to run or it fails.
 pub(crate) fn copy_for(record: &crate::snapshots::run_layer::Record) -> Result<(), String> {
+    copy_boot(&record.boot_dir, &record.boot_id)
+}
+
+/// Whether a program is set up to make the copy ([`copy_for`]).
+pub(crate) fn copier_available() -> bool {
+    copier_executable().is_some()
+}
+
+/// [`copy_for`] by the boot's folder and id.
+pub(crate) fn copy_boot(boot_dir: &Path, boot_id: &str) -> Result<(), String> {
     let exe = copier_executable().ok_or("no program is set up to copy the earlier bytes")?;
     let limits = limits();
     let mut child = std::process::Command::new(exe)
         .arg(COPY_FLAG)
-        .arg(&record.boot_dir)
-        .arg(&record.boot_id)
+        .arg(boot_dir)
+        .arg(boot_id)
         .arg(limits.per_file.to_string())
         .arg(limits.per_run.to_string())
         .stdin(std::process::Stdio::null())

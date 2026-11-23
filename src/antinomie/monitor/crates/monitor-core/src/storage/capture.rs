@@ -36,6 +36,8 @@ pub struct RawCapture {
     /// The writer's error, kept apart from `error` so an earlier quota error
     /// cannot hide that data was lost (`sync` reports it).
     write_failure: Option<String>,
+    /// The file's SHA-256 as the writer wrote it ([`Self::sha256`]).
+    digest: crate::writer::RunningDigest,
     quota: u64,
     pub packets: u64,
     pub bytes: u64,
@@ -69,6 +71,20 @@ impl RawCapture {
             message
         })
     }
+    /// The SHA-256 of `telemetry.raw` as written, after [`Self::sync`]:
+    /// summed by the writer block by block, so the end of a recording does
+    /// not read the file again (ANT-T0612). `None` when a write failed or
+    /// the file is not the length written.
+    pub(crate) fn sha256(&self) -> Option<String> {
+        if self.write_failure.is_some()
+            || !self.buffer.is_empty()
+            || !crate::writer::is_done(self.ticket)
+            || self.file.metadata().ok()?.len() != self.written.0
+        {
+            return None;
+        }
+        crate::writer::digest_hex(&self.digest)
+    }
     /// Every packet appended so far is in the file: nothing is buffered and
     /// the writer has finished the last block. Hands the buffer over first;
     /// never waits.
@@ -91,6 +107,7 @@ impl RawCapture {
             write_error: crate::writer::error_slot(),
             write_error_seen: false,
             write_failure: None,
+            digest: std::sync::Arc::new(std::sync::Mutex::new(None)),
             quota,
             packets: 0,
             bytes: 0,
@@ -117,6 +134,7 @@ impl RawCapture {
             write_error: crate::writer::error_slot(),
             write_error_seen: false,
             write_failure: None,
+            digest: crate::writer::running_digest(),
             quota,
             packets: 0,
             bytes: 0,
@@ -205,6 +223,7 @@ impl RawCapture {
                 data: std::mem::take(&mut self.buffer),
                 rollback: self.written.0,
                 error: self.write_error.clone(),
+                digest: Some(self.digest.clone()),
             };
             let submitted = if blocking {
                 Ok(crate::writer::submit(op))

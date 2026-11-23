@@ -15,7 +15,8 @@ it. The script prints and saves (out/trace-cap.json):
   line;
 * the host work items and their times;
 * the earlier bytes the recording kept (file-before/index.json): the fixture
-  appends a line to /etc/hostname, so that file must be there.
+  appends a line to an existing file (/etc/hostname, else /etc/profile,
+  /etc/inittab or /etc/passwd), so that file must be there with its bytes.
 
     test-auto-trace-cap.py --work DIR --base BASE [--cap-mib 256] [--vm-slot PREFIX]
 
@@ -38,6 +39,8 @@ spec.loader.exec_module(av)
 FIXTURE = Path(__file__).resolve().with_name("trace-cap-fixture.c")
 JOB_TIMEOUT_S = 3600
 CHANGED_FILE = "/etc/hostname"
+# The fixture changes the first of these that exists on the guest's disk.
+CHANGED_FILES = (CHANGED_FILE, "/etc/profile", "/etc/inittab", "/etc/passwd")
 
 
 def parser():
@@ -123,7 +126,8 @@ def main(argv=None):
         checks.check(code == 0, "config validate exit 0" + ("" if code == 0 else f": {err.strip()[-300:]}"))
         daemon.start("trace-cap", args.mem_gate_mb)
         submitted = time.monotonic()
-        job = av.submit(cli, fixture, timeout_run=args.run_s, name="trace-cap",
+        # As root: the changed file is a system file of the guest's disk.
+        job = av.submit(cli, fixture, timeout_run=args.run_s, name="trace-cap", run_as="root",
                         args=("--getpid", str(args.getpid), "--file", CHANGED_FILE))
         job = av.wait_job(cli, job["id"], JOB_TIMEOUT_S * factor, watch=watch, daemon=daemon, poll=2.0)
         summary["job_s"] = round(time.monotonic() - submitted, 1)
@@ -162,9 +166,10 @@ def main(argv=None):
             checks.note(f"host work {item['name']}: {item['state']} {item['s']} s")
         index = file_before(job)
         summary["file_before"] = index
-        kept = [f for f in (index or {}).get("files") or [] if f.get("path") == CHANGED_FILE]
+        kept = [f for f in (index or {}).get("files") or []
+                if f.get("path") in CHANGED_FILES and f.get("blob") and f.get("sha256")]
         checks.check(bool(index) and index.get("complete") and bool(kept),
-                     f"the earlier bytes of {CHANGED_FILE} are kept "
+                     f"the earlier bytes of the changed file are kept "
                      f"(complete {None if index is None else index.get('complete')}, note "
                      f"{None if index is None else index.get('note')}, files "
                      f"{[f.get('path') for f in (index or {}).get('files') or []]})")

@@ -5,8 +5,9 @@
  * seconds (ANT-T0612, tests/monitor/test-auto-trace-cap.py).
  *
  * First it appends one line to an existing file on the guest's disk
- * (/etc/hostname by default), so the run has a changed file whose earlier
- * bytes the recording keeps. Then, until it is stopped or --seconds pass,
+ * (--file, else the first of /etc/profile, /etc/inittab and /etc/passwd
+ * that exists), so the run has a changed file whose earlier bytes the
+ * recording keeps. Then, until it is stopped or --seconds pass,
  * every round makes --getpid getpid() calls and one non-blocking connect()
  * to a random address of TEST-NET-1/2/3 (192.0.2.0/24, 198.51.100.0/24,
  * 203.0.113.0/24: documentation ranges, never routed) or of 10.0.0.0/8,
@@ -52,11 +53,18 @@ static in_addr_t unroutable(unsigned long *state)
 
 static void touch_file(const char *path)
 {
-    int fd = open(path, O_WRONLY | O_APPEND | O_CLOEXEC);
+    /* The first of these that exists on the guest's disk. */
+    const char *const choices[] = {path, "/etc/profile", "/etc/inittab", "/etc/passwd"};
+    int fd = -1;
+    for (unsigned i = 0; i < sizeof choices / sizeof *choices && fd < 0; i++) {
+        path = choices[i];
+        fd = open(path, O_WRONLY | O_APPEND | O_CLOEXEC);
+    }
     if (fd < 0) {
-        fprintf(stderr, "trace-cap-fixture: %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "trace-cap-fixture: no file to change: %s\n", strerror(errno));
         return;
     }
+    printf("trace-cap-fixture: changed %s\n", path);
     static const char line[] = "# trace-cap-fixture was here\n";
     if (write(fd, line, sizeof line - 1) < 0) {
         fprintf(stderr, "trace-cap-fixture: write %s: %s\n", path, strerror(errno));

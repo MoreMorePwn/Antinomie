@@ -53,10 +53,34 @@ run, and the run's host work goes to the **host work pool** (see below).
 | `upload` | lane | Sends the sample from the library into the guest at the preset's `program.guest_path` (`/tmp/<sha8>-<name>`); the sample is decrypted in memory and never touches the host's disk | 60 s and 1 s per 10 MiB |
 | `launch` | lane | Starts the program in the app terminal with the preset's arguments, environment, working directory and user | 30 s |
 | `run` | lane | Lets it run until it exits or the run time (the preset's `program.run_time_s`, at most 1800) | the limit |
-| `collect` | lane | Waits for the network capture, memory dump and core dump to finish, stops the VM, waits until the recording is saved and the disk layer has settled | collect 300 s, stop 120 s, layer 1800 s |
+| `collect` | lane | Waits for the network capture, memory dump and core dump to finish, stops the VM, waits until the recording is saved and the disk layer has settled (see "Collect and the trace cap" below) | collect 300 s, stop 120 s, layer 1800 s |
 | `analyse` | host | Static checks of the library copy in bubblewrap, the Triage scan and the detection engines on the recording, Check online when the preset asks for it, the digest and the assessment | per item, 2 x its expected time (Check online: 300 s) |
 | `report` | host | The report files you asked for | 2 x its expected time |
 | `cleanup` | host | Retention, result files and the command hook | 60 s |
+
+### Collect and the trace cap
+
+`collect` holds the lane only until the guest's data has arrived, the VM is
+stopped, the recording is saved (its writes, `fsync` and the SHA-256 of the raw
+recording, summed as it was written) and the VM's disk layer is merged. The
+copy of the earlier bytes of the files the run changed, which reads the whole
+recording to find them, comes after: the small layer the run started from is
+kept aside in the boot's recording (`file-before-start/`), the lane takes the
+next run, and the `triage` item waits for the copy before it reads the run
+(`run.progress` "waiting for the copy of the earlier bytes"). A VM whose
+starting layer is over 256 MiB (not a lane VM) still copies before the merge.
+
+Each part of `collect` is a `run.collect` event with its time (`evidence`,
+`telemetry`, `stop`, `saving`, `disk_layer`; `earlier_bytes` is how long
+Triage waited for the copy), and the daemon log has one line per run, for
+example `run=r_... collect took 4.0 s: evidence 0.0 s, telemetry 0.0 s, stop
+1.3 s, saving 1.8 s, disk layer 0.8 s` for a run stopped at a 512 MiB cap, whose
+lane before 0.9.1 waited 234 s more for the copy.
+
+A run stopped at `[resources] trace_cap_mib` keeps everything recorded up to
+the stop; the cap is a limit you set, not a loss. The guest does not build a
+backlog that outlives the program (never-drop makes the program wait for the
+host instead), so nothing is drained after the stop.
 
 ### The host work pool
 

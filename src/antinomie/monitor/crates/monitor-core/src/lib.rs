@@ -36,6 +36,7 @@ pub mod disks;
 mod display;
 pub mod distribution;
 pub mod dump_trigger;
+pub mod earlier_kept;
 pub mod errno;
 pub mod evidence_delete;
 mod execution;

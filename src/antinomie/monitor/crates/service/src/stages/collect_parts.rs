@@ -166,7 +166,7 @@ impl CollectClock {
         let layer = if seen.settled_ms.is_none() {
             "the disk layer was still pending at the wait's end"
         } else if seen.finalizing_ms.is_some() {
-            "the earlier bytes of changed files (a scan of the recording) and the merge"
+            "the merge, and the copy of the earlier bytes of changed files (a scan of the recording) unless the sealed layer was kept aside"
         } else {
             "no disk layer was pending"
         };
@@ -205,5 +205,6 @@ pub(crate) fn name(part: CollectPart) -> &'static str {
         CollectPart::Stop => "stop",
         CollectPart::Saving => "saving",
         CollectPart::DiskLayer => "disk layer",
+        CollectPart::EarlierBytes => "earlier bytes",
     }
 }
