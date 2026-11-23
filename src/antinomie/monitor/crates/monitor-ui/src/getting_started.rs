@@ -204,6 +204,8 @@ pub(crate) struct GettingStarted {
     /// Tools still to install, and the one asked for last.
     pub tool_queue: VecDeque<String>,
     pub tool_inflight: Option<String>,
+    /// When the tool in flight was asked for.
+    pub tool_asked: Option<Instant>,
     /// Rule packs ticked for download (`None`: the defaults), and the ones
     /// still to install, one at a time.
     pub rules_chosen: Option<BTreeSet<String>>,

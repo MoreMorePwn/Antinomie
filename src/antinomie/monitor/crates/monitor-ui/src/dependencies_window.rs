@@ -177,6 +177,12 @@ impl DependenciesWindow {
         self.require_dependencies(&required)
     }
 
+    /// Whether a finished check is held; without one (a check is running) a
+    /// refused request only says it is still checking.
+    pub(crate) fn has_report(&self) -> bool {
+        self.report.is_some()
+    }
+
     pub fn require_dependencies(&self, required: &[Dependency]) -> Result<(), String> {
         self.report
             .as_ref()

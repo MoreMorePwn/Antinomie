@@ -475,6 +475,58 @@ fn install_all_missing_queues_only_missing_tools_and_one_runs_at_a_time() {
 }
 
 #[test]
+fn install_all_missing_stops_when_the_backend_refused_the_install() {
+    let (mut app, root) = fresh_app("tool-refused");
+    app.getting_started.decided = true;
+    app.snapshot.analysis_tools = ["one", "two"]
+        .iter()
+        .map(|id| antinomie_monitor_core::analysis_tools::ToolStatus {
+            id: (*id).into(),
+            name: (*id).into(),
+            purpose: "test".into(),
+            version: "1".into(),
+            size: 1024,
+            system: None,
+            installed: None,
+            installed_path: None,
+            installed_shown: None,
+        })
+        .collect();
+    app.getting_started.tool_queue = ["one".to_owned(), "two".to_owned()].into();
+    app.getting_started_tick();
+    assert_eq!(app.getting_started.tool_inflight.as_deref(), Some("one"));
+    // No install appears in the snapshot: still waiting while it is recent.
+    app.getting_started_tick();
+    assert_eq!(app.getting_started.tool_inflight.as_deref(), Some("one"));
+    app.getting_started.tool_asked = Instant::now().checked_sub(Duration::from_secs(60));
+    app.getting_started_tick();
+    assert_eq!(app.getting_started.tool_inflight, None);
+    assert!(app.getting_started.tool_queue.is_empty());
+    assert!(app
+        .getting_started
+        .tool_error
+        .as_deref()
+        .unwrap()
+        .contains("one"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_request_during_a_quiet_recheck_does_not_open_the_dependencies_window() {
+    let (mut app, root) = fresh_app("quiet-recheck");
+    app.dependencies.recheck_quietly(&app.options);
+    assert!(app.dependencies.checking());
+    assert_eq!(
+        app.send_request(Command::InstallTool { id: "x".into() }),
+        None
+    );
+    assert!(!app.dependencies.open);
+    assert!(app.status.contains("Checking app dependencies"));
+    settle(&mut app);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn the_rules_step_offers_catalog_packs_and_downloads_only_when_allowed() {
     let ctx = egui::Context::default();
     theme::install(&ctx);

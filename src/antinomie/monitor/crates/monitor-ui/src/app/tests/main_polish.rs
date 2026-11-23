@@ -300,3 +300,19 @@ fn a_time_limit_row_has_no_default_text_and_its_reset_help_names_the_default() {
         "{tip:?}"
     );
 }
+
+#[test]
+fn recording_edits_not_saved_are_put_back_and_saving_applies_them() {
+    let mut app = app();
+    app.options.capture_quota_size = 4 * 1073741824;
+    app.options.shutdown_timeout = Duration::from_secs(30);
+    app.settings.quota_gib = 50;
+    app.settings.timeout = 90;
+    app.revert_unsaved_recording_edits();
+    assert_eq!((app.settings.quota_gib, app.settings.timeout), (4, 30));
+    app.settings.quota_gib = 8;
+    app.update_options();
+    app.settings.quota_gib = 99;
+    app.revert_unsaved_recording_edits();
+    assert_eq!(app.settings.quota_gib, 8);
+}

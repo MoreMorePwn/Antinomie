@@ -12,6 +12,9 @@ mod steps;
 
 /// A VM that does not appear within this time is reported as not created.
 const VM_WAIT: Duration = Duration::from_secs(20);
+/// A tool install the backend refuses never shows up as an install; after
+/// this long the queue stops instead of waiting for it.
+const TOOL_START_WAIT: Duration = Duration::from_secs(20);
 
 impl MonitorApp {
     /// Open the window (Help > Getting started, or the first launch). It
@@ -64,9 +67,22 @@ impl MonitorApp {
         if let Some(id) = &self.getting_started.tool_inflight {
             match &self.snapshot.tool_install {
                 Some(install) if install.id == *id && install.finished => {}
-                _ => return,
+                Some(install) if install.id == *id => return,
+                _ => {
+                    // Not started: a refusal (a lane, one already running, no
+                    // curl) leaves no install behind to wait for.
+                    let asked = self.getting_started.tool_asked;
+                    if asked.is_some_and(|at| at.elapsed() <= TOOL_START_WAIT) {
+                        return;
+                    }
+                    self.getting_started.tool_error = Some(format!(
+                        "The install of {id} did not start; the Activity panel has the reason"
+                    ));
+                    self.getting_started.tool_queue.clear();
+                }
             }
             self.getting_started.tool_inflight = None;
+            self.getting_started.tool_asked = None;
         }
         while let Some(id) = self.getting_started.tool_queue.pop_front() {
             let missing = self
@@ -88,6 +104,7 @@ impl MonitorApp {
                     self.getting_started.tool_queue.clear();
                 } else {
                     self.getting_started.tool_inflight = Some(id);
+                    self.getting_started.tool_asked = Some(Instant::now());
                 }
             }
             break;
