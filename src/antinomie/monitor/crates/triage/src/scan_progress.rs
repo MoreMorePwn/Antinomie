@@ -123,37 +123,76 @@ impl ScanProgress {
 }
 
 /// A size and time budget for one scan: the passes over the calls stop at
-/// the first page past `max_calls` calls, or once `limit` has passed since the
-/// stop was made, and the index says it is partial. Both passes stop at the same
-/// call count, so what they read is one prefix of the run. The background
-/// digest build uses it so a recording of millions of calls costs a bounded
-/// amount of time and memory.
+/// the first page past `max_calls` calls, or when the time runs out, and the
+/// index says it is partial. Both passes read one prefix of the run: pass 1
+/// has [`PASS_ONE_SHARE`] of the time (it reads about a quarter as fast per
+/// call as pass 2 costs), and the call count it reached when its share ran
+/// out is where pass 2 stops too, unless the whole time runs out first. The
+/// background digest build and Auto Triage (ANT-T0612) use it so a recording
+/// of millions of calls costs a bounded amount of time and memory.
 #[derive(Debug)]
 pub struct ScanStop {
-    max_calls: u64,
-    deadline: std::time::Instant,
+    max_calls: std::sync::atomic::AtomicU64,
+    started: std::time::Instant,
+    limit: std::time::Duration,
+    /// Pass 2 has begun: the whole time is its deadline.
+    second: std::sync::atomic::AtomicBool,
     calls_hit: std::sync::atomic::AtomicBool,
     time_hit: std::sync::atomic::AtomicBool,
+    /// What the budget is for, in the reason: "building the digest".
+    what: &'static str,
 }
+
+/// The part of a time budget pass 1 may take.
+pub const PASS_ONE_SHARE: f64 = 0.25;
 
 impl ScanStop {
     pub fn new(max_calls: u64, limit: std::time::Duration) -> Self {
         Self {
-            max_calls,
-            deadline: std::time::Instant::now() + limit,
+            max_calls: max_calls.into(),
+            started: std::time::Instant::now(),
+            limit,
+            second: Default::default(),
             calls_hit: Default::default(),
             time_hit: Default::default(),
+            what: "building the digest",
         }
+    }
+
+    /// A time budget for Auto Triage.
+    pub fn triage(limit: std::time::Duration) -> Self {
+        Self {
+            what: "Triage",
+            ..Self::new(u64::MAX, limit)
+        }
+    }
+
+    /// Pass 2 begins.
+    pub fn second_pass(&self) {
+        self.second.store(true, Ordering::Relaxed);
     }
 
     /// Whether a pass that has read `calls` calls is to stop; remembers why.
     pub fn reached(&self, calls: u64) -> bool {
-        if calls >= self.max_calls {
-            self.calls_hit.store(true, Ordering::Relaxed);
+        let max = self.max_calls.load(Ordering::Relaxed);
+        if calls >= max {
+            if !self.time_hit.load(Ordering::Relaxed) {
+                self.calls_hit.store(true, Ordering::Relaxed);
+            }
             return true;
         }
-        if std::time::Instant::now() >= self.deadline {
+        let second = self.second.load(Ordering::Relaxed);
+        let deadline = if second {
+            self.limit
+        } else {
+            self.limit.mul_f64(PASS_ONE_SHARE)
+        };
+        if self.started.elapsed() >= deadline {
             self.time_hit.store(true, Ordering::Relaxed);
+            if !second {
+                // Pass 2 reads the same prefix.
+                self.max_calls.fetch_min(calls, Ordering::Relaxed);
+            }
             return true;
         }
         false
@@ -162,14 +201,15 @@ impl ScanStop {
     /// Why a pass stopped, in plain words; `None` when no pass did.
     pub fn reason(&self) -> Option<String> {
         if self.time_hit.load(Ordering::Relaxed) {
-            Some(
-                "the time budget for building the digest ran out before the end of the recording"
-                    .into(),
-            )
+            Some(format!(
+                "the time budget for {} ({}) ran out before the end of the recording",
+                self.what,
+                antinomie_monitor_core::time_span::seconds(self.limit.as_secs())
+            ))
         } else if self.calls_hit.load(Ordering::Relaxed) {
             Some(format!(
                 "the digest was built from the first {} calls of the recording (the size budget)",
-                count(self.max_calls)
+                count(self.max_calls.load(Ordering::Relaxed))
             ))
         } else {
             None
@@ -193,6 +233,23 @@ fn count(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_time_budget_ends_both_passes_at_one_prefix() {
+        let stop = ScanStop::triage(std::time::Duration::from_millis(800));
+        assert!(!stop.reached(10));
+        // Pass 1's share runs out at call 500: pass 2 reads the same 500.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert!(stop.reached(500));
+        stop.second_pass();
+        assert!(!stop.reached(499));
+        assert!(stop.reached(500));
+        let reason = stop.reason().unwrap();
+        assert!(reason.starts_with("the time budget for Triage"), "{reason}");
+        // And the whole time ends pass 2 wherever it is.
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        assert!(stop.reached(10));
+    }
 
     #[test]
     fn the_line_names_the_phase_and_how_far_it_got() {

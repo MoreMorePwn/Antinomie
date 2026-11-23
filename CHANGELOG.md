@@ -19,6 +19,7 @@ their entries are listed in full.
 
 ### Host
 
+- **Auto Triage has a time budget (ANT-T0612).** `[daemon] triage_time_per_run_s` (6 s per second the run ran, at least 120 s) bounds the Triage scan of an Auto run; when it runs out the result is marked partial with the reason instead of the item timing out. Auto no longer keeps the rows a filter change is answered from, which it never used.
 - **Triage reads recordings faster (ANT-T0612).** The per-call read transaction and the object index use cached statements, the object index is checked against its source once per page of calls, the raw recording is read through four windows instead of one (a call whose exit lies far past its entry no longer makes the same bytes be read again and again), and the run's JSON files are read buffered instead of a byte at a time.
 
 - **The app shows the static analysis of Auto runs (ANT-T0611).** The Triage Summary and the Static analysis tab said no analysis was recorded for a run Auto made, because Auto kept its per-tool reports only in `<data>/analyses/`. The `analyse` stage now joins them into one report in the run's `analysis/` folder, where the window, the run API and the evidence bundle read it. Runs made before 0.9.1 keep showing none.

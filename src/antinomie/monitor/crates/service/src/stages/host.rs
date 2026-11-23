@@ -128,6 +128,21 @@ pub struct RealTriage {
     pub lanes: Vec<(crate::api::ids::LaneId, BackendOptions)>,
     /// [`HostTriage::tcg_factor`]: 1 under KVM.
     pub tcg: f64,
+    /// `daemon.triage_time_per_run_s`: Auto Triage's budget per second the
+    /// run ran; 0 for none.
+    pub triage_time_per_run_s: f64,
+}
+
+/// Auto Triage's time budget for a run that ran `run_s` seconds: `per_run_s`
+/// seconds for each, at least [`crate::config::service::MIN_TRIAGE_BUDGET_S`];
+/// none when the rate is 0. A run whose length is unknown gets the least.
+pub fn triage_budget(per_run_s: f64, run_s: Option<u64>) -> Option<std::time::Duration> {
+    if per_run_s <= 0.0 || !per_run_s.is_finite() {
+        return None;
+    }
+    let least = crate::config::service::MIN_TRIAGE_BUDGET_S as f64;
+    let seconds = (run_s.unwrap_or(0) as f64 * per_run_s).max(least);
+    Some(std::time::Duration::from_secs_f64(seconds))
 }
 
 impl RealTriage {
@@ -137,6 +152,7 @@ impl RealTriage {
             address_lookup: antinomie_monitor_core::settings::AddressLookup::Tshark,
             lanes: Vec::new(),
             tcg: 1.0,
+            triage_time_per_run_s: crate::config::service::DEFAULT_TRIAGE_TIME_PER_RUN_S,
         }
     }
 
@@ -173,6 +189,11 @@ impl RealTriage {
             .map_or(&self.options, |(_, options)| options)
     }
 
+    pub fn with_triage_budget(mut self, per_run_s: f64) -> Self {
+        self.triage_time_per_run_s = per_run_s;
+        self
+    }
+
     pub fn with_address_lookup(
         mut self,
         mode: antinomie_monitor_core::settings::AddressLookup,
@@ -207,7 +228,8 @@ impl HostTriage for RealTriage {
     }
 
     fn index(&self, saved: &SavedRun, cancel: &Arc<AtomicBool>) -> Result<ArchiveScan, String> {
-        saved.scan(cancel)
+        let budget = triage_budget(self.triage_time_per_run_s, saved.run_seconds());
+        saved.scan_within(budget, cancel)
     }
 
     fn detect(
@@ -366,5 +388,19 @@ pub struct NoTags;
 impl SampleTags for NoTags {
     fn add_tag(&self, _: &Run, _: &str) -> Result<bool, String> {
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::triage_budget;
+    use std::time::Duration;
+
+    #[test]
+    fn the_triage_budget_follows_the_run_time_with_a_floor() {
+        assert_eq!(triage_budget(6.0, Some(51)), Some(Duration::from_secs(306)));
+        assert_eq!(triage_budget(6.0, Some(5)), Some(Duration::from_secs(120)));
+        assert_eq!(triage_budget(6.0, None), Some(Duration::from_secs(120)));
+        assert_eq!(triage_budget(0.0, Some(600)), None);
     }
 }

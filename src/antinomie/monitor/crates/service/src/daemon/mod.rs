@@ -610,6 +610,7 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             triage: Arc::new(
                 RealTriage::new(setup.options.clone())
                     .with_address_lookup(address_lookup)
+                    .with_triage_budget(setup.config.triage_time_per_run_s())
                     .with_lanes(lane_options.clone())
                     .with_tcg(!kvm || setup.options.force_tcg),
             ),
@@ -1074,8 +1075,13 @@ fn lane_main<E: Engine>(
     });
     // `service.toml [privacy]` through the daemon's settings (no lookup
     // that asks another machine, B-H16).
+    let per_run_s = service.config.read().map_or(
+        crate::config::service::DEFAULT_TRIAGE_TIME_PER_RUN_S,
+        |config| config.triage_time_per_run_s(),
+    );
     let triage = RealTriage::new(service.options.clone())
         .with_address_lookup(service.settings.address_lookup)
+        .with_triage_budget(per_run_s)
         .with_lanes(vec![(lane.clone(), options)]);
     let tags = LibraryTags {
         data_dir: service.data_dir.clone(),

@@ -17,6 +17,10 @@ pub const MAX_HOST_WORKERS: u32 = 8;
 pub const DEFAULT_HOST_TIME_FACTOR: f64 = 2.0;
 /// The largest `daemon.host_time_factor`.
 pub const MAX_HOST_TIME_FACTOR: f64 = 20.0;
+/// `daemon.triage_time_per_run_s` when it is not set (ANT-T0612).
+pub const DEFAULT_TRIAGE_TIME_PER_RUN_S: f64 = 6.0;
+/// The least time Auto Triage gets, whatever the run's length.
+pub const MIN_TRIAGE_BUDGET_S: u64 = 120;
 /// `daemon.stop_grace_s` when it is not set (ANT-T0471).
 pub const DEFAULT_STOP_GRACE_S: u32 = 30;
 /// The largest `daemon.stop_grace_s`.
@@ -51,6 +55,11 @@ pub struct Daemon {
     /// the job's host-stage deadline is this many times the expected work
     /// ahead of it plus its own. Default 2, at least 1.
     pub host_time_factor: Option<f64>,
+    /// Auto Triage's time budget, in seconds per second the run ran, at
+    /// least [`MIN_TRIAGE_BUDGET_S`]: when it runs out Triage stops reading
+    /// the calls and its result is marked partial, with the reason. Default
+    /// 6; 0 reads every run whole however long it takes (ANT-T0612).
+    pub triage_time_per_run_s: Option<f64>,
     /// A host work item stopped by its time limit or by its job's
     /// host-stage deadline gets a graceful stop (SIGTERM to its sandboxed
     /// tool, the cancel flag of in-process work), then SIGKILL after this
@@ -72,6 +81,7 @@ impl Default for Daemon {
             lanes: 1,
             host_workers: None,
             host_time_factor: None,
+            triage_time_per_run_s: None,
             stop_grace_s: DEFAULT_STOP_GRACE_S,
             shutdown: Shutdown::Cancel,
             drain_timeout_s: 600,
@@ -519,6 +529,14 @@ impl ServiceConfig {
             .host_workers
             .unwrap_or(DEFAULT_HOST_WORKERS)
             .clamp(1, MAX_HOST_WORKERS)
+    }
+
+    /// `daemon.triage_time_per_run_s`, else [`DEFAULT_TRIAGE_TIME_PER_RUN_S`].
+    pub fn triage_time_per_run_s(&self) -> f64 {
+        self.daemon
+            .triage_time_per_run_s
+            .filter(|f| f.is_finite() && *f >= 0.0)
+            .unwrap_or(DEFAULT_TRIAGE_TIME_PER_RUN_S)
     }
 
     /// `daemon.host_time_factor`, else [`DEFAULT_HOST_TIME_FACTOR`].

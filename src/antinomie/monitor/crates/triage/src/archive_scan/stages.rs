@@ -448,6 +448,9 @@ impl Scan {
             }
             Ok(())
         };
+        if let Some(stop) = &request.stop {
+            stop.second_pass();
+        }
         if let Some(progress) = &request.progress {
             progress.next(scan_progress::Phase::Files);
         }
