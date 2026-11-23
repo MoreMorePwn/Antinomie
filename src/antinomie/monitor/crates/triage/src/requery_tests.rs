@@ -132,7 +132,6 @@ fn a_chip_is_answered_from_the_rows_and_a_changed_recording_scans_again() {
     let (temp, _) = run(60);
     let cancel = Arc::new(AtomicBool::new(false));
     scan_archive_query(&temp.directory, None, false, &cancel, &request()).unwrap();
-    let before = reads();
     // Show INFO and the Files chips (all 16 combinations) are answered from the
     // rows, and are what a scan of the request makes (ANT-T0592).
     for bits in 0..16u32 {
