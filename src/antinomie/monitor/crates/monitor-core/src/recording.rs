@@ -391,9 +391,8 @@ fn index_archive(
             transaction.execute_batch("ALTER TABLE indexed ADD COLUMN writer INTEGER")?;
         }
         let (identity, length) = raw_identity(&raw)?;
-        // Four times the archive: a pathological archive of tiny packets
-        // indexes to more than twice its size, and hitting the cap would
-        // rebuild the index on every open.
+        // Four times the archive: an archive of tiny packets indexes to more
+        // than twice its size, and the cap would rebuild it on every open.
         let budget = length
             .checked_mul(4)
             .and_then(|size| size.checked_add(1024 * 1024))
