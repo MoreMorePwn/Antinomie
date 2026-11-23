@@ -1153,7 +1153,7 @@ impl VmProcess {
             let _ = socket.read(&mut greeting);
             if socket.write_all(b"{\"execute\":\"quit\"}\n").is_ok() {
                 // QEMU closes its disks on `quit`; give it the moment it needs.
-                wait_for_exit(&mut self.child, QUIT_GRACE).map_err(|e| e.to_string())?;
+                qmp::wait_for_exit(&mut self.child, qmp::QUIT_GRACE).map_err(|e| e.to_string())?;
             }
         }
         if self.child.try_wait().map_err(|e| e.to_string())?.is_none() {
@@ -1163,23 +1163,6 @@ impl VmProcess {
         Ok(())
     }
 }
-/// How long QEMU has to end after `quit` before it is killed.
-const QUIT_GRACE: Duration = Duration::from_millis(2000);
-
-/// Wait up to `limit` for the child to end; whether it did.
-fn wait_for_exit(child: &mut Child, limit: Duration) -> std::io::Result<bool> {
-    let until = std::time::Instant::now() + limit;
-    loop {
-        if child.try_wait()?.is_some() {
-            return Ok(true);
-        }
-        if std::time::Instant::now() >= until {
-            return Ok(false);
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
 impl Drop for VmProcess {
     fn drop(&mut self) {
         let _ = self.force_stop();
@@ -1213,8 +1196,8 @@ mod tests {
             .args(["-c", "sleep 0.2; exit 7"])
             .spawn()
             .unwrap();
-        assert!(!wait_for_exit(&mut child, Duration::from_millis(10)).unwrap());
-        assert!(wait_for_exit(&mut child, Duration::from_secs(10)).unwrap());
+        assert!(!qmp::wait_for_exit(&mut child, Duration::from_millis(10)).unwrap());
+        assert!(qmp::wait_for_exit(&mut child, Duration::from_secs(10)).unwrap());
         // Its own exit status: a kill would have no code.
         assert_eq!(child.wait().unwrap().code(), Some(7));
     }

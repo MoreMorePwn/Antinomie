@@ -33,8 +33,7 @@ fn new_id() -> String {
 /// The issue of a core asked to read non-resident pages on a guest that cannot.
 pub(super) const NO_NONRESIDENT: &str = "Read non-resident pages needs a base of guest contract revision 22: this guest copied only the pages that were in memory.";
 
-/// How long a cancelled capture keeps polling a status the guest refuses.
-const STATUS_GIVE_UP: Duration = Duration::from_secs(30);
+mod give_up;
 
 pub(super) struct Owner {
     pub summary: ProcessCoreCapture,
@@ -195,33 +194,6 @@ impl Owner {
     }
     fn issue(&mut self, issue: impl Into<String>) {
         self.summary.issue = Some(issue.into().chars().take(2048).collect());
-    }
-    /// A status poll failed. Once the capture is being cancelled and the guest
-    /// has refused every poll for `STATUS_GIVE_UP`, the guest side is given up
-    /// on: the owner no longer holds the guest or blocks snapshots. Returns
-    /// whether it did.
-    fn status_unanswerable(&mut self, error: &str) -> bool {
-        let since = *self.status_failing.get_or_insert_with(Instant::now);
-        if !self.cancel_requested || since.elapsed() < STATUS_GIVE_UP {
-            return false;
-        }
-        self.known_absent = true;
-        let why = format!(
-            "the guest kept refusing the core status ({error}); the capture is given up and its host prefix kept"
-        );
-        if self.desired.is_none() {
-            let state = if self.summary.stored_size > 0 {
-                RunArtifactState::Partial
-            } else {
-                RunArtifactState::Failed
-            };
-            self.finish(state, why);
-        } else {
-            self.issue(why);
-        }
-        self.done = true;
-        self.summary.phase = ProcessCorePhase::Finished;
-        true
     }
     fn fail_disk(&mut self, error: String) {
         self.disk_failed = true;
@@ -1261,7 +1233,8 @@ mod tests {
         assert!(!owner.status_unanswerable("rejected"));
         owner.cancel_requested = true;
         assert!(!owner.status_unanswerable("rejected"), "refused only now");
-        owner.status_failing = Instant::now().checked_sub(STATUS_GIVE_UP + Duration::from_secs(1));
+        owner.status_failing =
+            Instant::now().checked_sub(give_up::STATUS_GIVE_UP + Duration::from_secs(1));
         assert!(owner.status_unanswerable("rejected"));
         assert!(owner.done, "the owner no longer holds the guest");
         assert!(!owner.guest_busy());

@@ -154,20 +154,6 @@ fn under_prefix(path: &str, prefix: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-#[cfg(test)]
-mod prefix_tests {
-    use super::under_prefix;
-
-    #[test]
-    fn a_prefix_is_a_folder_boundary_not_a_text_prefix() {
-        assert!(under_prefix("rules/a.yml", "rules"));
-        assert!(under_prefix("rules/a/b.yml", "rules/"));
-        assert!(under_prefix("rules", "rules"));
-        assert!(!under_prefix("rules-extra/a.yml", "rules"));
-        assert!(!under_prefix("rulesets/a.yml", "rules/"));
-    }
-}
-
 fn member_path(raw: &str, strip: u32) -> Option<String> {
     let parts: Vec<&str> = raw.split('/').filter(|part| !part.is_empty()).collect();
     if parts.iter().any(|part| *part == ".." || *part == ".") || raw.starts_with('/') {
@@ -277,4 +263,18 @@ fn extract_tar(
         keep(path, data)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::under_prefix;
+
+    #[test]
+    fn a_prefix_is_a_folder_boundary_not_a_text_prefix() {
+        assert!(under_prefix("rules/a.yml", "rules"));
+        assert!(under_prefix("rules/a/b.yml", "rules/"));
+        assert!(under_prefix("rules", "rules"));
+        assert!(!under_prefix("rules-extra/a.yml", "rules"));
+        assert!(!under_prefix("rulesets/a.yml", "rules/"));
+    }
 }

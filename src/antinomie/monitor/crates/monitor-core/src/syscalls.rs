@@ -1165,12 +1165,7 @@ impl Table {
             ("memfd_secret", 0, "unknown") => "cloexec",
             _ => group,
         };
-        // A 32-bit C argument sits in the low half of its register; the
-        // upper half is whatever the caller left there.
-        let value = match info.arguments[index].c_type.as_str() {
-            "int" | "unsigned int" | "unsigned" | "u32" | "__u32" | "rwf_t" => value & 0xffff_ffff,
-            _ => value,
-        };
+        let value = scalars::low_half_of_int(&info.arguments[index].c_type, value);
         Some(self.flag_group(group, value))
     }
 
