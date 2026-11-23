@@ -22,6 +22,15 @@ pub struct Spool<'a> {
     pub http_page: &'a mut sorting::Page<Vec<Cell>>,
 }
 
+/// The response frame of each request in a joined field, by position: an empty
+/// or unreadable entry is `None` and does not shift the ones after it.
+fn response_frame_ids(joined: &str) -> Vec<Option<u64>> {
+    joined
+        .split('\u{1f}')
+        .map(|id| id.parse::<u64>().ok())
+        .collect()
+}
+
 /// The HTTP/1 requests of a frame, each with the response its link names.
 pub fn http_requests(
     frame_context: &Frame<'_>,
@@ -47,13 +56,10 @@ pub fn http_requests(
     } = spool;
     if !field(11).is_empty() {
         let methods = field(11).split('\u{1f}').collect::<Vec<_>>();
-        let response_frames = field(16)
-            .split('\u{1f}')
-            .filter_map(|id| id.parse::<u64>().ok())
-            .collect::<Vec<_>>();
+        let response_frames = response_frame_ids(field(16));
         for (at, method) in methods.iter().enumerate() {
             let item = |column: usize| field(column).split('\u{1f}').nth(at).unwrap_or("");
-            let response = match response_frames.get(at).copied() {
+            let response = match response_frames.get(at).copied().flatten() {
                 Some(frame) => spool_response(frame, offsets, responses)?,
                 None => Vec::new(),
             };
@@ -289,4 +295,18 @@ pub fn h2_requests(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::response_frame_ids;
+
+    #[test]
+    fn a_missing_response_frame_keeps_the_positions_of_the_others() {
+        assert_eq!(
+            response_frame_ids("12\u{1f}\u{1f}15"),
+            vec![Some(12), None, Some(15)]
+        );
+        assert_eq!(response_frame_ids("x\u{1f}7"), vec![None, Some(7)]);
+    }
 }
