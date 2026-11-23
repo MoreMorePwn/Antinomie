@@ -12,6 +12,7 @@ mod guest_resource_control;
 mod launch_failure;
 pub use launch_failure::split_run_record;
 mod manual_core;
+mod persist_start;
 mod persisted_watch;
 mod process_core;
 mod recorder_health;
@@ -542,6 +543,8 @@ struct Session {
     started: Instant,
     /// Telemetry of root tasks whose launch the host has not been told about yet.
     pre_ack: crate::pre_ack::PreAckBuffer,
+    /// Started persistence entries' root cookies to their run's (`persist_start`).
+    persist_alias: HashMap<u64, u64>,
     /// Set once the recording quota is reached; see `crate::quota`.
     quota: crate::quota::QuotaState,
     terminal_cursor: usize,

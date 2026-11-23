@@ -138,6 +138,25 @@ impl Worker {
         let timeout = session.reply_timeout();
         let cookie = session.run_cookie(&run_id)?;
         let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
+        // Its tree ended and the run is held open for the persistence entries
+        // Antinomie started: Stop ends the hold and stops what they run.
+        if run.summary.persistence_holding() {
+            let starters = run.end_persistence_hold("the run was stopped");
+            run.end_hold("the run was stopped");
+            run.summary.state = RunState::Stopped;
+            run.summary.stopped_by_user = reason.is_none();
+            run.summary.stop_reason = reason;
+            run.summary.stopped_at_ms.get_or_insert_with(super::unix_ms);
+            if let Some(log) = run.custody.as_mut() {
+                log.action(
+                    crate::samples::ActionKind::Kill,
+                    "Stop: the persistence entries Antinomie started were stopped",
+                );
+            }
+            run.persist_summary()?;
+            self.stop_starters(&starters);
+            return Ok("the run's tree had already ended; the persistence entries Antinomie started were stopped".into());
+        }
         // Its tree ended and the run is held open for a copy outside it:
         // Stop ends the hold. The guest cannot signal that copy.
         if run.end_hold("the run was stopped") {

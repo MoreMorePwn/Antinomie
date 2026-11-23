@@ -694,6 +694,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         stop_reason: run.stop_reason,
         stopped_at_ms: run.stopped_at_ms,
         persisted: run.persisted.clone(),
+        persistence_start: run.persistence_start.clone(),
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run

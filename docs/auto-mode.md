@@ -143,6 +143,7 @@ the permissions their options need.
 | Run time | 5 min | 5 min | 2 min | 15 min | 10 min | 10 min |
 | Route | None (drop) | InetSim | None (drop) | InetSim | None (drop) | Tor |
 | Dumps | none | core when a High rule matches | none | when suspicious from Medium (memory and core), core on exit | none | none |
+| Start persistence | off | on | off | on | off | off |
 | Static analysis | 11 Triage checks | 11 Triage checks | metadata, strings, hardening, rules, identification | 11 Triage checks, Disassembly, Decompilation, FLOSS | 11 Triage checks | 11 Triage checks |
 | Detection | YARA, Sigma, IDS | YARA, Sigma, IDS | YARA | YARA, Sigma, IDS | YARA, Sigma | YARA, IDS |
 | Report | HTML, JSON | HTML, JSON | HTML, JSON | HTML, JSON, PDF, evidence bundle | HTML, JSON | HTML, JSON |
@@ -156,7 +157,7 @@ a comment naming the app's label, under another name.
 The format has one table per part of Submit: `[accepts]` and `[duplicates]`
 (what the preset takes), `[program]` (source, guest path, arguments, working
 directory, environment, user `normal`, `root`, `nobody` or `custom` with `uid`
-and `gid`, run in, run time), `[record]`, `[network]` (capture, route),
+and `gid`, run in, run time, start persistence), `[record]`, `[network]` (capture, route),
 `[dumps]` (memory and core dumps on exit, the core budget and deadline, Dump
 when suspicious activity is seen with its minimum tier, what it takes, at most
 N dumps N seconds apart, non-resident pages), `[vm]` (lane group, keep the VM
@@ -309,6 +310,22 @@ its default is Standard's. The full list is in
 When the guest-side static analysis is still running after the 300 s evidence wait,
 the recording is saved without it and the run succeeds; `run.pending` lists
 `analysis`.
+
+* **Start persistence.** `program.start_persistence = true` (on in Simulated
+  network and Deep, off in the other built-in presets) makes the engine start what
+  the program installed as persistence when its process tree ends at least 30 s
+  before the run time: systemd `.service` units, init.d and rc scripts, `rc.local`,
+  the job lines of crontabs, one login shell per user for shell profiles, and
+  autostart entries, at most 8, each once, as a boot or login would. What they run
+  is recorded in the same run, which is held until the run time (the run then ends
+  `time_limit`) or until everything started has ended. The run's notes and the
+  report's overview list each entry as started by Antinomie (persistence), and
+  `run.json` keeps them under `persistence_start`; with the option off, the notes
+  say the persistence was installed but not started. A run may change it
+  (`{"program": {"start_persistence": true}}` in `overrides`, `auto submit
+  --start-persistence` or `--no-start-persistence`, `auto rerun --override
+  program.start_persistence=true`); no permission is needed. Details are under
+  *Start persistence* in the [user guide](usage.md).
 
 * **Non-resident pages in trigger cores.** `dumps.read_non_resident_pages = true`
   (default `false`) makes the cores the dump trigger takes also read the pages that

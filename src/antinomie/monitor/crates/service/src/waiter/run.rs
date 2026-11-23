@@ -802,10 +802,10 @@ impl<E: Engine> Waiter<E> {
             .iter()
             .map(|run| run.id.clone())
             .collect();
-        if request.dump_trigger.is_some() {
-            // A headless process has no UI to hand the rule engine over.
-            super::trigger::ensure_live_judge();
-        }
+        // A headless process has no UI to hand the rule engine over. Every
+        // launch gets it: the dump trigger judges with it, and without one
+        // it still lists what the run persists (ANT-T0608).
+        super::trigger::ensure_live_judge();
         // A guest transition keeps the launch from the guest: it is asked
         // again until `launch_s` once the guest is back. A refused or
         // cancelled `Execute` started nothing.

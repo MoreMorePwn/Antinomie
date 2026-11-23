@@ -281,6 +281,13 @@ pub trait LiveJudge: Send {
     /// Judge one call; returns the rows that are new, or that a repeat raised
     /// to a higher tier.
     fn judge(&mut self, call: &InvocationSummary) -> Vec<LiveFinding>;
+    /// The `persistence.*` rows judged since the last call, with the path
+    /// each names and whether all its calls failed, whatever their tier
+    /// (starting what a run persisted, ANT-T0608). A judge without them has
+    /// none.
+    fn written(&mut self) -> Vec<crate::persist_start::Written> {
+        Vec::new()
+    }
 }
 
 pub type JudgeFactory = fn() -> Box<dyn LiveJudge>;
@@ -437,7 +444,40 @@ pub(crate) struct Watch {
     /// waits for the new image's first call, or for [`EXEC_WAIT`].
     deferred: VecDeque<(LiveFinding, Instant)>,
     exec_wait: Duration,
+    /// The watch takes dumps (a dump trigger); a passive watch only lists
+    /// what the run persisted (ANT-T0608).
+    pub(crate) dumps: bool,
+    /// The `persistence.*` rows of the run (bounded).
+    pub(crate) written: Vec<crate::persist_start::Written>,
 }
+
+/// The calls a passive watch judges: those that name a file the run
+/// creates, writes, moves or links, and what the rules need to resolve
+/// their paths (the working directory, the process image).
+pub(crate) const PASSIVE_CALLS: &[&str] = &[
+    "open",
+    "openat",
+    "openat2",
+    "creat",
+    "rename",
+    "renameat",
+    "renameat2",
+    "link",
+    "linkat",
+    "symlink",
+    "symlinkat",
+    "chdir",
+    "fchdir",
+    "clone",
+    "clone3",
+    "fork",
+    "vfork",
+    "execve",
+    "execveat",
+];
+
+/// Persistence rows one run keeps.
+const WRITTEN_MAX: usize = 256;
 
 impl Watch {
     pub(crate) fn new(plan: &DumpTrigger, keep: &[String]) -> Option<Self> {
@@ -445,7 +485,24 @@ impl Watch {
         Some(Self::with_judge(factory(), plan, keep))
     }
 
-    fn with_judge(judge: Box<dyn LiveJudge>, plan: &DumpTrigger, keep: &[String]) -> Self {
+    /// A watch that takes no dump: it only lists what the run persisted.
+    /// `None` when no rule engine was registered.
+    pub(crate) fn passive() -> Option<Self> {
+        let factory = FACTORY.get()?;
+        let keep: Vec<String> = PASSIVE_CALLS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        let mut watch = Self::with_judge(factory(), &DumpTrigger::default(), &keep);
+        watch.dumps = false;
+        Some(watch)
+    }
+
+    pub(crate) fn with_judge(
+        judge: Box<dyn LiveJudge>,
+        plan: &DumpTrigger,
+        keep: &[String],
+    ) -> Self {
         Self {
             judge,
             plan: plan.clone(),
@@ -464,6 +521,8 @@ impl Watch {
             abis: HashMap::new(),
             deferred: VecDeque::new(),
             exec_wait: EXEC_WAIT,
+            dumps: true,
+            written: Vec::new(),
         }
     }
 
@@ -632,8 +691,14 @@ impl Watch {
 
     fn judge_events(&mut self, events: &[EventSummary]) {
         for call in pair_events(events) {
-            for finding in self.judge.judge(&call) {
-                if finding.tier < self.plan.min_tier {
+            let findings = self.judge.judge(&call);
+            for row in self.judge.written() {
+                if self.written.len() < WRITTEN_MAX {
+                    self.written.push(row);
+                }
+            }
+            for finding in findings {
+                if !self.dumps || finding.tier < self.plan.min_tier {
                     continue;
                 }
                 if self.queue.len() + self.deferred.len() >= QUEUE_MAX {

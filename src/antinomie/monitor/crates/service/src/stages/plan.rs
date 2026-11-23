@@ -113,6 +113,13 @@ pub fn effective(preset: &Preset, revert: RevertMode) -> Effective {
         // an Auto run keeps the defaults (500 pictures, 256 MiB).
         screenshot_max_pictures: None,
         screenshot_max_mib: None,
+        // `program.start_persistence` (ANT-T0608): the engine starts what the
+        // run persisted when its tree ends 30 s or more before the run time.
+        start_persistence: program.start_persistence.then_some(
+            antinomie_monitor_core::persist_start::StartPersistence {
+                run_limit_s: Some(program.run_time_s),
+            },
+        ),
     };
     Effective {
         run_limit: Duration::from_secs(u64::from(program.run_time_s)),
@@ -240,5 +247,29 @@ pub fn hosted(preset: &Preset) -> HostPlan {
         required: preset.required_stages.clone(),
         retry_analysis: preset.retry.retry_on.contains(&FailureCode::AnalysisFailed),
         max_attempts: preset.retry.max_attempts,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Start persistence (ANT-T0608) is on in Simulated network and Deep
+    /// only, and reaches the launch with the run time.
+    #[test]
+    fn start_persistence_is_on_in_simulated_network_and_deep() {
+        for (name, loaded) in crate::config::validate::built_in_presets() {
+            let preset = &loaded.preset;
+            let wanted = matches!(name.as_str(), "simulated-network" | "deep");
+            assert_eq!(preset.program.start_persistence, wanted, "{name}");
+            let request = effective(preset, Default::default()).request;
+            assert_eq!(
+                request.start_persistence,
+                wanted.then_some(antinomie_monitor_core::persist_start::StartPersistence {
+                    run_limit_s: Some(preset.program.run_time_s),
+                }),
+                "{name}"
+            );
+        }
     }
 }

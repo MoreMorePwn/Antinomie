@@ -20,6 +20,8 @@ pub enum ActionKind {
     ClockMove,
     Kill,
     SnapshotRestore,
+    /// Persistence the run installed was started by Antinomie (ANT-T0608).
+    PersistenceStart,
 }
 
 impl ActionKind {
@@ -29,6 +31,7 @@ impl ActionKind {
             Self::ClockMove => "Clock moved",
             Self::Kill => "Run killed",
             Self::SnapshotRestore => "Snapshot restored",
+            Self::PersistenceStart => "Persistence started",
         }
     }
 }

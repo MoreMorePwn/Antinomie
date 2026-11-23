@@ -53,6 +53,9 @@ pub(crate) struct ProgramRun {
     pub(crate) tasks: std::collections::HashSet<u64>,
     /// Copies of the program outside the recorded tree (`crate::persisted_copy`).
     pub(crate) persisted: crate::persisted_copy::Watch,
+    /// The start of what the run persisted, once its tree ended early
+    /// (`crate::persist_start`).
+    pub(crate) starting: crate::persist_start::Live,
     /// The timed screenshots of the run while its tree runs.
     pub(crate) shots: Option<crate::timed_shots::TimedShots>,
 }
@@ -98,6 +101,7 @@ impl ProgramRun {
             tasks: Default::default(),
             watch: None,
             persisted: Default::default(),
+            starting: Default::default(),
             shots: None,
         };
         run.refresh_analysis_metadata()?;
@@ -366,7 +370,9 @@ impl ProgramRun {
     /// The program tree has ended and its terminal is closed: no more telemetry
     /// or output is expected, so the run's archive is complete as it stands.
     pub fn recording_complete(&self) -> bool {
-        self.summary.terminal_eof
+        // Entries Antinomie started write into this recording until they end.
+        !self.persistence_busy()
+            && self.summary.terminal_eof
             && matches!(
                 self.summary.state,
                 RunState::Finished | RunState::Stopped | RunState::Finalized
@@ -501,6 +507,7 @@ impl ProgramRun {
             copies.holding = false;
             copies.hold_ended = Some("the recording ended (the VM stopped)".into());
         }
+        self.persistence_finalize();
         // Said once, at the end, where every view of the run shows its notes.
         if let Some(note) = self.telemetry_loss.totals().note() {
             self.add_note(note);
@@ -618,6 +625,7 @@ mod tests {
             stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
+            persistence_start: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -727,6 +735,7 @@ mod tests {
             stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
+            persistence_start: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -789,6 +798,7 @@ mod tests {
             stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
+            persistence_start: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -848,6 +858,7 @@ mod tests {
             stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
+            persistence_start: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -921,6 +932,7 @@ mod tests {
             stop_reason: None,
             stopped_at_ms: Some(1),
             persisted: None,
+            persistence_start: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -999,6 +1011,7 @@ mod tests {
             stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
+            persistence_start: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -1048,6 +1061,7 @@ mod tests {
             stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
+            persistence_start: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -1119,6 +1133,7 @@ mod tests {
             stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
+            persistence_start: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

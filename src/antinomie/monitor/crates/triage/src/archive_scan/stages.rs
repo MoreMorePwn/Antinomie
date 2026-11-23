@@ -1112,6 +1112,7 @@ impl Scan {
             signals: {
                 signals.run_flags = execution_flags(&recording.directory);
                 signals.persisted = persisted_copies(&recording.directory);
+                signals.persistence_start = persistence_start(&recording.directory);
                 signals.network_wait = network_wait(&recording.directory);
                 signals
             },

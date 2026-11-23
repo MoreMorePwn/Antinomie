@@ -41,6 +41,7 @@ fn run(id: &str, vm_id: &str, root: u64, session: u64) -> RunSummary {
         stop_reason: None,
         stopped_at_ms: None,
         persisted: None,
+        persistence_start: None,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),

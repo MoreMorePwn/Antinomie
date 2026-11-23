@@ -199,10 +199,10 @@ impl Session {
     /// live run watches for a trigger (a process that matches may exit within
     /// milliseconds), or a core the trigger asked for is still being started.
     pub(super) fn trigger_hot(&self) -> bool {
-        self.runs
-            .values()
-            .any(|run| run.watch.is_some() && run.summary.state.is_live())
-            || self.manual_cores.values().any(|owner| owner.starting())
+        self.runs.values().any(|run| {
+            run.watch.as_ref().is_some_and(|watch| watch.dumps)
+                && (run.summary.state.is_live() || run.persistence_busy())
+        }) || self.manual_cores.values().any(|owner| owner.starting())
     }
 }
 

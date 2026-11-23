@@ -830,6 +830,14 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     if let Some(note) = super::super::network_reach::unreachable_note(&scan.signals) {
         report.notes.push(note);
     }
+    if let Some(note) = scan
+        .signals
+        .persistence_start
+        .as_ref()
+        .and_then(antinomie_monitor_core::persist_start::report_note)
+    {
+        report.notes.push(note);
+    }
     if let Some(crash) = &scan.root_crash {
         report.notes.push(format!(
             "The sample {crash}. No calls of its program were recorded, so the process table, files and findings below are empty because there was nothing to record, not because it did nothing."

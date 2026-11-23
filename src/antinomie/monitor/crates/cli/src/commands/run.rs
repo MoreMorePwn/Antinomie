@@ -21,6 +21,7 @@ use crate::{
 use antinomie_monitor_core::{
     AnalysisSelection, Command, ExecRequest, RunIn, RunSummary, Snapshot, WaitStatus,
     dump_trigger::{DumpTrigger, TriggerTier},
+    persist_start::StartPersistence,
     route::RouteKind,
     samples::{NewOrigin, NewSample, SampleRecord, SampleRef},
 };
@@ -133,6 +134,13 @@ pub struct Exec {
     /// (--core-dump) always reads resident pages.
     #[arg(long = "core-nonresident", requires = "dump_trigger")]
     pub core_nonresident: bool,
+    /// When the program's tree ends at least 30 s before --timeout-run after
+    /// installing persistence (systemd units, init.d scripts, rc.local, cron
+    /// lines, shell profiles, autostart entries), start those entries in the
+    /// same run, as a boot or login would, and keep the run going until
+    /// --timeout-run. The result's run says what was started.
+    #[arg(long = "start-persistence")]
+    pub start_persistence: bool,
     /// Run the guest-side static analysis too, with these checks (comma
     /// separated; see `analyze --help`).
     #[arg(long = "static", value_delimiter = ',', value_name = "CHECKS")]
@@ -257,6 +265,9 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
             .then_some(antinomie_monitor_core::core_limits::CORE_LEGACY_TIMEOUT_MS),
         core_nonresident: arguments.core_nonresident,
         dump_trigger,
+        start_persistence: arguments.start_persistence.then(|| StartPersistence {
+            run_limit_s: Some(u32::try_from(arguments.timeout_run).unwrap_or(u32::MAX)),
+        }),
         ..ExecRequest::default()
     };
     request.validate().map_err(CliError::invalid)?;
@@ -824,6 +835,18 @@ mod tests {
                 "--core-nonresident"
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn start_persistence_carries_the_run_time() {
+        assert_eq!(request_for(&parse(&[])).unwrap().start_persistence, None);
+        let request = request_for(&parse(&["--start-persistence", "--timeout-run", "90"])).unwrap();
+        assert_eq!(
+            request.start_persistence,
+            Some(StartPersistence {
+                run_limit_s: Some(90)
+            })
         );
     }
 

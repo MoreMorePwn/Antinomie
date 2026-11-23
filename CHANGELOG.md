@@ -19,6 +19,7 @@ their entries are listed in full.
 
 ### Host
 
+- **Start persistence (ANT-T0608).** When a program's tree ends early after installing persistence (systemd units, init.d scripts, `rc.local`, cron lines, shell profiles, autostart entries), Antinomie can start those entries in the same run as a boot or login would, record what they run and hold the run until its run time; on in the Simulated network and Deep presets (`program.start_persistence`), a Run program checkbox and `run exec --start-persistence`. With it off the run's notes say the persistence was installed but not started.
 - **A command-line guide and reference (ANT-T0607).** `docs/cli.md` is a guide by task for new users (first setup, one sample by hand, Auto mode, scripting recipes, exit codes, custody, troubleshooting) and keeps the command notes that were in the user guide. `docs/cli-reference.md` lists every command, argument and option; it is generated from the program's command definitions, and the test `the_checked_in_cli_reference_is_current` fails when it is stale (`UPDATE_CLI_REFERENCE=1` regenerates it).
 - **A sixth built-in preset, Simulated network (ANT-T0605).** Standard on InetSim with a core when a High rule matches (`simulated-network`, needs `evidence.core_dump`); it comes second in the list.
 - **A Preset dropdown in Run program (ANT-T0605).** The options column starts with the

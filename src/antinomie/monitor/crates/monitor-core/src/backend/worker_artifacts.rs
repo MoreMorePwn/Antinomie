@@ -313,10 +313,13 @@ impl Worker {
             let Some(mut owner) = session.run_artifacts.remove(&cookie) else {
                 continue;
             };
+            // Entries Antinomie started after the tree's end run in the run:
+            // its tree is complete only when they are over.
             let changed = owner.observe(
                 session
                     .runs
                     .get(&cookie)
+                    .filter(|run| !run.persistence_busy())
                     .and_then(|run| run.summary.execution.as_ref()),
             );
             // A copy of the program outside the tree is alive: the run's

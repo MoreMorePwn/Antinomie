@@ -118,6 +118,10 @@ pub struct LiveRow {
     pub call_id: u64,
     pub ns: u64,
     pub syscall: String,
+    /// What the row is about (a path for the file rules).
+    pub object: String,
+    /// Every call of the row failed so far.
+    pub failed: bool,
 }
 
 impl Engine {
@@ -153,6 +157,8 @@ impl Engine {
                 call_id: agg.call_id,
                 ns: agg.first_ns,
                 syscall: agg.evidence.split(' ').nth(1).unwrap_or("").to_owned(),
+                object: agg.object.clone(),
+                failed: agg.count > 0 && agg.failed == agg.count,
             });
         }
         rows

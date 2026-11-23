@@ -873,6 +873,7 @@ impl Worker {
         self.poll_disk_job();
         self.host_analysis_tick();
         self.watch_persisted_copies();
+        self.start_persistence();
         self.check_run_artifacts();
         self.check_triggers();
         self.poll_flush();

@@ -39,6 +39,7 @@ pub(crate) struct Covered {
     trigger: Option<antinomie_monitor_core::dump_trigger::DumpTrigger>,
     nonresident: bool,
     screenshots: (Option<u32>, Option<u32>, Option<u32>),
+    start_persistence: bool,
     args: String,
     cwd: String,
     env: String,
@@ -69,6 +70,7 @@ impl Covered {
                 request.screenshot_max_pictures,
                 request.screenshot_max_mib,
             ),
+            start_persistence: request.start_persistence.is_some(),
             args: args.to_owned(),
             cwd: request.cwd.clone(),
             env: env.to_owned(),
@@ -255,6 +257,11 @@ pub(crate) fn fill(
     request.screenshot_every_s = eff.screenshot_every_s;
     request.screenshot_max_pictures = eff.screenshot_max_pictures;
     request.screenshot_max_mib = eff.screenshot_max_mib;
+    // The window has no run time: the hold lasts until Stop or its limit.
+    request.start_persistence = eff
+        .start_persistence
+        .as_ref()
+        .map(|_| antinomie_monitor_core::persist_start::StartPersistence::default());
     if program {
         let written = options.written;
         if written.arguments {

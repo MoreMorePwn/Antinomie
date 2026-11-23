@@ -43,6 +43,9 @@ runs while a window or the daemon owns the data directory.
   `static_analysis.limits.*` within the range of the app's Settings, at most 64
   arguments and 64 `NAME=value` environment entries, absolute
   `program.guest_path` and `program.working_directory`.
+- `program.start_persistence` is a boolean (default false; true in Simulated
+  network and Deep): start what the program installed as persistence when its
+  tree ends at least 30 s before the run time, and hold the run until then.
 - `record.screenshot_every_s` is 0 (off) or 1 to 999 seconds (timed screenshots
   of the VM screen while the program runs; no node minimum).
 - `dumps.dump_when_suspicious` must take something (`trigger_memory_dump` or

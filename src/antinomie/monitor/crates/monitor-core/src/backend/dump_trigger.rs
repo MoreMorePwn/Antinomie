@@ -167,6 +167,9 @@ impl Worker {
             .as_mut()
             .and_then(|watch| watch.held.remove(&finding.pid));
         let held = hold.is_some();
+        // Entries Antinomie started after the tree's end are judged as the
+        // program's own processes were.
+        let busy = run.persistence_busy();
         let log = run.summary.triggers.get_or_insert_with(TriggerLog::default);
         let cooling = log
             .records
@@ -178,7 +181,7 @@ impl Worker {
                     .at_ms
                     .saturating_add(u64::from(plan.cooldown_secs) * 1000)
             });
-        if !run.summary.state.is_live() {
+        if !run.summary.state.is_live() && !busy {
             // The run ended before the match was handled: the process is gone
             // too, and a note says by how much the dump was late.
             let reason = match run.watch.as_ref() {

@@ -209,6 +209,7 @@ fn run_summary(directory: &std::path::Path) -> RunSummary {
         stop_reason: None,
         stopped_at_ms: None,
         persisted: None,
+        persistence_start: None,
         started_ms: None,
         clock_anchor: None,
         id: "run".into(),

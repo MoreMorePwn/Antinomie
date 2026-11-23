@@ -131,6 +131,10 @@ pub struct Program {
     pub run_time_s: u32,
     pub preload: Vec<Preload>,
     pub extra_files: Vec<ExtraFile>,
+    /// Start persistence: when the program's tree ends 30 s or more before
+    /// the run time after installing persistence, start what it installed in
+    /// the same run, as a boot or login would (ANT-T0608).
+    pub start_persistence: bool,
 }
 
 impl Default for Program {
@@ -152,6 +156,7 @@ impl Default for Program {
             run_time_s: 300,
             preload: Vec::new(),
             extra_files: Vec::new(),
+            start_persistence: false,
         }
     }
 }
