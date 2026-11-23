@@ -20,6 +20,7 @@ toml = { version = "1", default-features = false, features = ["std", "serde", "p
 
 [dev-dependencies]
 antinomie-triage = { path = "../triage", features = ["test-support"] }
+zip = { version = "9.2", default-features = false, features = ["deflate", "aes-crypto"] }
 
 # A real-VM check with its own main: the engine's workers re-run the program.
 [[test]]

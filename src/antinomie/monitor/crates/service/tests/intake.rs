@@ -831,3 +831,134 @@ fn submit_with_an_upload_id_queues_a_job_and_uses_up_the_upload() {
         FailureCode::SampleTypeDenied
     );
 }
+
+// ---- password archives and shared libraries -------------------------------------
+
+/// A zip with `entries`, each AES-encrypted with `password`.
+fn aes_zip(entries: &[(&str, &[u8])], password: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, body) in entries {
+        writer
+            .start_file(
+                *name,
+                zip::write::SimpleFileOptions::default()
+                    .with_aes_encryption(zip::AesMode::Aes256, password),
+            )
+            .unwrap();
+        writer.write_all(body).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
+/// An x86-64 shared library: `ET_DYN`, a dynamic section with a soname, no
+/// interpreter.
+fn shared_library() -> Vec<u8> {
+    let mut bytes = vec![0u8; 64 + 56 + 32];
+    bytes[..4].copy_from_slice(b"\x7fELF");
+    bytes[4] = 2;
+    bytes[5] = 1;
+    bytes[16..18].copy_from_slice(&3u16.to_le_bytes());
+    bytes[18..20].copy_from_slice(&0x3eu16.to_le_bytes());
+    bytes[32..40].copy_from_slice(&64u64.to_le_bytes());
+    bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
+    bytes[56..58].copy_from_slice(&1u16.to_le_bytes());
+    // One PT_DYNAMIC at offset 120: a DT_SONAME and the end.
+    bytes[64..68].copy_from_slice(&2u32.to_le_bytes());
+    bytes[72..80].copy_from_slice(&120u64.to_le_bytes());
+    bytes[96..104].copy_from_slice(&32u64.to_le_bytes());
+    bytes[120..128].copy_from_slice(&14u64.to_le_bytes());
+    bytes
+}
+
+#[test]
+fn a_password_archive_is_opened_and_the_preset_judges_the_file_inside() {
+    let fx = Fx::new("archive");
+    let body = elf(0x3e, 100);
+    let outer = aes_zip(&[("sample.elf", &body)], "infected");
+    let upload = fx.upload(ME, Some("feed.zip"), &outer);
+    let sample = fx
+        .intake()
+        .admit(&source_upload(&upload), None, &policy(|_| {}), ME)
+        .unwrap();
+    assert_eq!(sample.kind, "elf");
+    assert_eq!(sample.sha256.as_str(), sha_of(&body));
+    assert_eq!(sample.name, "sample.elf");
+    let library = Library::open(&fx.data).unwrap();
+    assert!(library.get(&sha_of(&outer)).unwrap().is_none());
+    let entries = library.custody_entries(&sample.sha256.to_string()).unwrap();
+    let text: String = entries.iter().map(|e| e.detail.clone()).collect();
+    assert!(
+        text.contains("feed.zip") && text.contains(&sha_of(&outer)),
+        "{text}"
+    );
+    // Several files, encrypted: refused with the list.
+    let two = aes_zip(&[("a", b"aa"), ("b", b"bb")], "infected");
+    let upload = fx.upload(ME, Some("two.zip"), &two);
+    let error = fx
+        .intake()
+        .admit(&source_upload(&upload), None, &policy(|_| {}), ME)
+        .unwrap_err();
+    assert_eq!(error.code, FailureCode::SampleTypeDenied);
+    assert!(error.message.contains("a (2 bytes)") && error.message.contains("b (2 bytes)"));
+    // Another password: a clear message.
+    let other = aes_zip(&[("a", b"aa")], "other");
+    let upload = fx.upload(ME, Some("other.zip"), &other);
+    let error = fx
+        .intake()
+        .admit(&source_upload(&upload), None, &policy(|_| {}), ME)
+        .unwrap_err();
+    assert!(
+        error.message.contains("--archive-password"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn a_shared_library_needs_the_presets_load_into() {
+    let fx = Fx::new("library");
+    let upload = fx.upload(ME, Some("libx.so"), &shared_library());
+    let error = fx
+        .intake()
+        .admit(&source_upload(&upload), None, &policy(|_| {}), ME)
+        .unwrap_err();
+    assert_eq!(error.code, FailureCode::SampleTypeDenied);
+    assert!(
+        error.message.contains("shared library") && error.message.contains("LD_PRELOAD"),
+        "{}",
+        error.message
+    );
+    // With a program to load it into, it is an ELF the preset accepts.
+    let sample = fx
+        .intake()
+        .admit(
+            &source_upload(&upload),
+            None,
+            &policy(|p| p.program.load_into = "/bin/ls".into()),
+            ME,
+        )
+        .unwrap();
+    assert_eq!(sample.kind, "elf_library");
+    let library = Library::open(&fx.data).unwrap();
+    assert_eq!(
+        library
+            .get(sample.sha256.as_str())
+            .unwrap()
+            .unwrap()
+            .file_type,
+        "elf_library"
+    );
+    // A program is unaffected by the key.
+    let program = fx.upload(ME, None, &elf(0x3e, 100));
+    assert!(
+        fx.intake()
+            .admit(
+                &source_upload(&program),
+                None,
+                &policy(|p| p.program.load_into = "/bin/ls".into()),
+                ME
+            )
+            .is_ok()
+    );
+}

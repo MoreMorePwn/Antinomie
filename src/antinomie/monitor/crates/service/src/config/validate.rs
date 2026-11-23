@@ -83,8 +83,19 @@ pub const MAX_ATTEMPTS: u32 = 10;
 pub const MAX_BACKOFF_S: u32 = 3600;
 
 /// The values of `samples::detect_type`.
-pub const SAMPLE_TYPES: [&str; 11] = [
-    "elf", "sh", "py", "pl", "script", "exe", "zip", "gz", "bz2", "xz", "data",
+pub const SAMPLE_TYPES: [&str; 12] = [
+    "elf",
+    "elf_library",
+    "sh",
+    "py",
+    "pl",
+    "script",
+    "exe",
+    "zip",
+    "gz",
+    "bz2",
+    "xz",
+    "data",
 ];
 /// The architectures a preset accepts, in the one spelling (`crate::arch`;
 /// the old spellings are read as these).

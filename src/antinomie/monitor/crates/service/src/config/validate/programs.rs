@@ -15,6 +15,12 @@ pub(super) fn check_program(p: &preset::Program, sink: &mut Sink<'_>) {
             "an absolute path of a file (`{name}` is the sample's file name)",
         );
     }
+    if !p.load_into.is_empty() && (!absolute(&p.load_into) || p.load_into.ends_with('/')) {
+        sink.error(
+            "program.load_into",
+            "an absolute path of a program in the guest (for example /bin/ls), or empty",
+        );
+    }
     if !absolute(&p.working_directory) {
         sink.error("program.working_directory", "must be an absolute path");
     }

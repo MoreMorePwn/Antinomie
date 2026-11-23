@@ -74,6 +74,22 @@ fn classify(bytes: &[u8]) -> (&'static str, Option<&'static str>) {
 fn check_type(preset: &LoadedPreset, kind: &str, arch: Option<&str>) -> Result<(), IntakeError> {
     let accepts = &preset.preset.accepts;
     let name = preset.base_name();
+    // A shared library is not run: it is loaded into the program the preset
+    // names, and is then judged as the ELF it is.
+    let mut kind = kind;
+    if kind == samples::ELF_LIBRARY {
+        if preset.preset.program.load_into.is_empty() {
+            return Err(deny(
+                FailureCode::SampleTypeDenied,
+                samples::library_refusal(
+                    "set program.load_into in the preset, or give --load-into PROGRAM to auto submit",
+                ),
+            ));
+        }
+        if !accepts.types.iter().any(|t| t == samples::ELF_LIBRARY) {
+            kind = "elf";
+        }
+    }
     if !accepts.types.iter().any(|t| t == "any" || t == kind) {
         return Err(deny(
             FailureCode::SampleTypeDenied,
@@ -143,11 +159,19 @@ impl Intake {
             ));
         }
         let arch = (!record.arch.is_empty()).then_some(record.arch.as_str());
-        check_type(preset, &record.file_type, arch)?;
+        // A library added before libraries had their own type is `elf`.
+        let kind = if record.file_type.eq_ignore_ascii_case("elf")
+            && library.is_shared_library(sha256.as_str()).unwrap_or(false)
+        {
+            samples::ELF_LIBRARY
+        } else {
+            record.file_type.as_str()
+        };
+        check_type(preset, kind, arch)?;
         Ok(RunSample {
             sha256: sha256.clone(),
             size: record.size,
-            kind: record.file_type.clone(),
+            kind: kind.to_owned(),
             architecture: arch.map(crate::arch::normalize),
             name: record.name.clone(),
         })
@@ -206,8 +230,6 @@ impl Intake {
                 "the file grew while it was read",
             ));
         }
-        let (kind, arch) = classify(&bytes);
-        check_type(preset, kind, arch)?;
         // Only the name goes into the origin, never the host path.
         let origin = NewOrigin {
             kind: OriginKind::Added,
@@ -216,11 +238,31 @@ impl Intake {
             name: shown_name.to_owned(),
             ..Default::default()
         };
-        let new = NewSample {
+        let mut new = NewSample {
             name: name_hint.unwrap_or_default().to_owned(),
             origin,
             ..Default::default()
         };
+        // A ZIP with one file in it (MalwareBazaar's `infected` archives) is
+        // opened in memory; the preset judges the file inside, and the
+        // custody log records the archive. A password other than `infected`
+        // needs `sample add --archive-password`, then a submit by SHA-256.
+        let options = samples::ArchiveOptions {
+            limit: Some(limit),
+            ..Default::default()
+        };
+        if let Some(inner) = samples::unwrap_zip(&bytes, &options)
+            .map_err(|message| deny(FailureCode::SampleTypeDenied, message))?
+        {
+            samples::mark_unwrapped_origin(&mut new, shown_name, &inner);
+            // The archive's own name is not the sample's.
+            if new.name == shown_name {
+                new.name.clear();
+            }
+            bytes = inner.bytes;
+        }
+        let (kind, arch) = classify(&bytes);
+        check_type(preset, kind, arch)?;
         let mut library = self.library()?;
         let added = library.add_bytes_as(&bytes, new, actor).map_err(|e| {
             deny(
@@ -260,6 +302,7 @@ impl Intake {
         upload: &crate::api::ids::UploadId,
         name: Option<&str>,
         tags: Vec<samples::Tag>,
+        archive: &samples::ArchiveOptions,
         actor: &str,
     ) -> Result<(String, bool), crate::api::error::ApiError> {
         use crate::api::error::{ApiError, ErrorCode};
@@ -287,7 +330,7 @@ impl Intake {
             return Err(ApiError::payload_too_large(MAX_SAMPLE).with_field("sample.upload_id"));
         }
         let shown = staged.name.clone().unwrap_or_else(|| "upload".into());
-        let new = NewSample {
+        let mut new = NewSample {
             name: name
                 .or(staged.name.as_deref())
                 .unwrap_or_default()
@@ -297,11 +340,22 @@ impl Intake {
                 kind: OriginKind::Added,
                 source: "Daemon".into(),
                 path: shown.clone(),
-                name: shown,
+                name: shown.clone(),
                 ..Default::default()
             },
             ..Default::default()
         };
+        // A ZIP with one file in it is opened in memory; its file is the
+        // sample and the archive is the origin.
+        if let Some(inner) = samples::unwrap_zip(&bytes, archive)
+            .map_err(|message| ApiError::invalid_argument("sample.upload_id", message))?
+        {
+            samples::mark_unwrapped_origin(&mut new, &shown, &inner);
+            if new.name == shown {
+                new.name.clear();
+            }
+            bytes = inner.bytes;
+        }
         let mut library =
             Library::open_patient(&self.data_dir).map_err(crate::library::library_error)?;
         let added = library

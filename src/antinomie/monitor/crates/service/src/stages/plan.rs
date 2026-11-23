@@ -46,6 +46,8 @@ pub struct Effective {
     /// Where the sample lands (`program.guest_path`, `{name}` the sample's
     /// file name).
     pub guest_path: String,
+    /// `program.load_into`: the program a library sample runs in (empty: none).
+    pub load_into: String,
 }
 
 fn core_kind(route: &Route) -> RouteKind {
@@ -119,6 +121,7 @@ pub fn effective(preset: &Preset, revert: RevertMode) -> Effective {
         revert,
         request,
         guest_path: program.guest_path.clone(),
+        load_into: program.load_into.clone(),
     }
 }
 

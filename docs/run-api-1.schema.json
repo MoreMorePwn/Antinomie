@@ -4409,6 +4409,24 @@
           "items": {
             "$ref": "#/$defs/Tag"
           }
+        },
+        "archive_password": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The password of a ZIP with one encrypted file, which is opened in\nmemory and added as the sample (`infected` when none is given)."
+        },
+        "entry": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file to take from a ZIP of several."
+        },
+        "keep_archive": {
+          "type": "boolean",
+          "description": "Add a ZIP as the sample itself; open nothing."
         }
       },
       "required": [
