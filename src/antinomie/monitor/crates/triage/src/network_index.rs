@@ -45,6 +45,7 @@ pub fn collect(
     let http_query = query::compile_table(&request.filters[3], HTTP_FIELDS);
     let mut inventory = network::Inventory {
         attribution: request.attribution.clone(),
+        sweeps: request.sweeps.clone(),
         ..network::Inventory::default()
     };
     let mut inner = request.clone();

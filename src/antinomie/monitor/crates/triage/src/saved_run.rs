@@ -262,6 +262,34 @@ impl SavedRun {
         net_attr_read::read_calls(&self.run.directory, &self.request(), cancel)
     }
 
+    /// How long the run ran, in seconds, from its manifest's start and end;
+    /// `None` while it has no end.
+    pub fn run_seconds(&self) -> Option<u64> {
+        let facts = antinomie_monitor_core::recording::run_filter_facts(
+            &self.run.directory,
+            &self.run.id,
+            &self.run.vm_id,
+            &self.run.boot_id,
+        )
+        .ok()?;
+        Some(facts.ended_ms?.checked_sub(facts.started_ms?)? / 1000)
+    }
+
+    /// The scan Auto Triage makes (ANT-T0612): of the whole run, with a time
+    /// budget when one is given (the scan then stops reading the calls and
+    /// says the result is partial), and without the rows a filter change is
+    /// answered from, which Auto never asks for.
+    pub fn scan_within(
+        &self,
+        budget: Option<std::time::Duration>,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<ArchiveScan, String> {
+        let mut request = self.request();
+        request.keep_index = false;
+        request.stop = budget.map(|limit| Arc::new(scan_progress::ScanStop::triage(limit)));
+        self.scan_with(request, cancel)
+    }
+
     /// Index the whole run, as the GUI does when it is selected.
     pub fn scan(&self, cancel: &Arc<AtomicBool>) -> Result<ArchiveScan, String> {
         self.scan_with(self.request(), cancel)

@@ -95,6 +95,17 @@ check_online = true`), `assess` (the run's digest and the label, after
 `triage`, `detection` and `online`) and `report` (after all of them). At most `[daemon] host_workers` items run at once (2 by default),
 across every run.
 
+The `triage` item has a time budget of its own, proportional to how long the
+run ran: `[daemon] triage_time_per_run_s` seconds for each second (6 by default,
+at least 120 s). A recording too large to read within it (a scanner that made a
+million calls) gives a partial Triage result, marked so with the reason, instead
+of an item that runs out its limit and leaves nothing; the detection engines,
+the digest and the report go on from it. One process's `connect` and `sendto`
+calls to at least 256 addresses (a scanner) are one summarised row in the
+Endpoints tab, the IOC list and the report ("scanned 16,384 addresses on ports
+23, 2323"); each address is still matched against the datasets, and one that
+matched keeps its own row.
+
 A run launches without the guest-side static analysis, so YARA does not wait for
 the specimen that analysis keeps (as the window's Detection tab does): it scans
 the sample the run ran, read from the library, with the files the run wrote and

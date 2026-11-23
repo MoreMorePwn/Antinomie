@@ -29,6 +29,7 @@ pub const DOCUMENTS: usize = 50;
 pub const NOTE_DIRECTORIES: usize = 3;
 
 /// Items seen within a span of time.
+#[derive(Clone)]
 pub struct Window<T> {
     pub items: VecDeque<(u64, T)>,
 }
@@ -83,7 +84,7 @@ impl<T: Ord + Clone> Window<T> {
 }
 
 /// What is true of one thread: its own first call, span and end.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Thread {
     /// Whether the first call seen from the thread was an exec.
     pub first_exec: Option<bool>,
@@ -105,7 +106,7 @@ pub const RESOLVER_CONFIG: &[&str] = &[
 /// One process's counters (all its threads together, keyed by the thread group
 /// id): a program that spreads its work over worker threads is still one
 /// program. A flag that ends in `_done` means the rule already fired.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Task {
     pub ssh_hosts_read: bool,
     /// Under `/proc`: pids whose process files were opened.
@@ -254,14 +255,14 @@ impl Contact {
 }
 
 /// Failed connects to one public address and port, over the whole run.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DeadServer {
     pub failed: u32,
     /// A connect to it succeeded once: the server is not dead.
     pub reached: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct State {
     /// Failed connects per public address and port (`network.dead_c2`).
     pub dead_servers: BTreeMap<(std::net::IpAddr, u16), DeadServer>,

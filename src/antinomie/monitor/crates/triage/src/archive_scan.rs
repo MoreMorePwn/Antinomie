@@ -2,6 +2,9 @@
 //! Background scans of a saved recording and the finding journal they write.
 use super::*;
 
+pub mod file_pass;
+pub mod live;
+mod run_record;
 pub mod stages;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -10,6 +13,8 @@ thread_local! {
     /// without one); tests bound a filter change by it.
     pub static READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
+#[cfg(test)]
+mod live_tests;
 #[cfg(test)]
 mod timing;
 
@@ -155,11 +160,41 @@ fn scan_with_progress(
     cancel: &Arc<AtomicBool>,
     request: &ScanRequest,
 ) -> Result<ArchiveScan, String> {
+    // A run still being recorded is refreshed from the snapshot its last
+    // scan kept, when that holds (ANT-T0602); otherwise it is read whole.
+    let mut plan = live::Plan::new(directory, pcap, pcap_open, request);
+    let result = match scan_planned(directory, pcap, pcap_open, cancel, request, &mut plan) {
+        Err(error) if error == live::RESTART => {
+            live::why("the scan starts again, whole");
+            plan.restart();
+            scan_planned(directory, pcap, pcap_open, cancel, request, &mut plan)
+        }
+        other => other,
+    };
+    if result.is_err() {
+        plan.give_back();
+    }
+    result
+}
+
+fn scan_planned(
+    directory: &Path,
+    pcap: Option<&Path>,
+    pcap_open: bool,
+    cancel: &Arc<AtomicBool>,
+    request: &ScanRequest,
+    plan: &mut live::Plan,
+) -> Result<ArchiveScan, String> {
     // A scan that keeps its index records the rows its tables are made from, so
-    // a later filter, sort or page of this recording is answered from them.
+    // a later filter, sort or page of this recording is answered from them. A
+    // resumed refresh goes on recording into its snapshot's logs.
     let tapped;
     let request = if request.keep_index && request.stop.is_none() && request.tap.is_none() {
-        match row_index::Tap::new() {
+        let tap = match &plan.resume {
+            Some(snapshot) => Ok(Arc::clone(&snapshot.tap)),
+            None => row_index::Tap::new(),
+        };
+        match tap {
             Ok(tap) => {
                 tapped = ScanRequest {
                     tap: Some(tap),
@@ -179,16 +214,40 @@ fn scan_with_progress(
             let progress = Arc::clone(progress);
             antinomie_monitor_core::recording::with_index_progress(
                 move |done, total| progress.set(scan_progress::Phase::Indexing, done, total),
-                || stages::open_scan(directory, pcap, pcap_open, cancel, request),
+                || stages::open_scan_planned(directory, pcap, pcap_open, cancel, request, plan),
             )
         }
-        None => stages::open_scan(directory, pcap, pcap_open, cancel, request),
+        None => stages::open_scan_planned(directory, pcap, pcap_open, cancel, request, plan),
     };
     let mut scan = opened?;
-    let mut files = scan.read_files(cancel, request)?;
+    let settled = plan.keep.then(|| {
+        (
+            scan.settled_facts.clone(),
+            scan.cookies.clone(),
+            scan.settled.clone(),
+        )
+    });
+    let mut files = scan.read_files_planned(cancel, request, plan)?;
     request.phase(scan_progress::Phase::Settling, 0);
     let network = scan.read_network(&mut files.pending, pcap, pcap_open, cancel, request)?;
-    let done = scan.finish(files, network, pcap, pcap_open, cancel, request)?;
+    let mut done = scan.finish(files, network, pcap, pcap_open, cancel, request)?;
+    if plan.resumed {
+        #[cfg(any(test, feature = "test-support"))]
+        live::RESUMES.with(|resumes| resumes.set(resumes.get() + 1));
+        // The refresh read only the calls from the snapshot on: every table
+        // is made from the kept rows, as a filter change makes them.
+        done.shown = None;
+        done = match requery::answer(&done, request, cancel) {
+            Some(answer) => answer?,
+            None => {
+                live::why("the kept rows do not answer the request");
+                return Err(live::RESTART.into());
+            }
+        };
+    }
+    if let Some((facts, cookies, parents)) = settled {
+        std::mem::take(plan).store(facts, cookies, parents, request.tap.as_ref());
+    }
     if request.keep_index {
         scan_cache::remember(directory, &done);
     }
@@ -265,6 +324,7 @@ pub fn note_schema_gaps(
 }
 
 /// A call that tried to make, change or run something and was refused.
+#[derive(Clone)]
 pub struct FailedStep {
     pub text: String,
 }

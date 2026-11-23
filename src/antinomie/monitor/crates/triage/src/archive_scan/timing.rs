@@ -319,3 +319,118 @@ fn every_chip_combination_is_what_a_full_scan_makes() {
         );
     }
 }
+
+fn rss_mib() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("VmRSS:").map(str::to_owned))
+        })
+        .and_then(|rest| {
+            rest.trim()
+                .trim_end_matches("kB")
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
+        .map_or(0, |kib| kib / 1024)
+}
+
+/// ANT-T0602, `ANT_TIMING_MODE=live`: the recording of `ANT_TIMING_RUN`
+/// replayed in `ANT_TIMING_CHUNKS` (default 6) chunks into a growing copy in
+/// `ANT_TIMING_LIVE_DIR` (a scratch folder, made and emptied of the run's
+/// files), refreshed after each chunk as the window refreshes a live run,
+/// and compared with a full scan of the same bytes. Every chunk must give no
+/// difference. The chunks end anywhere: the index stops before a packet that
+/// is cut off, as it does while the guest writes.
+#[test]
+#[ignore = "needs ANT_TIMING_RUN and ANT_TIMING_LIVE_DIR"]
+fn a_live_refresh_is_what_a_full_scan_makes() {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let (Some(dir), Some(live)) = (
+        std::env::var_os("ANT_TIMING_RUN"),
+        std::env::var_os("ANT_TIMING_LIVE_DIR"),
+    ) else {
+        return;
+    };
+    let (dir, live) = (
+        std::path::PathBuf::from(dir),
+        std::path::PathBuf::from(live),
+    );
+    let chunks: u64 = std::env::var("ANT_TIMING_CHUNKS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(6);
+    std::fs::create_dir_all(&live).unwrap();
+    for name in [
+        "run.json",
+        "manifest.json",
+        "artifacts.json",
+        "inetsim.json",
+    ] {
+        let _ = std::fs::remove_file(live.join(name));
+        if dir.join(name).is_file() {
+            std::fs::copy(dir.join(name), live.join(name)).unwrap();
+        }
+    }
+    let objects = live.join("objects");
+    let _ = std::fs::remove_dir_all(&objects);
+    std::fs::create_dir_all(&objects).unwrap();
+    if let Ok(entries) = std::fs::read_dir(dir.join("objects")) {
+        for entry in entries.flatten() {
+            std::fs::hard_link(entry.path(), objects.join(entry.file_name()))
+                .or_else(|_| {
+                    std::fs::copy(entry.path(), objects.join(entry.file_name())).map(|_| ())
+                })
+                .unwrap();
+        }
+    }
+    let raw = live.join("telemetry.raw");
+    let _ = std::fs::remove_file(&raw);
+    let mut source = std::fs::File::open(dir.join("telemetry.raw")).unwrap();
+    let total = source.metadata().unwrap().len();
+    let mut target = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&raw)
+        .unwrap();
+    let run: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("run.json")).unwrap()).unwrap();
+    let mut request = request_of(&run);
+    request.run_finished = false;
+    request.recording_open = true;
+    request.keep_index = true;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut written = 0u64;
+    for step in 1..=chunks {
+        let end = total * step / chunks;
+        source.seek(SeekFrom::Start(written)).unwrap();
+        std::io::copy(&mut (&mut source).take(end - written), &mut target).unwrap();
+        target.flush().unwrap();
+        written = end;
+        let resumes = live::RESUMES.with(std::cell::Cell::get);
+        let at = Instant::now();
+        let refreshed = scan_archive_query(&live, None, false, &cancel, &request).unwrap();
+        let refresh_s = at.elapsed().as_secs_f64();
+        let resumed = live::RESUMES.with(std::cell::Cell::get) > resumes;
+        let rss = rss_mib();
+        let mut plain = request.clone();
+        plain.keep_index = false;
+        let at = Instant::now();
+        let full = scan_archive_uncached(&live, None, false, &cancel, &plain).unwrap();
+        let full_s = at.elapsed().as_secs_f64();
+        let differences = requery::differences(&refreshed, &full);
+        eprintln!(
+            "TIMING live chunk {step}/{chunks} ({} MiB, {} calls): refresh {refresh_s:.1} s ({}), full scan {full_s:.1} s, rss after refresh {rss} MiB, peak {} MiB, findings {}, differences {differences:?}",
+            end >> 20,
+            full.counts.calls,
+            if resumed { "from the snapshot" } else { "whole" },
+            peak_rss_mib(),
+            full.counts.findings,
+        );
+        assert!(differences.is_empty(), "chunk {step}: {differences:?}");
+        assert_eq!(refreshed.counts.calls, full.counts.calls);
+        assert_eq!(refreshed.process.len(), full.process.len());
+    }
+}

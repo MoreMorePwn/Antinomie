@@ -269,12 +269,14 @@ fn unchanged(
     source_len: u64,
 ) -> io::Result<bool> {
     let cached: Option<(String, Vec<u8>, Vec<u8>, i64)> = connection
-        .query_row(
-            "SELECT identity, source_len, indexed, stopped FROM metadata WHERE id=?1",
-            params![STATE_ID],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .optional()
+        .prepare_cached("SELECT identity, source_len, indexed, stopped FROM metadata WHERE id=?1")
+        .and_then(|mut query| {
+            query
+                .query_row(params![STATE_ID], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .optional()
+        })
         .map_err(sql_error)?;
     let Some((cached_identity, cached_len, cached_cursor, stopped)) = &cached else {
         return Ok(false);
@@ -561,6 +563,22 @@ fn encode_key(key: &FieldKey) -> [u8; 37] {
     bytes
 }
 
+thread_local! {
+    /// The page of calls this thread reads ([`next_read_epoch`]); 0 outside one.
+    static READ_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The objects folder whose index this thread found current in that page.
+    static VERIFIED: std::cell::RefCell<Option<(PathBuf, u64)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A reader of a page of calls begins: the object index is checked against
+/// its source once in the page instead of at every object read (most calls
+/// read one or two). A source that grows or is replaced is noticed at the
+/// next page.
+pub(crate) fn next_read_epoch() {
+    READ_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1).max(1)));
+}
+
 /// Read and update the disposable index for `objects`, then query it.
 /// `None` means the archive has no packed-object index.
 ///
@@ -570,6 +588,35 @@ fn encode_key(key: &FieldKey) -> [u8; 37] {
 /// (ANT-T0588: a field read made some forty system calls here, on every call
 /// of a recording that holds hundreds of thousands).
 pub(super) fn with_index<R>(
+    objects: &Path,
+    read: impl FnOnce(&Connection) -> io::Result<R>,
+) -> io::Result<Option<R>> {
+    let epoch = READ_EPOCH.with(std::cell::Cell::get);
+    let checked = epoch != 0
+        && VERIFIED.with(|verified| {
+            verified
+                .borrow()
+                .as_ref()
+                .is_some_and(|(folder, at)| *at == epoch && folder == objects)
+        });
+    if checked {
+        let path = cache_path(objects)?;
+        let handle =
+            cached_connection(&path).map_err(|error| cache_database_error(error, &path))?;
+        let connection = handle.lock().map_err(|_| {
+            cache_database_error(io::Error::other("archive cache lock poisoned"), &path)
+        })?;
+        return read(&connection).map(Some);
+    }
+    let result = with_index_checked(objects, read);
+    if epoch != 0 && matches!(result, Ok(Some(_))) {
+        VERIFIED.with(|verified| *verified.borrow_mut() = Some((objects.to_path_buf(), epoch)));
+    }
+    result
+}
+
+/// [`with_index`] with the full check of the index against its source.
+fn with_index_checked<R>(
     objects: &Path,
     read: impl FnOnce(&Connection) -> io::Result<R>,
 ) -> io::Result<Option<R>> {
@@ -606,14 +653,32 @@ pub(super) fn with_index<R>(
     let mut connection = handle.lock().map_err(|_| {
         cache_database_error(io::Error::other("archive cache lock poisoned"), &path)
     })?;
+    let mut read = Some(read);
     let result: io::Result<Option<R>> = (|| {
-        {
-            let transaction = connection.transaction().map_err(sql_error)?;
-            if unchanged(&transaction, opened.as_ref(), &identity, source_len)? {
-                let result = read(&transaction)?;
-                verify_source(objects, &identity, source_len)?;
-                return Ok(Some(result));
+        // One read transaction, begun and ended by cached statements: a walk
+        // reads objects for most of its calls, and parsing the statements'
+        // text each time was a share of its cost.
+        connection
+            .prepare_cached("BEGIN DEFERRED")
+            .and_then(|mut begin| begin.execute([]))
+            .map_err(sql_error)?;
+        let early = match unchanged(&connection, opened.as_ref(), &identity, source_len) {
+            Ok(true) => {
+                let read = read
+                    .take()
+                    .ok_or_else(|| invalid_cache("index read twice"))?;
+                Some(read(&connection).and_then(|result| {
+                    verify_source(objects, &identity, source_len).map(|()| result)
+                }))
             }
+            Ok(false) => None,
+            Err(error) => Some(Err(error)),
+        };
+        let _ = connection
+            .prepare_cached("ROLLBACK")
+            .and_then(|mut rollback| rollback.execute([]));
+        if let Some(result) = early {
+            return result.map(Some);
         }
         let file = match opened.take() {
             Some(file) => file,
@@ -631,6 +696,9 @@ pub(super) fn with_index<R>(
             }
         };
         update(objects, &mut connection, &file, &identity, source_len)?;
+        let read = read
+            .take()
+            .ok_or_else(|| invalid_cache("index read twice"))?;
         let result = read(&connection)?;
         verify_source(objects, &identity, source_len)?;
         Ok(Some(result))

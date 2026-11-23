@@ -102,14 +102,30 @@ pub fn walk_segments_within(
     recordings: &[Recording],
     cancel: &AtomicBool,
     stop: Option<&crate::scan_progress::ScanStop>,
+    each: impl FnMut(usize, &[InvocationSummary]) -> Result<(), String>,
+) -> Result<(u64, bool, Vec<String>), String> {
+    walk_segments_from(recordings, (0, 0), cancel, stop, each)
+}
+
+/// [`walk_segments_within`] from segment `start.0` at raw offset `start.1`:
+/// the segments before it are not read, the later ones from their start.
+pub fn walk_segments_from(
+    recordings: &[Recording],
+    start: (usize, u64),
+    cancel: &AtomicBool,
+    stop: Option<&crate::scan_progress::ScanStop>,
     mut each: impl FnMut(usize, &[InvocationSummary]) -> Result<(), String>,
 ) -> Result<(u64, bool, Vec<String>), String> {
     let (mut seen, mut issues) = (0u64, Vec::new());
-    for (index, recording) in recordings.iter().enumerate() {
-        let (count, complete, found) =
-            walk_pages(recording, cancel, stop.map(|stop| (stop, seen)), |page| {
-                each(index, page)
-            })?;
+    for (index, recording) in recordings.iter().enumerate().skip(start.0) {
+        let offset = if index == start.0 { start.1 } else { 0 };
+        let (count, complete, found) = walk_pages_from(
+            recording,
+            offset,
+            cancel,
+            stop.map(|stop| (stop, seen)),
+            |page| each(index, page),
+        )?;
         seen += count;
         for issue in found {
             if issues.len() < 32 && !issues.contains(&issue) {

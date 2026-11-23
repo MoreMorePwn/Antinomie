@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Source column over a small capture: a TCP connect, a UDP DNS lookup, an
 //! accepted connection, background NTP and a flow no call names, read by
-//! TShark from a pcap the test writes.
+//! TShark from a pcap the test writes; and a scan storm's frames counted on
+//! one Endpoints row (ANT-T0612).
 use super::net_attr::*;
 use super::*;
 use std::net::IpAddr;
@@ -219,4 +220,127 @@ fn endpoints_name_the_process_the_base_image_or_nothing() {
         ioc_scan::text_of(&row[0].values, "network.source_process"),
         "curl"
     );
+}
+
+/// A scanner's SYNs to 300 addresses (and the refusals of a few) are one
+/// Endpoints row with all their frames; the capture's IOC list holds none of
+/// the scanned addresses, and the other process's endpoint keeps its row.
+#[test]
+fn a_scan_storm_in_the_capture_is_one_endpoints_row() {
+    if !Path::new("/usr/bin/tshark").is_file() {
+        return;
+    }
+    let files = PacketSpool::new().unwrap();
+    let capture = files.directory.join("scan.pcap");
+    let guest = [10, 0, 2, 15];
+    let target = |at: u32| -> ([u8; 4], u16) {
+        let ip = std::net::Ipv4Addr::from(0x0b00_0000 + at).octets();
+        (ip, if at.is_multiple_of(4) { 2323 } else { 23 })
+    };
+    let mut log = rules::ioc::Log::default();
+    let mut frames = vec![(0, frame(true, (guest, 40001), ([192, 0, 2, 9], 80)))];
+    for at in 0..300u32 {
+        let (ip, port) = target(at);
+        let who = rules::ioc::Who {
+            cookie: 70,
+            pid: 7,
+            tid: 8,
+            time_ns: 1_000 + u64::from(at),
+            stream: 1,
+            call_id: u64::from(at),
+            ..Default::default()
+        };
+        rules::ioc::push(
+            &mut log,
+            rules::ioc::Connection {
+                ip: IpAddr::from(ip),
+                port,
+                udp: false,
+                ok: false,
+                who,
+                name: "connect",
+            },
+        );
+        frames.push((1, frame(true, (guest, 50000 + at as u16), (ip, port))));
+        if at.is_multiple_of(50) {
+            // A refusal from the scanned host.
+            frames.push((2, frame(true, (ip, port), (guest, 50000 + at as u16))));
+        }
+    }
+    std::fs::write(&capture, pcap(&frames)).unwrap();
+    let artifacts = serde_json::json!({"run_id":"r","vm_id":"v","boot_id":"b","network_captures":[capture],"network_state":"complete","memory_dump":null,"memory_state":"disabled","core_dump":null,"core_state":"disabled","issues":[]});
+    std::fs::write(
+        files.directory.join("artifacts.json"),
+        serde_json::to_vec(&artifacts).unwrap(),
+    )
+    .unwrap();
+    let sweeps = crate::sweeps::Sweeps::of(&log);
+    assert_eq!(sweeps.scans.len(), 1);
+    // The scan's row is attributed by its lowest endpoint's call.
+    let (low_ip, low_port, _) = *sweeps.scans[0].endpoints.iter().min().unwrap();
+    let mut scanner = call(
+        7,
+        "scanner",
+        "connect",
+        Role::Remote,
+        ("0.0.0.0", 0),
+        false,
+        1,
+    );
+    scanner.ip = low_ip;
+    scanner.port = low_port;
+    scanner.caller.cookie = 70;
+    let attribution = NetAttribution::new(vec![
+        call(
+            40,
+            "curl",
+            "connect",
+            Role::Remote,
+            ("192.0.2.9", 80),
+            false,
+            0,
+        ),
+        scanner,
+    ]);
+    let request = ScanRequest {
+        owned_pcap: true,
+        identity: Some(("v".into(), "b".into(), "r".into())),
+        attribution: Some(Arc::new(attribution)),
+        sweeps: Some(Arc::new(sweeps)),
+        ..Default::default()
+    };
+    let index = network_index::collect(
+        &files.directory,
+        &capture,
+        false,
+        &Arc::new(AtomicBool::new(false)),
+        &request,
+        &mut |_, _, _, _, _| Ok(()),
+    )
+    .unwrap();
+    let rows = &index.new_tabs.endpoints;
+    let texts: Vec<&str> = rows.iter().map(|row| row[0].text.as_str()).collect();
+    assert_eq!(rows.len(), 2, "{texts:?}");
+    let scan = rows
+        .iter()
+        .find(|row| row[0].text == "scanned 300 addresses on ports 23, 2323")
+        .unwrap_or_else(|| panic!("no scan row in {texts:?}"));
+    // 300 SYNs and 6 refusals, every frame of the scan on its row.
+    assert_eq!(scan[3].text, "306");
+    assert_eq!(scan[1].text, "scanner (7 \u{b7} 8)");
+    assert_eq!(files::number(&scan[0].values, "network.port"), Some(23));
+    assert_eq!(files::number(&scan[0].values, "network.frames"), Some(306));
+    let curl = rows
+        .iter()
+        .find(|row| row[0].text == "192.0.2.9:80")
+        .expect("curl keeps its row");
+    assert_eq!(curl[3].text, "1");
+    // The capture lists none of the scanned addresses as indicators.
+    let indicators = index.ioc.finish();
+    let keys: Vec<&str> = indicators
+        .iter()
+        .map(|indicator| indicator.key.as_str())
+        .collect();
+    assert!(keys.contains(&"192.0.2.9:80"), "{keys:?}");
+    assert!(!keys.iter().any(|key| key.starts_with("11.0.")), "{keys:?}");
 }

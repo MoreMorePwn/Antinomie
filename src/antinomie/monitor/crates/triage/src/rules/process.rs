@@ -311,7 +311,7 @@ fn named_program(files: &FdState, mut key: TaskKey) -> Option<&str> {
         {
             return Some(path);
         }
-        let parent = files.settled_parents.get(&key).copied().or(node.parent)?;
+        let parent = files.settled_parent(&key).or(node.parent)?;
         if parent == key {
             return None;
         }

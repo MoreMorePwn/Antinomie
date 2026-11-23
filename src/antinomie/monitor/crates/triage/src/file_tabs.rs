@@ -180,6 +180,9 @@ pub struct TabSink {
     /// Opened first, then the operation tabs in slot order from 8.
     pub pages: Vec<sorting::Page<Vec<Cell>>>,
     pub queries: Vec<query::Compiled>,
+    /// Fill the pages; off when the tables are made from the kept rows (a
+    /// live run's refresh, ANT-T0602): the counts and the rows go on.
+    pub keep_pages: bool,
 }
 
 impl TabSink {
@@ -200,6 +203,7 @@ impl TabSink {
             queries: slots
                 .map(|slot| query::compile_table(&request.filters[slot], FILE_FIELDS))
                 .collect(),
+            keep_pages: true,
         }
     }
 
@@ -259,7 +263,7 @@ impl TabSink {
                 show,
             );
             let keeps = request.file_visibility.keeps_with(&row, show);
-            if keeps {
+            if keeps && self.keep_pages {
                 if self.queries[at].keep_table(&row[0].values) {
                     self.pages[at].push(row)?;
                 }

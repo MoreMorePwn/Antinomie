@@ -38,6 +38,7 @@ pub(crate) use segments::recording_root;
 pub use segments::{RunSegment, run_segments};
 mod facts;
 pub use facts::{RunFilterFacts, run_filter_facts};
+pub mod growth;
 mod matching;
 pub use matching::{ArchiveStamp, MatchTotals, MatchingPage};
 mod read_only;
@@ -58,7 +59,7 @@ impl Recording {
         let manifest = archive_io::open_regular(directory, Path::new("manifest.json"))
             .ok()
             .filter(|file| file.metadata().is_ok_and(|meta| meta.len() <= 1024 * 1024))
-            .and_then(|file| serde_json::from_reader(file).ok())
+            .and_then(|file| serde_json::from_reader(BufReader::new(file)).ok())
             .unwrap_or(serde_json::Value::Null);
         Self {
             directory: directory.to_path_buf(),
@@ -123,7 +124,7 @@ pub fn open_recording_cancellable(
     if manifest_file.metadata()?.len() > 1024 * 1024 {
         return Err(RecordingError::Limit("manifest exceeds reader limit"));
     }
-    let manifest = serde_json::from_reader(manifest_file)?;
+    let manifest = serde_json::from_reader(BufReader::new(manifest_file))?;
     if directory.join("telemetry.raw").exists() {
         let mut recording = Recording {
             directory,
@@ -149,7 +150,7 @@ pub fn open_recording_cancellable(
             "event summaries exceed reader limit; raw archive retained",
         ));
     }
-    let events: Vec<EventSummary> = serde_json::from_reader(events_file)?;
+    let events: Vec<EventSummary> = serde_json::from_reader(BufReader::new(events_file))?;
     if events.len() > 2112
         || events.iter().any(|e| {
             e.fields.len() > parser::MAX_RETAINED_FIELDS
@@ -925,7 +926,7 @@ fn saved_run_with(
     if file.metadata()?.len() > 1024 * 1024 {
         return Err(RecordingError::Limit("run metadata exceeds limit"));
     }
-    let mut run: RunSummary = serde_json::from_reader(file)?;
+    let mut run: RunSummary = serde_json::from_reader(BufReader::new(file))?;
     unreadable::bound_embedded_analysis(&mut run);
     if run.vm_id != vm_id {
         return Ok(None);
@@ -965,7 +966,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
             if file.metadata()?.len() > 1024 * 1024 {
                 return Err(RecordingError::Limit("run metadata exceeds limit"));
             }
-            let mut run: RunSummary = serde_json::from_reader(file)?;
+            let mut run: RunSummary = serde_json::from_reader(BufReader::new(file))?;
             if let Some(report) = &run.analysis {
                 crate::analysis::validation::validate_report(report).map_err(|_| {
                     RecordingError::Limit("archived analysis report violates bounds")
@@ -1004,7 +1005,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
                     "legacy manifest exceeds reader limit",
                 ));
             }
-            let manifest: serde_json::Value = serde_json::from_reader(file)?;
+            let manifest: serde_json::Value = serde_json::from_reader(BufReader::new(file))?;
             let id = format!("legacy-{}", entry.file_name().to_string_lossy());
             runs.push(RunSummary {
                 environment: None,
@@ -1094,7 +1095,7 @@ fn reopen_analysis_sidecar(root: &Path, run: &mut RunSummary) -> Result<(), Reco
     if file.metadata()?.len() > 128 * 1024 {
         return Err(RecordingError::Limit("analysis sidecar exceeds bound"));
     }
-    let report: crate::analysis::AnalysisReport = serde_json::from_reader(file)?;
+    let report: crate::analysis::AnalysisReport = serde_json::from_reader(BufReader::new(file))?;
     crate::analysis::validation::validate_report(&report)
         .map_err(|_| RecordingError::Limit("analysis sidecar violates bounds"))?;
     let Some(embedded) = run.analysis.as_ref() else {
