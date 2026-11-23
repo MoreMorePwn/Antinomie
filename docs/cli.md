@@ -266,6 +266,22 @@ SHA-256. A tag is `verdict=`, `category=`, `technique=` or `custom=` plus a valu
 custom value. `--name` names the file in the library, and `--delete-original` removes the
 file once the archive read back and matched.
 
+A ZIP with one file in it (MalwareBazaar's and vx-underground's archives, password `infected`)
+is opened in memory and the file inside is added; the ZIP is never written unencrypted and its
+file name and SHA-256 go into the custody entry as the origin. `--archive-password PASSWORD` (or
+`--archive-password-stdin`, one line from standard input) gives another password. A ZIP of
+several files that is encrypted is refused with the list of its entries (name and size); pick
+one with `--entry NAME`. A ZIP of several files that is not encrypted (a jar, an apk) stays a
+zip, and `--keep-archive` adds any ZIP as it is. An entry larger than the sample limit
+(256 MiB) is refused before it is read. `auto submit FILE` opens the same archives with the
+password `infected` only; for another password add the file with `sample add --archive-password`
+and submit its SHA-256.
+
+An ELF shared library is recognised (type `elf_library`, shown by `sample show` and on the
+Samples page) and is never started as a program: `run exec` refuses it and says to run it
+inside a host program with `--load-into /bin/ls`. In Auto mode set `program.load_into` in the
+preset, or give `auto submit --load-into PROGRAM`.
+
 ### 2. Run it
 
 ```sh
@@ -900,7 +916,8 @@ install to a daemon is [First setup](#first-setup). The web layer is not shipped
   direct mode (the command reads the run store without writing). With a daemon `sample add FILE`
   uploads the file and adds it as the socket's caller (`local:<uid>`);
   `--delete-original` then removes the file after the daemon reported the same
-  SHA-256. `sample verify`, `sample remove` and `custody verify --export` work in the
+  SHA-256 (not for a ZIP that was opened: the sample's hash is the file inside's, so the
+  archive stays). `sample verify`, `sample remove` and `custody verify --export` work in the
   command: they read or write files by path.
 - **A VM lives as long as the command.** In direct mode the engine runs inside the
   command and stops the VM when the command ends, so `vm start` boots the guest, waits
@@ -916,7 +933,7 @@ install to a daemon is [First setup](#first-setup). The web layer is not shipped
   booting in it fails the command. Keeping a VM up between commands is what the daemon
   (the daemon, `auto daemon`; see [Auto mode commands in detail](#auto-mode-commands-in-detail)) is for. Progress lines go to standard error, Ctrl-C
   stops the VM cleanly, and `--timeout SECONDS` limits the waits (exit 14).
-- `sample add FILE... [--name N] [--tag K=V] [--delete-original]` hashes and archives
+- `sample add FILE... [--name N] [--tag K=V] [--delete-original] [--archive-password P | --archive-password-stdin] [--entry NAME] [--keep-archive]` (a one-file ZIP is opened in memory, see above) hashes and archives
   files in the library (never runs them) and prints the SHA-256 of each; a tag is
   `verdict=`, `category=`, `technique=` or `custom=` plus a value, or a bare custom
   value. `sample list [--q TEXT] [--tag K=V] [--limit N] [--cursor C] [--all]
@@ -1112,7 +1129,7 @@ stays in its lane's folder, and the read commands given the data folder
 
 | Command | What it does |
 |---|---|
-| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a run; prints the run. `--preset` (the preset, default `standard`), `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V` (replaces the preset's environment), `--as user\|root\|nobody\|UID:GID`, `--route drop\|inet_sim` (a live route is not set up on this node in 0.9.0, whereas `run exec --route` takes all six), `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--screenshot-every S` (a picture of the VM screen every S seconds, 1 to 999, `record.screenshot_every_s`; 0 turns it off), `--idempotency-key K`, `--name`. A flag that changes a preset value makes the run Custom; only your permissions and the node limit what a run may change. `--wait` waits for the end and exits with the run's code; `--follow` also prints the run's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded run labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected run exits 13 |
+| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a run; prints the run. `--preset` (the preset, default `standard`), `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--load-into PROGRAM` (the sample is a shared library: run PROGRAM, an absolute guest path, with it in `LD_PRELOAD`; `program.load_into`), `--env K=V` (replaces the preset's environment), `--as user\|root\|nobody\|UID:GID`, `--route drop\|inet_sim` (a live route is not set up on this node in 0.9.0, whereas `run exec --route` takes all six), `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--screenshot-every S` (a picture of the VM screen every S seconds, 1 to 999, `record.screenshot_every_s`; 0 turns it off), `--idempotency-key K`, `--name`. A flag that changes a preset value makes the run Custom; only your permissions and the node limit what a run may change. `--wait` waits for the end and exits with the run's code; `--follow` also prints the run's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded run labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected run exits 13 |
 | `auto status [RUN]` | One run, or the queue and the lanes |
 | `auto list` | Runs, newest first: `--state`, `--outcome`, `--sha256`, `--label K[=V]`, `--since 24h`, `--limit`, `--cursor` |
 | `auto wait RUN...` | Waits until the runs have ended (`--timeout` bounds it, exit 14) and exits with the worst code; `--verdict-exit` as above |

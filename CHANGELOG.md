@@ -19,6 +19,8 @@ their entries are listed in full.
 
 ### Host
 
+- **Password archives are opened when a sample is added (ANT-T0609).** `sample add`, `auto submit FILE`, the watch folders and the Samples page's Add file open a ZIP with one file in it (MalwareBazaar's `infected` archives, AES or ZipCrypto) in memory and add the file inside; the archive's name and SHA-256 are the origin in the custody log. `--archive-password`, `--archive-password-stdin`, `--entry NAME` (for a ZIP of several files) and `--keep-archive` on `sample add`, and a password field in Add file.
+- **Shared libraries are recognised and not started (ANT-T0610).** An ELF shared library gets the type `elf_library`; `run exec`, Run program and Auto refuse to start it and say to use `LD_PRELOAD` (`--load-into /bin/ls`). The preset key `program.load_into` and `auto submit --load-into` run a library preloaded into a host program unattended.
 - **A command-line guide and reference (ANT-T0607).** `docs/cli.md` is a guide by task for new users (first setup, one sample by hand, Auto mode, scripting recipes, exit codes, custody, troubleshooting) and keeps the command notes that were in the user guide. `docs/cli-reference.md` lists every command, argument and option; it is generated from the program's command definitions, and the test `the_checked_in_cli_reference_is_current` fails when it is stale (`UPDATE_CLI_REFERENCE=1` regenerates it).
 - **A sixth built-in preset, Simulated network (ANT-T0605).** Standard on InetSim with a core when a High rule matches (`simulated-network`, needs `evidence.core_dump`); it comes second in the list.
 - **A Preset dropdown in Run program (ANT-T0605).** The options column starts with the
