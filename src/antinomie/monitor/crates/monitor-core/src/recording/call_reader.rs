@@ -98,8 +98,12 @@ struct Queries<'a> {
 }
 
 /// Bytes of the raw archive read at once. A walk reads calls in archive
-/// order, so most packets are in the window the previous one loaded.
-const WINDOW_SIZE: usize = 512 * 1024;
+/// order, so most packets are in a window an earlier one loaded.
+const WINDOW_SIZE: usize = 256 * 1024;
+/// Windows kept: a call's exit or async records may lie far past its entry
+/// (a call that blocked), and one window would be read again for every call
+/// after it, back and forth (ANT-T0612: the copies were a fifth of a scan).
+const WINDOWS: usize = 4;
 
 /// The raw archive and the objects it was recorded with.
 struct Source {
@@ -107,9 +111,9 @@ struct Source {
     /// The guest's architecture: the records' calls are its ids.
     arch: crate::api::GuestArch,
     file: File,
-    /// Archive bytes from `window_start`, read with one positioned read.
-    window: Vec<u8>,
-    window_start: u64,
+    /// Archive bytes from each window's start, each read with one
+    /// positioned read; the most recently used last.
+    windows: Vec<(u64, Vec<u8>)>,
     boundary: u64,
     issues: Vec<String>,
 }
@@ -158,16 +162,34 @@ impl Source {
                 RecordingError::Limit("indexed packet exceeds retained boundary")
             });
         }
-        let window_end = self.window_start + self.window.len() as u64;
-        if offset < self.window_start || end > window_end {
-            use std::os::unix::fs::FileExt;
-            let want = (self.boundary - offset).min(WINDOW_SIZE.max(len) as u64) as usize;
-            self.window.resize(want, 0);
-            self.file.read_exact_at(&mut self.window, offset)?;
-            self.window_start = offset;
+        let held = self
+            .windows
+            .iter()
+            .position(|(start, bytes)| offset >= *start && end <= *start + bytes.len() as u64);
+        let at = match held {
+            Some(at) => at,
+            None => {
+                use std::os::unix::fs::FileExt;
+                let want = (self.boundary - offset).min(WINDOW_SIZE.max(len) as u64) as usize;
+                let mut bytes = if self.windows.len() >= WINDOWS {
+                    self.windows.remove(0).1
+                } else {
+                    Vec::new()
+                };
+                bytes.resize(want, 0);
+                self.file.read_exact_at(&mut bytes, offset)?;
+                self.windows.push((offset, bytes));
+                self.windows.len() - 1
+            }
+        };
+        let last = self.windows.len() - 1;
+        if at != last {
+            let window = self.windows.remove(at);
+            self.windows.push(window);
         }
-        let start = (offset - self.window_start) as usize;
-        Ok(&self.window[start..start + len])
+        let (start, bytes) = &self.windows[last];
+        let from = (offset - start) as usize;
+        Ok(&bytes[from..from + len])
     }
 }
 
@@ -192,11 +214,14 @@ struct ReadTransaction<'a>(Option<&'a rusqlite::Connection>);
 
 impl<'a> ReadTransaction<'a> {
     fn begin(connection: &'a rusqlite::Connection) -> Self {
-        if connection.is_autocommit() && connection.execute_batch("BEGIN DEFERRED").is_ok() {
-            Self(Some(connection))
-        } else {
-            Self(None)
-        }
+        // Cached statements: a walk begins one per call, and parsing the
+        // text each time was a share of its cost of its own.
+        let begun = connection.is_autocommit()
+            && connection
+                .prepare_cached("BEGIN DEFERRED")
+                .and_then(|mut begin| begin.execute([]))
+                .is_ok();
+        Self(begun.then_some(connection))
     }
 }
 
@@ -204,7 +229,9 @@ impl Drop for ReadTransaction<'_> {
     fn drop(&mut self) {
         if let Some(connection) = self.0 {
             // A read transaction has nothing to keep; its end only lets go.
-            let _ = connection.execute_batch("ROLLBACK");
+            let _ = connection
+                .prepare_cached("ROLLBACK")
+                .and_then(|mut rollback| rollback.execute([]));
         }
     }
 }
@@ -220,6 +247,8 @@ impl<'a> CallReader<'a> {
         arch: crate::api::GuestArch,
     ) -> Result<Self, RecordingError> {
         let objects = directory.join("objects");
+        // The packed objects' index is checked once in this page.
+        crate::object_pack::next_read_epoch();
         // One check of the objects directory for the whole read.
         Assembler::open_archive(objects.clone())
             .map_err(|_| RecordingError::Limit("cannot open archived objects"))?;
@@ -260,8 +289,7 @@ impl<'a> CallReader<'a> {
                 objects,
                 arch,
                 file,
-                window: Vec::new(),
-                window_start: 0,
+                windows: Vec::new(),
                 boundary,
                 issues: Vec::new(),
             },

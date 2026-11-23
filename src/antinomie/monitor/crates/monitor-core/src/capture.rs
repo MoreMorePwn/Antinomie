@@ -221,7 +221,9 @@ fn list_vm_captures_inner(
             if file.metadata().map_or(true, |m| m.len() > 1024 * 1024) {
                 continue;
             }
-            let Ok(mut capture) = serde_json::from_reader::<_, CaptureSummary>(file) else {
+            let Ok(mut capture) =
+                serde_json::from_reader::<_, CaptureSummary>(std::io::BufReader::new(file))
+            else {
                 continue;
             };
             if capture.vm_id != vm_id {
@@ -263,7 +265,7 @@ pub fn open_capture_recording_cancellable(
             "capture metadata exceeds reader limit",
         ));
     }
-    let summary: CaptureSummary = serde_json::from_reader(summary_file)?;
+    let summary: CaptureSummary = serde_json::from_reader(std::io::BufReader::new(summary_file))?;
     let recording = crate::recording::open_recording_cancellable(&root, cancel)?;
     let embedded: CaptureSummary =
         serde_json::from_value(recording.manifest.get("capture").cloned().ok_or(

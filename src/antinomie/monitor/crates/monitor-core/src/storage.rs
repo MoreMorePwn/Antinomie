@@ -334,7 +334,8 @@ pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T
     if file.metadata().map_err(|e| e.to_string())?.len() > 1024 * 1024 {
         return Err("configuration JSON exceeds 1 MiB limit".into());
     }
-    serde_json::from_reader(file).map_err(|error| format!("{}: {error}", path.display()))
+    serde_json::from_reader(std::io::BufReader::new(file))
+        .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
