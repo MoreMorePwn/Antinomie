@@ -37,6 +37,7 @@ fn unreadable_run(directory: &Path, vm_id: &str, error: &RecordingError) -> RunS
         stop_reason: None,
         stopped_at_ms: None,
         persisted: None,
+        persistence_start: None,
         started_ms: None,
         clock_anchor: None,
         id: name.clone(),

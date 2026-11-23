@@ -376,6 +376,23 @@ pub(super) fn screenshot_selection(ui: &mut egui::Ui, request: &mut ExecRequest,
     });
 }
 
+/// Start persistence (ANT-T0608): when the program's tree ends after
+/// installing persistence, start what it installed as a boot or login would.
+pub(super) fn persistence_selection(ui: &mut egui::Ui, request: &mut ExecRequest) {
+    folding_section(ui, "Persistence", |ui| {
+        let mut on = request.start_persistence.is_some();
+        crate::widgets::hover_help(
+            ui,
+            "When the program's process tree ends after installing persistence (systemd services, init scripts, rc.local, cron lines, shell profiles, autostart entries), start them in this run as a boot or login would, and keep the run open until what they start ends, you stop the run, or 10 min have passed",
+            |ui| ui.checkbox(&mut on, "Start persistence"),
+        );
+        if on != request.start_persistence.is_some() {
+            request.start_persistence =
+                on.then(antinomie_monitor_core::persist_start::StartPersistence::default);
+        }
+    });
+}
+
 pub(super) fn debugger_selection(ui: &mut egui::Ui, request: &mut ExecRequest, supported: bool) {
     let enabled = supported && request.run_in == RunIn::AppTerminal;
     if !enabled {

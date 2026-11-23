@@ -466,6 +466,16 @@ pub fn persisted_copies(
     serde_json::from_value(run.pointer("/persisted")?.clone()).ok()
 }
 
+/// What Antinomie started of the run's persistence, from the run's
+/// `run.json` (`persistence_start`).
+pub fn persistence_start(
+    directory: &Path,
+) -> Option<antinomie_monitor_core::persist_start::PersistenceStart> {
+    let run: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
+    serde_json::from_value(run.pointer("/persistence_start")?.clone()).ok()
+}
+
 /// The launch's wait for the guest's network address, from the run's
 /// `run.json` (`boot_wait.network`).
 pub fn network_wait(directory: &Path) -> Option<antinomie_monitor_core::boot_wait::NetworkWait> {

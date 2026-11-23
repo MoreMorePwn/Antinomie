@@ -622,6 +622,7 @@ impl Session {
             run.summary.execution = Some(execution);
             if tree_ended {
                 run.begin_final_look();
+                run.persistence_tree_ended();
             }
             run.record_async_loss();
             run.record_tree_completion();
@@ -723,6 +724,7 @@ mod forget_tests {
             stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
+            persistence_start: None,
         }
     }
 

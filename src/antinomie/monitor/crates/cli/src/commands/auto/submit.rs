@@ -74,6 +74,15 @@ pub struct Submit {
     /// pictures are the recording's `screenshot` artifacts.
     #[arg(long, value_name = "SECONDS")]
     pub screenshot_every: Option<u32>,
+    /// Start what the program installed as persistence when its tree ends
+    /// early, and hold the run until its run time
+    /// (`program.start_persistence = true`).
+    #[arg(long, conflicts_with = "no_start_persistence")]
+    pub start_persistence: bool,
+    /// Do not start the program's persistence
+    /// (`program.start_persistence = false`).
+    #[arg(long)]
+    pub no_start_persistence: bool,
     /// Program arguments (`program.arguments`).
     #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "ARG")]
     pub args: Vec<String>,
@@ -203,6 +212,13 @@ pub fn spec_of(arguments: &Submit) -> Result<Value, CliError> {
     }
     if let Some(seconds) = arguments.screenshot_every {
         set("record", "screenshot_every_s", json!(seconds));
+    }
+    if arguments.start_persistence || arguments.no_start_persistence {
+        set(
+            "program",
+            "start_persistence",
+            json!(arguments.start_persistence),
+        );
     }
     if !arguments.args.is_empty() {
         set("program", "arguments", json!(arguments.args));

@@ -9,6 +9,20 @@ use antinomie_monitor_core::{RunState, RunSummary, WaitStatus};
 /// the run is held open while a copy of its program runs outside the tree
 /// (or while the host takes its last look for one). `None` for any other run.
 pub fn held(run: &RunSummary) -> Option<String> {
+    // Held for the persistence entries Antinomie started (ANT-T0608).
+    if let Some(start) = run.persistence_start.as_ref().filter(|start| start.holding) {
+        let running = start
+            .entries
+            .iter()
+            .filter(|entry| entry.pid.is_some() && !entry.ended)
+            .count();
+        return Some(match (start.entries.len(), running) {
+            (0, _) => "Held: looking for persistence to start".into(),
+            (_, 0) => "Held: starting persistence".into(),
+            (_, 1) => "Held: persistence started by Antinomie running (1 entry)".into(),
+            (_, n) => format!("Held: persistence started by Antinomie running ({n} entries)"),
+        });
+    }
     let copies = run.persisted.as_ref().filter(|copies| copies.holding)?;
     let alive: Vec<_> = copies.alive().collect();
     Some(match alive.as_slice() {

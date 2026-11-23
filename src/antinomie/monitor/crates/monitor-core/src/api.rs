@@ -675,6 +675,12 @@ pub struct ExecRequest {
     /// to 4096); `None` is 256.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_max_mib: Option<u32>,
+    /// Start persistence: when the run's tree ends well before its run time
+    /// after writing persistence entries (init scripts, systemd units, cron
+    /// lines, shell profiles, autostart), start them in the same run as a
+    /// boot or login would, and hold the run open (ANT-T0608). `None` is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_persistence: Option<crate::persist_start::StartPersistence>,
 }
 
 impl ExecRequest {
@@ -1208,6 +1214,11 @@ pub struct RunSummary {
     /// and whether the run was held open for them; absent when none was found.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persisted: Option<crate::persisted_copy::PersistedCopies>,
+    /// What Antinomie started of the persistence the run installed once its
+    /// tree ended early, and the hold for it; or why nothing was started.
+    /// Absent when the run installed none, or its tree did not end early.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistence_start: Option<crate::persist_start::PersistenceStart>,
 }
 
 /// Why a run was stopped when no person pressed Stop run (A06).
@@ -1258,9 +1269,18 @@ impl RunSummary {
     }
 
     /// The run's tree ended but the run is held open for a copy of its
-    /// program outside the tree (`persisted.holding`): it still captures.
+    /// program outside the tree (`persisted.holding`), or for the
+    /// persistence entries Antinomie started (`persistence_start.holding`):
+    /// it still captures.
     pub fn held_open(&self) -> bool {
-        self.persisted.as_ref().is_some_and(|copies| copies.holding)
+        self.persisted.as_ref().is_some_and(|copies| copies.holding) || self.persistence_holding()
+    }
+
+    /// Held open for the persistence entries Antinomie started.
+    pub fn persistence_holding(&self) -> bool {
+        self.persistence_start
+            .as_ref()
+            .is_some_and(|start| start.holding)
     }
 
     /// Stop run may be sent: the run is live, or held open (Stop then ends
@@ -2425,6 +2445,7 @@ impl Default for ExecRequest {
             screenshot_every_s: None,
             screenshot_max_pictures: None,
             screenshot_max_mib: None,
+            start_persistence: None,
         }
     }
 }

@@ -50,6 +50,9 @@ pub struct SignalNotes {
     /// Copies of the program the host found outside the recorded tree
     /// (`run.json` `persisted`).
     pub persisted: Option<antinomie_monitor_core::persisted_copy::PersistedCopies>,
+    /// What Antinomie started of the persistence the run installed
+    /// (`run.json` `persistence_start`).
+    pub persistence_start: Option<antinomie_monitor_core::persist_start::PersistenceStart>,
     /// Network calls that failed for want of a network, and the wait for the
     /// guest's address before the launch (`run.json` `boot_wait.network`).
     pub unreachable: crate::network_reach::Unreachable,

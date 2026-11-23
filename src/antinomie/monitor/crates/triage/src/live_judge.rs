@@ -9,11 +9,18 @@
 use super::rules::{Engine, Options, Tier};
 use super::*;
 use antinomie_monitor_core::dump_trigger::{LiveFinding, LiveJudge, TriggerTier};
+use antinomie_monitor_core::persist_start::Written;
+
+/// Persistence rows kept for [`LiveJudge::written`] until they are taken.
+const WRITTEN_MAX: usize = 256;
 
 pub struct Judge {
     pub engine: Engine,
     pub files: FdState,
     pub sets: std::collections::BTreeMap<u32, std::collections::BTreeSet<u64>>,
+    /// The `persistence.*` rows with their object, whatever their tier, for
+    /// starting what the run persisted (ANT-T0608).
+    pub written: Vec<Written>,
 }
 
 impl LiveJudge for Judge {
@@ -31,9 +38,18 @@ impl LiveJudge for Judge {
         let cookies = resolve_cookies(&self.sets);
         inherit_open_fds(&mut self.files, call, event, &cookies);
         sigma_events::track(&mut self.files, call, event);
-        self.engine
-            .live_changes()
-            .into_iter()
+        let rows = self.engine.live_changes();
+        for row in &rows {
+            if row.rule.starts_with("persistence.") && self.written.len() < WRITTEN_MAX {
+                self.written.push(Written {
+                    rule: row.rule.to_owned(),
+                    path: row.object.clone(),
+                    failed: row.failed,
+                    pid: row.pid,
+                });
+            }
+        }
+        rows.into_iter()
             .filter_map(|row| {
                 let tier = match row.tier {
                     Tier::High => TriggerTier::High,
@@ -56,6 +72,10 @@ impl LiveJudge for Judge {
             })
             .collect()
     }
+
+    fn written(&mut self) -> Vec<Written> {
+        std::mem::take(&mut self.written)
+    }
 }
 
 pub fn make() -> Box<dyn LiveJudge> {
@@ -63,6 +83,7 @@ pub fn make() -> Box<dyn LiveJudge> {
         engine: Engine::new(Options::default()),
         files: FdState::default(),
         sets: Default::default(),
+        written: Vec::new(),
     })
 }
 

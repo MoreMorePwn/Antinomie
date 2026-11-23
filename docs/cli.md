@@ -305,6 +305,7 @@ is added to the library first. The common flags:
 | `--memory-dump`, `--core-dump` | Take the VM's memory, or a core of the program, when its tree has ended. |
 | `--dump-trigger low\|medium\|high` with `--dump-kind core\|memory\|both` | Take a dump while the program runs, when the live Triage rules match at that tier or above. Off by default; `--dump-kind` defaults to `core`. |
 | `--core-nonresident` | The trigger's cores also read pages that are not in memory. Needs a core trigger and a revision-22 base. |
+| `--start-persistence` | When the program's tree ends at least 30 s before `--timeout-run` after installing persistence (systemd units, init.d scripts, `rc.local`, cron lines, shell profiles, autostart entries), start those in the same run as a boot or login would and keep the run going until `--timeout-run`. See *Start persistence* in the [user guide](usage.md). |
 | `--static CHECKS` | The guest-side static analysis too (the names `analyze --help` lists). |
 | `--load-into PROGRAM` | The sample is a shared library: PROGRAM (an absolute guest path) runs with `LD_PRELOAD` set to it. |
 | `--screenshot-every SECONDS` | A picture of the VM screen every SECONDS (1 to 999), and one when the tree ends. `--screenshot-max-pictures` and `--screenshot-max-mib` set the limits. |

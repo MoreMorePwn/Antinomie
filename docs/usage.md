@@ -1841,6 +1841,52 @@ started in the guest:
 `run.json` keeps what was found under `persisted` (each copy's pid, name, parent,
 uid, SHA-256, size, when it was seen and whether it ended, and the hold).
 
+### Start persistence
+
+Much Linux malware installs persistence and exits: it writes an init script or a
+systemd unit, a cron line or a line in `.bashrc`, and waits for a boot, a login or a
+service start that never comes in a sandbox, so its second stage is never seen.
+**Start persistence** (the **Persistence** section of the Run program form; preset key
+`program.start_persistence`, on in the Simulated network and Deep presets;
+`run exec --start-persistence`) starts what the run installed, inside the same run:
+
+- It arms when the program's whole tree has ended (at least 30 s before the run time
+  of `run exec` and Auto mode; the window has none) and the live Triage rules saw the
+  run write persistence: a file under a systemd unit directory, `/etc/init.d`,
+  `rcN.d`, `rc.local`, a crontab, a shell profile or an XDG autostart directory. A
+  write that failed (the program had no right to it) does not count.
+- About 2 s after the tree's end it starts, in this order and each once, at most 8:
+  systemd `.service` units (their `ExecStart=` command, run directly: `systemctl
+  start` would have systemd start it where the guest does not trace it), init.d and
+  rc scripts and `rc.local` (`<script> start`), the job lines of each crontab the run
+  wrote (each line's command, as cron would run it; `run-parts` lines are left) and
+  the scripts it put in `/etc/cron.daily` and the like, one interactive login shell
+  per user for the shell profiles, and the `Exec=` command of autostart entries.
+  Only files the run wrote or changed, and a command that would run the launched
+  program itself again is left.
+- Each entry starts as the guest's boot or login would: as root for system entries,
+  as the user whose home it is in for a user's entries, from `/`, with a boot's
+  environment and nothing on its input or output, as a process of init (outside the
+  program's tree). The next entry starts when the previous one returned, or after
+  20 s.
+- What the started entries run is recorded in the **same run**, like the program's
+  own processes: Triage, the dump trigger, the network capture and route all go on.
+- The run is **held open** until everything that was started has ended, the run is
+  stopped (Auto and `run exec` stop it at the run time, and the run then ends at its
+  limit), the VM stops, or, in the window, after 10 minutes. Stop run stops what was
+  started. While held, the run's state reads **Held: persistence started by
+  Antinomie running**.
+- The run's notes say what was started ("…these were started by Antinomie
+  (persistence)…: /etc/init.d/x start as root"), and the report's overview repeats
+  it. `run.json` keeps each entry under `persistence_start` (kind, file, command,
+  user, pid, how it ended, marked `started by Antinomie (persistence)`).
+- With the option off, or when the tree ended too close to the run time, nothing is
+  started and the notes say why: "The tree ended after 2 s; persistence installed
+  but not started (option off)."
+
+No guest change is needed: each entry is started with the same guest command as a
+program, and its telemetry is given to the run.
+
 ## 5. Samples
 
 **Library > Samples** (sidebar) lists every sample across runs and VMs with its

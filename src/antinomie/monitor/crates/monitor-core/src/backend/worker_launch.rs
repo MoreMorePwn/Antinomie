@@ -396,6 +396,7 @@ impl Worker {
             stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
+            persistence_start: None,
             execution: None,
             analysis: selected
                 .then(|| crate::analysis::jobs::new_report(&request.path, &request.analysis)),
@@ -449,9 +450,12 @@ impl Worker {
             .set_event_table(session.vm.transport.event_table as usize);
         run.assembler.set_arch(session.disk_bundle.arch);
         run.summary.recording_error = None;
-        run.watch = request.dump_trigger.as_ref().and_then(|plan| {
-            crate::dump_trigger::Watch::new(plan, &self.options.reduced_keep_calls)
-        });
+        // Without a dump trigger a passive watch still lists what the run
+        // persists, to start it or to say it was not (ANT-T0608).
+        run.watch = match request.dump_trigger.as_ref() {
+            Some(plan) => crate::dump_trigger::Watch::new(plan, &self.options.reduced_keep_calls),
+            None => crate::dump_trigger::Watch::passive(),
+        };
         if let Some(watch) = run.watch.as_mut() {
             watch.scale_hold_grace(Self::hold_scale(session));
         }
@@ -780,7 +784,7 @@ impl Worker {
     }
 
     /// Feed the run the telemetry that arrived before its launch was acknowledged.
-    fn replay_pre_ack(&mut self, run: &mut ProgramRun, cookie: u64) {
+    pub(super) fn replay_pre_ack(&mut self, run: &mut ProgramRun, cookie: u64) {
         let Some(session) = self.session.as_mut() else {
             return;
         };

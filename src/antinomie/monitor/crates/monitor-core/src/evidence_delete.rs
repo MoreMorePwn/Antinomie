@@ -768,6 +768,7 @@ mod tests {
             stop_reason: None,
             stopped_at_ms: None,
             persisted: None,
+            persistence_start: None,
         };
         atomic_json(&dir.join("run.json"), &run).unwrap();
         dir

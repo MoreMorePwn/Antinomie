@@ -155,6 +155,22 @@ fn each_built_in_fills_the_form_as_the_service_would_run_it() {
             (run.request.uid, run.request.gid)
         );
         assert_eq!(request.cwd, run.request.cwd, "{name}");
+        // Start persistence (ANT-T0608) as the preset has it; the window has
+        // no run time to carry.
+        assert_eq!(
+            request.start_persistence.is_some(),
+            run.request.start_persistence.is_some(),
+            "{name}"
+        );
+        assert_eq!(
+            request.start_persistence.is_some(),
+            matches!(name, "simulated-network" | "deep"),
+            "{name}"
+        );
+        assert!(request
+            .start_persistence
+            .as_ref()
+            .is_none_or(|option| option.run_limit_s.is_none()));
     }
     // What the three that differ from Standard fill, in the words of the form.
     let mut request = ExecRequest::default();

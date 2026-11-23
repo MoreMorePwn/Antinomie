@@ -37,6 +37,7 @@ run_in = "app_terminal"                        # Run in: app_terminal (the deskt
 run_time_s = 300                               # Run time, 5 to 1800 seconds
 preload = []                                   # [{ sample = "<sha256>", how = "ld_preload" }] (later)
 extra_files = []                               # [{ sample = "<sha256>", guest_path = "/tmp/lib.so" }] (later)
+start_persistence = false                      # Start persistence: start what the program installed when its tree ends early
 
 [record]
 scope = "program"                              # program | whole_vm (Capture all, later)
@@ -122,6 +123,9 @@ retry_on = ["vm_start_failed", "guest_unreachable", "upload_failed", "guest_lost
 pub const SIMULATED_NETWORK: &str = r#"title = "Simulated network"
 description = "Five minutes, fake internet services (InetSim), a core when a High rule matches"
 
+[program]
+start_persistence = true
+
 [network]
 route = "inet_sim"
 
@@ -155,6 +159,7 @@ description = "Fifteen minutes on InetSim, dumps when suspicious, deep static an
 
 [program]
 run_time_s = 900
+start_persistence = true
 
 [network]
 route = "inet_sim"

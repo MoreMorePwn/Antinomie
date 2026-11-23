@@ -72,6 +72,7 @@ pub mod open_files;
 pub mod packet_filter;
 pub mod parser;
 pub mod path_key;
+pub mod persist_start;
 pub mod persisted_copy;
 mod pre_ack;
 mod process_tree;

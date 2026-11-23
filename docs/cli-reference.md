@@ -754,6 +754,7 @@ Options:
 - `--dump-trigger <TIER>`: Take a dump while the program runs, when the live Triage rules match at this tier or above (low, medium or high; default off). What it takes is --dump-kind. The program is not stopped. The result's `triggers` says what fired (rule, tier, dump state and path) or that it was armed and nothing matched. Needs a revision-16 base for a core
 - `--dump-kind <KIND>`: What --dump-trigger takes: core (the process that made the call, the default), memory (the VM's RAM) or both. Bounded by the core budget and the memory cap of the UI's defaults
 - `--core-nonresident`: Make the cores --dump-trigger takes read the pages that are not in memory too (swapped out, or file pages the kernel dropped): slower, bounded by the core budget and deadline. Needs --dump-trigger with core or both, and a base of guest contract revision 22 (an older one reads resident pages only and the run says so). An exit core (--core-dump) always reads resident pages
+- `--start-persistence`: When the program's tree ends at least 30 s before --timeout-run after installing persistence (systemd units, init.d scripts, rc.local, cron lines, shell profiles, autostart entries), start those entries in the same run, as a boot or login would, and keep the run going until --timeout-run. The result's run says what was started
 - `--static <CHECKS>`: Run the guest-side static analysis too, with these checks (comma separated; see `analyze --help`)
 - `--wait`: Wait for the result. Always on in direct mode: leaving would stop the VM
 - `--events`: Print the progress as it happens, one event (design 5.5) per line, then the result; implies `-o ndjson`
@@ -1132,6 +1133,8 @@ Options:
 - `--label <KEY=VALUE>`: A label of the run (repeatable)
 - `--timeout-run <SECONDS>`: The run time in seconds, 5 to 1800 (`program.run_time_s`)
 - `--screenshot-every <SECONDS>`: Take a screenshot of the VM screen every SECONDS while the program runs (`record.screenshot_every_s`: 1 to 999; 0 turns it off). The pictures are the recording's `screenshot` artifacts
+- `--start-persistence`: Start what the program installed as persistence when its tree ends early, and hold the run until its run time (`program.start_persistence = true`)
+- `--no-start-persistence`: Do not start the program's persistence (`program.start_persistence = false`)
 - `--args <ARG>`: Program arguments (`program.arguments`)
 - `--load-into <PROGRAM>`: The sample is a shared library: run this program in the guest (an absolute path to a dynamically linked program, for example `/bin/ls` on a Debian base; BusyBox programs are static, so there use the loader `/lib/ld-linux-x86-64.so.2` with `--args /lib/libc.so.6`) with the library in `LD_PRELOAD` (`program.load_into`). A sample that is a program runs as usual
 - `--env <KEY=VALUE>`: An environment entry (repeatable); replaces the preset's environment (a PATH is added when none is given)

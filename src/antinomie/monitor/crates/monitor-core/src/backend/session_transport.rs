@@ -90,6 +90,8 @@ impl Session {
                 continue;
             }
             let root = header.as_ref().map_or(0, |header| header.root_task_cookie);
+            // A persistence entry Antinomie started records into its run.
+            let root = self.persist_alias.get(&root).copied().unwrap_or(root);
             let capture_cookie = header.as_ref().map_or(0, |header| header.capture_cookie);
             let observer_id = self
                 .captures

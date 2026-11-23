@@ -125,6 +125,7 @@ fn options(
     });
     capture_selection(ui, request, capabilities, outcome);
     screenshot_selection(ui, request, capabilities.screen);
+    persistence_selection(ui, request);
     debugger_selection(ui, request, capabilities.debug_on_start);
 }
 

@@ -135,6 +135,10 @@ pub struct Program {
     /// library in `LD_PRELOAD` (an absolute path; empty: a library is
     /// refused). A sample that is a program runs as usual.
     pub load_into: String,
+    /// Start persistence: when the program's tree ends 30 s or more before
+    /// the run time after installing persistence, start what it installed in
+    /// the same run, as a boot or login would (ANT-T0608).
+    pub start_persistence: bool,
 }
 
 impl Default for Program {
@@ -157,6 +161,7 @@ impl Default for Program {
             preload: Vec::new(),
             extra_files: Vec::new(),
             load_into: String::new(),
+            start_persistence: false,
         }
     }
 }

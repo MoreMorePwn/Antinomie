@@ -452,6 +452,7 @@ impl Session {
             network_unseen: false,
             started: Instant::now(),
             pre_ack: crate::pre_ack::PreAckBuffer::new(options.pre_ack),
+            persist_alias: HashMap::new(),
             quota: crate::quota::QuotaState::new(&options.reduced_keep_calls),
             terminal_cursor: 0,
             restored_from: snapshot_id.map(str::to_owned),
