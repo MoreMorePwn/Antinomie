@@ -10,7 +10,7 @@ src/antinomie/monitor/crates/monitor-core/src/analysis_tools.rs 4 tool installat
 src/antinomie/monitor/crates/monitor-core/src/backend.rs 1 python3 running the base-build script (scripts/build-base.py)
 src/antinomie/monitor/crates/monitor-core/src/backend/worker_vm_config.rs 1 qemu-img resize of the analysis VM disk
 src/antinomie/monitor/crates/monitor-core/src/build.rs 2 base-image build steps (setxkbmap query, tool --version)
-src/antinomie/monitor/crates/monitor-core/src/builder_vm.rs 4 builder VM: qemu-img, tar, qemu-system
+src/antinomie/monitor/crates/monitor-core/src/builder_vm.rs 3 builder VM: qemu-img, tar, qemu-system
 src/antinomie/monitor/crates/monitor-core/src/container.rs 3 container engine (docker/podman) for builds and tool containers
 src/antinomie/monitor/crates/monitor-core/src/data_move.rs 1 qemu-img rebase when the data folder moves
 src/antinomie/monitor/crates/monitor-core/src/dependencies.rs 2 dependency checks and installs (fixed programs)
