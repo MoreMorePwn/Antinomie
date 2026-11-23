@@ -28,6 +28,7 @@ mod chain_check;
 mod chain_export;
 mod custody;
 mod delete_run;
+mod elf_kind;
 mod intake;
 mod ioc_export;
 mod ioc_union;
@@ -44,6 +45,7 @@ mod runlog;
 mod scan;
 mod similar;
 mod summary;
+mod unwrap;
 mod write_lock;
 
 pub use archive::Verification;
@@ -62,6 +64,7 @@ pub use delete_run::{
     RunPlan, SavedTree, delete as delete_run, delete_as as delete_run_as,
     plan as plan_run_deletion, saved_process_tree,
 };
+pub use elf_kind::is_shared_library;
 pub use intake::{Added, FileProbe, NewSample, detect_type};
 pub use ioc_export::{
     COLUMNS as IOC_COLUMNS, csv as ioc_csv, hit_texts as ioc_hit_texts, json as ioc_json,
@@ -101,6 +104,10 @@ pub use scan::{
 };
 pub use similar::{Shared, Similar};
 pub use summary::{StringRow, defang, longest_strings, regex_matches};
+pub use unwrap::{
+    ArchiveOptions, DETAIL_PREFIX as UNWRAP_DETAIL_PREFIX, Unwrapped,
+    mark_origin as mark_unwrapped_origin, unwrap_zip,
+};
 
 /// MalwareBazaar's API: every call is a POST with an `Auth-Key` header.
 pub const BAZAAR_API: &str = "https://mb-api.abuse.ch/api/v1/";
@@ -110,6 +117,22 @@ pub const BAZAAR_KEYS: &str = "https://auth.abuse.ch/";
 pub const ARCHIVE_PASSWORD: &str = "infected";
 /// Samples larger than this are refused (decrypted in memory).
 pub const MAX_SAMPLE: u64 = 256 * 1024 * 1024;
+
+/// The file type of an ELF shared library (see [`is_shared_library`]).
+pub const ELF_LIBRARY: &str = "elf_library";
+
+/// Why a shared library is not run as a program, and what to do instead;
+/// `how` says it for the place the words are shown (a flag, a window).
+pub fn library_refusal(how: &str) -> String {
+    format!(
+        "This is a shared library, not a program: run it inside a host program with LD_PRELOAD ({how})"
+    )
+}
+
+/// An ELF of either kind, as the library records the type.
+pub fn is_elf_type(file_type: &str) -> bool {
+    file_type.eq_ignore_ascii_case("elf") || file_type.eq_ignore_ascii_case(ELF_LIBRARY)
+}
 
 /// Where samples come from. Each takes the user's own API key.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
