@@ -830,3 +830,93 @@ fn a_run_lane_2_recorded_is_read_from_lane_1_through_the_daemon_and_directly() {
     assert!(dir.join("run.json").is_file());
     assert!(!fixture.root.join("data/vm-2").exists());
 }
+
+/// A zip of one AES-encrypted file, made in the test.
+fn password_zip(name: &str, body: &[u8], password: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    writer
+        .start_file(
+            name,
+            zip::write::SimpleFileOptions::default()
+                .with_aes_encryption(zip::AesMode::Aes256, password),
+        )
+        .unwrap();
+    writer.write_all(body).unwrap();
+    writer.finish().unwrap().into_inner()
+}
+
+#[test]
+fn sample_add_opens_a_password_archive_directly_and_through_the_daemon() {
+    use sha2::{Digest, Sha256};
+    let hash = |bytes: &[u8]| -> String {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    let fixture = Fixture::new("archive");
+    let data = fixture.data();
+    let first = b"#!/bin/sh\necho from an archive\n";
+    let infected = fixture.root.join("feed.zip");
+    std::fs::write(&infected, password_zip("payload.sh", first, "infected")).unwrap();
+    let (code, added) = cli(&args(
+        &data,
+        &["--direct", "sample", "add", infected.to_str().unwrap()],
+    ));
+    assert_eq!(code, 0, "{added}");
+    let item = &items(&added)[0];
+    assert_eq!(item["sha256"], hash(first).as_str());
+    assert_eq!(item["name"], "payload.sh");
+    assert_eq!(item["type"], "sh");
+    // Another password: refused with a hint; given, it opens.
+    let second = b"#!/bin/sh\necho second\n";
+    let odd = fixture.root.join("odd.zip");
+    std::fs::write(&odd, password_zip("s.sh", second, "hunter2")).unwrap();
+    let odd_path = odd.to_str().unwrap();
+    let (code, refused) = cli(&args(&data, &["--direct", "sample", "add", odd_path]));
+    assert_ne!(code, 0);
+    assert!(
+        refused.to_string().contains("--archive-password"),
+        "{refused}"
+    );
+    let (code, opened) = cli(&args(
+        &data,
+        &[
+            "--direct",
+            "sample",
+            "add",
+            odd_path,
+            "--archive-password",
+            "hunter2",
+        ],
+    ));
+    assert_eq!(code, 0, "{opened}");
+    assert_eq!(items(&opened)[0]["sha256"], hash(second).as_str());
+    // Kept as a zip on request.
+    let (code, kept) = cli(&args(
+        &data,
+        &["--direct", "sample", "add", odd_path, "--keep-archive"],
+    ));
+    assert_eq!(code, 0, "{kept}");
+    assert_eq!(items(&kept)[0]["type"], "zip");
+    // Through the daemon the same options travel in sample.add.
+    let _daemon = Running::start(&fixture);
+    let third = b"#!/bin/sh\necho third\n";
+    let more = fixture.root.join("more.zip");
+    std::fs::write(&more, password_zip("t.sh", third, "hunter2")).unwrap();
+    let (code, over) = cli(&args(
+        &data,
+        &[
+            "--daemon",
+            "sample",
+            "add",
+            more.to_str().unwrap(),
+            "--archive-password",
+            "hunter2",
+        ],
+    ));
+    assert_eq!(code, 0, "{over}");
+    assert_eq!(items(&over)[0]["sha256"], hash(third).as_str());
+    assert_eq!(items(&over)[0]["name"], "t.sh");
+}

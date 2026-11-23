@@ -18,7 +18,9 @@ use crate::{
     error::{CliError, ErrorCode},
     output::{Reply, block, table},
 };
-use antinomie_monitor_core::samples::{Library, NewOrigin, NewSample, Tag, TagKind, Verification};
+use antinomie_monitor_core::samples::{
+    ArchiveOptions, Library, NewOrigin, NewSample, Tag, TagKind, Verification,
+};
 use antinomie_service::{
     api::ops::{SampleGetParams, SampleListParams},
     library as service_library,
@@ -66,6 +68,44 @@ pub struct Add {
     /// Delete the original after the archive read back and matched.
     #[arg(long)]
     pub delete_original: bool,
+    /// The password of a ZIP with one encrypted file, which is opened in
+    /// memory and added as the sample [default: `infected`].
+    #[arg(
+        long,
+        value_name = "PASSWORD",
+        conflicts_with = "archive_password_stdin"
+    )]
+    pub archive_password: Option<String>,
+    /// Read the ZIP password from one line of standard input.
+    #[arg(long)]
+    pub archive_password_stdin: bool,
+    /// The file to take from a ZIP of several.
+    #[arg(long, value_name = "NAME")]
+    pub entry: Option<String>,
+    /// Add a ZIP as the sample itself; open nothing.
+    #[arg(long, conflicts_with_all = ["archive_password", "archive_password_stdin", "entry"])]
+    pub keep_archive: bool,
+}
+
+impl Add {
+    /// What the flags say of a ZIP; the password comes from the flag or from
+    /// standard input.
+    fn archive(&self) -> Result<ArchiveOptions, CliError> {
+        let password = if self.archive_password_stdin {
+            Some(
+                super::vm::read_password()
+                    .map_err(|error| error.with_field("archive-password-stdin"))?,
+            )
+        } else {
+            self.archive_password.clone()
+        };
+        Ok(ArchiveOptions {
+            password,
+            entry: self.entry.clone(),
+            keep_archive: self.keep_archive,
+            limit: None,
+        })
+    }
 }
 
 #[derive(Args, Debug)]
@@ -168,6 +208,7 @@ fn add(arguments: &Add, context: &Context) -> Result<Reply, CliError> {
         .iter()
         .map(|text| parse_tag(text))
         .collect::<Result<_, _>>()?;
+    let archive = arguments.archive()?;
     let mut adder = match link::daemon(context)? {
         Some(client) => Adder::Daemon(Box::new(client)),
         None => Adder::Library(Box::new(open_for_write(context.data_dir())?)),
@@ -176,7 +217,7 @@ fn add(arguments: &Add, context: &Context) -> Result<Reply, CliError> {
     let mut failures = 0;
     let mut first_failure: Option<CliError> = None;
     for path in &arguments.files {
-        match adder.add(path, arguments, &tags, context) {
+        match adder.add(path, arguments, &archive, &tags, context) {
             Ok(item) => items.push(item),
             Err(error) => {
                 failures += 1;
@@ -200,6 +241,7 @@ impl Adder {
         &mut self,
         path: &PathBuf,
         arguments: &Add,
+        archive: &ArchiveOptions,
         tags: &[Tag],
         context: &Context,
     ) -> Result<Value, CliError> {
@@ -212,7 +254,7 @@ impl Adder {
                     ..Default::default()
                 };
                 let added = library
-                    .add_file(path, new, arguments.delete_original)
+                    .add_file_with(path, new, arguments.delete_original, archive)
                     .map_err(library_error)?;
                 let record = library.get(&added.sha256).map_err(library_error)?;
                 let mut item =
@@ -234,6 +276,15 @@ impl Adder {
                 }
                 if !tags.is_empty() {
                     params["tags"] = tags.iter().map(tag_value).collect();
+                }
+                if let Some(password) = &archive.password {
+                    params["archive_password"] = json!(password);
+                }
+                if let Some(entry) = &archive.entry {
+                    params["entry"] = json!(entry);
+                }
+                if archive.keep_archive {
+                    params["keep_archive"] = json!(true);
                 }
                 let sample = link::call(client, "sample.add", params)?;
                 if arguments.delete_original && sample["sha256"].as_str() == Some(sha256.as_str()) {

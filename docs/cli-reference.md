@@ -859,6 +859,10 @@ Options:
 - `--name <NAME>`: Library name (one file only; default: the file name)
 - `--tag <K=V>`: Tag as KIND=VALUE (verdict, category, technique, custom) or a bare custom value
 - `--delete-original`: Delete the original after the archive read back and matched
+- `--archive-password <PASSWORD>`: The password of a ZIP with one encrypted file, which is opened in memory and added as the sample \[default: `infected`\]
+- `--archive-password-stdin`: Read the ZIP password from one line of standard input
+- `--entry <NAME>`: The file to take from a ZIP of several
+- `--keep-archive`: Add a ZIP as the sample itself; open nothing
 
 #### antinomie-cli sample list
 
@@ -1129,6 +1133,7 @@ Options:
 - `--timeout-run <SECONDS>`: The run time in seconds, 5 to 1800 (`program.run_time_s`)
 - `--screenshot-every <SECONDS>`: Take a screenshot of the VM screen every SECONDS while the program runs (`record.screenshot_every_s`: 1 to 999; 0 turns it off). The pictures are the recording's `screenshot` artifacts
 - `--args <ARG>`: Program arguments (`program.arguments`)
+- `--load-into <PROGRAM>`: The sample is a shared library: run this program in the guest (an absolute path, for example `/bin/ls`) with the library in `LD_PRELOAD` (`program.load_into`). A sample that is a program runs as usual
 - `--env <KEY=VALUE>`: An environment entry (repeatable); replaces the preset's environment (a PATH is added when none is given)
 - `--as <WHO>`: `user`, `root`, `nobody` or `UID:GID` (root or an id below 1000 needs the run.as_root permission)
 - `--route <ROUTE>`: `drop` or `inet_sim` (a live route is not set up on this node)
