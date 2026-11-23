@@ -839,7 +839,7 @@ def build_sigma(run):
 
 README = """# Antinomie rules
 
-This is the rules catalog for Antinomie {app}. It lists where each community
+This is the rules catalog for Antinomie {app} and newer. It lists where each community
 rule collection lives upstream, the exact revision it was pinned at, the
 SHA-256 of every file Antinomie keeps and how Antinomie filters the files on
 the user's computer. It contains **no rules**, and no samples, captures or scan
