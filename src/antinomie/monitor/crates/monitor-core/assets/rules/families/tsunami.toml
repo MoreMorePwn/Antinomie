@@ -1,0 +1,32 @@
+# Tsunami (Kaiten): an IRC DDoS bot whose source has circulated since the
+# 2000s; many Linux and IoT builds.
+[[profile]]
+name = "Tsunami"
+platforms = ["linux"]
+references = [
+  "Kaiten IRC bot source (kaiten.c), the code Tsunami builds share: makestring() reads /usr/dict/words for random nicknames",
+]
+min_markers = 2
+min_distinctive = 1
+
+[[profile.marker]]
+# The nickname generator reads /usr/dict/words (kaiten.c; T0600 runs
+# 97e77ff4, 80b4d47b).
+path = "/usr/dict/words"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# Its C2 is an IRC channel (kaiten.c; T0600 runs 97e77ff4, 80b4d47b).
+finding = "network.irc_c2"
+weight = 2
+
+[[profile.marker]]
+# It looks at the BSD and Slackware start files /etc/rc.conf and
+# /etc/rc.d/rc.local (T0600 runs 97e77ff4, 80b4d47b).
+path = "/etc/rc.conf"
+weight = 1
+
+[[profile.marker]]
+path = "/etc/rc.d/rc.local"
+weight = 1

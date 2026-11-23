@@ -69,7 +69,7 @@ pub const EVASION: &[Spec] = &[
     ),
     rule(
         "evasion.watchdog_disable",
-        1,
+        2,
         T::High,
         C::Evasion,
         &["T1490", "DET0329"],

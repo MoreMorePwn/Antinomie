@@ -567,6 +567,7 @@ pub fn traffic(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
         if bytes.starts_with(b"\x7fELF") {
             st.task(cx).net_elf = true;
         }
+        super::stager::receive(cx, st, socket, out);
     }
 }
 

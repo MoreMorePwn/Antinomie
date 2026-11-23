@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Which rule names name a family and which name a technique (ANT-T0556,
-//! A48/A53), and the families a run's own behaviour names.
+//! A48/A53), the rules known to match other programs, and the families
+//! with no Linux variant.
 //!
 //! A family comes only from a rule that names one: a `family` meta, an
 //! Elastic or Malpedia family rule, a known family's name in a curated rule,
@@ -235,35 +236,285 @@ pub fn rule_tags(rule: &str, meta_family: &str) -> Vec<String> {
     tags
 }
 
-/// What a run's own behaviour says about its family: files, services and
-/// URL paths public reports tie to one family. Each entry is a family and
-/// the markers any of which names it. Keep this list short and cite the
-/// marker's source in the comment.
-const BEHAVIOUR_SIGNATURES: &[(&str, &[&str])] = &[
-    // Prometei's Linux bot installs itself as /usr/sbin/uplugplay with an
-    // uplugplay systemd unit and polls /cgi-bin/p.cgi (Cisco Talos,
-    // "Prometei botnet improves modules", 2023; seen in the 2026-11-16
-    // x86-64 evaluation runs 21011aed, a5dbdaf2, 6bca3c88, ad28ddd7).
+/// YARA rules known to match programs of other families, each with why. A
+/// family only these name is "also named", never the run's family and never
+/// family evidence (ANT-T0604). Keep this list short and give the evidence.
+pub const DOUBTFUL_RULES: &[(&str, &str)] = &[
+    // Its string $d5 "glibc.malloc.top" is the start of the glibc tunable
+    // glibc.malloc.top_pad, in every statically linked glibc program, and the
+    // rule matches on that one string. T0600: it matched Prometei 0f7149c0,
+    // Rekoobe 1adee8d0 and Mirai 9a38b870 through $d5 alone.
     (
-        "Prometei",
-        &[
-            "/usr/sbin/uplugplay",
-            "uplugplay.service",
-            "/cgi-bin/p.cgi?r=",
-        ],
+        "MIRAI_OHSHIT_payload",
+        "its string \"glibc.malloc.top\" is part of a glibc setting name found in every statically linked glibc program",
+    ),
+    // Its own meta says "Lineage marker, not a family discriminator": it
+    // matches Mirai's reserved address ranges ("119.0.0.0", "120.0.0.0"),
+    // which Gafgyt builds copy. T0600: Gafgyt 62c5b21d.
+    (
+        "MIRAI_TELNETCURL_payload",
+        "its author calls it a lineage marker, not a family discriminator; it matches address ranges Mirai's code shares with Gafgyt builds",
     ),
 ];
 
-/// The families the run's behaviour names: for each, the first marker seen
-/// in `observed` (file paths, URLs and command lines of the run).
-pub fn behaviour_families(observed: &[&str]) -> Vec<(String, String)> {
-    BEHAVIOUR_SIGNATURES
+/// Why a rule is in [`DOUBTFUL_RULES`], when it is.
+pub fn doubtful_rule(rule: &str) -> Option<&'static str> {
+    DOUBTFUL_RULES
         .iter()
-        .filter_map(|(family, markers)| {
-            markers
-                .iter()
-                .find(|marker| observed.iter().any(|seen| seen.contains(**marker)))
-                .map(|marker| ((*family).to_owned(), (*marker).to_owned()))
-        })
-        .collect()
+        .find(|(name, _)| name.eq_ignore_ascii_case(rule))
+        .map(|(_, why)| *why)
 }
+
+/// Families with no Linux variant, lower case without separators: a rule
+/// name, a meta or an IDS message that names one of these never names the
+/// family of a Linux program (ANT-T0604: an abuse.ch YARAhub rule for
+/// RemcosRAT matched "</script>" in the Go bot Chaos). Families with Linux
+/// builds (Cobalt Strike's CrossC2, NetWire, Gh0st forks, the Gafgyt fork
+/// QBot) are not listed.
+const WINDOWS_ONLY: &[&str] = &[
+    "remcos",
+    "remcosrat",
+    "agenttesla",
+    "asyncrat",
+    "njrat",
+    "nanocore",
+    "formbook",
+    "xloader",
+    "lokibot",
+    "emotet",
+    "trickbot",
+    "qakbot",
+    "dridex",
+    "icedid",
+    "redline",
+    "redlinestealer",
+    "raccoon",
+    "vidar",
+    "azorult",
+    "darkcomet",
+    "quasar",
+    "quasarrat",
+    "dcrat",
+    "warzone",
+    "warzonerat",
+    "avemaria",
+    "smokeloader",
+    "guloader",
+    "ursnif",
+    "gozi",
+    "zloader",
+    "amadey",
+    "lumma",
+    "lummastealer",
+    "stealc",
+    "xworm",
+    "bumblebee",
+    "pikabot",
+    "hancitor",
+    "darkgate",
+    "snakekeylogger",
+    "valleyrat",
+];
+
+/// Whether a family has no Linux variant ([`WINDOWS_ONLY`]).
+pub fn windows_only(family: &str) -> bool {
+    let key: String = family
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    WINDOWS_ONLY.contains(&key.as_str())
+}
+
+/// Words that name a kind of rule, a platform or a date, not a family.
+pub(super) const NOT_FAMILY: &[&str] = &[
+    "mal",
+    "malware",
+    "elf",
+    "linux",
+    "lin",
+    "lnx",
+    "unix",
+    "win",
+    "windows",
+    "apt",
+    "hktl",
+    "susp",
+    "suspicious",
+    "trojan",
+    "backdoor",
+    "rat",
+    "botnet",
+    "exploit",
+    "webshell",
+    "loader",
+    "dropper",
+    "generic",
+    "crime",
+    "crimeware",
+    "ransom",
+    "ransomware",
+    "miner",
+    "cryptominer",
+    "coinminer",
+    "tool",
+    "pua",
+    "x64",
+    "x86",
+    "arm",
+    "arm64",
+    "mips",
+    "packer",
+    "upx",
+    "shell",
+    "script",
+    "file",
+    "ioc",
+    "ttp",
+    "cve",
+    "rule",
+    "hacktool",
+    "stealer",
+    "worm",
+    "virus",
+    "agent",
+    "family",
+    "bot",
+    "downloader",
+    "implant",
+    "strings",
+    "string",
+    "payload",
+    "obfuscated",
+    "encoded",
+    "code",
+    "command",
+    "config",
+    "sample",
+    "general",
+    "common",
+    "possible",
+    "potential",
+    "detect",
+    "detection",
+    "indicator",
+    "indicators",
+    "keyword",
+    "keywords",
+    "hash",
+    "hashes",
+    "anomaly",
+    "behavior",
+    "behaviour",
+    "encrypted",
+    "golang",
+    "go",
+    "rust",
+    "python",
+    "java",
+    "php",
+    "pe",
+    "dll",
+    "exe",
+    "base64",
+    "heur",
+    "hunt",
+    "hunting",
+    "test",
+];
+
+/// Tags MalwareBazaar gives that say a file type, an architecture, a packer or
+/// a kind of malware, not a family.
+pub(super) const GENERIC_TAGS: &[&str] = &[
+    "elf",
+    "exe",
+    "dll",
+    "sh",
+    "bash",
+    "py",
+    "ps1",
+    "js",
+    "vbs",
+    "bat",
+    "msi",
+    "apk",
+    "pe",
+    "upx",
+    "x86",
+    "x86-64",
+    "x86_64",
+    "x64",
+    "amd64",
+    "i386",
+    "i686",
+    "arm",
+    "arm32",
+    "arm64",
+    "aarch64",
+    "armv5",
+    "armv6",
+    "armv7",
+    "mips",
+    "mipsel",
+    "mips64",
+    "ppc",
+    "powerpc",
+    "riscv",
+    "sparc",
+    "sh4",
+    "m68k",
+    "32",
+    "64",
+    "32-bit",
+    "64-bit",
+    "ua-wget",
+    "ua-curl",
+    "opendir",
+    "geofenced",
+    "malware",
+    "botnet",
+    "trojan",
+    "backdoor",
+    "rat",
+    "ddos",
+    "miner",
+    "coinminer",
+    "cryptominer",
+    "ransomware",
+    "rootkit",
+    "stealer",
+    "loader",
+    "dropper",
+    "worm",
+    "virus",
+    "linux",
+    "unix",
+    "iot",
+    "packed",
+    "unpacked",
+    "stripped",
+    "golang",
+    "go",
+    "rust",
+    "c2",
+    "payload",
+    "suspicious",
+    "malicious",
+    "shellcode",
+    "script",
+    "xz",
+    "gz",
+    "zip",
+    "tar",
+    "wget",
+    "curl",
+    "tor",
+    "ssh",
+    "telnet",
+    "exploit",
+    "cve",
+    "scanner",
+    "bruteforce",
+    "cnc",
+    "downloader",
+];

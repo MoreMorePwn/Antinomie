@@ -328,7 +328,7 @@ fn severe(severity: &str) -> bool {
 ///
 /// | # | When | Label |
 /// |---|---|---|
-/// | 1 | Triage did not run, or the run did not complete | `inconclusive` |
+/// | 1 | Triage did not run | `inconclusive` |
 /// | 2 | an indicator matched a stored dataset | `malicious` |
 /// | 3 | a strong family rule (or a behaviour signature) names a family and the behaviour reached tier medium or high | `malicious` |
 /// | 4 | a rule of the run names a family | `suspicious` |
@@ -339,29 +339,53 @@ fn severe(severity: &str) -> bool {
 ///
 /// A family named only by the sample's MalwareBazaar record is no evidence
 /// of this run. A rule's own severity alone never makes a run `malicious`.
+///
+/// A run that did not complete (stopped, the guest lost) is judged on what
+/// was recorded until then: rows 2, 3, 4, 6 and 7 still hold, since the
+/// evidence was seen (T0600 F4: two Mirai runs stopped at the trace cap with
+/// tier high and a strong Mirai rule were `inconclusive`). Rows 5 and 8, which
+/// read the absence of behaviour, give `inconclusive` instead, as the rest of
+/// the run was never seen.
 pub fn default_label(facts: &Facts) -> Verdict {
+    if !facts.triage_ran {
+        return Verdict {
+            label: Label::Inconclusive,
+            score: None,
+            basis: "Triage did not run, so the run could not be judged.".into(),
+        };
+    }
+    let verdict = label_of_recorded(facts);
+    if facts.run_completed() {
+        return verdict;
+    }
+    let how = facts
+        .end_reason
+        .map_or("did not report how it ended".to_owned(), |reason| {
+            format!("ended as {}", name_of(&reason))
+        });
+    match verdict.label {
+        Label::Malicious | Label::Suspicious => Verdict {
+            basis: format!(
+                "The run did not complete (it {how}); the label rests on what was recorded until then. {}",
+                verdict.basis
+            ),
+            ..verdict
+        },
+        _ => Verdict {
+            label: Label::Inconclusive,
+            score: None,
+            basis: format!("The run did not complete (it {how}), so it could not be judged."),
+        },
+    }
+}
+
+/// The default mapping's rows 2 to 8 over what Triage recorded.
+fn label_of_recorded(facts: &Facts) -> Verdict {
     let say = |label, text: String| Verdict {
         label,
         score: None,
         basis: text,
     };
-    if !facts.triage_ran {
-        return say(
-            Label::Inconclusive,
-            "Triage did not run, so the run could not be judged.".into(),
-        );
-    }
-    if !facts.run_completed() {
-        let how = facts
-            .end_reason
-            .map_or("did not report how it ended".to_owned(), |reason| {
-                format!("ended as {}", name_of(&reason))
-            });
-        return say(
-            Label::Inconclusive,
-            format!("The run did not complete (it {how}), so it could not be judged."),
-        );
-    }
     // Without datasets, nothing can have matched an indicator: an assessment
     // that says so came from the online check and is not a dataset verdict.
     let matched = facts.assessment == AssessmentKind::MatchedIndicators;

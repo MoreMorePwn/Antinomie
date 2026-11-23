@@ -233,6 +233,14 @@ const EARLY: &[Spec] = &[
         C::Execution,
         &["T1129", "DET0018"],
     ),
+    rule(
+        "execution.socket_stager",
+        1,
+        T::High,
+        C::Execution,
+        &["T1620", "DET0300", "T1105", "DET0060"],
+    )
+    .allow(JIT),
     // Injection
     rule("process.ptrace", 2, T::Low, C::Injection, &["T1055.008"]),
     rule(

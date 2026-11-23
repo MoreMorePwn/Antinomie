@@ -1,0 +1,55 @@
+# BillGates: a Linux DDoS bot that replaces ps, netstat, ss and lsof with
+# copies of itself.
+[[profile]]
+name = "BillGates"
+platforms = ["linux"]
+references = [
+  "Akamai SIRT, \"BillGates Botnet\" threat advisory, 2015",
+]
+min_markers = 3
+min_distinctive = 2
+
+[[profile.marker]]
+# The init script DbSecuritySpt (Akamai 2015; T0600 runs 6cfbe997, 6f287b2a).
+path = "/etc/init.d/DbSecuritySpt"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# Its copy /usr/bin/bsd-port/getty (Akamai 2015; T0600 runs 6cfbe997,
+# 6f287b2a).
+path = "/usr/bin/bsd-port/getty"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# The originals of ps and netstat moved to /usr/bin/dpkgd (Akamai 2015;
+# T0600 runs 6cfbe997, 6f287b2a).
+path = "/usr/bin/dpkgd/"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+# Its lock and state files in /tmp (T0600 runs 6cfbe997, 6f287b2a).
+path = "/tmp/gates.lod"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+path = "/tmp/moni.lod"
+weight = 1
+
+[[profile.marker]]
+path = "/tmp/bill.lock"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+# A second init script named selinux (T0600 runs 6cfbe997, 6f287b2a).
+path = "/etc/init.d/selinux"
+weight = 1
+
+[[profile.marker]]
+# The hidden copy /usr/bin/.sshd (Akamai 2015).
+path = "/usr/bin/.sshd"
+weight = 1

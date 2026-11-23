@@ -1,0 +1,64 @@
+# Kaiji: a Go DDoS bot for Linux servers and IoT devices that spreads by SSH
+# brute force.
+[[profile]]
+name = "Kaiji"
+platforms = ["linux"]
+references = [
+  "Intezer, \"Kaiji: New Chinese Linux malware turning to Golang\", 2020-05-04",
+]
+min_markers = 3
+min_distinctive = 2
+
+[[profile.marker]]
+# The init script linux_kill under /etc/init.d and /etc/rc.d (Intezer 2020;
+# T0600 runs 2e2481d9, 120ed0f4, c8e4bb12).
+path_regex = "/(init\\.d|rc\\.d)/linux_kill$"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# Its copy /etc/32676, started from a shell (T0600 runs 2e2481d9, 120ed0f4,
+# c8e4bb12).
+path = "/etc/32676"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# The service configuration files it writes (T0600 runs 2e2481d9, 120ed0f4,
+# c8e4bb12).
+path = "/etc/id.services.conf"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+path = "/etc/opt.services.cfg"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+# The copy kept under /boot (T0600 runs 2e2481d9, 120ed0f4, c8e4bb12).
+path = "/boot/System.mod"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+# Its lock and state files in /dev and /etc (T0600 runs 2e2481d9, 120ed0f4,
+# c8e4bb12).
+path = "/dev/.walk.lod"
+weight = 1
+
+[[profile.marker]]
+# The cron line that restarts the copy /.mod every minute (Intezer 2020;
+# shared with Chaos, which took Kaiji's code).
+command = "root /.mod"
+weight = 1
+
+[[profile.marker]]
+# It hides its process with a bind mount over /proc/<pid> (shared with Chaos).
+finding = "evasion.proc_hide_mount"
+weight = 1
+
+[[profile.marker]]
+# ... and raises its own priority (T0600 runs 2e2481d9, 120ed0f4, c8e4bb12).
+command = "renice -20"
+weight = 1

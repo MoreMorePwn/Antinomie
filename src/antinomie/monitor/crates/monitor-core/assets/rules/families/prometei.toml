@@ -1,0 +1,42 @@
+# Prometei: a Linux and Windows botnet that mines Monero and spreads with
+# stolen SSH and SMB credentials.
+[[profile]]
+name = "Prometei"
+platforms = ["linux"]
+references = [
+  "Cisco Talos, \"Prometei botnet improves modules and exhibits new capabilities in recent updates\", 2023-03-09",
+]
+# Any one distinctive marker names it, as the behaviour signature before
+# profiles did (T0600 run 0f7149c0; the 2026-11-16 runs 21011aed, a5dbdaf2,
+# 6bca3c88, ad28ddd7).
+min_markers = 1
+min_distinctive = 1
+
+[[profile.marker]]
+# The bot installs itself as /usr/sbin/uplugplay (Talos 2023).
+path = "/usr/sbin/uplugplay"
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+# ... and runs it from an uplugplay systemd unit (Talos 2023).
+path = "uplugplay.service"
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+# Its C2 requests poll /cgi-bin/p.cgi?r=<n>&i=<bot id> (Talos 2023).
+url = "/cgi-bin/p.cgi?r="
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+# The service's command line: uplugplay -Dcomsvc (T0600 run 0f7149c0).
+command = "uplugplay -Dcomsvc"
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+# The bot id file /etc/CommId (T0600 run 0f7149c0).
+path = "/etc/CommId"
+weight = 1

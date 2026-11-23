@@ -165,14 +165,20 @@ fn a_hostile_expression_is_refused_before_it_can_overflow_the_stack() {
 
 #[test]
 fn the_default_mapping_follows_the_table_in_order() {
-    // Not completed, or Triage did not run: inconclusive, whatever else holds.
+    // Not completed: what was recorded still counts (T0604), but the
+    // absence of behaviour does not; the basis says the run did not complete.
     let mut f = facts();
     f.assessment = AssessmentKind::MatchedIndicators;
     f.end_reason = Some(EndReason::GuestLost);
-    assert_eq!(label(&f), Label::Inconclusive);
-    assert!(default_label(&f).basis.contains("did not complete"));
+    let v = default_label(&f);
+    assert_eq!(v.label, Label::Malicious);
+    assert!(v.basis.contains("did not complete"), "{}", v.basis);
+    assert!(v.basis.contains("until then"), "{}", v.basis);
+    f.assessment = AssessmentKind::ObservedOnly;
     f.end_reason = Some(EndReason::Stopped);
     assert_eq!(label(&f), Label::Inconclusive, "a stop for a safety rule");
+    assert!(default_label(&f).basis.contains("did not complete"));
+    // Triage did not run: inconclusive, whatever else holds.
     let mut none = Facts::without_triage(Some(EndReason::Exited), 3);
     none.assessment = AssessmentKind::MatchedIndicators;
     assert_eq!(label(&none), Label::Inconclusive);
@@ -448,7 +454,10 @@ fn label_table() -> Vec<Row> {
     use AssessmentKind::SuspiciousBehaviour as Behaviour;
     use AssessmentKind::{Inconclusive as NoBehaviour, NoFindings, ObservedOnly};
     vec![
-        // A strong family rule and medium or high behaviour: malicious.
+        // T0604: MIRAI_OHSHIT_payload matches every statically linked glibc
+        // program and MIRAI_TELNETCURL_payload is a lineage marker; the
+        // Mirai they name is "also named" and no family evidence, so medium
+        // or high behaviour alone gives suspicious.
         Row {
             run: "1bcae1cc-r2",
             assessment: Behaviour,
@@ -464,7 +473,7 @@ fn label_table() -> Vec<Row> {
                 MASS,
             ],
             observed: &[],
-            label: Label::Malicious,
+            label: Label::Suspicious,
             families: &["Mirai"],
         },
         Row {
@@ -473,10 +482,11 @@ fn label_table() -> Vec<Row> {
             tier: Tier::Medium,
             hits: &[OHSHIT, MASS],
             observed: &[],
-            label: Label::Malicious,
+            label: Label::Suspicious,
             families: &["Mirai"],
         },
-        // The behaviour names Prometei; the Mirai rule is "also named".
+        // The behaviour names Prometei; the doubtful Mirai rule is dropped
+        // beside it.
         Row {
             run: "21011aed",
             assessment: Behaviour,
@@ -487,16 +497,16 @@ fn label_table() -> Vec<Row> {
                 "GET 177.221.180.26/cgi-bin/p.cgi?r=59&i=4J8",
             ],
             label: Label::Malicious,
-            families: &["Prometei", "Mirai"],
+            families: &["Prometei"],
         },
-        // A strong family rule and low behaviour: suspicious, never clean.
+        // Only a doubtful rule and low behaviour: no family evidence.
         Row {
             run: "d0d25b1a",
             assessment: ObservedOnly,
             tier: Tier::Low,
             hits: &[OHSHIT, MASS],
             observed: &[],
-            label: Label::Suspicious,
+            label: Label::CleanObserved,
             families: &["Mirai"],
         },
         Row {
@@ -516,7 +526,7 @@ fn label_table() -> Vec<Row> {
             ],
             observed: &[],
             label: Label::Suspicious,
-            families: &["Mirai", "XMRig"],
+            families: &["XMRig", "Mirai"],
         },
         // A "high severity" rule beside a family rule on a low-tier run:
         // suspicious, no longer malicious.
@@ -531,7 +541,7 @@ fn label_table() -> Vec<Row> {
             ],
             observed: &[],
             label: Label::Suspicious,
-            families: &["Mirai", "Focusbot"],
+            families: &["Focusbot"],
         },
         // Family rules of Gafgyt (meta, a known name, a Malpedia alias).
         Row {
@@ -583,15 +593,25 @@ fn label_table() -> Vec<Row> {
             label: Label::Suspicious,
             families: &["Gafgyt"],
         },
-        // A family rule and no recorded behaviour: suspicious, and says so.
+        // A doubtful rule and no recorded behaviour: inconclusive.
         Row {
             run: "83ff6b2e-r2",
             assessment: NoBehaviour,
             tier: Tier::Low,
             hits: &[OHSHIT, MASS],
             observed: &[],
-            label: Label::Suspicious,
+            label: Label::Inconclusive,
             families: &["Mirai"],
+        },
+        // A family rule and no recorded behaviour: suspicious, and says so.
+        Row {
+            run: "83ff6b2e-r2-gafgyt",
+            assessment: NoBehaviour,
+            tier: Tier::Low,
+            hits: &[("gafgyt_ansi_beacon", "Gafgyt", HUB, "indicator"), MASS],
+            observed: &[],
+            label: Label::Suspicious,
+            families: &["Gafgyt"],
         },
         // Technique and generic rules only: no family, the behaviour decides.
         Row {
@@ -718,13 +738,8 @@ fn the_label_follows_the_tier_and_the_family_evidence_in_every_evaluation_run() 
             .collect();
         let v = default_label(&f);
         assert_eq!(v.label, row.label, "{}: {}", row.run, v.basis);
-        if !row.families.is_empty() {
-            assert!(
-                v.basis.contains(row.families[0]),
-                "{}: {}",
-                row.run,
-                v.basis
-            );
+        if let Some(evidence) = f.family_evidence.first() {
+            assert!(v.basis.contains(&evidence.name), "{}: {}", row.run, v.basis);
         }
     }
 }
@@ -747,4 +762,36 @@ fn a_run_with_no_recorded_behaviour_is_inconclusive_and_says_why() {
     let v = default_label(&f);
     assert_eq!(v.label, Label::Inconclusive);
     assert!(v.basis.contains("SIGBUS"), "{}", v.basis);
+}
+
+#[test]
+fn a_stopped_run_with_high_tier_and_a_strong_family_is_malicious() {
+    // T0600 F4: Mirai a100ff2b and 5015e226 reached the 2 GiB recording cap,
+    // the program was stopped, and the run was labelled inconclusive although
+    // what was recorded had tier high and a strong Mirai rule.
+    let mut f = facts();
+    f.end_reason = Some(EndReason::Stopped);
+    f.assessment = AssessmentKind::SuspiciousBehaviour;
+    f.highest_tier = Tier::High;
+    f.families = vec!["Mirai".into()];
+    f.family_evidence = vec![FamilyEvidence {
+        name: "Mirai".into(),
+        strong: true,
+    }];
+    let v = default_label(&f);
+    assert_eq!(v.label, Label::Malicious, "{}", v.basis);
+    assert!(v.basis.contains("ended as stopped"), "{}", v.basis);
+    assert!(v.basis.contains("Mirai"), "{}", v.basis);
+    // Tier high without a family: suspicious, as for a completed run.
+    f.family_evidence.clear();
+    f.families.clear();
+    assert_eq!(label(&f), Label::Suspicious);
+    // Nothing above low before the stop: the rest of the run was not seen.
+    f.assessment = AssessmentKind::ObservedOnly;
+    f.highest_tier = Tier::Low;
+    assert_eq!(label(&f), Label::Inconclusive);
+    f.end_reason = Some(EndReason::GuestLost);
+    f.assessment = AssessmentKind::NoFindings;
+    f.highest_tier = Tier::None;
+    assert_eq!(label(&f), Label::Inconclusive);
 }

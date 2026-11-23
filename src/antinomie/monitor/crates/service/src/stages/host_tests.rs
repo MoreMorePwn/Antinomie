@@ -571,17 +571,27 @@ fn a_high_yara_severity_without_a_family_makes_the_job_suspicious_not_malicious(
 }
 
 #[test]
-fn a_run_that_did_not_complete_is_inconclusive_and_the_datasets_note_follows_the_probe() {
+fn a_run_that_did_not_complete_is_judged_on_what_was_recorded_and_the_datasets_note_follows_the_probe()
+ {
     let mut w = world("host-lost");
     hook(&mut w, |h| h.datasets = 2);
     let job = collected(&w, 1);
-    // The run ended with the guest: the label cannot be given.
+    // The run ended with the guest: the label rests on what was recorded
+    // until then (T0604, T0600 F4), and the basis says the run did not
+    // complete. The fixture's behaviour is not clean, so it is no longer
+    // inconclusive.
     attach(&w, &job, &run_dir(&w), EndReason::GuestLost);
     let mut waiter = w.engine(|_| {});
     let done = finished(host(&w, &mut waiter, &job));
     let a = done.assessment.unwrap();
-    assert_eq!(a.label, Some(Label::Inconclusive));
+    assert!(
+        matches!(a.label, Some(Label::Suspicious | Label::Malicious)),
+        "{:?}: {}",
+        a.label,
+        a.basis
+    );
     assert!(a.basis.contains("did not complete"), "{}", a.basis);
+    assert!(a.basis.contains("until then"), "{}", a.basis);
     assert!(!a.basis.contains("datasets"), "two datasets were loaded");
     assert_eq!(a.ioc_dataset_count, 2);
 }

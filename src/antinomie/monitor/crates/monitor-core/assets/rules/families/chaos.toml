@@ -1,0 +1,46 @@
+# Chaos: a Go bot for Linux and Windows built on Kaiji's code: DDoS, mining
+# and remote shell.
+[[profile]]
+name = "Chaos"
+platforms = ["linux"]
+references = [
+  "Lumen Black Lotus Labs, \"Chaos is a Go-based Swiss army knife of malware\", 2022-09-28",
+]
+min_markers = 3
+min_distinctive = 2
+
+[[profile.marker]]
+# The key file it keeps under /boot (T0600 run 2d8b0955).
+path = "/boot/system.pub"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# Its init script dns-udp4 (T0600 run 2d8b0955).
+path = "/etc/init.d/dns-udp4"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# The marker file /lib/system.mark it writes and timestomps (T0600 run
+# 2d8b0955).
+path = "/lib/system.mark"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+# The shell profile it adds (T0600 run 2d8b0955).
+path = "/etc/profile.d/bash.cfg"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+# Kaiji's process hiding, kept in Chaos (Lumen 2022: Chaos shares Kaiji's
+# code; T0600 run 2d8b0955).
+finding = "evasion.proc_hide_mount"
+weight = 1
+
+[[profile.marker]]
+# Kaiji's copy /.mod, kept in Chaos (T0600 run 2d8b0955).
+path_regex = "^/\\.mod$"
+weight = 1

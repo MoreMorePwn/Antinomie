@@ -7,9 +7,12 @@
 use crate::run_digest::DetectionHit;
 use std::collections::BTreeMap;
 
+pub mod profiles;
 mod words;
+pub use profiles::{Profile, Seen};
 pub use words::{
-    KNOWN_FAMILIES, behaviour_families, is_known_family, is_technique_rule, rule_tags,
+    DOUBTFUL_RULES, KNOWN_FAMILIES, doubtful_rule, is_known_family, is_technique_rule, rule_tags,
+    windows_only,
 };
 
 /// A malware family a detection names, with where it said so.
@@ -27,6 +30,10 @@ pub struct Candidate {
     pub observed: bool,
     /// ... and a strong rule or a behaviour signature among them.
     pub observed_strong: bool,
+    /// Only rules known to match programs of other families named it
+    /// ([`DOUBTFUL_RULES`]): it is "also named", never the run's family and
+    /// never family evidence.
+    pub doubtful: bool,
 }
 
 /// The families the run's own evidence names ([`Candidate::observed`]),
@@ -35,7 +42,7 @@ pub struct Candidate {
 pub fn observed_families(candidates: &[Candidate]) -> Vec<crate::report::FamilyEvidence> {
     candidates
         .iter()
-        .filter(|candidate| candidate.observed)
+        .filter(|candidate| candidate.observed && !candidate.doubtful)
         .map(|candidate| crate::report::FamilyEvidence {
             name: candidate.name.clone(),
             strong: candidate.observed_strong,
@@ -69,13 +76,17 @@ pub fn detection_tags(hits: &[DetectionHit]) -> Vec<String> {
 
 /// The candidates a report names as the family: the first, and any other
 /// with at least half its points (MalwareBazaar's signature and tags may name
-/// two). The rest are "also named". Both lists keep the candidates' order.
+/// two). The rest are "also named", and so is a family that only rules known
+/// to match other programs named ([`Candidate::doubtful`]). Both lists keep
+/// the candidates' order.
 pub fn primary_families(candidates: &[Candidate]) -> (Vec<&Candidate>, Vec<&Candidate>) {
-    let top = candidates.first().map_or(0, |c| c.points);
+    let lead = candidates.iter().find(|c| !c.doubtful);
+    let top = lead.map_or(0, |c| c.points);
     let mut primary = Vec::new();
     let mut other = Vec::new();
-    for (at, candidate) in candidates.iter().enumerate() {
-        if at == 0 || candidate.points * 2 >= top {
+    for candidate in candidates {
+        let first = lead.is_some_and(|lead| std::ptr::eq(lead, candidate));
+        if !candidate.doubtful && (first || candidate.points * 2 >= top) {
             primary.push(candidate);
         } else {
             other.push(candidate);
@@ -164,103 +175,6 @@ const PACK_WORDS: &[&str] = &[
     "name",
 ];
 
-/// Words that name a kind of rule, a platform or a date, not a family.
-const NOT_FAMILY: &[&str] = &[
-    "mal",
-    "malware",
-    "elf",
-    "linux",
-    "lin",
-    "lnx",
-    "unix",
-    "win",
-    "windows",
-    "apt",
-    "hktl",
-    "susp",
-    "suspicious",
-    "trojan",
-    "backdoor",
-    "rat",
-    "botnet",
-    "exploit",
-    "webshell",
-    "loader",
-    "dropper",
-    "generic",
-    "crime",
-    "crimeware",
-    "ransom",
-    "ransomware",
-    "miner",
-    "cryptominer",
-    "coinminer",
-    "tool",
-    "pua",
-    "x64",
-    "x86",
-    "arm",
-    "arm64",
-    "mips",
-    "packer",
-    "upx",
-    "shell",
-    "script",
-    "file",
-    "ioc",
-    "ttp",
-    "cve",
-    "rule",
-    "hacktool",
-    "stealer",
-    "worm",
-    "virus",
-    "agent",
-    "family",
-    "bot",
-    "downloader",
-    "implant",
-    "strings",
-    "string",
-    "payload",
-    "obfuscated",
-    "encoded",
-    "code",
-    "command",
-    "config",
-    "sample",
-    "general",
-    "common",
-    "possible",
-    "potential",
-    "detect",
-    "detection",
-    "indicator",
-    "indicators",
-    "keyword",
-    "keywords",
-    "hash",
-    "hashes",
-    "anomaly",
-    "behavior",
-    "behaviour",
-    "encrypted",
-    "golang",
-    "go",
-    "rust",
-    "python",
-    "java",
-    "php",
-    "pe",
-    "dll",
-    "exe",
-    "base64",
-    "heur",
-    "hunt",
-    "hunting",
-    "test",
-];
-
 /// Families that Linux IDS signature names carry as a word.
 const IDS_FAMILIES: &[&str] = &[
     "mirai",
@@ -289,7 +203,9 @@ const IDS_FAMILIES: &[&str] = &[
 
 /// A lower-case word of a rule name that is no family.
 fn not_family(lower: &str) -> bool {
-    NOT_FAMILY.contains(&lower) || GENERIC_FRAGMENTS.contains(&lower) || PACK_WORDS.contains(&lower)
+    words::NOT_FAMILY.contains(&lower)
+        || GENERIC_FRAGMENTS.contains(&lower)
+        || PACK_WORDS.contains(&lower)
 }
 
 /// Families whose usual spelling has inner capitals; rule names and tags often
@@ -483,130 +399,50 @@ fn known_family_in_rule_name(rule: &str) -> Option<String> {
         .map(pretty)
 }
 
-/// Tags MalwareBazaar gives that say a file type, an architecture, a packer or
-/// a kind of malware, not a family.
-const GENERIC_TAGS: &[&str] = &[
-    "elf",
-    "exe",
-    "dll",
-    "sh",
-    "bash",
-    "py",
-    "ps1",
-    "js",
-    "vbs",
-    "bat",
-    "msi",
-    "apk",
-    "pe",
-    "upx",
-    "x86",
-    "x86-64",
-    "x86_64",
-    "x64",
-    "amd64",
-    "i386",
-    "i686",
-    "arm",
-    "arm32",
-    "arm64",
-    "aarch64",
-    "armv5",
-    "armv6",
-    "armv7",
-    "mips",
-    "mipsel",
-    "mips64",
-    "ppc",
-    "powerpc",
-    "riscv",
-    "sparc",
-    "sh4",
-    "m68k",
-    "32",
-    "64",
-    "32-bit",
-    "64-bit",
-    "ua-wget",
-    "ua-curl",
-    "opendir",
-    "geofenced",
-    "malware",
-    "botnet",
-    "trojan",
-    "backdoor",
-    "rat",
-    "ddos",
-    "miner",
-    "coinminer",
-    "cryptominer",
-    "ransomware",
-    "rootkit",
-    "stealer",
-    "loader",
-    "dropper",
-    "worm",
-    "virus",
-    "linux",
-    "unix",
-    "iot",
-    "packed",
-    "unpacked",
-    "stripped",
-    "golang",
-    "go",
-    "rust",
-    "c2",
-    "payload",
-    "suspicious",
-    "malicious",
-    "shellcode",
-    "script",
-    "xz",
-    "gz",
-    "zip",
-    "tar",
-    "wget",
-    "curl",
-    "tor",
-    "ssh",
-    "telnet",
-    "exploit",
-    "cve",
-    "scanner",
-    "bruteforce",
-    "cnc",
-    "downloader",
-];
-
 /// Whether a MalwareBazaar tag could name a family.
 fn tag_is_family(tag: &str) -> bool {
     let lower = tag.trim().to_ascii_lowercase();
     lower.len() >= 3
-        && !GENERIC_TAGS.contains(&lower.as_str())
+        && !words::GENERIC_TAGS.contains(&lower.as_str())
         && !not_family(&lower)
         && !lower.contains([':', '.', '/', ' ', '='])
         && !lower.starts_with(|c: char| c.is_ascii_digit())
         && lower.chars().any(|c| c.is_ascii_alphabetic())
 }
 
+/// The pack a match's source names, lower case: the folder after `pack/`
+/// (`selection/pack/abuse-ch-yarahub/MULTI_..._ForgeAuto_....yar` is
+/// `abuse-ch-yarahub`), else the source without its file name. A rule file's
+/// own name never names the pack: YARAhub's `..._ForgeAuto_...` rules are
+/// not YARA-Forge's (T0604: one named RemcosRAT on a Linux Go program).
+fn pack_of(source: &str) -> String {
+    let lower = source.to_ascii_lowercase();
+    if let Some((_, rest)) = lower.rsplit_once("pack/") {
+        return rest.split('/').next().unwrap_or_default().to_owned();
+    }
+    match lower.rsplit_once('/') {
+        Some((dir, _)) => dir.to_owned(),
+        None => lower,
+    }
+}
+
 fn is_forge(source: &str) -> bool {
-    source.to_ascii_lowercase().contains("forge")
+    pack_of(source).contains("forge")
 }
 
 fn curated_pack(source: &str) -> bool {
-    let lower = source.to_ascii_lowercase();
+    let pack = pack_of(source);
     ["malpedia", "forge", "yarahub"]
         .iter()
-        .any(|pack| lower.contains(pack))
+        .any(|name| pack.contains(name))
 }
 
 fn is_elastic(source: &str) -> bool {
-    source.to_ascii_lowercase().contains("elastic")
+    pack_of(source).contains("elastic")
 }
 
 fn is_yarahub(source: &str) -> bool {
-    source.to_ascii_lowercase().contains("yarahub")
+    pack_of(source).contains("yarahub")
 }
 
 /// Elastic's score, the rule's severity when it is a number.
@@ -684,8 +520,11 @@ pub fn strength(rule: &str, severity: &str, source: &str, family: &str) -> Stren
     if wrong_platform(rule) {
         return Strength::WrongPlatform;
     }
-    // A technique rule is no family evidence, whatever its meta says.
-    if !is_elastic(source) && is_technique_rule(plain_name(rule)) {
+    // A technique rule is no family evidence, whatever its meta says, and
+    // nor is a rule known to match other programs.
+    if (!is_elastic(source) && is_technique_rule(plain_name(rule)))
+        || doubtful_rule(plain_name(rule)).is_some()
+    {
         return Strength::Weak;
     }
     let family = family.trim();
@@ -739,6 +578,8 @@ struct Mention {
     name: String,
     points: u32,
     strong: bool,
+    /// From a rule known to match programs of other families.
+    doubtful: bool,
     source: String,
 }
 
@@ -752,28 +593,55 @@ pub fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candi
     family_candidates_seen(hits, bazaar, &[])
 }
 
-/// Points a behaviour signature adds ([`behaviour_families`]): what the run
-/// did outweighs one or two rules that name another family (one strong
-/// rule, a `family` meta, is 90), and three or more such rules still win.
-const BEHAVIOUR_POINTS: u32 = 200;
-
-/// [`family_candidates`] with the run's behaviour: `observed` holds the
-/// file paths, URLs and command lines of the run. When the rules and the
-/// behaviour disagree (MIRAI_OHSHIT_payload on a bot that installs Prometei's
-/// `uplugplay` service), the behaviour leads and the rules' family is "also
-/// named".
+/// [`family_candidates`] with the run's behaviour, as texts of unknown kind
+/// (file paths, URLs and command lines), matched against the shipped family
+/// profiles. When the rules and the behaviour disagree (a Mirai rule on a bot
+/// that installs Prometei's `uplugplay` service), the behaviour leads and the
+/// rules' family is "also named".
 pub fn family_candidates_seen(
     hits: &[DetectionHit],
     bazaar: Bazaar<'_>,
     observed: &[&str],
 ) -> Vec<Candidate> {
+    family_candidates_with(
+        hits,
+        bazaar,
+        &Seen::of_texts(observed).tidy(),
+        &profiles::shipped(),
+    )
+}
+
+/// The families the run's detections, its MalwareBazaar record and its
+/// behaviour name: each family profile of `profiles` the run matches
+/// ([`profiles::Profile::matches`]) gives a strong candidate beside the
+/// rules' ones.
+pub fn family_candidates_with(
+    hits: &[DetectionHit],
+    bazaar: Bazaar<'_>,
+    seen: &Seen,
+    profiles: &[Profile],
+) -> Vec<Candidate> {
     let mut mentions: Vec<Mention> = Vec::new();
-    for (name, marker) in behaviour_families(observed) {
+    let rules = profiles::Rules {
+        sigma: hits
+            .iter()
+            .filter(|hit| hit.engine.eq_ignore_ascii_case("sigma"))
+            .map(|hit| hit.rule_id.as_str())
+            .collect(),
+        yara: hits
+            .iter()
+            .filter(|hit| hit.engine.eq_ignore_ascii_case("yara"))
+            .map(|hit| plain_name(&hit.rule_id))
+            .collect(),
+        tags: detection_tags(hits),
+    };
+    for matched in profiles::matching(profiles, seen, &rules) {
         mentions.push(Mention {
-            name,
-            points: BEHAVIOUR_POINTS,
+            name: matched.family,
+            points: matched.points,
             strong: true,
-            source: format!("behaviour \u{b7} {marker}"),
+            doubtful: false,
+            source: matched.source,
         });
     }
     let yara = |hit: &&DetectionHit| hit.engine.eq_ignore_ascii_case("yara");
@@ -793,6 +661,7 @@ pub fn family_candidates_seen(
                 60
             },
             strong: true,
+            doubtful: false,
             source: if bazaar.looked_up {
                 format!("{source} (looked up by hash)")
             } else {
@@ -814,6 +683,8 @@ const IDS_MESSAGE_POINTS: u32 = 35;
 const IDS_WORD_POINTS: u32 = 30;
 /// Points each family of a known-broad Elastic rule adds (see `BROAD_RULES`).
 const BROAD_POINTS: u32 = 25;
+/// Points a rule known to match other programs adds ([`DOUBTFUL_RULES`]).
+const DOUBTFUL_POINTS: u32 = 10;
 
 /// Elastic rules known to match more than the family their name says: each
 /// is listed with the families it is evidence for, the first one the sample
@@ -829,6 +700,9 @@ const BROAD_RULES: &[(&str, &[&str])] = &[("Linux_Trojan_Gafgyt_28a2fe0c", &["Mi
 /// for a known-broad rule.
 fn hit_mentions(hit: &DetectionHit) -> Vec<Mention> {
     let mut found = mentions_of(hit);
+    // A family with no Linux variant is no family of a Linux program,
+    // whichever rule names it (T0604: RemcosRAT on the Go bot Chaos).
+    found.retain(|mention| !windows_only(&mention.name));
     if hit.layer {
         for mention in &mut found {
             mention.source.push_str(" (in the unpacked payload)");
@@ -954,6 +828,7 @@ fn mentions_of(hit: &DetectionHit) -> Vec<Mention> {
                     name,
                     points: IDS_META_POINTS,
                     strong: false,
+                    doubtful: false,
                     source: format!("IDS metadata malware_family {family} \u{b7} {}", hit.title),
                 }];
             }
@@ -963,6 +838,7 @@ fn mentions_of(hit: &DetectionHit) -> Vec<Mention> {
                 name,
                 points: IDS_MESSAGE_POINTS,
                 strong: false,
+                doubtful: false,
                 source: format!("IDS message \u{b7} {}", hit.title),
             }];
         }
@@ -974,6 +850,7 @@ fn mentions_of(hit: &DetectionHit) -> Vec<Mention> {
                 name: pretty(word),
                 points: IDS_WORD_POINTS,
                 strong: false,
+                doubtful: false,
                 source: format!("IDS \u{b7} {}", hit.title),
             })
             .into_iter()
@@ -992,6 +869,7 @@ fn mentions_of(hit: &DetectionHit) -> Vec<Mention> {
                 // The first family leads by one point.
                 points: BROAD_POINTS + u32::from(at == 0),
                 strong: false,
+                doubtful: false,
                 source: format!(
                     "YARA \u{b7} Elastic rule {name} (known broad: it matches {})",
                     families.join(" and ")
@@ -1015,6 +893,23 @@ fn mention_of_yara(hit: &DetectionHit, name: &str) -> Option<Mention> {
     if !elastic && is_technique_rule(name) {
         return None;
     }
+    if let Some(why) = doubtful_rule(name) {
+        let family = if hit.family.is_empty() {
+            known_family_in_rule_name(name)?
+        } else {
+            meta_family(&hit.family)
+        };
+        return Some(Mention {
+            name: family,
+            points: DOUBTFUL_POINTS,
+            strong: false,
+            doubtful: true,
+            source: format!(
+                "YARA \u{b7} {} rule {name} (known to match other programs: {why})",
+                hit.source
+            ),
+        });
+    }
     if !hit.family.is_empty() {
         let family = meta_family(&hit.family);
         if !not_family(&family.to_ascii_lowercase()) {
@@ -1022,6 +917,7 @@ fn mention_of_yara(hit: &DetectionHit, name: &str) -> Option<Mention> {
                 name: family,
                 points: 90,
                 strong: true,
+                doubtful: false,
                 source: format!("YARA \u{b7} {} meta {}", hit.source, hit.family),
             });
         }
@@ -1034,6 +930,7 @@ fn mention_of_yara(hit: &DetectionHit, name: &str) -> Option<Mention> {
             name: family,
             points: score(&hit.severity).unwrap_or(60).min(100),
             strong: true,
+            doubtful: false,
             source: format!("YARA \u{b7} Elastic rule {name}"),
         });
     }
@@ -1054,6 +951,7 @@ fn mention_of_yara(hit: &DetectionHit, name: &str) -> Option<Mention> {
             name: family,
             points: if malpedia { 70 } else { 20 },
             strong: malpedia,
+            doubtful: false,
             source: format!("YARA \u{b7} {} rule {name}", hit.source),
         });
     }
@@ -1069,6 +967,7 @@ fn merge(mentions: Vec<Mention>) -> Vec<Candidate> {
         strong: bool,
         observed: bool,
         observed_strong: bool,
+        doubtful: bool,
         best: (u32, String, String),
         /// One source per kind (Elastic rule, a pack's rule, IDS, MalwareBazaar).
         kinds: Vec<(String, String)>,
@@ -1084,12 +983,14 @@ fn merge(mentions: Vec<Mention>) -> Vec<Candidate> {
                 strong: false,
                 observed: false,
                 observed_strong: false,
+                doubtful: true,
                 best: (0, mention.name.clone(), mention.source.clone()),
                 kinds: Vec::new(),
                 rules: 0,
             });
         total.points += mention.points;
         total.strong |= mention.strong;
+        total.doubtful &= mention.doubtful;
         let own = !mention.source.starts_with("MalwareBazaar");
         total.observed |= own;
         total.observed_strong |= own && mention.strong;
@@ -1120,8 +1021,9 @@ fn merge(mentions: Vec<Mention>) -> Vec<Candidate> {
                 .all(|(_, source)| source.contains("yarahub")))
     });
     list.sort_by(|a, b| {
-        b.strong
-            .cmp(&a.strong)
+        a.doubtful
+            .cmp(&b.doubtful)
+            .then(b.strong.cmp(&a.strong))
             .then(b.points.cmp(&a.points))
             .then(a.first.cmp(&b.first))
     });
@@ -1146,6 +1048,7 @@ fn merge(mentions: Vec<Mention>) -> Vec<Candidate> {
                 strong: total.strong,
                 observed: total.observed,
                 observed_strong: total.observed_strong,
+                doubtful: total.doubtful,
             }
         })
         .collect()
@@ -1322,7 +1225,6 @@ mod tests {
         let hub = "selection/pack/abuse-ch-yarahub/x.yar";
         let forge = "selection/pack/yara-forge-core/x.yar";
         for (rule, meta, source, family) in [
-            ("MIRAI_OHSHIT_payload", "MIRAI_OHSHIT", hub, "Mirai"),
             ("Cling_Ngioweb_IoT_Proxy_bot", "Ngioweb", hub, "Ngioweb"),
             ("botnet_mortem_qbot_gafgyt", "Gafgyt", hub, "Gafgyt"),
             ("ELF_Mirai", "", hub, "Mirai"),
@@ -1361,10 +1263,11 @@ mod tests {
     }
 
     #[test]
-    fn the_behaviour_names_prometei_over_a_mirai_rule_and_mirai_is_also_named() {
+    fn the_behaviour_names_prometei_over_a_mirai_rule() {
         // A53, x86-64 runs 21011aed and a5dbdaf2: MIRAI_OHSHIT_payload and
         // RANSOMWARE matched a bot that installs Prometei's uplugplay service
-        // and polls /cgi-bin/p.cgi.
+        // and polls /cgi-bin/p.cgi. T0604: that rule matches every statically
+        // linked glibc program, so beside the behaviour it is dropped.
         let hub = "selection/pack/abuse-ch-yarahub/x.yar";
         let hits = [
             hit(
@@ -1382,18 +1285,27 @@ mod tests {
             "GET 177.221.180.26/cgi-bin/p.cgi?r=59&i=4J82I51K4M5S4A98",
         ];
         let found = family_candidates_seen(&hits, Bazaar::default(), &observed);
-        assert_eq!(names(&found), ["Prometei", "Mirai"]);
-        assert!(found[0].source.starts_with("behaviour"), "{found:?}");
+        assert_eq!(names(&found), ["Prometei"]);
+        assert!(
+            found[0].source.starts_with("behaviour profile Prometei"),
+            "{found:?}"
+        );
+        assert!(found[0].source.contains("3 of 5 markers"), "{found:?}");
         let (primary, other) = primary_families(&found);
         assert_eq!(primary.len(), 1);
-        assert_eq!(other[0].name, "Mirai");
+        assert!(other.is_empty());
         let evidence = observed_families(&found);
         assert!(evidence.iter().all(|f| f.strong));
-        // Without the behaviour the rule's family stands alone.
-        assert_eq!(
-            names(&family_candidates(&hits, Bazaar::default())),
-            ["Mirai"]
-        );
+        // Without the behaviour the rule's Mirai is only "also named" and no
+        // family evidence.
+        let alone = family_candidates(&hits, Bazaar::default());
+        assert_eq!(names(&alone), ["Mirai"]);
+        assert!(alone[0].doubtful && !alone[0].strong);
+        assert!(alone[0].source.contains("glibc"), "{alone:?}");
+        let (primary, other) = primary_families(&alone);
+        assert!(primary.is_empty());
+        assert_eq!(other[0].name, "Mirai");
+        assert!(observed_families(&alone).is_empty());
         // A MalwareBazaar signature alone is no evidence of the run.
         let tags = Vec::new();
         let found = family_candidates(
@@ -1773,6 +1685,144 @@ mod tests {
             .collect();
         assert_eq!(strong, ["Multi_Trojan_Merlin_32643f4c"]);
         assert_eq!(hits.len() - strong.len(), 12, "all other matches are weak");
+    }
+
+    #[test]
+    fn a_family_with_no_linux_variant_is_never_named() {
+        // T0600 Chaos 2d8b0955 and Merlin 6d58d777: the YARAhub rule
+        // MULTI_Malware_RemcosRAT_ForgeAuto_4785f0c3 matched "</script>" and
+        // "DOCTYPE html>" in Go programs. "ForgeAuto" in its file name made it
+        // pass for a YARA-Forge rule, whose malware rules name their family
+        // as a word.
+        let hub = "selection/pack/abuse-ch-yarahub/MULTI_Malware_RemcosRAT_ForgeAuto_4785f0c3.yar";
+        let remcos = hit(
+            "YARA",
+            "s706::MULTI_Malware_RemcosRAT_ForgeAuto_4785f0c3",
+            "indicator",
+            "",
+            hub,
+        );
+        assert!(family_candidates(std::slice::from_ref(&remcos), Bazaar::default()).is_empty());
+        assert!(!is_forge(hub) && is_yarahub(hub) && curated_pack(hub));
+        assert!(is_forge("selection/pack/yara-forge-core/x.yar"));
+        // Nor through a meta, an IDS signature or a curated pack's name.
+        let forge = "selection/pack/yara-forge-core/x.yar";
+        for found in [
+            family_candidates(
+                &[hit("YARA", "Some_Rat_Rule", "indicator", "win.remcos", hub)],
+                Bazaar::default(),
+            ),
+            family_candidates(
+                &[hit(
+                    "YARA",
+                    "DITEKSHEN_MALWARE_Win_AgentTesla",
+                    "indicator",
+                    "",
+                    forge,
+                )],
+                Bazaar::default(),
+            ),
+            family_candidates(
+                &[ids("ET MALWARE AsyncRAT CnC Activity", "")],
+                Bazaar::default(),
+            ),
+        ] {
+            assert!(found.is_empty(), "{found:?}");
+        }
+        assert!(windows_only("RemcosRAT") && windows_only("Agent Tesla"));
+        assert!(!windows_only("Mirai") && !windows_only("QBot") && !windows_only("CobaltStrike"));
+    }
+
+    #[test]
+    fn a_doubtful_rule_is_also_named_and_never_the_family() {
+        // T0600: MIRAI_TELNETCURL_payload ("lineage marker, not a family
+        // discriminator") on Gafgyt 62c5b21d beside the Cling rule.
+        let hub = "selection/pack/abuse-ch-yarahub/x.yar";
+        let hits = [
+            hit(
+                "YARA",
+                "s3::MIRAI_TELNETCURL_payload",
+                "indicator",
+                "MIRAI_TELNETCURL",
+                hub,
+            ),
+            hit(
+                "YARA",
+                "s81::Cling_Ngioweb_IoT_Proxy_bot",
+                "indicator",
+                "Ngioweb",
+                hub,
+            ),
+        ];
+        let found = family_candidates(&hits, Bazaar::default());
+        assert_eq!(names(&found), ["Ngioweb"]);
+        let lineage = family_candidates(&hits[..1], Bazaar::default());
+        assert_eq!(names(&lineage), ["Mirai"]);
+        assert!(lineage[0].doubtful);
+        assert!(lineage[0].source.contains("lineage marker"), "{lineage:?}");
+        assert!(primary_families(&lineage).0.is_empty());
+        // The detection list says the rule is weak.
+        assert_eq!(
+            strength(
+                "MIRAI_TELNETCURL_payload",
+                "indicator",
+                hub,
+                "MIRAI_TELNETCURL"
+            ),
+            Strength::Weak
+        );
+        assert_eq!(
+            strength("MIRAI_OHSHIT_payload", "indicator", hub, "MIRAI_OHSHIT"),
+            Strength::Weak
+        );
+        // A real Mirai rule beside it makes Mirai the family again.
+        let with_elastic = [
+            hits[0].clone(),
+            hit("YARA", "Linux_Trojan_Mirai_b9a9d04b", "100", "", "elastic"),
+        ];
+        let found = family_candidates(&with_elastic, Bazaar::default());
+        assert_eq!(names(&found), ["Mirai"]);
+        assert!(!found[0].doubtful && found[0].strong);
+        assert_eq!(primary_families(&found).0.len(), 1);
+    }
+
+    #[test]
+    fn a_profile_names_the_family_with_the_markers_it_saw() {
+        // Made-up Kaiji run: the profile gives a strong, observed family
+        // that outranks one community rule naming another.
+        let seen = Seen {
+            findings: vec!["evasion.proc_hide_mount".into()],
+            paths: vec![
+                "/etc/32676".into(),
+                "/etc/rc.d/init.d/linux_kill".into(),
+                "/boot/System.mod".into(),
+            ],
+            ..Seen::default()
+        };
+        let hub = "selection/pack/abuse-ch-yarahub/x.yar";
+        let hits = [hit(
+            "YARA",
+            "botnet_mortem_qbot_gafgyt",
+            "indicator",
+            "Gafgyt",
+            hub,
+        )];
+        let found = family_candidates_with(&hits, Bazaar::default(), &seen, &profiles::shipped());
+        assert_eq!(names(&found), ["Kaiji", "Gafgyt"]);
+        assert!(found[0].strong && found[0].observed_strong);
+        assert!(
+            found[0]
+                .source
+                .starts_with("behaviour profile Kaiji \u{b7} 4 of 9 markers: "),
+            "{}",
+            found[0].source
+        );
+        let (primary, other) = primary_families(&found);
+        assert_eq!(primary.len(), 1);
+        assert_eq!(other[0].name, "Gafgyt");
+        // No profiles: the rule alone.
+        let found = family_candidates_with(&hits, Bazaar::default(), &seen, &[]);
+        assert_eq!(names(&found), ["Gafgyt"]);
     }
 
     #[test]

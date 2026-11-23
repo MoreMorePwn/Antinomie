@@ -1,0 +1,39 @@
+# Mettle: Metasploit's native Linux Meterpreter payload.
+[[profile]]
+name = "Mettle"
+platforms = ["linux"]
+references = [
+  "Rapid7, mettle (Metasploit's native Meterpreter): its system information comes from the SIGAR library, which reads each distribution's release file",
+  "Rapid7, Metasploit reverse_http and reverse_https transports: a long random URI per session",
+]
+min_markers = 3
+min_distinctive = 1
+
+[[profile.marker]]
+# SIGAR's distribution list includes XenServer's /etc/xensource-inventory,
+# which almost nothing else reads (T0600 run d005ba53).
+path = "/etc/xensource-inventory"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# ... and the release files of old distributions (T0600 run d005ba53).
+path = "/etc/mandrake-release"
+weight = 1
+
+[[profile.marker]]
+path = "/etc/slackware-version"
+weight = 1
+
+[[profile.marker]]
+path = "/etc/gentoo-release"
+weight = 1
+
+[[profile.marker]]
+# The HTTP transport polls one long random URI (T0600 run d005ba53).
+url_regex = "^https?://[^/]+/[A-Za-z0-9_-]{40,}/?$"
+weight = 2
+
+[[profile.marker]]
+finding = "network.beacon"
+weight = 1

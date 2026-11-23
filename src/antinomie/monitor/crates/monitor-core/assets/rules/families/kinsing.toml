@@ -1,0 +1,40 @@
+# Kinsing (H2Miner): a Go bot that mines Monero on misconfigured servers and
+# containers.
+[[profile]]
+name = "Kinsing"
+platforms = ["linux"]
+references = [
+  "Aqua Security, \"Threat Alert: Kinsing Malware Attacks Targeting Container Environments\", 2020-04-03",
+  "Trend Micro, \"Kinsing ... uses a rootkit\" (libsystem.so in /etc/ld.so.preload), 2020",
+]
+min_markers = 1
+min_distinctive = 1
+
+[[profile.marker]]
+# The miner kdevtmpfsi in /tmp (Aqua 2020).
+path = "/kdevtmpfsi"
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+command = "kdevtmpfsi"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# The bot itself as /tmp/kinsing or /etc/kinsing, fetched by a script
+# (Aqua 2020).
+path_regex = "/(tmp|etc|var/tmp|dev/shm)/kinsing$"
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+url_regex = "/kinsing$"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# Its rootkit /etc/libsystem.so (Trend Micro 2020).
+path = "/etc/libsystem.so"
+weight = 3
+distinctive = true
