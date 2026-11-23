@@ -592,18 +592,27 @@ impl MonitorApp {
             {
                 chosen = Some(Action::Export);
             }
+            // A shared library is loaded into a program (Load into…), never started.
+            let library = data
+                .record
+                .file_type
+                .eq_ignore_ascii_case(antinomie_monitor_core::samples::ELF_LIBRARY);
             if crate::widgets::hover_help_or(
                 ui,
                 "Send the archive into the running VM (its SHA-256 is read back first) \
                          and open Run program with it",
-                why.clone().unwrap_or_else(|| "Start a VM first".into()),
-                |ui| ui.add_enabled(can_run, egui::Button::new("Run in VM…")),
+                if library {
+                    antinomie_monitor_core::samples::library_refusal("use Load into…")
+                } else {
+                    why.clone().unwrap_or_else(|| "Start a VM first".into())
+                },
+                |ui| ui.add_enabled(can_run && !library, egui::Button::new("Run in VM…")),
             )
             .clicked()
             {
                 chosen = Some(Action::RunInVm);
             }
-            if data.record.file_type.eq_ignore_ascii_case("elf") {
+            if antinomie_monitor_core::samples::is_elf_type(&data.record.file_type) {
                 // The program to run with this library preloaded.
                 let memory = egui::Id::new(("load-into-program", &data.record.sha256));
                 let mut program = ui
@@ -715,7 +724,7 @@ pub(super) fn run_error(
     let kind = record.file_type.to_ascii_lowercase();
     antinomie_monitor_core::samples::run_verdict(
         matches!(kind.as_str(), "sh" | "bash"),
-        kind == "elf",
+        antinomie_monitor_core::samples::is_elf_type(&kind),
         Some(record.arch.as_str()),
         guest,
     )

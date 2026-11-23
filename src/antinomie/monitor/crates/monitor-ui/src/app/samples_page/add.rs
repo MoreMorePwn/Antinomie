@@ -5,7 +5,7 @@
 use super::picker::TagPicker;
 use crate::{sample_tags, theme, widgets};
 use antinomie_monitor_core::samples::{
-    Added, FileProbe, Library, NewOrigin, NewSample, OriginKind, Tag,
+    Added, ArchiveOptions, FileProbe, Library, NewOrigin, NewSample, OriginKind, Tag,
 };
 use eframe::egui::{self, RichText};
 use std::{
@@ -29,6 +29,10 @@ pub(super) struct AddDialog {
     tags: TagPicker,
     tags_open: bool,
     delete_original: bool,
+    /// For a ZIP: the password (empty: `infected`) and whether it is kept as
+    /// the sample instead of being opened.
+    archive_password: String,
+    keep_archive: bool,
     adding: Option<Receiver<Result<Added, String>>>,
     error: Option<String>,
     /// The last path that was probed, so a path is read once however often
@@ -57,6 +61,8 @@ impl AddDialog {
             tags: TagPicker::default(),
             tags_open: false,
             delete_original,
+            archive_password: String::new(),
+            keep_archive: false,
             adding: None,
             error: None,
             probed: String::new(),
@@ -82,6 +88,24 @@ impl AddDialog {
         self.delete_original = true;
     }
 
+    fn archive_options(&self) -> ArchiveOptions {
+        ArchiveOptions {
+            password: Some(self.archive_password.clone()).filter(|text| !text.is_empty()),
+            keep_archive: self.keep_archive,
+            ..ArchiveOptions::default()
+        }
+    }
+
+    /// The path looks like an archive the options apply to.
+    fn archive_row_shown(&self) -> bool {
+        let zip = self.path.trim().to_ascii_lowercase().ends_with(".zip");
+        zip || match &self.probe {
+            Probe::Ready(probe) => !probe.unwrapped_from.is_empty(),
+            Probe::Failed(error) => error.contains("archive"),
+            _ => false,
+        }
+    }
+
     fn start_probe(&mut self, ctx: &egui::Context, data_dir: &Path) {
         let path = self.path.trim().to_owned();
         self.probed.clone_from(&path);
@@ -94,11 +118,12 @@ impl AddDialog {
         let data_dir = data_dir.to_path_buf();
         let wake = ctx.clone();
         let probing = PathBuf::from(&path);
+        let archive = self.archive_options();
         let started = std::thread::Builder::new()
             .name("sample-probe".into())
             .spawn(move || {
-                let result =
-                    Library::open(&data_dir).and_then(|library| library.probe_file(&probing));
+                let result = Library::open(&data_dir)
+                    .and_then(|library| library.probe_file_with(&probing, &archive));
                 let _ = sender.send(result);
                 wake.request_repaint();
             });
@@ -141,12 +166,13 @@ impl AddDialog {
             ..NewSample::default()
         };
         let delete = self.delete_original;
+        let archive = self.archive_options();
         let wake = ctx.clone();
         match std::thread::Builder::new()
             .name("sample-add".into())
             .spawn(move || {
                 let result = Library::open(&data_dir)
-                    .and_then(|mut library| library.add_file(&path, new, delete));
+                    .and_then(|mut library| library.add_file_with(&path, new, delete, &archive));
                 let _ = sender.send(result);
                 wake.request_repaint();
             }) {
@@ -231,6 +257,40 @@ impl AddDialog {
                             }
                         });
                         ui.end_row();
+                        if self.archive_row_shown() {
+                            ui.label(RichText::new("Archive").color(theme::muted()));
+                            ui.horizontal(|ui| {
+                                let edit = ui.add_enabled(
+                                    !busy && !self.keep_archive,
+                                    egui::TextEdit::singleline(&mut self.archive_password)
+                                        .password(true)
+                                        .hint_text(crate::theme::placeholder(
+                                            ui,
+                                            "Password (default: infected)",
+                                        ))
+                                        .desired_width(crate::theme::plain_edit_width(190.0)),
+                                );
+                                let keep = crate::widgets::hover_help(
+                                    ui,
+                                    "A ZIP with one file in it is opened in memory and the file inside is added; this adds the ZIP itself instead",
+                                    |ui| {
+                                        ui.add_enabled(
+                                            !busy,
+                                            egui::Checkbox::new(
+                                                &mut self.keep_archive,
+                                                "Keep the ZIP as it is",
+                                            ),
+                                        )
+                                    },
+                                );
+                                if (edit.lost_focus() && self.probed == self.path.trim())
+                                    || keep.changed()
+                                {
+                                    self.start_probe(ctx, data_dir);
+                                }
+                            });
+                            ui.end_row();
+                        }
                         match &self.probe {
                             Probe::Idle => {}
                             Probe::Reading(_) => {
@@ -277,6 +337,18 @@ impl AddDialog {
                                     format!("{} · {}", probe.file_type, probe.arch)
                                 });
                                 ui.end_row();
+                                if !probe.unwrapped_from.is_empty() {
+                                    ui.label("");
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "Opened in memory from {}; the archive is recorded as the origin",
+                                            probe.unwrapped_from
+                                        ))
+                                        .small()
+                                        .color(theme::muted()),
+                                    );
+                                    ui.end_row();
+                                }
                                 ui.label(RichText::new("In Samples").color(theme::muted()));
                                 if probe.known {
                                     widgets::chip(
