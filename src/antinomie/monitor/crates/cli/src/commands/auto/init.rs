@@ -53,10 +53,13 @@ pub struct Init {
     /// [default: auto-N].
     #[arg(long)]
     pub name: Option<String>,
+    /// Virtual CPUs.
     #[arg(long, default_value_t = 2)]
     pub cpus: u16,
+    /// Guest RAM in MiB.
     #[arg(long, default_value_t = 4096, value_name = "N")]
     pub ram_mib: u32,
+    /// Disk size in GiB.
     #[arg(long, default_value_t = 40, value_name = "N")]
     pub disk_gib: u32,
     /// realistic-desktop, realistic-laptop, realistic-server or transparent.

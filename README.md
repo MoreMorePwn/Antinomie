@@ -380,7 +380,7 @@ terminal: `antinomie --check-dependencies`. The
 * **Headless mode:** `antinomie-cli` is back in the archive beside the window, and
   `./install.sh` installs both. It runs the engine with no display: bases, VMs,
   snapshots, samples, custody, static analysis, rules, Triage, reports and `run exec`.
-  See [Command line and automation](docs/usage.md#command-line-and-automation-091).
+  See the [command-line guide](docs/cli.md).
 * **Auto mode:** `antinomie-cli auto daemon` and `auto submit` take a sample in and
   give a report and a label out, on a lane VM that reverts to a clean snapshot before
   every run, with presets, permissions, watch folders, result files, retention and a systemd unit
@@ -416,7 +416,7 @@ Planned and undated:
 | Read | For |
 |---|---|
 | [User guide](docs/usage.md) | Bases, VMs, runs, routes and reading results. |
-| [Command line and automation](docs/usage.md#command-line-and-automation-091) | `antinomie-cli` (0.9.1): install, `doctor`, your first run, the daemon and watch folders; the [command reference](docs/usage.md#command-line-091) follows. |
+| [Command-line guide](docs/cli.md) and [command reference](docs/cli-reference.md) | `antinomie-cli` (0.9.1): install, `doctor`, first setup, one sample by hand, Auto mode and the daemon, scripting recipes, exit codes; the reference lists every command and option. |
 | [Auto mode](docs/auto-mode.md) | The pipeline, presets, revert, retention, failure codes, troubleshooting and the systemd unit. |
 | [Run API](docs/run-api-1.md) and [service configuration](docs/service-config.md) | The contract and the configuration files of the Auto mode daemon. |
 | [Triage report](docs/triage-report.md) | Export formats, evidence bundle and the JSON schema. |

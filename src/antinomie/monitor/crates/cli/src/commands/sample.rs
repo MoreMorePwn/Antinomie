@@ -44,6 +44,7 @@ pub enum Sample {
     },
     /// Delete a sample's archive (the record and its custody log stay).
     Remove {
+        /// The sample's SHA-256.
         sha256: String,
         /// Confirm the deletion.
         #[arg(long)]
@@ -53,6 +54,7 @@ pub enum Sample {
 
 #[derive(Args, Debug)]
 pub struct Add {
+    /// The files to add. They are hashed and archived, never run.
     #[arg(required = true, value_name = "FILE")]
     pub files: Vec<PathBuf>,
     /// Library name (one file only; default: the file name).
@@ -90,6 +92,7 @@ pub struct List {
 
 #[derive(Args, Debug)]
 pub struct Show {
+    /// The sample's SHA-256.
     pub sha256: String,
     /// Add the routes that brought the sample in.
     #[arg(long)]
@@ -104,7 +107,9 @@ pub struct Show {
 
 #[derive(Args, Debug)]
 pub struct TagArgs {
+    /// The sample's SHA-256.
     pub sha256: String,
+    /// Tags as KIND=VALUE (verdict, category, technique, custom) or a bare custom value.
     #[arg(required = true, value_name = "TAG")]
     pub tags: Vec<String>,
     /// Remove the tags instead of adding them.

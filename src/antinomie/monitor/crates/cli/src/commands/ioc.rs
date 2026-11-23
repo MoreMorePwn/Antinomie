@@ -70,9 +70,15 @@ pub enum Datasets {
         names: Vec<String>,
     },
     /// Switch a dataset on: `update` downloads it and matching uses it.
-    Enable { name: String },
+    Enable {
+        /// The dataset name, as `ioc datasets list` shows it.
+        name: String,
+    },
     /// Switch a dataset off: not downloaded, not used; its copy stays.
-    Disable { name: String },
+    Disable {
+        /// The dataset name, as `ioc datasets list` shows it.
+        name: String,
+    },
 }
 
 pub fn run(ioc: &Ioc, context: &Context) -> Result<Reply, CliError> {

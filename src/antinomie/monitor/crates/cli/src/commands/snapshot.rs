@@ -26,13 +26,17 @@ use std::time::Duration;
 #[derive(Subcommand, Debug)]
 pub enum Snapshot {
     /// List a VM's snapshots.
-    List { vm: String },
+    List {
+        /// The VM's identity or name.
+        vm: String,
+    },
     /// Take a snapshot of a VM.
     Create(Create),
     /// Return a VM to a snapshot, boot it and stop it again.
     Restore(Restore),
     /// Delete (hide) a snapshot; layers other snapshots need stay on disk.
     Delete {
+        /// The VM's identity or name.
         vm: String,
         /// The snapshot identity or name.
         id: String,
@@ -53,17 +57,21 @@ pub enum Mode {
 
 #[derive(Args, Debug)]
 pub struct Create {
+    /// The VM's identity or name.
     pub vm: String,
     /// The snapshot's name.
     pub name: String,
+    /// What the snapshot keeps.
     #[arg(long, value_enum, default_value = "disk")]
     pub mode: Mode,
+    /// A note kept with the snapshot.
     #[arg(long, default_value = "")]
     pub description: String,
 }
 
 #[derive(Args, Debug)]
 pub struct Restore {
+    /// The VM's identity or name.
     pub vm: String,
     /// The snapshot identity or name.
     pub id: String,

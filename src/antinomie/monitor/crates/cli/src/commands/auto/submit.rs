@@ -91,6 +91,7 @@ pub struct Submit {
     /// Static checks on the host: `none`, `triage`, or names (`strings,entropy`).
     #[arg(long = "static", value_name = "CHECKS", conflicts_with = "no_static")]
     pub static_checks: Option<String>,
+    /// Run no static checks (the same as `--static none`).
     #[arg(long)]
     pub no_static: bool,
     /// Report formats: html, pdf, json, misp, stix, md (`--format` is the
@@ -100,8 +101,10 @@ pub struct Submit {
     /// Also write the evidence bundle zip (`--bundle` is the boot bundle).
     #[arg(long)]
     pub evidence_bundle: bool,
+    /// Defang indicators in the HTML, PDF and Markdown reports (hxxp://example[.]com).
     #[arg(long, conflicts_with = "no_defang")]
     pub defang: bool,
+    /// Keep indicators as they are in every report format.
     #[arg(long)]
     pub no_defang: bool,
     /// The same key and spec within 24 hours returns the first run.

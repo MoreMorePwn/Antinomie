@@ -31,6 +31,7 @@ const DEFAULT_WAIT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Args, Debug)]
 pub struct Analyze {
+    /// The file to analyse. It is added to the sample library; the original is not changed.
     pub file: PathBuf,
     /// Checks to run, comma separated (default: the triage set). Names:
     /// metadata, structures, strings, regex, entropy, hardening, rules,

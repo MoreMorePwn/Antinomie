@@ -25,14 +25,21 @@ pub enum Rules {
         engine: Option<String>,
     },
     /// Enable a pack or group. Use `pack:ID` or `group:ID` when an id names both.
-    Enable { id: String },
+    Enable {
+        /// The pack or group id.
+        id: String,
+    },
     /// Disable a pack or group.
-    Disable { id: String },
+    Disable {
+        /// The pack or group id.
+        id: String,
+    },
     /// Check the rules catalog and list its packs with the installed version.
     Catalog,
     /// Download, check, filter and install catalog packs (their default
     /// options), as Tools > Rules does: for example yara-forge-core.
     Install {
+        /// Catalog pack ids (`rules catalog`).
         #[arg(required = true, value_name = "ID")]
         ids: Vec<String>,
     },
@@ -40,6 +47,7 @@ pub enum Rules {
     /// named ones when ids are given), with the options they were installed
     /// with.
     Update {
+        /// Installed pack ids; without one, every installed pack.
         #[arg(value_name = "ID")]
         ids: Vec<String>,
     },
