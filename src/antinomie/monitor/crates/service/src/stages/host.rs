@@ -90,6 +90,14 @@ pub trait HostTriage: Send + Sync {
     ) -> Result<Built, String>;
     /// Write what [`build`](Self::build) built into the choices' folder.
     fn write(&self, built: Built, cancel: &Arc<AtomicBool>) -> Result<Written, String>;
+    /// Mark the static analyses `reports` (ids under `<data>/analyses`) as the
+    /// job's, so retention finds them, and join them into the job's
+    /// recording where the window and the run API read a run's static
+    /// analysis. `Some` says what could not be done; the job does not fail
+    /// for it. Fakes do nothing.
+    fn attach_static(&self, _job: &Run, _reports: &[String]) -> Option<String> {
+        None
+    }
     /// How many stored indicator datasets are switched on and usable.
     fn ioc_datasets(&self) -> u32;
     /// How much a busy host stretches the static tools' time (1 when idle):
@@ -260,6 +268,40 @@ impl HostTriage for RealTriage {
         std::fs::create_dir_all(&built.job.folder)
             .map_err(|e| format!("{}: {e}", built.job.folder.display()))?;
         report_export::write_built(&built.job, built.built, cancel, &|_| {})
+    }
+
+    fn attach_static(&self, job: &Run, reports: &[String]) -> Option<String> {
+        let data = &self.options_for(job).data_dir;
+        let root = data.join("analyses");
+        let mut problems = Vec::new();
+        for id in reports {
+            match std::fs::symlink_metadata(root.join(id)) {
+                // The analysis never got as far as a folder.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ => {
+                    if let Err(error) = crate::retention::analyses::mark(&root, id, &job.id) {
+                        problems.push(format!("analysis {id}: {error}"));
+                    }
+                }
+            }
+        }
+        let parts: Vec<std::path::PathBuf> = reports.iter().map(|id| root.join(id)).collect();
+        let linked = if job.recording.is_some() {
+            self.open_run(job).and_then(|saved| {
+                antinomie_monitor_core::analysis::attach_static_reports(
+                    &parts,
+                    &saved.run.directory,
+                )
+            })
+        } else {
+            Ok(None)
+        };
+        if let Err(error) = linked {
+            problems.push(format!(
+                "the static analysis could not be joined into the recording: {error}"
+            ));
+        }
+        (!problems.is_empty()).then(|| problems.join("; "))
     }
 
     fn ioc_datasets(&self) -> u32 {

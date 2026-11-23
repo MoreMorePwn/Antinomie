@@ -19,6 +19,9 @@ their entries are listed in full.
 
 ### Host
 
+- **The app shows the static analysis of Auto runs (ANT-T0611).** The Triage Summary and the Static analysis tab said no analysis was recorded for a run Auto made, because Auto kept its per-tool reports only in `<data>/analyses/`. The `analyse` stage now joins them into one report in the run's `analysis/` folder, where the window, the run API and the evidence bundle read it. Runs made before 0.9.1 keep showing none.
+- **`auto delete` and `auto gc` clean the static analyses (ANT-T0611).** `auto delete --with-recording` removes the run's `analyses/<id>` folders too; a plain `auto delete` prints what it kept (the recording and the analyses, with paths and sizes, also in JSON); `auto gc` removes the analysis folders of a run whose record is gone, and they go with the run's record at `jobs_days`.
+- **The first run on a fresh lane no longer fails on the core limits (ANT-T0611).** A launch that needs a process core waits up to 10 seconds (longer under TCG) for the guest to report its limits, instead of failing `launch_failed` "retry in a moment".
 - **A command-line guide and reference (ANT-T0607).** `docs/cli.md` is a guide by task for new users (first setup, one sample by hand, Auto mode, scripting recipes, exit codes, custody, troubleshooting) and keeps the command notes that were in the user guide. `docs/cli-reference.md` lists every command, argument and option; it is generated from the program's command definitions, and the test `the_checked_in_cli_reference_is_current` fails when it is stale (`UPDATE_CLI_REFERENCE=1` regenerates it).
 - **A sixth built-in preset, Simulated network (ANT-T0605).** Standard on InetSim with a core when a High rule matches (`simulated-network`, needs `evidence.core_dump`); it comes second in the list.
 - **A Preset dropdown in Run program (ANT-T0605).** The options column starts with the

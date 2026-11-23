@@ -65,14 +65,18 @@ impl Service {
             query: Some(&self.query),
         };
         let log = |line: &str| (self.log)(line);
-        retention::delete_job(
+        let done = retention::delete_job(
             &self.store,
             &runs,
             &request.run_id,
             request.with_recording.unwrap_or(false),
             &log,
         )?;
-        to_value(&Deleted { deleted: true })
+        to_value(&Deleted {
+            deleted: true,
+            removed: done.removed,
+            kept: done.kept,
+        })
     }
 }
 

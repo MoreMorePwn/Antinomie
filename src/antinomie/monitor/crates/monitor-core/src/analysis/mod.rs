@@ -67,4 +67,5 @@ pub mod fuzz {
 }
 pub(crate) mod jobs;
 pub(crate) mod validation;
+pub use jobs::attach::attach_static_reports;
 pub use jobs::open_report;

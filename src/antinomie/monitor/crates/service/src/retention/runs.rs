@@ -33,6 +33,10 @@ pub trait Runs: Send + Sync {
     fn is_open(&self, job: &Run) -> bool;
     /// Delete the run through the engine's own deletion; the bytes freed.
     fn delete(&self, job: &Run, actor: &str) -> Result<u64, String>;
+    /// The `analyses` folders the static analyses of auto runs are in.
+    fn analysis_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 pub struct RealRuns<'a> {
@@ -120,6 +124,10 @@ impl RealRuns<'_> {
 }
 
 impl Runs for RealRuns<'_> {
+    fn analysis_roots(&self) -> Vec<PathBuf> {
+        super::analyses::roots(&self.options.data_dir)
+    }
+
     fn inspect(&self, job: &Run) -> Result<RunState, String> {
         let Some(dir) = self.run_dir(job)? else {
             return Ok(RunState::Gone);

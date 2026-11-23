@@ -303,6 +303,7 @@ impl<E: Engine> LaneStages<'_, E> {
         group: &[AnalysisKind],
         limit: Duration,
         until: Duration,
+        analysis_id: &mut Option<String>,
     ) -> Result<(StaticOutcome, bool, u64), StageStop> {
         let Some(sample) = job.sample.as_ref() else {
             return Ok((
@@ -363,6 +364,7 @@ impl<E: Engine> LaneStages<'_, E> {
             }
             Err(other) => return Err(StageStop::Abort(other)),
         };
+        *analysis_id = Some(id.clone());
         let waiting = |r: &AnalysisReport| {
             matches!(r.state, AnalysisState::Acquiring | AnalysisState::Queued)
         };

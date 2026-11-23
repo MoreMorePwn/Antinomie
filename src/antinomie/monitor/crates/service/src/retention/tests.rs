@@ -29,6 +29,7 @@ struct FakeRuns {
     deleted: Mutex<Vec<(String, String)>>,
     fail_for: Mutex<BTreeSet<String>>,
     unreadable: Mutex<BTreeSet<String>>,
+    roots: Mutex<Vec<std::path::PathBuf>>,
 }
 
 /// The fake's name of `job`'s run: the job id for the run every test job
@@ -67,6 +68,9 @@ impl FakeRuns {
 }
 
 impl Runs for FakeRuns {
+    fn analysis_roots(&self) -> Vec<std::path::PathBuf> {
+        self.roots.lock().unwrap().clone()
+    }
     fn inspect(&self, job: &Run) -> Result<RunState, String> {
         if self.unreadable.lock().unwrap().contains(&key(job)) {
             return Err("permission denied".into());
@@ -103,11 +107,29 @@ struct Rig {
 
 impl Rig {
     fn new(name: &str) -> Self {
-        Self {
+        let rig = Self {
             fx: Fx::new(&format!("gc-{name}")),
             runs: FakeRuns::default(),
             log: Mutex::new(Vec::new()),
+        };
+        rig.runs
+            .roots
+            .lock()
+            .unwrap()
+            .push(rig.fx.dir.join("analyses"));
+        rig
+    }
+
+    /// An analysis folder of `bytes` bytes under `analyses/`, marked as
+    /// `run`'s when one is given.
+    fn analysis(&self, name: &str, run: Option<&str>, bytes: usize) -> std::path::PathBuf {
+        let dir = self.fx.dir.join("analyses").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("specimen.zip"), vec![0u8; bytes]).unwrap();
+        if let Some(run) = run {
+            fs::write(dir.join(super::analyses::MARKER), run).unwrap();
         }
+        dir
     }
 
     /// An ended job that finished at `finished_ms` with a recording of
@@ -892,5 +914,78 @@ fn the_real_runs_accept_a_run_under_its_vms_recording_folder() {
     assert!(
         runs.inspect(&job_with_folder(&rig, &other.join("r2"), "r2"))
             .is_err()
+    );
+}
+
+#[test]
+fn delete_with_recording_removes_the_runs_analyses_and_a_plain_delete_says_what_it_kept() {
+    let rig = Rig::new("del-analyses");
+    let log = |_: &str| {};
+    let kept_run = rig.ended(Outcome::Succeeded, NOW - DAY, Some(100));
+    let other = rig.ended(Outcome::Succeeded, NOW - DAY, Some(100));
+    let mine = rig.analysis("aaa", Some(kept_run.as_str()), 40);
+    let theirs = rig.analysis("bbb", Some(other.as_str()), 10);
+    let library = rig.analysis("ccc", None, 10);
+    let plain = delete_job(&rig.fx.store, &rig.runs, &kept_run, false, &log).unwrap();
+    assert!(plain.removed.is_empty());
+    let kept: Vec<_> = plain
+        .kept
+        .iter()
+        .map(|k| (k.what.as_str(), k.bytes))
+        .collect();
+    assert!(kept.contains(&("recording", 100)), "{kept:?}");
+    assert!(
+        kept.iter()
+            .any(|(what, bytes)| *what == "analysis" && *bytes >= 40)
+    );
+    assert!(plain.kept.iter().any(|k| k.path.ends_with("/aaa")));
+    assert!(mine.is_dir(), "a plain delete leaves the analysis");
+    assert!(rig.runs.deleted_jobs().is_empty());
+
+    let full = delete_job(&rig.fx.store, &rig.runs, &other, true, &log).unwrap();
+    assert!(full.kept.is_empty());
+    let removed: Vec<_> = full.removed.iter().map(|k| k.what.as_str()).collect();
+    assert_eq!(removed, ["recording", "analysis"]);
+    assert!(!theirs.exists());
+    assert!(library.is_dir() && mine.is_dir());
+}
+
+#[test]
+fn gc_removes_the_analyses_of_a_run_whose_record_is_gone_and_only_those() {
+    let rig = Rig::new("gc-analyses");
+    let alive = rig.ended(Outcome::Succeeded, NOW - DAY, Some(10));
+    let gone = rig.ended(Outcome::Succeeded, NOW - DAY, None);
+    rig.fx.store.delete_job(&gone).unwrap();
+    let live = rig.analysis("live", Some(alive.as_str()), 10);
+    let orphan = rig.analysis("orphan", Some(gone.as_str()), 1000);
+    let unmarked = rig.analysis("unmarked", None, 10);
+    let dry = rig.run(true);
+    let orphans: Vec<_> = dry
+        .actions
+        .iter()
+        .filter(|a| a.kind == "analysis")
+        .collect();
+    assert_eq!(orphans.len(), 1);
+    assert!(orphans[0].bytes >= 1000 && !orphans[0].done);
+    assert!(orphan.is_dir(), "a dry run removes nothing");
+    let report = rig.run(false);
+    assert!(report.freed_bytes >= 1000);
+    assert!(!orphan.exists());
+    assert!(live.is_dir() && unmarked.is_dir());
+}
+
+#[test]
+fn the_analyses_go_with_the_run_record_after_ninety_days() {
+    let rig = Rig::new("gc-old-analyses");
+    let old = rig.ended(Outcome::Succeeded, NOW - 100 * DAY, None);
+    let folder = rig.analysis("old", Some(old.as_str()), 50);
+    let report = rig.run(false);
+    assert!(!rig.exists(&old));
+    assert!(!folder.exists());
+    assert!(
+        report
+            .actions
+            .iter()
+            .any(|a| a.kind == "analysis" && a.done)
     );
 }

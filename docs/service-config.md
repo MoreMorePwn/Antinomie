@@ -235,7 +235,7 @@ take it again; a rewritten file is a new file. `SIGHUP` re-reads the folder list
 | `[retention] recordings_days` | 14 | The recordings of a finished run older than this (the run of each attempt that launched, in the data folder or a VM's recordings folder), through the engine's run deletion (the run's record is copied into the sample's record; captures and dumps that belong to the VM stay with it, as when the window deletes a run) |
 | `[retention] keep_failed` | true | A failed run's recording is kept until `jobs_days` |
 | `[retention] max_recordings_gib` | 200 | Above this the oldest recordings go first (those `keep_failed` protects last). At least 1: 0 is refused, it does not mean "no cap" |
-| `[retention] jobs_days` | 90 | A finished run's record, events, artifacts and folder; the run's recordings (one per attempt that launched) go with it, or the run stays; a run whose recording cannot be read stays |
+| `[retention] jobs_days` | 90 | A finished run's record, events, artifacts and folder, and the static analyses the run made (`<data>/analyses/<id>`, marked with the run's id; an analysis folder without the mark is never removed). The same analyses also go when the run is deleted with `--with-recording`, and when the run's record is gone already; the run's recordings (one per attempt that launched) go with it, or the run stays; a run whose recording cannot be read stays |
 
 Staged uploads expire after 24 hours and files in `<inbox>/rejected/` after 7
 days. Files in `<inbox>/processed/` go after `[inbox] processed_keep_days` (7):

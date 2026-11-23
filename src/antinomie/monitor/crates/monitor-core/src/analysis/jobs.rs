@@ -27,6 +27,7 @@ use std::{
 
 mod acquisition;
 mod adopt;
+pub(crate) mod attach;
 mod carry;
 mod host_copy;
 mod host_file;

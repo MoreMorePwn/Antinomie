@@ -562,6 +562,13 @@ run record, so it is never left with nothing naming it. `auto gc --dry-run` prin
 delete; `auto gc` runs one; `auto delete RUN [--with-recording]` removes one ended
 run. Without a daemon these take the data folder for the command.
 
+The static analysis of an Auto run is one report per tool in `<data>/analyses/<id>` and, joined into
+one report, in the run's own `analysis/` folder, which is where the app's Triage Summary and Static
+analysis tab, `recording.analysis.*` and the evidence bundle read it (a run made before 0.9.1 has
+only the first). The `analyses/` folders go with the run's record (`jobs_days`), with
+`auto delete --with-recording`, or when `auto gc` finds the run's record gone; the joined copy goes
+with the recording. A plain `auto delete` keeps both and says so.
+
 ## Failure codes
 
 A failed run has a `failure` with a code, shown by `auto status RUN`,

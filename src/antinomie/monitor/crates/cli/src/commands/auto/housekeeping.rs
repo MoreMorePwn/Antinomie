@@ -236,6 +236,44 @@ pub fn gc(arguments: &Gc, context: &Context) -> Result<Reply, CliError> {
     Ok(Reply::value(report).with_human(human))
 }
 
+/// The size in words, for the line about what a deletion left or removed.
+fn size_text(bytes: u64) -> String {
+    antinomie_monitor_core::byte_size::short_size(bytes)
+}
+
+/// The lines of what the deletion removed and what it left (`removed` and
+/// `kept` of the answer).
+fn delete_text(id: &str, deleted: &Value, with_recording: bool) -> String {
+    let mut out = format!("deleted {id}\n");
+    let line = |item: &Value| {
+        format!(
+            "{} {} ({})",
+            cell(item, "what"),
+            cell(item, "path"),
+            size_text(item["bytes"].as_u64().unwrap_or(0))
+        )
+    };
+    for item in deleted["removed"].as_array().into_iter().flatten() {
+        out.push_str(&format!("removed {}\n", line(item)));
+    }
+    let kept = deleted["kept"].as_array().cloned().unwrap_or_default();
+    for item in &kept {
+        out.push_str(&format!("kept {}\n", line(item)));
+    }
+    if !kept.is_empty() && !with_recording {
+        let analyses = kept.iter().any(|k| k["what"] == "analysis");
+        out.push_str(&format!(
+            "the recording stays until its own age (`auto delete {id} --with-recording` removes it){}\n",
+            if analyses {
+                "; `auto gc` removes the analysis of a run whose record is gone"
+            } else {
+                ""
+            }
+        ));
+    }
+    out
+}
+
 pub fn delete(arguments: &Delete, context: &Context) -> Result<Reply, CliError> {
     let id = run_id(&arguments.run)?;
     let deleted = match link::daemon(context)? {
@@ -252,7 +290,7 @@ pub fn delete(arguments: &Delete, context: &Context) -> Result<Reply, CliError> 
                 query: None,
             };
             let logger = context.logger;
-            retention::delete_job(
+            let done = retention::delete_job(
                 &store,
                 &runs,
                 &id,
@@ -260,9 +298,16 @@ pub fn delete(arguments: &Delete, context: &Context) -> Result<Reply, CliError> 
                 &move |line: &str| logger.info(line),
             )
             .map_err(api)?;
-            json!({"deleted": true})
+            let mut value = json!({"deleted": true});
+            if !done.removed.is_empty() {
+                value["removed"] = serde_json::to_value(&done.removed).unwrap_or_default();
+            }
+            if !done.kept.is_empty() {
+                value["kept"] = serde_json::to_value(&done.kept).unwrap_or_default();
+            }
+            value
         }
     };
-    let human = format!("deleted {id}\n");
+    let human = delete_text(&id.to_string(), &deleted, arguments.with_recording);
     Ok(Reply::value(deleted).with_human(human))
 }

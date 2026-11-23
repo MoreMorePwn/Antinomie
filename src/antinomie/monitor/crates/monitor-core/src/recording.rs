@@ -1084,9 +1084,6 @@ fn settle_stale_analysis(run: &mut RunSummary, seal: bool) {
     }
 }
 fn reopen_analysis_sidecar(root: &Path, run: &mut RunSummary) -> Result<(), RecordingError> {
-    let Some(embedded) = run.analysis.as_ref() else {
-        return Ok(());
-    };
     let path = run.directory.join("analysis/report.json");
     let file = match archive_io::open_regular(root, &path) {
         Ok(file) => file,
@@ -1099,6 +1096,11 @@ fn reopen_analysis_sidecar(root: &Path, run: &mut RunSummary) -> Result<(), Reco
     let report: crate::analysis::AnalysisReport = serde_json::from_reader(file)?;
     crate::analysis::validation::validate_report(&report)
         .map_err(|_| RecordingError::Limit("analysis sidecar violates bounds"))?;
+    let Some(embedded) = run.analysis.as_ref() else {
+        // An Auto run: its joined static analysis is only in the sidecar.
+        run.analysis = Some(report);
+        return Ok(());
+    };
     if report.id != embedded.id
         || report.source_path != embedded.source_path
         // Checks added later (Analyse more) live only in the sidecar, after

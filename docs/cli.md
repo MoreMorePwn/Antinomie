@@ -507,7 +507,16 @@ antinomie-cli auto delete RUN --with-recording
 `--dry-run` deletes nothing. A plain `auto delete RUN` removes the run's record, events and
 artifacts and **keeps the recording** (and the sample stays in the library).
 `--with-recording` also deletes the run's recording, and the recording of each earlier attempt
-that launched. A recording a client is reading, or that is still being written, is refused.
+that launched, and the run's static analyses (`<data>/analyses/<id>`, 5 to 18 MB a run). A
+recording a client is reading, or that is still being written, is refused.
+
+A plain `auto delete` says what it kept: a `kept recording PATH (SIZE)` line and a `kept analysis
+PATH (SIZE)` line for each folder (in JSON, `.result.kept[]` with `what`, `path` and `bytes`;
+`.result.removed[]` lists what `--with-recording` removed). The analyses of a run whose record is
+gone are removed by the next `auto gc` (the hourly pass of the daemon too) and listed in its output
+as `analysis` rows; `auto gc --dry-run` shows them first. Only the analyses an Auto run made
+(marked with the run's id) are touched; an analysis from the window or `auto analyze`, and the
+analyses of runs made before 0.9.1, stay.
 
 ## Scripting recipes
 
@@ -591,6 +600,18 @@ done
 `triage` prints the recording's assessment (`matched_indicators`, `suspicious_behaviour`,
 `observed_only`, `no_findings` or `inconclusive`) and its families. The label of an Auto run is in
 `auto result RUN -o json` as `.result.run.assessment.label`.
+
+### Where the run is in the answer
+
+The commands do not wrap a run alike, so a script reads the run's id and state at different paths:
+
+| Command | The run is at |
+|---|---|
+| `auto submit` | `.result.run` (beside `.result.replayed` and `.result.reports`) |
+| `auto result` | `.result.run` (beside `.result.files`) |
+| `auto status RUN` | `.result` itself (`.result.state`, `.result.id`) |
+
+The shapes stay as they are in 0.9.1; 0.9.2 may make them alike.
 
 ## Exit codes
 
