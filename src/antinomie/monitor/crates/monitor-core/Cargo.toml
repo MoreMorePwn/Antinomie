@@ -24,6 +24,7 @@ iced-x86 = { version = "1.21", default-features = false, features = ["std", "dec
 capstone = { version = "0.14", default-features = false, features = ["std", "full", "arch_arm", "arch_arm64"] }
 yara-x = "1.22.1"
 regex = "1"
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse"] }
 psl = "2"
 zip = { version = "9.2", default-features = false, features = ["deflate", "aes-crypto"] }
 flate2 = "1"

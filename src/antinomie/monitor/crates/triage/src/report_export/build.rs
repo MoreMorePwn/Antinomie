@@ -151,19 +151,8 @@ fn indicators(job: &Job, scan: &ArchiveScan) -> Vec<(report::Indicator, bool)> {
                 family: cell("family"),
                 confidence: primary.and_then(|m| m.record.confidence),
                 reference: cell("reference"),
-                url: if indicator.ty == antinomie_monitor_core::ioc::indicator::Type::Url
-                    && !indicator.path.is_empty()
-                {
-                    // FTP and TFTP requests (from the InetSim log) keep their scheme.
-                    let scheme = match indicator.value.split(' ').next() {
-                        Some("TFTP") => "tftp",
-                        Some("FTP") => "ftp",
-                        _ => "http",
-                    };
-                    format!("{scheme}://{}", indicator.path)
-                } else {
-                    String::new()
-                },
+                // FTP and TFTP requests (from the InetSim log) keep their scheme.
+                url: super::super::family::indicator_url(indicator).unwrap_or_default(),
                 sni: tls.sni,
                 ja3: tls.ja3,
                 ja4: tls.ja4,
@@ -790,15 +779,13 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
             .and_then(|(sample, dir)| {
                 antinomie_monitor_core::samples::recorded_info(dir, &sample.sha256)
             });
-        // What the run did that names a family (Prometei's `uplugplay`
-        // service): the indicators' values, paths and URLs.
-        let observed: Vec<&str> = indicator_rows
-            .iter()
-            .flat_map(|(i, _)| [i.value.as_str(), i.path.as_str(), i.url.as_str()])
-            .filter(|text| !text.is_empty())
-            .collect();
+        // What the run did that names a family: its findings, paths, URLs
+        // and command lines, read by the shipped and the user's family
+        // profiles (ANT-T0604).
+        let seen = super::super::family::seen_of(scan);
+        let (profiles, _) = super::super::family::profiles::load(job.data_dir.as_deref());
         let hits = digest_detections.as_deref().unwrap_or_default();
-        let candidates = super::super::family::family_candidates_seen(
+        let candidates = super::super::family::family_candidates_with(
             hits,
             bazaar
                 .as_ref()
@@ -808,7 +795,8 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
                     looked_up: info.looked_up,
                 })
                 .unwrap_or_default(),
-            &observed,
+            &seen,
+            &profiles,
         );
         report.summary = Some(summary(
             scan,

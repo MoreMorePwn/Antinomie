@@ -203,6 +203,7 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "tlsh2",
+ "toml",
  "vt100",
  "x11rb",
  "yara-x",

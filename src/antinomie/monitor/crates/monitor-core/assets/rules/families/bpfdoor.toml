@@ -1,0 +1,43 @@
+# BPFDoor: a passive Linux backdoor that waits for a magic packet through a
+# BPF filter on a raw socket.
+[[profile]]
+name = "BPFDoor"
+platforms = ["linux"]
+references = [
+  "Sandfly Security, \"BPFDoor - An Evasive Linux Backdoor Technical Analysis\", 2022-05-11",
+  "Deep Instinct, \"BPFDoor Malware Evolves - Stealthy Sniffing Backdoor Ups Its Game\", 2023-05-10",
+]
+min_markers = 2
+min_distinctive = 1
+
+[[profile.marker]]
+# The 2023 variant's lock file /var/run/initd.lock (Deep Instinct 2023;
+# T0600 runs 3b071d36, 3e01a4bd).
+path = "/var/run/initd.lock"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# The 2022 variant's pid file /var/run/haldrund.pid (Sandfly 2022).
+path = "/var/run/haldrund.pid"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# The 2022 variant copies itself to /dev/shm/kdmtmpflush (Sandfly 2022).
+path = "/dev/shm/kdmtmpflush"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# A BPF filter on a raw socket waits for the magic packet (both reports).
+finding = "c2.bpf_backdoor"
+weight = 2
+
+[[profile.marker]]
+finding = "bpf.socket_filter"
+weight = 1
+
+[[profile.marker]]
+finding = "network.raw_socket"
+weight = 1

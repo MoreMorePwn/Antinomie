@@ -1,0 +1,32 @@
+# Sliver: an open-source command-and-control framework (Bishop Fox) whose
+# implants are Go programs.
+[[profile]]
+name = "Sliver"
+platforms = ["linux"]
+references = [
+  "Bishop Fox, Sliver's default HTTP C2 profile (server/configs/http-c2.json)",
+  "Microsoft Threat Intelligence, \"Looking for the 'Sliver' lining: Hunting for emerging command-and-control frameworks\", 2022-08-24",
+]
+min_markers = 2
+min_distinctive = 1
+
+[[profile.marker]]
+# The default HTTP C2 profile builds URLs from path words (js, umd, assets,
+# bundle(s), script(s), javascript(s), jscript), an optional file such as
+# app.php or array.php and a one-letter nonce parameter (T0600 run 3dc4d1b1:
+# /bundles/javascripts/script/script/array.php?s=24346167866).
+url_regex = "^https?://[^/]+(?:/(?:js|umd|assets|bundles?|scripts?|javascripts?|jscript))+(?:/[A-Za-z0-9_.-]+\\.(?:js|php|html))?\\?[a-z]=[0-9]+(?:x[0-9]+)?$"
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+finding = "network.beacon"
+weight = 1
+
+[[profile.marker]]
+finding = "network.c2_ip_literal"
+weight = 1
+
+[[profile.marker]]
+finding = "network.tls_ip_literal"
+weight = 1

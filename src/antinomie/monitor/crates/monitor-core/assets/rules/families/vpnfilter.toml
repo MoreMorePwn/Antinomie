@@ -1,0 +1,33 @@
+# VPNFilter: a modular router and NAS botnet attributed to Sandworm.
+[[profile]]
+name = "VPNFilter"
+platforms = ["linux"]
+references = [
+  "Cisco Talos, \"New VPNFilter malware targets at least 500K networking devices worldwide\", 2018-05-23",
+]
+min_markers = 2
+min_distinctive = 1
+
+[[profile.marker]]
+# Stage 1 falls back to toknowall.com to find stage 2 (Talos 2018; T0600
+# run 0e0094d9).
+url = "toknowall.com"
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+# ... after reading the metadata of images in Photobucket galleries (Talos
+# 2018; T0600 run 0e0094d9: GET photobucket.com/user/<name>/library).
+url_regex = "photobucket\\.com/user/[^/]+/library"
+weight = 2
+
+[[profile.marker]]
+# Its pid file (T0600 run 0e0094d9).
+path = "/var/run/msvf.pid"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+# It persists through the crontab of OpenWrt-style devices (Talos 2018).
+path = "/etc/config/crontab"
+weight = 1

@@ -1,0 +1,59 @@
+# RotaJakiro: a Linux backdoor that hides as systemd and GNOME helper files.
+[[profile]]
+name = "RotaJakiro"
+platforms = ["linux"]
+references = [
+  "360 Netlab, \"RotaJakiro: A long live secret backdoor with 0 VT detection\", 2021-04-28",
+]
+min_markers = 2
+min_distinctive = 2
+
+[[profile.marker]]
+# As root: an upstart job /etc/init/systemd-agent.conf (360 Netlab 2021;
+# T0600 run 5d753e72).
+path = "/etc/init/systemd-agent.conf"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# ... a systemd unit sys-temd-agent.service (360 Netlab 2021).
+path = "sys-temd-agent.service"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# ... and the copy /usr/lib/systemd/systemd-daemon or
+# /bin/systemd/systemd-daemon (360 Netlab 2021; T0600 run 5d753e72, in an
+# inittab line).
+path_regex = "/(usr/lib|bin)/systemd/systemd-daemon$"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+command = "/usr/lib/systemd/systemd-daemon"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# As a user: ~/.gvfsd/.profile/gvfsd-helper and ~/.dbus/sessions/session-dbus
+# (360 Netlab 2021).
+path = "/.gvfsd/.profile/gvfsd-helper"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+path = "/.dbus/sessions/session-dbus"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+# ... started from ~/.config/au-tostart (360 Netlab 2021).
+path = "/au-tostart/"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+# The SysV script /etc/init.d/systemd-agent (T0600 run 5d753e72).
+path = "/etc/init.d/systemd-agent"
+weight = 2
+distinctive = true

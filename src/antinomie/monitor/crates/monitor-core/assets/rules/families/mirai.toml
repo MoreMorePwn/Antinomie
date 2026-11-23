@@ -1,0 +1,59 @@
+# Mirai and its forks (Okiru, Satori, Echobot, Moobot, Zerobot ...): IoT DDoS
+# bots built on the source code published in 2016.
+[[profile]]
+name = "Mirai"
+platforms = ["linux"]
+references = [
+  "Mirai source code as published in 2016 (bot/main.c, bot/killer.c, bot/scanner.c)",
+  "Antonakakis et al., \"Understanding the Mirai Botnet\", USENIX Security 2017",
+]
+min_markers = 3
+min_distinctive = 1
+
+[[profile.marker]]
+# Mirai's forks add the FTWDT101 watchdog to the list it tries
+# (/dev/FTWDT101_watchdog, "/dev/FTWDT101 watchdog"; T0600 run 5015e226).
+path = "/dev/FTWDT101"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# bot/killer.c reads /proc/<pid>/exe and kills what it finds.
+finding = "evasion.process_killer"
+weight = 2
+
+[[profile.marker]]
+# bot/main.c opens /dev/watchdog or /dev/misc/watchdog and turns it off
+# (WDIOC_SETOPTIONS). Kaiji and others do this too.
+finding = "evasion.watchdog_disable"
+weight = 2
+
+[[profile.marker]]
+# bot/scanner.c sends SYN probes to random addresses from a raw socket ...
+finding = "network.raw_socket"
+weight = 1
+
+[[profile.marker]]
+finding = "discovery.network_scan"
+weight = 1
+
+[[profile.marker]]
+# ... and logs in to telnet with a list of default passwords.
+finding = "lateral.bruteforce"
+weight = 1
+
+[[profile.marker]]
+finding = "network.inetsim_telnet_login"
+weight = 1
+
+[[profile.marker]]
+# Forks add router exploits (Huawei HG532 /ctrlt/DeviceUpgrade_1, Realtek
+# UPnP; T0600 run 5015e226).
+finding = "lateral.exploit_payload"
+weight = 1
+
+[[profile.marker]]
+# A technique rule compares the program to Mirai (NSVPS_Mirai_Busybox_Staging,
+# the lineage rule MIRAI_TELNETCURL_payload's family as a tag).
+yara_tag = "Mirai-like"
+weight = 1

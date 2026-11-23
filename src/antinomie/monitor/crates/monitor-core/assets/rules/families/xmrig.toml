@@ -1,0 +1,43 @@
+# XMRig and the miners built on it (Monero, RandomX).
+[[profile]]
+name = "XMRig"
+platforms = ["linux"]
+references = [
+  "XMRig documentation: configuration file locations and command line options (xmrig.com/docs/miner)",
+]
+min_markers = 1
+min_distinctive = 1
+
+[[profile.marker]]
+# XMRig looks for its configuration in ~/.xmrig.json and
+# ~/.config/xmrig.json (XMRig docs; T0600 run afaba21a).
+path = "/.xmrig.json"
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+path = "/.config/xmrig.json"
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+# Its command line options (XMRig docs).
+command = "--donate-level"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+command_regex = "stratum\\+(tcp|ssl|tls)://"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# The Stratum login it sends a pool.
+finding = "impact.miner"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# MSR and huge-page tuning for RandomX.
+finding = "impact.miner_tuning"
+weight = 2

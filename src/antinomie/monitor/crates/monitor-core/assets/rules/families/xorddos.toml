@@ -1,0 +1,43 @@
+# XorDDoS: a Linux DDoS trojan with an XOR-encrypted configuration, spread by
+# SSH brute force.
+[[profile]]
+name = "XorDDoS"
+platforms = ["linux"]
+references = [
+  "Microsoft Security Blog, \"Rise in XorDdos: A deeper look at the stealthy DDoS malware targeting Linux devices\", 2022-05-19",
+]
+min_markers = 3
+min_distinctive = 1
+
+[[profile.marker]]
+# The cron script /etc/cron.hourly/gcc.sh that restarts it (Microsoft 2022;
+# T0600 runs 0086a399, 188f7cc1).
+path = "/etc/cron.hourly/gcc.sh"
+weight = 4
+distinctive = true
+
+[[profile.marker]]
+# Its copy as /lib/libudev.so (Microsoft 2022).
+path = "/lib/libudev.so"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# Copies under random ten-letter names in /bin and /usr/bin (Microsoft 2022;
+# T0600 runs 0086a399, 188f7cc1).
+path_regex = "^/(usr/)?bin/[a-z]{10}$"
+weight = 1
+
+[[profile.marker]]
+# ... started with the name of a common program as argument and the pid of
+# the parent (Microsoft 2022; T0600 runs 0086a399, 188f7cc1).
+command_regex = "^/usr/bin/[a-z]{10} .+ [0-9]+$"
+weight = 2
+
+[[profile.marker]]
+finding = "persistence.cron"
+weight = 1
+
+[[profile.marker]]
+finding = "persistence.rc_init"
+weight = 1

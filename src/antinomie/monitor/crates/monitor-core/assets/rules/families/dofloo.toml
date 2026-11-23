@@ -1,0 +1,31 @@
+# Dofloo (AES.DDoS, Mr.Black): a Linux DDoS bot with an AES-encrypted C2 link.
+[[profile]]
+name = "Dofloo"
+platforms = ["linux"]
+references = [
+  "Trend Micro, \"AESDDoS Botnet Malware Exploits Atlassian Confluence Server Vulnerability\", 2019-04-26",
+]
+min_markers = 2
+min_distinctive = 1
+
+[[profile.marker]]
+# It inserts "<itself> reboot" as line 2 of rc.local and boot.local with sed
+# (Trend Micro 2019: autostart in rc.local and boot.local; T0600 run
+# 04beae03).
+command_regex = "sed -i -e '2 i\\S+ reboot"
+weight = 3
+distinctive = true
+
+[[profile.marker]]
+# ... after deleting rc.local's exit line (T0600 run 04beae03).
+command = "sed -i -e /exit/d /etc/rc.local"
+weight = 2
+distinctive = true
+
+[[profile.marker]]
+path = "/etc/init.d/boot.local"
+weight = 1
+
+[[profile.marker]]
+finding = "persistence.rc_init"
+weight = 1
