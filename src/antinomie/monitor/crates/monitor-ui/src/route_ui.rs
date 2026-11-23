@@ -200,7 +200,7 @@ impl RouteChoice {
         }
     }
 
-    fn problem(&self, kind: RouteKind) -> Option<&'static str> {
+    pub(crate) fn problem(&self, kind: RouteKind) -> Option<&'static str> {
         RouteKind::ALL
             .iter()
             .position(|candidate| *candidate == kind)

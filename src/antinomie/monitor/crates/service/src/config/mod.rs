@@ -8,6 +8,7 @@
 pub mod builtin;
 pub mod callers;
 pub mod catalog;
+pub mod form;
 pub mod locate;
 pub mod migrate;
 pub mod preset;

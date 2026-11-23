@@ -221,6 +221,9 @@ pub(crate) fn app() -> MonitorApp {
         settings_file_reported: None,
         env: exec.env.join("\n"),
         exec,
+        run_presets: crate::analysis::presets::PresetForm::new(
+            "/nonexistent/antinomie-presets".into(),
+        ),
         args: String::new(),
         source: String::new(),
         destination: "/tmp/program".into(),

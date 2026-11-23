@@ -5,7 +5,8 @@
 //! ANTINOMIE_QA_DIALOG = settings | snapshots | run
 //! ANTINOMIE_QA_PIN = text of a help icon to open pinned,
 //! ANTINOMIE_QA_THEME = dark | light | blue, ANTINOMIE_QA_SIZE = 1280x820,
-//! ANTINOMIE_QA_PAGE = settings page name (or `upload` for run), ANTINOMIE_QA_SECONDS = 25.
+//! ANTINOMIE_QA_PAGE = settings page name (or `upload` for run), ANTINOMIE_QA_SECONDS = 25,
+//! ANTINOMIE_QA_PRESETS = 1 puts a user preset and a broken one in the Preset list of `run`.
 use super::*;
 use crate::app::settings_window::SettingsPage;
 use crate::theme::Theme;
@@ -84,6 +85,22 @@ fn native_dialog_fixture() {
                 _ => {
                     app.launch_open = true;
                     app.args = String::new();
+                    if !var("ANTINOMIE_QA_PRESETS").is_empty() {
+                        let data = std::env::temp_dir()
+                            .join(format!("ant-qa-presets-{}", std::process::id()));
+                        std::fs::create_dir_all(data.join("presets")).expect("preset folder");
+                        std::fs::write(
+                            data.join("presets/lab-notes.toml"),
+                            "title = \"Lab notes\"\ndescription = \"Two minutes, a screenshot every 10 s\"\n[program]\nrun_time_s = 120\n[record]\nscreenshot_every_s = 10\n",
+                        )
+                        .expect("user preset");
+                        std::fs::write(
+                            data.join("presets/broken.toml"),
+                            "[program]\nrun_time_s = \"long\"\n",
+                        )
+                        .expect("broken preset");
+                        app.run_presets = crate::analysis::presets::PresetForm::new(data);
+                    }
                     if page_name == "upload" {
                         app.launch_source = crate::analysis::LaunchSource::Upload;
                         app.source = "/home/analyst/samples/dropper.elf".into();

@@ -462,6 +462,19 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    reason. **Memory Dump on Exit** and **Core Dump on Exit** sit
    below the trigger's options in the same section. Each launch gets its own terminal
    window for input and output.
+   **Preset** at the top of the options column offers the five built-in presets
+   (Standard, Quick look, Deep, Interactive, Live network) and the files of
+   `presets/` in the data folder, read by the same code as the command line and
+   Auto mode. A preset fills what the window has: static analysis and its
+   checks, the network capture and route, the dumps, timed screenshots and, when
+   the preset writes them out, the arguments, working directory, environment and
+   user. The program, the host file and the guest path stay as you set them.
+   Report formats, duplicates, run time and the other keys the window has no field
+   for are not used here. A preset this VM cannot run is greyed out and says why
+   on hover (Live network, a core dump on a base without core support, a route a
+   VM that is not Routed does not have); a file with an error is listed greyed out
+   with the error. Change any field and the box reads **Custom (from <preset>)**.
+   A new window starts on Standard, then on the last preset you chose.
    A library sample's window has **Load into…**: give a program (and its
    arguments, split on spaces) and it sends the library into the running VM, then
    opens **Run program** with that program and `LD_PRELOAD` set to where the library

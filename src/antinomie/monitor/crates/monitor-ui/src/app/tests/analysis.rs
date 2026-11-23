@@ -83,6 +83,8 @@ fn run_setup_keeps_final_actions_visible_and_dispatches_a_selection_snapshot() {
         theme::install(&ctx);
         theme::text_size(&ctx, font);
         let mut app = analysis_setup_fixture();
+        // This run is of the two checks the fixture picked, not of Standard.
+        app.run_presets.keep_the_form();
         app.settings.font_size = font;
         for _ in 0..3 {
             let _ = render(&mut app, &ctx, size);

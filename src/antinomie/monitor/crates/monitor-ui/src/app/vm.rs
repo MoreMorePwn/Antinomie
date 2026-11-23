@@ -456,6 +456,7 @@ impl MonitorApp {
                     self.exec.analysis.time_limit_minutes =
                         self.settings.analysis_time_limit_minutes;
                     self.exec.analysis.limits = self.settings.analysis_limits;
+                    self.run_presets.ready = ready;
                     let outcome = crate::analysis::launch_fields(
                         ui,
                         &mut self.exec,
@@ -489,6 +490,7 @@ impl MonitorApp {
                                 busy: self.pending_upload.is_some(),
                             },
                         },
+                        &mut self.run_presets,
                     );
                     self.settings.analysis_time_limit_minutes =
                         self.exec.analysis.time_limit_minutes;
