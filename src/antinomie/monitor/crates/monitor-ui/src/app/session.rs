@@ -33,7 +33,11 @@ impl MonitorApp {
             .dependencies
             .require(&command, &self.options, &self.snapshot)
         {
-            self.dependencies.open = true;
+            // Still checking is no failure to show; the window opens when the
+            // check ends and finds something missing.
+            if self.dependencies.has_report() {
+                self.dependencies.open = true;
+            }
             if vm_snapshot {
                 self.vm_snapshots.result = Some((false, error.clone()));
             }
@@ -801,12 +805,30 @@ impl MonitorApp {
     pub(super) fn update_options(&mut self) {
         self.options.bundle_dir = crate::folders::user_path(&self.settings.bundle);
         self.options.start = self.settings.start;
+        self.options.capture_quota_size = u64::from(self.settings.quota_gib) * 1073741824;
+        self.options.shutdown_timeout = Duration::from_secs(self.settings.timeout);
         self.send(Command::UpdateOptions {
             bundle_dir: crate::folders::user_path(&self.settings.bundle),
             capture_quota_size: u64::from(self.settings.quota_gib) * 1073741824,
             shutdown_timeout_secs: self.settings.timeout,
             start: self.settings.start,
         });
+    }
+}
+
+impl MonitorApp {
+    /// The Recording page edits the settings directly but only Save sends them
+    /// to the backend; a window closed without saving puts back what the
+    /// backend runs with, so the saved file never holds an unapplied edit.
+    pub(super) fn revert_unsaved_recording_edits(&mut self) {
+        const GIB: u64 = 1073741824;
+        if crate::folders::user_path(&self.settings.bundle) != self.options.bundle_dir {
+            self.settings.bundle = self.options.bundle_dir.to_string_lossy().into_owned();
+        }
+        self.settings.quota_gib = u32::try_from(self.options.capture_quota_size / GIB)
+            .unwrap_or(u32::MAX)
+            .max(1);
+        self.settings.timeout = self.options.shutdown_timeout.as_secs();
     }
 }
 

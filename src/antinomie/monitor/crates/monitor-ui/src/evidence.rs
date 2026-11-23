@@ -34,13 +34,21 @@ fn state(ctx: &egui::Context) -> Shared {
     })
 }
 
+const LABEL_CACHE_MAX: usize = 4096;
+
+/// Keep the cache bounded by dropping one entry for a new directory, not all
+/// of them (a filter over more records than the bound would reload every frame).
+fn make_room(labels: &mut BTreeMap<PathBuf, Result<Annotation, String>>, incoming: &Path) {
+    if labels.len() >= LABEL_CACHE_MAX && !labels.contains_key(incoming) {
+        labels.pop_first();
+    }
+}
+
 pub(crate) fn title(ui: &egui::Ui, directory: &Path, fallback: &str) -> String {
     let shared = state(ui.ctx());
     let mut data = shared.lock().unwrap_or_else(|e| e.into_inner());
     // Bound cache size independently of how many archived records exist.
-    if data.labels.len() >= 4096 && !data.labels.contains_key(directory) {
-        data.labels.clear();
-    }
+    make_room(&mut data.labels, directory);
     let annotation = data
         .labels
         .entry(directory.to_owned())
@@ -66,9 +74,7 @@ pub(crate) fn title(ui: &egui::Ui, directory: &Path, fallback: &str) -> String {
 pub(crate) fn annotation(ui: &egui::Ui, directory: &Path) -> Option<Annotation> {
     let shared = state(ui.ctx());
     let mut data = shared.lock().unwrap_or_else(|error| error.into_inner());
-    if data.labels.len() >= 4096 && !data.labels.contains_key(directory) {
-        data.labels.clear();
-    }
+    make_room(&mut data.labels, directory);
     data.labels
         .entry(directory.to_owned())
         .or_insert_with(|| annotations::load(directory))
@@ -243,6 +249,22 @@ fn unquote(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_full_label_cache_drops_one_entry_not_all() {
+        let mut labels = BTreeMap::new();
+        for index in 0..LABEL_CACHE_MAX {
+            labels.insert(
+                PathBuf::from(format!("/r/{index:05}")),
+                Ok(Annotation::default()),
+            );
+        }
+        make_room(&mut labels, Path::new("/r/00001"));
+        assert_eq!(labels.len(), LABEL_CACHE_MAX);
+        make_room(&mut labels, Path::new("/r/new"));
+        assert_eq!(labels.len(), LABEL_CACHE_MAX - 1);
+        assert!(labels.contains_key(Path::new("/r/00002")));
+    }
 
     #[test]
     fn evidence_edit_keeps_the_field_that_was_not_opened() {

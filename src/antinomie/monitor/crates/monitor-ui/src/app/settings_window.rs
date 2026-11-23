@@ -299,7 +299,11 @@ impl MonitorApp {
                     },
                 );
             });
+        let was_open = self.settings_open;
         self.settings_open = open && !close;
+        if was_open && !self.settings_open && !save {
+            self.revert_unsaved_recording_edits();
+        }
         if save {
             self.update_options();
             self.settings_open = false;

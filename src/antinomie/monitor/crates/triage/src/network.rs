@@ -937,11 +937,25 @@ thread_local! {
     pub static ONLINE_LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// The longest the indexing pass waits for address lookups altogether; the
+/// destinations not reached by then are left without a country.
+pub const LOOKUP_BUDGET: std::time::Duration = std::time::Duration::from_secs(40);
+
 pub fn enrich_public(
     inventory: &mut Inventory,
     cancel: &std::sync::atomic::AtomicBool,
     warning: &mut Option<String>,
 ) -> Result<(), String> {
+    enrich_public_within(inventory, cancel, warning, LOOKUP_BUDGET)
+}
+
+fn enrich_public_within(
+    inventory: &mut Inventory,
+    cancel: &std::sync::atomic::AtomicBool,
+    warning: &mut Option<String>,
+    budget: std::time::Duration,
+) -> Result<(), String> {
+    let started = std::time::Instant::now();
     let mut pending: Vec<String> = inventory
         .incomplete()
         .into_iter()
@@ -958,6 +972,15 @@ pub fn enrich_public(
     for ip in pending {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             return Err("cancelled".into());
+        }
+        if started.elapsed() >= budget {
+            if !noted {
+                *warning = Some(format!(
+                    "Address lookup stopped after {} seconds; the remaining destinations were not queried.",
+                    budget.as_secs()
+                ));
+            }
+            break;
         }
         match lookup_public(&ip) {
             Ok((country, organization)) => inventory.fill_missing(&ip, &country, &organization),
@@ -1192,6 +1215,23 @@ pub mod tests {
         }
         assert!(online_lookup(AddressLookup::Whois));
         assert!(online_lookup(AddressLookup::TsharkThenWhois));
+    }
+
+    #[test]
+    fn address_lookups_stop_when_their_time_budget_is_spent() {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut inventory = unresolved();
+        let mut warning = None;
+        let before = ONLINE_LOOKUPS.with(std::cell::Cell::get);
+        enrich_public_within(
+            &mut inventory,
+            &cancel,
+            &mut warning,
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!(ONLINE_LOOKUPS.with(std::cell::Cell::get), before);
+        assert!(warning.unwrap().contains("stopped after"));
     }
 
     #[test]

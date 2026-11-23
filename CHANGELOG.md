@@ -722,6 +722,12 @@ their entries are listed in full.
 - **Sigma files with CRLF line ends, a capitalised `product: Linux` and a detection field named `id` read as the rule means; IDS `pass` and `reject` rules load like the index counts them; a rule folder prefix is a folder, not a text prefix (ANT-T0581).** Entropy no longer prints `-0.000000`, and binwalk matches at the very end of a file are dropped.
 - **Triage: the Export report button no longer covers the IOC tab's count (ANT-T0581).** The button is given its measured width; the tab bar wraps the button to the next line when there is no room.
 - **A negative hex number in a filter (`-0x10`) reads, and a mask over 64 bits says so (ANT-T0581).** Run History's row list follows a run's guest status, and a worker that ended without an answer no longer leaves the run filter facts or the Memory plugin list waiting.
+- **One rule file that does not compile no longer drops the others from a scan (ANT-T0581).** The file is named in the warning and the rest scan; the Rules section names the file a match came from, not `s0`.
+- **A Python install step that hangs is stopped after 30 minutes (ANT-T0581).** The venv and pip steps of a tool install had only the Cancel button.
+- **Naming the call targets of a program with many code sections is fast (ANT-T0581).** Each target is looked up by a search, not a scan of every section.
+- **Getting started: Install all missing stops when the app refuses an install (ANT-T0581).** The queue waited for ever; it now says the install did not start. A request made while the app dependencies are still being checked no longer opens the dependencies window.
+- **Recording settings that were not saved are put back when Settings closes (ANT-T0581).** Quota, shutdown timeout and base were kept in the settings file though the backend never got them; Save also updates the app's own copy now.
+- **Triage: a missing HTTP response frame no longer shifts the responses of the other requests, address lookups stop after 40 seconds, and the annotation cache drops one entry at its limit (ANT-T0581).**
 
 ## 0.9.0 — 2026-11-23
 

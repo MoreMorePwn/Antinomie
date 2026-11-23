@@ -83,10 +83,30 @@ fn text_ranges(file: &object::File) -> Vec<(u64, u64)> {
         .collect()
 }
 
+/// The ranges sorted, with overlapping and touching ones joined, so an address
+/// is found by a binary search.
+fn merged_ranges(mut ranges: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+    ranges.retain(|(start, end)| start < end);
+    ranges.sort_unstable();
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+}
+
+fn in_ranges(merged: &[(u64, u64)], address: u64) -> bool {
+    let after = merged.partition_point(|(start, _)| *start <= address);
+    after > 0 && address < merged[after - 1].1
+}
+
 /// Name every direct call target inside executable code `sub_<address>`,
 /// so stripped programs still read as functions.
 fn call_targets(file: &object::File, bitness: u32, functions: &mut Functions) {
-    let ranges = text_ranges(file);
+    let ranges = merged_ranges(text_ranges(file));
     for code in file.sections().filter(|s| s.kind() == SectionKind::Text) {
         let Ok(bytes) = code.data() else { continue };
         let mut decoder = Decoder::with_ip(bitness, bytes, code.address(), DecoderOptions::NONE);
@@ -95,10 +115,7 @@ fn call_targets(file: &object::File, bitness: u32, functions: &mut Functions) {
             decoder.decode_out(&mut instruction);
             if instruction.is_call_near() {
                 let target = instruction.near_branch_target();
-                if ranges
-                    .iter()
-                    .any(|(start, end)| (*start..*end).contains(&target))
-                {
+                if in_ranges(&ranges, target) {
                     functions
                         .entry(target)
                         .or_insert_with(|| (format!("sub_{target:x}"), 0));
@@ -572,5 +589,31 @@ mod tests {
         let mut table = Functions::new();
         table.insert(u64::MAX, ("last".into(), 0));
         assert_eq!(containing(&table, u64::MAX), None);
+    }
+
+    #[test]
+    fn many_code_ranges_are_searched_not_scanned() {
+        let merged = merged_ranges(vec![
+            (0x30, 0x40),
+            (0x10, 0x20),
+            (0x20, 0x28),
+            (5, 5),
+            (0x38, 0x50),
+        ]);
+        assert_eq!(merged, vec![(0x10, 0x28), (0x30, 0x50)]);
+        for (address, inside) in [
+            (0xf, false),
+            (0x10, true),
+            (0x27, true),
+            (0x28, false),
+            (0x2f, false),
+            (0x30, true),
+            (0x4f, true),
+            (0x50, false),
+            (u64::MAX, false),
+        ] {
+            assert_eq!(in_ranges(&merged, address), inside, "{address:#x}");
+        }
+        assert!(!in_ranges(&[], 1));
     }
 }
