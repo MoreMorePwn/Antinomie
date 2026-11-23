@@ -84,6 +84,31 @@ pub(super) struct W {
     pub(super) callers: Box<dyn crate::config::callers::CallerLookup>,
     /// `[lanes] revert` of the node.
     pub(super) revert: crate::config::service::RevertMode,
+    /// The daemon log lines the stages wrote.
+    pub(super) log: LogLines,
+}
+
+/// The daemon log of a test world.
+pub(super) struct LogLines {
+    lines: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pub(super) write: Box<dyn Fn(&str) + Send + Sync>,
+}
+
+impl Default for LogLines {
+    fn default() -> Self {
+        let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let kept = lines.clone();
+        Self {
+            lines,
+            write: Box::new(move |line| kept.lock().unwrap().push(line.to_owned())),
+        }
+    }
+}
+
+impl LogLines {
+    pub(super) fn lines(&self) -> Vec<String> {
+        self.lines.lock().unwrap().clone()
+    }
 }
 
 impl W {
@@ -114,6 +139,7 @@ impl W {
             tags: TagLog::default(),
             callers: Box::new(crate::config::callers::LocalOnly),
             revert: Default::default(),
+            log: LogLines::default(),
             evidence: Box::new(|_| {
                 Ok(Some(antinomie_monitor_core::RunArtifacts {
                     network_state: antinomie_monitor_core::RunArtifactState::Complete,
@@ -160,6 +186,7 @@ impl W {
                 triage: self.triage.as_ref(),
                 tags: &self.tags,
                 data_dir: std::path::Path::new("/nonexistent-antinomie-data"),
+                log: &*self.log.write,
             },
             lane: lane(),
         }

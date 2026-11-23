@@ -9,7 +9,7 @@ use super::{
 };
 use crate::api::{
     assessment::Assessment,
-    event::EventBody,
+    event::{CollectPart, EventBody},
     ids::RunId,
     run::{Run, RunProgram, RunRecording, RunSample, RunState, RunVm, Warning},
     spec::Route,
@@ -158,6 +158,28 @@ impl Store {
                 )?;
             }
             Ok(())
+        })
+    }
+
+    /// How long one part of `collect` took (`run.collect`, ANT-T0612).
+    pub fn emit_collect(
+        &self,
+        id: &RunId,
+        part: CollectPart,
+        duration_ms: u64,
+        detail: Option<String>,
+    ) -> R<()> {
+        self.write(|tx| {
+            let cur = current(tx, id)?;
+            live(id, cur.state, "time a part of collect")?;
+            tx.emit(
+                Some(id),
+                EventBody::RunCollect {
+                    part,
+                    duration_ms,
+                    detail,
+                },
+            )
         })
     }
 

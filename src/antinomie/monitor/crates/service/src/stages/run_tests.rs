@@ -128,7 +128,7 @@ fn run_stage(
     w.stages(waiter).run(job, &ready.0, &ready.1)
 }
 
-fn collect_stage(
+pub(super) fn collect_stage(
     w: &W,
     waiter: &mut Waiter<FakeEngine>,
     job: &Run,
@@ -666,7 +666,7 @@ fn complete() -> RunArtifacts {
 }
 
 /// A launched and finished run, ready to be collected.
-fn finished_run(
+pub(super) fn finished_run(
     w: &W,
     extra: impl FnOnce(&mut FakeEngine),
 ) -> (Run, Waiter<FakeEngine>, (Prepared, Launched)) {

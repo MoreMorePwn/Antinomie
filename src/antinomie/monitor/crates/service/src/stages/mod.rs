@@ -25,6 +25,9 @@
 mod analyse;
 mod cleanup;
 mod collect;
+mod collect_parts;
+#[cfg(test)]
+mod collect_tests;
 mod drive;
 #[cfg(test)]
 mod drive_tests;
@@ -207,6 +210,8 @@ pub struct LaneEnv<'a> {
     pub tags: &'a dyn host::SampleTags,
     /// The data directory: the library the launch stages a host copy from.
     pub data_dir: &'a std::path::Path,
+    /// The daemon log (INFO lines).
+    pub log: &'a (dyn Fn(&str) + Send + Sync),
 }
 
 pub struct LaneStages<'a, E: Engine> {

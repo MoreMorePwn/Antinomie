@@ -42,7 +42,7 @@ use std::{
 
 /// The stored event types a subscription may ask for (`types`), plus the
 /// ephemeral ones.
-pub const EVENT_TYPES: [&str; 15] = [
+pub const EVENT_TYPES: [&str; 16] = [
     "run.created",
     "run.state",
     "run.stage",
@@ -51,6 +51,7 @@ pub const EVENT_TYPES: [&str; 15] = [
     "run.warning",
     "run.artifact",
     "run.trigger",
+    "run.collect",
     "run.assessment",
     "run.requeued",
     "run.finished",
