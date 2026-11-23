@@ -448,7 +448,7 @@ mod tests {
     fn preset_show_prints_a_preset_file_that_loads_as_the_same_preset() {
         let set = antinomie_service::config::PresetSet::built_in();
         let names: Vec<String> = set.names().map(str::to_owned).collect();
-        assert_eq!(names.len(), 5);
+        assert_eq!(names.len(), 6);
         for name in names {
             let detail = serde_json::to_value(set.detail(&name).unwrap()).unwrap();
             let text = preset_toml(&detail);

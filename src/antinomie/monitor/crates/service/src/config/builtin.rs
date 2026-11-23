@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The five built-in presets (the presets specification, "Built-in presets").
+//! The six built-in presets (the presets specification, "Built-in presets").
 //! They ship with the service, are always offered and are read-only: a file
 //! in `presets/` may not take one of their names; copy one under another name
 //! to change it. 0.9.0's `default` policy is Standard.
@@ -118,6 +118,20 @@ backoff_s = [30, 120]
 retry_on = ["vm_start_failed", "guest_unreachable", "upload_failed", "guest_lost", "analysis_failed"]
 "#;
 
+/// Simulated network: Standard on InetSim, with a core when a High rule matches.
+pub const SIMULATED_NETWORK: &str = r#"title = "Simulated network"
+description = "Five minutes, fake internet services (InetSim), a core when a High rule matches"
+
+[network]
+route = "inet_sim"
+
+[dumps]
+dump_when_suspicious = true
+minimum_tier = "high"
+trigger_core = true
+trigger_memory_dump = false
+"#;
+
 pub const QUICK_LOOK: &str = r#"title = "Quick look"
 description = "Two minutes, nothing leaves the lab, five static checks and YARA"
 
@@ -191,8 +205,9 @@ ids = true
 "#;
 
 /// The built-in presets by name, Standard first.
-pub const BUILT_IN: [(&str, &str); 5] = [
+pub const BUILT_IN: [(&str, &str); 6] = [
     ("standard", STANDARD),
+    ("simulated-network", SIMULATED_NETWORK),
     ("quick-look", QUICK_LOOK),
     ("deep", DEEP),
     ("interactive", INTERACTIVE),

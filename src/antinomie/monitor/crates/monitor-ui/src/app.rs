@@ -658,6 +658,8 @@ pub struct MonitorApp {
     /// The last failure to write it that was shown, so it is shown once.
     settings_file_reported: Option<String>,
     exec: ExecRequest,
+    /// The Preset dropdown of the Run program form.
+    run_presets: crate::analysis::presets::PresetForm,
     args: String,
     env: String,
     source: String,

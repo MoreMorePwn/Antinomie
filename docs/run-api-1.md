@@ -103,7 +103,7 @@ is set. Every other field is optional. The preset gives every run option;
 | Field | Meaning |
 |---|---|
 | `name` | File name hint, 1 to 128 bytes, no `/`, no NUL |
-| `preset` | The preset's name, default `standard`. Five presets are built in: `standard`, `quick-look`, `deep`, `interactive`, `live-network`; more are `<data>/presets/<name>.toml` |
+| `preset` | The preset's name, default `standard`. Six presets are built in: `standard`, `simulated-network`, `quick-look`, `deep`, `interactive`, `live-network`; more are `<data>/presets/<name>.toml` |
 | `priority` | 0 to 9, default 5 (the app's levels: Low 2, Normal 5, Urgent 8); higher starts first, with no ageing; the caller's `priority_max`, when it has one, is a ceiling: a higher value is refused `limit_exceeded`, never lowered (an unset priority becomes the default or the ceiling when that is lower) |
 | `labels` | At most 16 pairs; key 1 to 32 bytes of `[a-z0-9._-]`, value up to 128 bytes |
 | `idempotency_key` | See conventions |

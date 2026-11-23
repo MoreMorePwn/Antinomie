@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Configuration: `service.toml` (design 2.4.2) and the presets (the five
+//! Configuration: `service.toml` (design 2.4.2) and the presets (the six
 //! built-in ones and `presets/*.toml`), their validation (`config validate`)
 //! and the set of presets a running service holds. A run freezes the preset
 //! it is submitted with (or its Custom options), so a reload (SIGHUP) never
@@ -8,6 +8,7 @@
 pub mod builtin;
 pub mod callers;
 pub mod catalog;
+pub mod form;
 pub mod locate;
 pub mod migrate;
 pub mod preset;
@@ -66,7 +67,7 @@ impl PresetSet {
         Self::new(by_name)
     }
 
-    /// The five built-in presets alone.
+    /// The six built-in presets alone.
     pub fn built_in() -> Self {
         Self::new(validate::built_in_presets())
     }

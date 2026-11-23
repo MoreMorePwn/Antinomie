@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 antinomie-monitor-core = { path = "../monitor-core" }
 antinomie-triage = { path = "../triage" }
+antinomie-service = { path = "../service" }
 eframe = { version = "0.36", default-features = false, features = ["glow", "x11", "wayland", "default_fonts", "persistence"] }
 egui_extras = "0.36"
 egui_dock = { version = "=0.21.1", features = ["serde"] }

@@ -55,6 +55,7 @@ impl MonitorApp {
             explorer_browser.reset(root);
         }
         let routes = route_settings::RouteSettings::load(&options.data_dir);
+        let run_presets = crate::analysis::presets::PresetForm::new(options.data_dir.clone());
         let mut app = Self {
             performance: crate::ui_performance::Performance::new(cc.gl.as_deref()),
             last_frame_start: None,
@@ -187,6 +188,7 @@ impl MonitorApp {
             settings_file,
             settings_file_reported: None,
             exec,
+            run_presets,
             args: String::new(),
             env,
             source: String::new(),

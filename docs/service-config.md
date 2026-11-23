@@ -16,7 +16,7 @@ them; the program never rewrites them.
 | File | Purpose |
 |---|---|
 | `<data>/service.toml` | Daemon behaviour: socket, lanes, queue limits, inbox, retention, notifications, resource floors. Optional: without it every default applies. |
-| `<data>/presets/<name>.toml` | A preset: a named set of run options to start from (the program, the network, dumps, static analysis, detection, the report, what it accepts, retries). The file name is the preset name (`[a-z0-9._-]`, not `custom` and not a built-in one). Optional: five presets are built in. |
+| `<data>/presets/<name>.toml` | A preset: a named set of run options to start from (the program, the network, dumps, static analysis, detection, the report, what it accepts, retries). The file name is the preset name (`[a-z0-9._-]`, not `custom` and not a built-in one). Optional: six presets are built in. |
 
 An unknown key is an error, in both files. Check the files without starting
 anything:

@@ -8,6 +8,7 @@ use eframe::egui;
 mod entropy;
 mod listing_view;
 mod meaning;
+pub(crate) mod presets;
 mod records;
 mod row_menu;
 mod run_options;
@@ -59,6 +60,7 @@ pub(crate) struct LaunchOutcome {
 
 /// Program fields and the analysis selection. `capabilities.graphical`
 /// offers the Run in choice, which only a graphical base's session can use.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn launch_fields(
     ui: &mut egui::Ui,
     request: &mut ExecRequest,
@@ -67,6 +69,7 @@ pub(crate) fn launch_fields(
     tools: &[ToolStatus],
     capabilities: LaunchCapabilities,
     source: ProgramSource<'_>,
+    presets: &mut presets::PresetForm,
 ) -> LaunchOutcome {
     let mut outcome = LaunchOutcome::default();
     let spacing = ui.spacing().item_spacing.x;
@@ -88,14 +91,17 @@ pub(crate) fn launch_fields(
                     capabilities.graphical,
                     source,
                 );
+                presets::dropdown(&mut columns[1], presets, request, args, env, capabilities);
                 options(&mut columns[1], request, tools, capabilities, &mut outcome);
             });
         });
     } else {
         outcome.source = fields(ui, request, args, env, capabilities.graphical, source);
         ui.add_space(6.0);
+        presets::dropdown(ui, presets, request, args, env, capabilities);
         options(ui, request, tools, capabilities, &mut outcome);
     }
+    presets::settled(ui, presets, request, args, env);
     outcome
 }
 
@@ -717,6 +723,8 @@ pub(crate) fn other_progress<'a>(
 
 #[cfg(test)]
 mod identity_tests;
+#[cfg(test)]
+mod presets_tests;
 #[cfg(test)]
 mod screenshot_tests;
 #[cfg(test)]

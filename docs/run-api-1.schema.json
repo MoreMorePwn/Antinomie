@@ -3465,7 +3465,7 @@
         },
         "built_in": {
           "type": "boolean",
-          "description": "One of the five presets that ship with the service (read-only)."
+          "description": "One of the six presets that ship with the service (read-only)."
         },
         "offered_to": {
           "type": "array",

@@ -18,6 +18,11 @@ their entries are listed in full.
 
 ### Host
 
+- **A sixth built-in preset, Simulated network (ANT-T0605).** Standard on InetSim with a core when a High rule matches (`simulated-network`, needs `evidence.core_dump`); it comes second in the list.
+- **A Preset dropdown in Run program (ANT-T0605).** The options column starts with the
+  six built-in presets and the files of `presets/`, read by the service's own
+  parser; choosing one fills the options, a changed field reads Custom, and the
+  program, host file and guest path are never touched.
 - **Check online in Auto runs (ANT-T0548 F2).** A preset with `[detection]
   check_online = true` (off in every built-in preset; needs `lookup.online`)
   now asks abuse.ch about the run's indicators, as the window's Triage › IOC ›

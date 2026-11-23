@@ -125,6 +125,7 @@ fn validate_accepts_good_files_and_a_data_directory_with_none() {
             "interactive",
             "live-network",
             "quick-look",
+            "simulated-network",
             "standard"
         ])
     );
@@ -136,7 +137,7 @@ fn validate_accepts_good_files_and_a_data_directory_with_none() {
     let (code, out) = cli(&data, &["validate"]);
     assert_eq!(code, 0, "{out}");
     let presets = out["result"]["presets"].as_array().unwrap();
-    assert_eq!(presets.len(), 7, "{out}");
+    assert_eq!(presets.len(), 8, "{out}");
     let files = out["result"]["files"].to_string();
     assert!(
         files.contains("presets/ci.toml") && files.contains("built-in/standard"),

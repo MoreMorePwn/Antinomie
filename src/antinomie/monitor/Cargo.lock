@@ -215,6 +215,7 @@ name = "antinomie-monitor-ui"
 version = "0.9.1"
 dependencies = [
  "antinomie-monitor-core",
+ "antinomie-service",
  "antinomie-triage",
  "chrono",
  "clap",

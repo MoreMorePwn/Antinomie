@@ -73,12 +73,13 @@ fn lane_problems(service: &str, catalog: &dyn VmCatalog) -> Vec<String> {
 }
 
 #[test]
-fn the_five_built_in_presets_parse_and_pass_every_check() {
+fn the_six_built_in_presets_parse_and_pass_every_check() {
     let names: Vec<&str> = BUILT_IN.iter().map(|(name, _)| *name).collect();
     assert_eq!(
         names,
         [
             "standard",
+            "simulated-network",
             "quick-look",
             "deep",
             "interactive",
@@ -86,7 +87,7 @@ fn the_five_built_in_presets_parse_and_pass_every_check() {
         ]
     );
     let set = PresetSet::built_in();
-    assert_eq!(set.len(), 5);
+    assert_eq!(set.len(), 6);
     for (name, text) in BUILT_IN {
         // As a file under another name, each passes every check but the
         // live route (no route is set up on this node).
@@ -196,6 +197,21 @@ fn the_built_in_presets_hold_the_values_of_the_specification() {
     assert!(!quick.vm.allow_control);
     assert!(standard.vm.allow_control && deep.vm.allow_control);
     assert!(interactive.vm.allow_control && live.vm.allow_control);
+    // Simulated network is Standard on InetSim with a core on a High rule.
+    let simulated = get("simulated-network");
+    assert_eq!(simulated.program.run_time_s, 300);
+    assert_eq!(simulated.network.route, Route::InetSim);
+    assert!(simulated.network.capture);
+    assert_eq!(simulated.static_analysis, standard.static_analysis);
+    assert_eq!(simulated.detection, standard.detection);
+    assert_eq!(simulated.report, standard.report);
+    let trigger = simulated.dumps.trigger().unwrap();
+    assert!(trigger.core && !trigger.memory);
+    assert_eq!(
+        trigger.min_tier,
+        antinomie_monitor_core::dump_trigger::TriggerTier::High
+    );
+    assert!(!simulated.dumps.core_dump_on_exit && !simulated.dumps.memory_dump_on_exit);
 }
 
 #[test]
@@ -212,6 +228,11 @@ fn the_listing_names_what_each_built_in_preset_needs() {
         [Permission::EvidenceCoreDump, Permission::EvidenceMemoryDump]
     );
     assert_eq!(find("deep").missing, find("deep").needs);
+    assert_eq!(
+        find("simulated-network").needs,
+        [Permission::EvidenceCoreDump]
+    );
+    assert!(find("simulated-network").unavailable.is_empty());
     assert_eq!(find("live-network").needs, [Permission::RouteTor]);
     assert_eq!(
         find("live-network").unavailable,
@@ -641,7 +662,7 @@ fn load_reads_the_data_directory_and_checks_across_files() {
     assert!(report.has_errors());
     assert!(report.presets.contains_key("mine"));
     assert!(report.presets.contains_key("standard"), "the built-in ones");
-    assert_eq!(report.presets.len(), 6);
+    assert_eq!(report.presets.len(), 7);
     // A preset with errors is not loaded.
     assert!(!report.presets.contains_key("broken"));
     let messages: Vec<String> = report.problems.iter().map(|p| p.to_string()).collect();
@@ -669,11 +690,11 @@ fn load_reads_the_data_directory_and_checks_across_files() {
     let none = validate::load(&root, &NoVms, Some("nothing"));
     assert!(none.errors().any(|p| p.message == "no such preset"));
 
-    // An empty directory is the five built-in presets.
+    // An empty directory is the six built-in presets.
     let empty = scratch("empty");
     let report = validate::load(&empty, &NoVms, None);
     assert!(!report.has_errors(), "{:?}", report.problems);
-    assert_eq!(report.presets.len(), 5);
+    assert_eq!(report.presets.len(), 6);
     let _ = fs::remove_dir_all(&root);
     let _ = fs::remove_dir_all(&empty);
 }
@@ -758,7 +779,7 @@ fn a_reload_replaces_the_set_and_a_bad_reload_keeps_it() {
     let file = root.join("presets").join("mine.toml");
     fs::write(&file, STANDARD).unwrap();
     let shared = SharedPresets::new(Default::default());
-    assert_eq!(shared.reload(&root, &NoVms).unwrap(), 6);
+    assert_eq!(shared.reload(&root, &NoVms).unwrap(), 7);
     let frozen = shared.get("mine").unwrap();
     assert_eq!(frozen.preset.program.run_time_s, 300);
 
@@ -1058,6 +1079,7 @@ fn the_built_in_presets_take_the_nodes_lane_group_and_its_architecture() {
     let set = report.preset_set();
     for name in [
         "standard",
+        "simulated-network",
         "quick-look",
         "deep",
         "interactive",

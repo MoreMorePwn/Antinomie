@@ -462,6 +462,19 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    reason. **Memory Dump on Exit** and **Core Dump on Exit** sit
    below the trigger's options in the same section. Each launch gets its own terminal
    window for input and output.
+   **Preset** at the top of the options column offers the six built-in presets
+   (Standard, Simulated network, Quick look, Deep, Interactive, Live network) and the files of
+   `presets/` in the data folder, read by the same code as the command line and
+   Auto mode. A preset fills what the window has: static analysis and its
+   checks, the network capture and route, the dumps, timed screenshots and, when
+   the preset writes them out, the arguments, working directory, environment and
+   user. The program, the host file and the guest path stay as you set them.
+   Report formats, duplicates, run time and the other keys the window has no field
+   for are not used here. A preset this VM cannot run is greyed out and says why
+   on hover (Live network; Simulated network and Deep on a VM that is not Routed or
+   whose base has no core support); a file with an error is listed greyed out
+   with the error. Change any field and the box reads **Custom (from <preset>)**.
+   A new window starts on Standard, then on the last preset you chose.
    A library sample's window has **Load into…**: give a program (and its
    arguments, split on spaces) and it sends the library into the running VM, then
    opens **Run program** with that program and `LD_PRELOAD` set to where the library
@@ -2727,7 +2740,7 @@ install to a daemon is [above](#command-line-and-automation-091). The web layer 
   capture quota (`quota_gib`), the VM shutdown timeout (`shutdown_timeout_s`) and the
   caps on earlier file bytes (`file_before_file_mib`, `file_before_run_mib`), which the
   CLI and the daemon start their engine with.
-  `config validate [--preset NAME]` checks `service.toml`, the five built-in
+  `config validate [--preset NAME]` checks `service.toml`, the six built-in
   presets and `presets/*.toml` without starting anything (see
   [service configuration](service-config.md)); it prints each problem as
   `file:line:column` and exits 4 when there is an error. A `policies/`
@@ -2800,7 +2813,7 @@ takes the Disk snapshot `auto-clean` (`--snapshot`) and writes
 `[lanes] vm`, `revert_to` and `group` of `service.toml`: a new file, or a table
 added to a file that has no `[lanes]` table (an operator's `[lanes]` table is left
 alone, and the command prints the lines to change). The presets need no file: the
-five built-in presets take the node's lane group and accept its architecture, so
+six built-in presets take the node's lane group and accept its architecture, so
 on an x86-64 node Standard accepts ELF x86-64 programs and shell scripts, and
 after `auto init` on an arm64 base it accepts arm64 programs and shell scripts.
 Architectures have one spelling in `service.toml`, the presets, the CLI and the
@@ -2846,7 +2859,7 @@ stays in its lane's folder, and the read commands given the data folder
 | `auto cancel RUN [--reason TEXT]` | A queued run is cancelled at once; a running one stops its run and VM and ends `cancelled` (its recording is kept) |
 | `auto rerun RUN [--preset NAME] [--override TABLE.KEY=VALUE] [--priority N]` | Run again: a new run from a finished one, with `repeat_of` set: the preset as it is now, or a Custom run's resolved options; `--preset` uses another preset as it is now instead; `--override program.run_time_s=60` changes one option; `--priority` replaces the old run's priority (kept otherwise, lowered to your `priority_max` when above it) |
 | `auto queue status\|pause\|resume` | The queue; a paused queue starts no run (running runs finish) |
-| `auto preset list`, `auto preset show NAME` | The presets (five built in, and `presets/*.toml`) with the permissions their options need and whether you can run them as they are; `show` prints the preset as a preset file (TOML, its name and digest as comments) that you can save as `presets/<another name>.toml` and edit; JSON with `-o json` |
+| `auto preset list`, `auto preset show NAME` | The presets (six built in, and `presets/*.toml`) with the permissions their options need and whether you can run them as they are; `show` prints the preset as a preset file (TOML, its name and digest as comments) that you can save as `presets/<another name>.toml` and edit; JSON with `-o json` |
 | `auto delete RUN [--with-recording]` | Removes a finished run: its record, events and artifacts (the sample stays in the library). `--with-recording` also deletes the run's recording, and the run of each earlier attempt that launched, through the run deletion the window uses; a recording a client is reading, or still being written, is refused |
 | `auto gc [--dry-run]` | Applies retention now (below) and prints what was deleted and what was skipped and why; `--dry-run` deletes nothing. Works with a daemon, or on its own when none runs |
 | `auto watch list` | The watch folders: state, files taken, files rejected, entries refused and why. Without a daemon, the folders `service.toml` names |

@@ -4,7 +4,7 @@
 //! name, snapshot or lane group than the defaults, the `[lanes]` table of
 //! `service.toml` (a new file, or added to one that has no `[lanes]` table).
 //! The lane group is the base's architecture (`arm64` for an arm64 base,
-//! ANT-T0556), and the five built-in presets take the node's lane group and
+//! ANT-T0556), and the six built-in presets take the node's lane group and
 //! accept its architecture, so a run needs no preset file.
 //!
 //! It runs in this process and takes the lane's data folder for itself, so it
