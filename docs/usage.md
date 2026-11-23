@@ -1160,9 +1160,13 @@ The network capture is the guest's own view on every route.
   even when its meta does and gives behaviour tags ("Torii-like", "persistence",
   "staging", "Go binary") instead; Malpedia's aliases name one family (Bashlite,
   Lizkebab and Torlus are Gafgyt; Elastic's Bishopsliver is Sliver); what the run did
-  can name a family too (Prometei's `uplugplay` service and `/cgi-bin/p.cgi` calls),
-  and that outweighs one or two rules naming another family, which are then listed
-  as also named; a family named only by a layer Static analysis unpacked from a packed
+  can name a family too, through the family profiles of `docs/family-profiles.md`
+  (Prometei's `uplugplay` service and `/cgi-bin/p.cgi` calls, Kaiji's `linux_kill`
+  script; your own profiles go in `<data>/rules/families/`), and that outweighs one
+  or two rules naming another family, which are then listed as also named; a rule
+  known to match other programs (`MIRAI_OHSHIT_payload`, `MIRAI_TELNETCURL_payload`)
+  only ever gives an also-named family, and a family with no Linux variant
+  (RemcosRAT and other Windows families) is never named; a family named only by a layer Static analysis unpacked from a packed
   sample says "in the unpacked payload", and a signature fetched for a file you
   imported says "looked up by hash"); and behaviour tags), **Key findings** (the six worst by tier and
   then first time, each with its description on a line below, cut to its first sentence

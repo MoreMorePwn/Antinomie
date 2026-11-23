@@ -592,8 +592,15 @@ their entries are listed in full.
   - The data folder's owner record can name the window, the daemon or a command, and the busy messages say which.
   - On a node whose lanes run under TCG the code-analysis tools' time limit is multiplied by the TCG
     multiplier, and capa and FLOSS items on a non-x86 ELF are skipped as "not applicable to this architecture".
+- **Family profiles (ANT-T0604).** A family is named from what the run did: data files list a family's markers (findings, file paths, URLs, command lines, Sigma ids, YARA tags) and a threshold, and the 15 shipped profiles name BillGates, BPFDoor, Chaos, Dofloo, Kaiji, Kinsing, Mettle, Mirai, Prometei, RotaJakiro, Sliver, Tsunami, VPNFilter, XMRig and XorDDoS; your own go in `<data>/rules/families/` (`docs/family-profiles.md`).
+- **New finding `execution.socket_stager` (ANT-T0604).** A process that reads from a connected socket into executable memory, or into memory it then makes executable, is HIGH: the in-memory stager of Metasploit and Mettle.
+- **A failed attempt to open the watchdog is reported (ANT-T0604).** `evasion.watchdog_disable` also fires, one tier lower, when the open fails, as it does in a sandbox with no watchdog device, and knows the FTWDT101 watchdog that Mirai's forks try.
 
 ### Fixed
+
+- **No Windows family is named on a Linux program (ANT-T0604).** A YARAhub rule whose file name holds "ForgeAuto" passed for a YARA-Forge rule and named RemcosRAT on the Chaos and Merlin runs; families with no Linux variant are never named.
+- **MIRAI_OHSHIT_payload and MIRAI_TELNETCURL_payload no longer name the family (ANT-T0604).** The first matches every statically linked glibc program and named Mirai on Rekoobe and Prometei; the second is a lineage marker by its author's words and named Mirai on a Gafgyt. Their Mirai is "also named".
+- **A run stopped with tier high and a strong family is no longer `inconclusive` (ANT-T0604, T0600 F4).** The label of a run that did not complete rests on what was recorded until then; only the absence of behaviour still gives `inconclusive`.
 
 - **The Auto-mode label reads the family evidence (ANT-T0556, A50, A11).** Runs
   with a strong family rule (MIRAI_OHSHIT_payload, Gafgyt rules) were

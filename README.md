@@ -420,6 +420,7 @@ Planned and undated:
 | [Auto mode](docs/auto-mode.md) | The pipeline, presets, revert, retention, failure codes, troubleshooting and the systemd unit. |
 | [Run API](docs/run-api-1.md) and [service configuration](docs/service-config.md) | The contract and the configuration files of the Auto mode daemon. |
 | [Triage report](docs/triage-report.md) | Export formats, evidence bundle and the JSON schema. |
+| [Family profiles](docs/family-profiles.md) | How a run's behaviour names a malware family, and how to add your own profiles. |
 | [Security model](docs/security.md) | Trust boundaries, network modes, sensitive data and safe use. |
 | [Security policy](SECURITY.md) | Supported versions and how to report a vulnerability privately. |
 | [Implementation record](docs/implementation.md) | Implemented behavior, wire contracts, measurements and limits, by release. |

@@ -370,17 +370,24 @@ the recording is saved without it and the run succeeds; `run.pending` lists
 
   | # | When | Label |
   |---|---|---|
-  | 1 | Triage did not run, or the run did not complete (guest lost, a safety stop) | `inconclusive` |
+  | 1 | Triage did not run | `inconclusive` |
   | 2 | an indicator matched a stored dataset | `malicious` |
-  | 3 | a strong family rule names a family (an Elastic family rule scored 70 or more, a rule's `family` meta, a Malpedia rule) or a behaviour signature does, and the behaviour reached tier medium or high | `malicious` |
+  | 3 | a strong family rule names a family (an Elastic family rule scored 70 or more, a rule's `family` meta, a Malpedia rule) or a family profile does (`docs/family-profiles.md`), and the behaviour reached tier medium or high | `malicious` |
   | 4 | any detection rule of the run names a family | `suspicious` |
   | 5 | the program made no system call the recording kept (it crashed while loading, or the time limit stopped it before its first call) | `inconclusive`, "No behaviour was recorded" with the reason |
   | 6 | the behaviour reached tier high or medium | `suspicious` |
   | 7 | a YARA rule of severity high or critical matched | `suspicious` |
   | 8 | only low or informational findings, or none | `clean_observed` |
 
+  A run that did not complete (the guest was lost, a safety stop, the recording
+  cap) is judged on what was recorded until then: rows 2, 3, 4, 6 and 7 still
+  hold and the basis says the run did not complete; rows 5 and 8, which read the
+  absence of behaviour, give `inconclusive` instead.
+
   A family named only by the sample's MalwareBazaar record is no evidence of the
-  run, and a rule's own severity never makes a run `malicious` by itself. A rule
+  run, and a rule's own severity never makes a run `malicious` by itself. Nor is
+  a family that only a rule known to match other programs names
+  (`MIRAI_OHSHIT_payload`, `MIRAI_TELNETCURL_payload`). A rule
   that detects a technique or a generic trait (`ELF_Toriilike_persist`,
   `NSVPS_Mirai_Busybox_Staging`, `Suspicious_Golang_Binary`) names no family, even
   when its meta does: it gives the report's `summary.tags`. `[[verdict.rule]]`
