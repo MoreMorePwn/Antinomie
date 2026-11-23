@@ -116,7 +116,7 @@ pub const PATH_GAP: &str =
 /// Distinct lifecycle steps kept per file.
 pub const LIFECYCLE_STEPS: usize = 64;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct FileIndex {
     pub changes: BTreeMap<String, Change>,
     /// Descriptor owner, fd -> shared open-file description; dup shares offsets.

@@ -87,6 +87,7 @@ pub const COLLECTOR: &str = "/tmp/.antinomie-resource-";
 /// Rows held before the caps are applied; past it matches are only counted.
 pub const ROWS_HELD: usize = 200_000;
 
+#[derive(Clone)]
 pub struct Engine {
     pub options: Options,
     pub aggs: Vec<Agg>,

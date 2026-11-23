@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The phases of one archive scan, each a step over the state the one before left.
+use super::file_pass::{FileState, Sinks};
+use super::live::{Plan, ProcessPass};
+pub(crate) use super::run_record::{launch_sha256, no_capture_note, settle_crashed_start};
 use super::segments::{
-    guest_names, name_launched, run_segments, segment_facts, segments_stamp, walk_segments_within,
+    guest_names, name_launched, run_segments, segment_facts, segments_stamp, walk_segments_from,
 };
 use super::*;
 use antinomie_monitor_core::recording::{Recording, RunFilterFacts, RunSegment};
@@ -17,6 +20,11 @@ pub struct Scan {
     pub started_ms: Option<u64>,
     pub total: Option<u64>,
     pub cookies: std::collections::BTreeMap<u32, u64>,
+    /// Every task's parent as the whole recording settled it.
+    pub settled: std::collections::BTreeMap<TaskKey, TaskKey>,
+    /// What pass 1 settled that pass 2 reads besides the cookies and parents
+    /// (a live refresh resumes only when it is the same, ANT-T0602).
+    pub settled_facts: String,
     pub nodes: std::collections::BTreeMap<TaskKey, TaskNode>,
     pub scoped_count: u64,
     pub async_partial: u64,
@@ -85,6 +93,27 @@ pub fn open_scan(
     cancel: &Arc<AtomicBool>,
     request: &ScanRequest,
 ) -> Result<Scan, String> {
+    open_scan_planned(
+        directory,
+        pcap,
+        pcap_open,
+        cancel,
+        request,
+        &mut Plan::default(),
+    )
+}
+
+/// [`open_scan`] that resumes pass 1 from `plan`'s snapshot and decides where
+/// this scan's snapshot is taken. [`live::RESTART`] when the snapshot does not
+/// hold for the recording: the caller scans it whole.
+pub fn open_scan_planned(
+    directory: &Path,
+    pcap: Option<&Path>,
+    pcap_open: bool,
+    cancel: &Arc<AtomicBool>,
+    request: &ScanRequest,
+    plan: &mut Plan,
+) -> Result<Scan, String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
@@ -111,7 +140,6 @@ pub fn open_scan(
         .collect();
     let recording = recordings.last().ok_or("no recording segment")?;
     let facts = segment_facts(&segments, request)?;
-    let mut clock_anchor = request.clock_anchor;
     let started_ms = request
         .started_ms
         .or_else(|| facts.as_ref().and_then(|facts| facts.started_ms));
@@ -121,67 +149,81 @@ pub fn open_scan(
         .iter()
         .map(|recording| recording.invocation_count_cancellable(None, cancel).ok())
         .sum::<Option<u64>>();
+    // Each segment's extent before a call is read, and whether the snapshot
+    // being resumed holds for the recording as it is now.
+    let resuming = plan.resuming();
+    plan.prepare(&recordings, cancel);
+    if resuming && !plan.resuming() {
+        return Err(live::RESTART.into());
+    }
     request.phase(scan_progress::Phase::Reading, total.unwrap_or(0));
-    // The root's stream and its first credentials, for its launch.
-    let mut root_stream = None;
-    let mut root_creds = None;
-    let mut root_call = None;
-    let mut cookie_sets = std::collections::BTreeMap::new();
-    let mut nodes = std::collections::BTreeMap::new();
+    let mut pass = plan
+        .resume
+        .as_mut()
+        .map(|snapshot| std::mem::take(&mut snapshot.pass1))
+        .unwrap_or_else(|| ProcessPass {
+            clock_anchor: request.clock_anchor,
+            ..ProcessPass::default()
+        });
     let engine = rules::Engine::new(rules::Options {
         show_info: request.finding_view.show_info,
         capture_all: request.root_cookie == 0,
         packed: request.packed.clone(),
         cloud_profile: cloud_profile(&directory),
     });
-    let mut scoped_count = 0;
-    // Calls whose saved async observations the pages only preview, and how many.
-    let (mut async_partial, mut async_omitted) = (0u64, 0u64);
-    let (seen, complete, issues) = walk_segments_within(
+    let mut last = None;
+    let (_, complete, found) = walk_segments_from(
         &recordings,
+        plan.start,
         cancel,
         request.stop.as_deref(),
         |segment, page| {
             request.advance(page.len());
-            let page: Vec<_> = page.iter().filter(&scoped).cloned().collect();
-            for call in page
-                .iter()
-                .filter(|call| request.root_cookie != 0 && call.task_cookie == request.root_cookie)
-            {
-                root_stream.get_or_insert((segment, call.stream_id));
-                root_call.get_or_insert(trace::key(call));
-                if root_creds.is_none() {
-                    root_creds = call
-                        .kernel_notes
-                        .iter()
-                        .find_map(antinomie_monitor_core::kernel_notes::credentials);
+            let in_scope: Vec<&InvocationSummary> = page.iter().filter(&scoped).collect();
+            pass.anchor(started_ms, &in_scope);
+            for call in page {
+                plan.before_pass1(&pass, segment, call);
+                if scoped(&call) {
+                    pass.observe(request, segment, call);
                 }
+                pass.seen += 1;
+                last = Some((segment, trace::key(call)));
             }
-            scoped_count += page.len() as u64;
-            for call in page.iter().filter(|call| call.async_omitted() > 0) {
-                async_partial += 1;
-                async_omitted = async_omitted.saturating_add(call.async_omitted());
-            }
-            if clock_anchor.is_none() {
-                clock_anchor = started_ms
-                    .zip(
-                        page.iter()
-                            .filter_map(trace::representative)
-                            .map(|event| event.timestamp_ns)
-                            .min(),
-                    )
-                    .and_then(|(host_ms, guest_ns)| {
-                        Some(antinomie_monitor_core::HostClockAnchor {
-                            guest_ns,
-                            host_us: host_ms.checked_mul(1000)?,
-                        })
-                    });
-            }
-            note_cookie_sets(&mut cookie_sets, &page);
-            observe_processes(&mut nodes, &page);
             Ok(())
         },
     )?;
+    if complete {
+        plan.after_pass1(&pass, last);
+    }
+    // The anchor a full scan reads from the first page with a call: a
+    // resumed pass kept the one its snapshot had, which holds only if the
+    // first page still gives the same.
+    if plan.resuming() && request.clock_anchor.is_none() && started_ms.is_some() {
+        let mut fresh = ProcessPass::default();
+        live::first_anchor(&recordings, &scoped, started_ms, cancel, &mut fresh);
+        if fresh.clock_anchor != pass.clock_anchor {
+            live::why("the clock anchor of the first page changed");
+            return Err(live::RESTART.into());
+        }
+    }
+    for issue in found {
+        if pass.issues.len() < 32 && !pass.issues.contains(&issue) {
+            pass.issues.push(issue);
+        }
+    }
+    let ProcessPass {
+        root_stream,
+        root_creds,
+        root_call,
+        cookie_sets,
+        mut nodes,
+        scoped_count,
+        async_partial,
+        async_omitted,
+        clock_anchor,
+        seen,
+        issues,
+    } = pass;
     // The launch, read from the segment that holds the root's first call.
     let launch = root_stream.and_then(|(segment, stream)| {
         recordings[segment]
@@ -213,7 +255,12 @@ pub fn open_scan(
     let mut event_journal = request
         .identity
         .as_ref()
-        .filter(|_| request.root_cookie != 0 && cached_events.is_none() && !request.read_only)
+        // A live run's refresh resumes pass 2 from a snapshot, which the
+        // journal's writer is not part of: its events are written by the
+        // full scan once the run has ended (ANT-T0602).
+        .filter(|_| {
+            request.root_cookie != 0 && cached_events.is_none() && !request.read_only && !plan.keep
+        })
         .and_then(|(vm, boot, run)| {
             let identity = antinomie_monitor_core::analysis::detection::Identity {
                 vm_id: vm.clone(),
@@ -249,8 +296,9 @@ pub fn open_scan(
             Err(error) => (None, Some(error)),
         }
     };
+    let settled = process_tree::settled_parents(&nodes);
     let mut files = FdState {
-        settled_parents: process_tree::settled_parents(&nodes),
+        settled_parents: settled.clone(),
         ..FdState::default()
     };
     files.journal.launch_cwd = facts.as_ref().and_then(|facts| facts.launch_cwd.clone());
@@ -278,6 +326,22 @@ pub fn open_scan(
             }
         }
     }
+    // What pass 2 starts from besides the calls: a snapshot whose prefix
+    // was read with other facts, or asked the whole recording for a cookie or
+    // a parent that is now another, is not resumed.
+    let settled_facts = format!(
+        "{named:?}|{:?}|{}|{:?}|{}|{clock_anchor:?}|{:?}",
+        files.journal.launch_cwd,
+        files.journal.hashes_writes,
+        files.journal.names,
+        files.journal.root_cookie,
+        files.journal.launch_image
+    );
+    if let Some(snapshot) = &plan.resume {
+        if !live::lookups_hold(snapshot, &settled_facts, &cookies, &settled) {
+            return Err(live::RESTART.into());
+        }
+    }
     Ok(Scan {
         directory,
         segments,
@@ -288,6 +352,8 @@ pub fn open_scan(
         started_ms,
         total,
         cookies,
+        settled,
+        settled_facts,
         nodes,
         scoped_count,
         async_partial,
@@ -314,6 +380,17 @@ impl Scan {
         cancel: &Arc<AtomicBool>,
         request: &ScanRequest,
     ) -> Result<FileOut, String> {
+        self.read_files_planned(cancel, request, &mut Plan::default())
+    }
+
+    /// [`Self::read_files`] from `plan`'s snapshot when it resumes one, taking
+    /// this scan's snapshot at the plan's mark.
+    pub fn read_files_planned(
+        &mut self,
+        cancel: &Arc<AtomicBool>,
+        request: &ScanRequest,
+        plan: &mut Plan,
+    ) -> Result<FileOut, String> {
         let clock_anchor = self.clock_anchor;
         let Scan {
             recordings,
@@ -326,127 +403,53 @@ impl Scan {
             engine,
             ..
         } = self;
-        let (files, mut event_journal, counts) = (files, event_journal, counts);
         let scoped = in_scope(request);
-        // The last install-like call the kernel refused: "openat /var/run/x ENOENT".
-        let mut last_failed: Option<FailedStep> = None;
-        // Signals the calls sent, and the parent-death signals they asked for.
-        let mut signals = run_end::SignalNotes::default();
-        // Fields the guest had no argument decoder for, by call: the recorder's "schema gaps".
-        let mut schema_gaps: std::collections::BTreeMap<String, u64> = Default::default();
-        let mut pending = Vec::new();
+        // A resumed refresh starts from the snapshot's state, with what pass 1
+        // settled from the whole recording now; its tables are made from the
+        // kept rows, so it fills no page.
+        let resumed = plan.resume.take();
+        let rows_only = resumed.is_some();
+        plan.resumed = rows_only;
+        let mut state = match resumed {
+            Some(snapshot) => {
+                let tap = request
+                    .tap
+                    .as_ref()
+                    .ok_or("a resumed refresh keeps its rows")?;
+                if !Arc::ptr_eq(tap, &snapshot.tap) {
+                    return Err(live::RESTART.into());
+                }
+                tap.rewind(&snapshot.tap_marks)?;
+                let mut state = snapshot.pass2;
+                state.files.settled_parents = std::mem::take(&mut files.settled_parents);
+                state.counts.calls = counts.calls;
+                state
+            }
+            None => FileState::new(
+                std::mem::take(files),
+                std::mem::replace(engine, rules::Engine::new(Default::default())),
+                counts.clone(),
+                request,
+            ),
+        };
         let mut change_page = sorting::Page::new(request, 2, cancel);
-        let mut file_index = files::FileIndex::default();
-        file_index.set_write_limits(request.write_limits);
-        file_index.set_retention(request.retention);
-        file_index.set_kernel_revision(request.kernel_revision);
-        let mut bpf_calls = Vec::new();
-        let mut bpf_size = 0usize;
-        let mut bpf_omitted = 0;
-        let mut read_page = sorting::Page::new(request, 5, cancel);
-        let read_query = query::compile_table(&request.filters[5], FILE_FIELDS);
         let change_query = query::compile_table(&request.filters[2], FILE_FIELDS);
         let mut tabs = file_tabs::TabSink::new(request, cancel);
-        let mut reach = async_files::Reach::default();
-        let mut attributed = async_files::Attributed::default();
-        // One call, traced (`real`) or standing for an io_uring or AIO request.
-        let mut observe = |segment: usize,
-                           invocation: &InvocationSummary,
-                           real: bool|
-         -> Result<(), String> {
-            file_index.begin_segment(segment);
-            let recording = &recordings[segment];
-            if real {
-                observe_processes(&mut files.process_images, std::slice::from_ref(invocation));
-            }
-            let Some(event) = trace::representative(invocation) else {
-                return Ok(());
-            };
-            if real && call_args(invocation).is_some_and(|args| bpf_command(event, args).is_some())
-            {
-                let size = invocation
-                    .entry
-                    .iter()
-                    .chain(invocation.exit.iter())
-                    .flat_map(|event| &event.fields)
-                    .map(|field| field.preview.len() + field.key.len() + field.ranges.len() * 16)
-                    .sum::<usize>();
-                if bpf_calls.len() < request.rows()
-                    && bpf_size.saturating_add(size) <= 8 * 1024 * 1024
-                {
-                    bpf_size += size;
-                    bpf_calls.push(invocation.clone());
-                } else {
-                    bpf_omitted += 1;
-                }
-            }
-            engine.observe(invocation, files, Some(&recording.directory), !real);
-            sigma_events::seed_launch_cwd(files, event);
-            remember_cwd(files, invocation, event);
-            remember_open(files, invocation, event);
-            apply_dup(files, invocation, event);
-            forget_closed(files, invocation, event);
-            inherit_open_fds(files, invocation, event, cookies);
-            // Classified before the call is tracked: "created" means the path
-            // was not seen before this call.
-            let hits = file_category::classify(files, invocation, event);
-            if real {
-                note_failed_step(&mut last_failed, files, invocation, event);
-                signals.observe(invocation, event);
-                note_schema_gaps(&mut schema_gaps, invocation, event);
-            }
-            if let Some(writer) = &mut event_journal {
-                if let Err(error) = normalized::call(writer, &mut pending, files, invocation, event)
-                {
-                    *event_error = Some(error);
-                    *event_journal = None;
-                }
-            }
-            if event_journal.is_none() {
-                // The journal tracks seen paths itself; without it, do it here.
-                sigma_events::track(files, invocation, event);
-            }
-            tabs.observe(request, counts, files, invocation, event, &hits)?;
-            // Pages the call wrote back or unmapped were copied before its own change.
-            if real {
-                let directory = Some(recording.directory.as_path());
-                file_index.observe_mapped(files, invocation, event, directory, true);
-            }
-            if let Some(row) =
-                file_index.observe_with(files, invocation, event, Some(&recording.directory), &hits)
-            {
-                // Every read is kept before the chips: a later Files chip is
-                // answered from these rows (ANT-T0592).
-                if let Some(tap) = &request.tap {
-                    tap.push(5, &row);
-                }
-                // Failed reads are listed with their result while Failed attempts is on.
-                let failed_read = file_visibility::FileVisibility::failed(&row);
-                if failed_read {
-                    counts.failed_attempts += 1;
-                    counts.visibility[file_visibility::visibility_slot(FileTab::Read)]
-                        .note_failed(&row);
-                }
-                if !failed_read || request.file_visibility.show_failed {
-                    counts.reads += 1;
-                    counts.visibility[file_visibility::visibility_slot(FileTab::Read)].add(
-                        request.file_visibility,
-                        &row,
-                        true,
-                    );
-                    if request.file_visibility.keeps_with(&row, true) {
-                        if read_query.keep_table(&row[0].values) {
-                            read_page.push(row)?;
-                        }
-                    }
-                }
-            }
-            if real {
-                let directory = Some(recording.directory.as_path());
-                file_index.observe_mapped(files, invocation, event, directory, false);
-                file_index.observe_hashes(files, invocation, event);
-            }
-            Ok(())
+        tabs.keep_pages = !rows_only;
+        let mut sinks = Sinks {
+            tabs,
+            read_page: (!rows_only).then(|| sorting::Page::new(request, 5, cancel)),
+            read_query: query::compile_table(&request.filters[5], FILE_FIELDS),
+            event_journal,
+            event_error,
+            pending: Vec::new(),
+        };
+        let marks = || {
+            request
+                .tap
+                .as_ref()
+                .map(|tap| tap.marks())
+                .unwrap_or_default()
         };
         if let Some(stop) = &request.stop {
             stop.second_pass();
@@ -454,34 +457,58 @@ impl Scan {
         if let Some(progress) = &request.progress {
             progress.next(scan_progress::Phase::Files);
         }
-        let (_, files_complete, _) = walk_segments_within(
+        let (_, files_complete, _) = walk_segments_from(
             recordings,
+            plan.start,
             cancel,
             request.stop.as_deref(),
             |segment, page| {
                 request.advance(page.len());
                 let recording = &recordings[segment];
-                for submitted in page.iter().filter(&scoped) {
-                    // Requests a ring's own thread submitted, once the calls reach
-                    // their time.
-                    for call in attributed.due(segment, submitted) {
-                        observe(segment, &call, false)?;
+                for submitted in page {
+                    if plan.takes_before(segment, submitted) {
+                        plan.pass2_at = Some((state.clone(), marks()));
                     }
-                    attributed.read(recording, segment, submitted, &mut reach, cancel);
-                    // The file requests an io_uring ring or AIO context carried,
-                    // after the call that submitted them, as the calls they stand for.
-                    let requests = async_files::expand(recording, submitted, &mut reach, cancel);
-                    observe(segment, submitted, true)?;
-                    for request in &requests {
-                        observe(segment, request, false)?;
+                    if scoped(&submitted) {
+                        state.walk_call(
+                            &mut sinks, request, cookies, recording, segment, submitted, cancel,
+                        )?;
+                    }
+                    if plan.takes_after(segment, submitted) {
+                        plan.pass2_at = Some((state.clone(), marks()));
                     }
                 }
                 Ok(())
             },
         )?;
-        for (segment, call) in attributed.rest() {
-            observe(segment, &call, false)?;
+        for (segment, call) in state.attributed.rest() {
+            let recording = &recordings[segment];
+            state.observe(
+                &mut sinks, request, cookies, recording, segment, &call, false,
+            )?;
         }
+        let Sinks {
+            tabs,
+            read_page,
+            pending,
+            ..
+        } = sinks;
+        let FileState {
+            files: state_files,
+            engine: state_engine,
+            file_index,
+            reach,
+            counts: state_counts,
+            last_failed,
+            signals,
+            schema_gaps,
+            bpf_calls,
+            bpf_omitted,
+            ..
+        } = state;
+        *files = state_files;
+        *engine = state_engine;
+        *counts = state_counts;
         let bpf_identity = request.identity.as_ref();
         let bpf = bpf_notes(&TriageInput {
             invocations: &bpf_calls,
@@ -541,7 +568,9 @@ impl Scan {
         for &at in &kept_at {
             let row = counted[at].row(clock_anchor);
             if change_query.keep_table(&row[0].values) {
-                change_page.push(row)?;
+                if !rows_only {
+                    change_page.push(row)?;
+                }
                 listed.push(at);
             }
         }
@@ -555,7 +584,13 @@ impl Scan {
         if let Some(tap) = &request.tap {
             tap.keep_changes(counted);
         }
-        let (read, read_omitted, _) = read_page.finish()?;
+        let (read, read_omitted) = match read_page {
+            Some(page) => {
+                let (read, omitted, _) = page.finish()?;
+                (read, omitted)
+            }
+            None => (Vec::new(), 0),
+        };
         let (mut changed, changed_omitted, _) = change_page.finish()?;
         crate::inetsim::label_stand_in_files(&mut changed);
         let (opened, file_tabs) = tabs.finish()?;
@@ -1136,75 +1171,4 @@ impl Scan {
             },
         }))
     }
-}
-
-/// The guest's SHA-256 of the launched program's image, from the launch's own
-/// hash record: none for a script's interpreter or a file that changed while
-/// it was read.
-pub(crate) fn launch_sha256(
-    launch: &antinomie_monitor_core::recording::LaunchRecord,
-) -> Option<String> {
-    use antinomie_monitor_core::kernel_notes::{self, HashKind};
-    launch
-        .notes
-        .iter()
-        .filter_map(kernel_notes::file_hash)
-        .find(|hash| hash.kind == HashKind::Exec)
-        .filter(|hash| hash.skipped().is_none())
-        .and_then(|hash| hash.sha256_hex())
-}
-
-/// A program that died of a signal before its first recorded call has a
-/// process row without an exit record: show the run's own end instead of
-/// "running", the signal for the program and "ended with the run" for the
-/// rest.
-pub(crate) fn settle_crashed_start(process: &mut [ProcessNode], directory: &Path) {
-    let Some(status) = root_exit_status(directory) else {
-        return;
-    };
-    for node in process
-        .iter_mut()
-        .filter(|node| !node.thread && !node.state.starts_with("task exit"))
-        .filter(|node| node.in_call.is_none())
-    {
-        if node.parent.is_none() || node.parent_missing || node.depth == 0 {
-            node.state = format!("task exit, {}", crate::values::task_end(&status));
-            if let antinomie_monitor_core::WaitStatus::Signaled { signal, .. } = status {
-                node.end_signal = Some(signal);
-            }
-        } else {
-            node.state = "task exit, ended with the run".into();
-        }
-    }
-}
-
-/// Why a run has no packet capture when the run's own record says it was not
-/// to have one: its VM had no network, or Capture network was off. `None`
-/// when the record does not say (a capture that failed or went missing).
-pub(crate) fn no_capture_note(directory: &Path) -> Option<String> {
-    let run: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
-    let no_network = matches!(
-        run.pointer("/environment/network").and_then(|v| v.as_str()),
-        Some("Disconnected" | "Isolated")
-    );
-    let capture_off = run
-        .pointer("/request/capture_network")
-        .and_then(|v| v.as_bool())
-        == Some(false);
-    let why = if no_network {
-        "This VM has no network"
-    } else if capture_off {
-        "Network capture was off for this run"
-    } else {
-        return None;
-    };
-    let fix = if no_network {
-        "Give the VM a route (for example InetSim) and keep Capture network on to scan network traffic."
-    } else {
-        "Turn on Capture network in Run program to scan network traffic."
-    };
-    Some(format!(
-        "{why}, so no network capture was recorded and the network (Suricata) rules did not run. {fix}"
-    ))
 }

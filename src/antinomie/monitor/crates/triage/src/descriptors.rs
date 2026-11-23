@@ -404,6 +404,7 @@ pub fn inherit_open_fds(
     let Some(child_pid) = u32::try_from(result).ok() else {
         return;
     };
+    files.asked_cookies.insert(child_pid);
     let child_cookie = cookies.get(&child_pid).copied().unwrap_or(0);
     if child_pid == event.tid && child_cookie == invocation.task_cookie {
         return;

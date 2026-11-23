@@ -79,6 +79,7 @@ impl Class {
 }
 
 /// One check: what was looked at, and what came back.
+#[derive(Clone)]
 pub struct Probe {
     pub class: Class,
     pub what: String,
@@ -101,7 +102,7 @@ pub enum Event {
     Exit,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct TaskProbes {
     pub pid: u32,
     pub tid: u32,
@@ -116,7 +117,7 @@ pub struct TaskProbes {
     pub timing_done: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Probes {
     pub tasks: BTreeMap<u64, TaskProbes>,
     /// Tasks that called `PTRACE_TRACEME` and have not exec'd since.

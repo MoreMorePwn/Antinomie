@@ -211,7 +211,7 @@ pub struct TaskKey {
     pub cookie: u64,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct TaskNode {
     pub parent: Option<TaskKey>,
     pub comm: String,
@@ -686,7 +686,7 @@ pub struct PacketIndex {
     pub network_note: Option<String>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct FdState {
     /// Images tracked in observation order, keyed by stable task identity.
     pub process_images: std::collections::BTreeMap<TaskKey, TaskNode>,
@@ -709,6 +709,21 @@ pub struct FdState {
         std::collections::BTreeMap<antinomie_monitor_core::kernel_notes::FileKey, String>,
     /// What the Sigma journal tracks beyond descriptors: sockets, known paths, DNS answers.
     pub journal: sigma_events::State,
+    /// The pids whose task cookie the calls looked up in the whole
+    /// recording's map, and the tasks whose settled parent they asked for: a
+    /// live refresh resumes only when the grown recording answers these the
+    /// same (ANT-T0602).
+    pub asked_cookies: std::collections::BTreeSet<u32>,
+    pub asked_parents: std::cell::RefCell<std::collections::BTreeSet<TaskKey>>,
+}
+
+impl FdState {
+    /// Task `key`'s parent as the whole recording settled it; the question is
+    /// remembered ([`FdState::asked_parents`]).
+    pub fn settled_parent(&self, key: &TaskKey) -> Option<TaskKey> {
+        self.asked_parents.borrow_mut().insert(*key);
+        self.settled_parents.get(key).copied()
+    }
 }
 
 pub enum DupKind {

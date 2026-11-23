@@ -91,6 +91,20 @@ impl RowLog {
             .map_err(|error| error.to_string())
     }
 
+    /// Back to its first `rows` rows, holding `bytes`, and open for more.
+    fn rewind(&mut self, rows: u64, bytes: u64) -> Result<(), String> {
+        if !self.connection.is_autocommit() {
+            self.commit()?;
+        }
+        self.connection
+            .execute("DELETE FROM rows WHERE seq>?1", [rows as i64])
+            .and_then(|_| self.connection.execute_batch("BEGIN;"))
+            .map_err(|error| error.to_string())?;
+        self.rows = rows;
+        self.bytes = bytes;
+        Ok(())
+    }
+
     /// Every row in scan order; stops at the first error `visit` returns.
     pub fn each(
         &self,
@@ -176,6 +190,17 @@ pub struct Tap {
     bytes: std::sync::atomic::AtomicU64,
     limit: u64,
     changes: Mutex<Option<Vec<files::Change>>>,
+    /// Counts the rewinds: an index sealed before the last one no longer
+    /// has its rows (ANT-T0602).
+    generation: std::sync::atomic::AtomicU64,
+}
+
+/// How far one log had got: its slot, rows and bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogMark {
+    pub slot: usize,
+    pub rows: u64,
+    pub bytes: u64,
 }
 
 impl Tap {
@@ -197,7 +222,44 @@ impl Tap {
             bytes: Default::default(),
             limit,
             changes: Mutex::new(None),
+            generation: Default::default(),
         }))
+    }
+
+    /// How far each log has got: what a live run's snapshot keeps.
+    pub fn marks(&self) -> Vec<LogMark> {
+        self.logs
+            .iter()
+            .filter_map(|(slot, log)| {
+                let log = log.lock().ok()?;
+                Some(LogMark {
+                    slot: *slot,
+                    rows: log.rows,
+                    bytes: log.bytes,
+                })
+            })
+            .collect()
+    }
+
+    /// Back to `marks` (a log not named there to empty), to record a live
+    /// run's refresh from its snapshot on. An index sealed before no longer
+    /// fits any request ([`RowIndex::fits`]).
+    pub fn rewind(&self, marks: &[LogMark]) -> Result<(), String> {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        let mut total = 0;
+        for (slot, log) in &self.logs {
+            let mark = marks.iter().find(|mark| mark.slot == *slot);
+            let (rows, bytes) = mark.map_or((0, 0), |mark| (mark.rows, mark.bytes));
+            log.lock()
+                .map_err(|_| "row log lock poisoned".to_owned())?
+                .rewind(rows, bytes)?;
+            total += bytes;
+        }
+        self.bytes.store(total, Ordering::Relaxed);
+        if let Ok(mut held) = self.changes.lock() {
+            *held = None;
+        }
+        Ok(())
     }
 
     /// Record one row of table `slot`. A failure (a cap, the disk) voids the
@@ -256,6 +318,7 @@ impl Tap {
         let changes = self.changes.lock().ok()?.take()?;
         Some(Arc::new(RowIndex {
             facts: facts(request),
+            generation: self.generation.load(Ordering::Relaxed),
             tap: Arc::clone(self),
             variants,
             changes,
@@ -284,7 +347,10 @@ pub struct InfoVariant {
 pub struct RowIndex {
     /// The request facts the rows depend on that the recording's stamp does not carry.
     pub facts: String,
-    /// Holds the logs; nothing is recorded into it after the seal.
+    /// The tap's generation at the seal.
+    pub generation: u64,
+    /// Holds the logs; nothing is recorded into it after the seal (a live
+    /// run's next refresh rewinds them and moves the generation on).
     pub tap: Arc<Tap>,
     /// The engine's output without and with INFO rows, by `show_info as usize`.
     pub variants: [InfoVariant; 2],
@@ -298,6 +364,7 @@ impl RowIndex {
     /// Files chips and Show INFO are not asked: the rows are made before them.
     pub fn fits(&self, request: &ScanRequest) -> bool {
         self.facts == facts(request)
+            && self.generation == self.tap.generation.load(Ordering::Relaxed)
     }
 
     /// The rows of table `slot`, in scan order.
@@ -363,7 +430,7 @@ impl RowIndex {
 
 /// What else in the request shapes the rows: the packer verdict, the address
 /// lookup mode, the guest's gateway, the launch and the run's identity.
-fn facts(request: &ScanRequest) -> String {
+pub(crate) fn facts(request: &ScanRequest) -> String {
     format!(
         "{:?}|{:?}|{:?}|{:?}|{:?}",
         request.packed,

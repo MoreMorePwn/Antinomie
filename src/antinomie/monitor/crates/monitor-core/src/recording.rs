@@ -38,6 +38,7 @@ pub(crate) use segments::recording_root;
 pub use segments::{RunSegment, run_segments};
 mod facts;
 pub use facts::{RunFilterFacts, run_filter_facts};
+pub mod growth;
 mod matching;
 pub use matching::{ArchiveStamp, MatchTotals, MatchingPage};
 mod read_only;

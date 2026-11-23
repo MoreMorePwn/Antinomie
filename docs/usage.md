@@ -1400,6 +1400,15 @@ The network capture is the guest's own view on every route.
   the first HIGH finding of each rule in a run that is still going raises one
   toast; later matches of that rule add `×N` to it. It is raised when the run's
   index is read again, every 5 s while Triage is shown and every 15 s otherwise.
+- **A run that is still recording** is read again from where the last read
+  stopped: Triage keeps the state of its passes at the first call whose exit has
+  not arrived, and the next refresh reads only the calls from there on, then
+  settles the network, the indicators and the tables in full. The answer is the
+  one a full read of the recording would give; a refresh reads the whole
+  recording again when that could not be so (a call before that point gained a
+  record, the run reconnected, a setting that changes the passes changed). While
+  the run records, Triage writes no Sigma event journal; the read after the run
+  ends writes it.
 - **A scanner's calls** (one process's `connect` and `sendto` to at least 256
   addresses) are one row in **Network › Endpoints** and in the IOC list, "scanned
   16,384 addresses on ports 23, 2323", with the frames and bytes of all of them.

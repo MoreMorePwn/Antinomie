@@ -367,7 +367,7 @@ pub struct Mapped<'a> {
 /// Collects [`Record`]s into an [`Activity`]. A file is its identity where the
 /// guest recorded one, so its names join; where it did not, a name is a file
 /// until a rename or link gives the same file another.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Builder {
     pub files: BTreeMap<String, FileActivity>,
     /// The file each name leads to now.

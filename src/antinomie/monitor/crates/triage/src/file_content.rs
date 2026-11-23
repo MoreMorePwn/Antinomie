@@ -368,7 +368,7 @@ pub fn field_capture(field: &FieldSummary, directory: Option<&Path>, size: u64) 
 }
 
 /// Directory and object names shared by every extent of a field.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Interned {
     pub recording: Option<Arc<PathBuf>>,
     pub raw: Option<Arc<PathBuf>>,

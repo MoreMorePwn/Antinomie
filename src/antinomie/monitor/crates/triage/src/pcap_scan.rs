@@ -829,9 +829,19 @@ pub fn walk_pages(
     recording: &antinomie_monitor_core::recording::Recording,
     cancel: &AtomicBool,
     stop: Option<(&crate::scan_progress::ScanStop, u64)>,
+    each: impl FnMut(&[InvocationSummary]) -> Result<(), String>,
+) -> Result<(u64, bool, Vec<String>), String> {
+    walk_pages_from(recording, 0, cancel, stop, each)
+}
+
+/// [`walk_pages`] from the call whose first record is at raw offset `offset` on.
+pub fn walk_pages_from(
+    recording: &antinomie_monitor_core::recording::Recording,
+    mut offset: u64,
+    cancel: &AtomicBool,
+    stop: Option<(&crate::scan_progress::ScanStop, u64)>,
     mut each: impl FnMut(&[InvocationSummary]) -> Result<(), String>,
 ) -> Result<(u64, bool, Vec<String>), String> {
-    let mut offset = 0u64;
     let mut seen = 0u64;
     let mut issues = Vec::new();
     loop {

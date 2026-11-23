@@ -245,6 +245,7 @@ impl Category {
 }
 
 /// One match of a rule, before the pipeline has judged it.
+#[derive(Clone)]
 pub struct Hit {
     pub rule: &'static str,
     /// What rows of this rule are folded by: a path, an endpoint, a target.

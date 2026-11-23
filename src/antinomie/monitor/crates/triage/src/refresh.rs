@@ -23,6 +23,28 @@ pub fn source_stamp(
     pcap_open: bool,
     request: &ScanRequest,
 ) -> String {
+    stamp_of(directory, pcap, pcap_open, request, true)
+}
+
+/// [`source_stamp`] without what grows while a run is recorded: the size and
+/// time of `telemetry.raw` and of the capture. The state a live refresh
+/// resumes from depends on these facts only (ANT-T0602).
+pub fn stamp_without_growth(
+    directory: &Path,
+    pcap: Option<&Path>,
+    pcap_open: bool,
+    request: &ScanRequest,
+) -> String {
+    stamp_of(directory, pcap, pcap_open, request, false)
+}
+
+fn stamp_of(
+    directory: &Path,
+    pcap: Option<&Path>,
+    pcap_open: bool,
+    request: &ScanRequest,
+    growth: bool,
+) -> String {
     use std::os::unix::fs::MetadataExt;
     let file = |path: &Path| {
         std::fs::metadata(path).map_or_else(
@@ -37,6 +59,13 @@ pub fn source_stamp(
                 )
             },
         )
+    };
+    let grows = |path: &Path| {
+        if growth {
+            file(path)
+        } else {
+            "growing".to_owned()
+        }
     };
     let page_rows = request.rows();
     let mut stamp = format!(
@@ -62,7 +91,11 @@ pub fn source_stamp(
         "manifest.json",
     ] {
         stamp.push('|');
-        stamp.push_str(&file(&directory.join(name)));
+        stamp.push_str(&if name == "telemetry.raw" {
+            grows(&directory.join(name))
+        } else {
+            file(&directory.join(name))
+        });
     }
     // What the IOC list depends on besides the recording: the datasets, the
     // false positives, the online answers kept with the run and the sample.
@@ -91,7 +124,7 @@ pub fn source_stamp(
             ))
     ));
     if let Some(pcap) = pcap {
-        stamp.push_str(&format!("|{}={}", pcap.display(), file(pcap)));
+        stamp.push_str(&format!("|{}={}", pcap.display(), grows(pcap)));
     }
     stamp
 }

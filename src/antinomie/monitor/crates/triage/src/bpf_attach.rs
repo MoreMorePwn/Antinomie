@@ -57,7 +57,7 @@ pub fn hex(value: Option<u64>) -> String {
 }
 
 /// Descriptors the trace has shown, per task: loaded programs and perf events.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct BpfFds {
     pub programs: Vec<(u64, i64, u64)>,
     pub perf: Vec<(u64, i64, PerfEvent)>,

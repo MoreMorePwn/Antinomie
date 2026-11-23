@@ -68,7 +68,7 @@ impl Frame<'_> {
 }
 
 /// What the rules remember across frames.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Frames {
     /// Some resolver answered a name: failed lookups mean something.
     pub resolver_answers: bool,

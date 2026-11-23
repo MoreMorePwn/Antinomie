@@ -244,7 +244,7 @@ pub const HARDCODED_SPAN: u64 = 10 * NS;
 const COMMON_PORTS: &[u16] = &[80, 443, 8080, 8443, 53, 853, 22, 21, 25, 587, 993, 995];
 
 /// What the run's connects to one public address add up to.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Hardcoded {
     pub count: u32,
     pub first_ns: u64,

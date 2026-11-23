@@ -586,7 +586,7 @@ pub fn calls(parent: &InvocationSummary, events: &[EventSummary]) -> Vec<Invocat
 /// ring is made, and stand for calls of that task (its descriptors, its
 /// evidence: the `io_uring_setup`), each at the time of its first record. The
 /// scan holds them until the calls it walks reach that time.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Attributed {
     /// Tasks whose attributed requests were read: stream and task cookie.
     pub read: std::collections::BTreeSet<(u64, u64)>,
@@ -690,7 +690,7 @@ impl Attributed {
 }
 
 /// What reading the observations of a call left out.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Reach {
     /// Requests turned into calls.
     pub requests: usize,
