@@ -227,6 +227,10 @@ pub struct Inventory {
     /// The same with the names the capture's DNS answers gave, once
     /// [`Inventory::finish`] has run.
     pub attributed: Option<std::sync::Arc<crate::net_attr::NetAttribution>>,
+    /// The scans the calls made: their frames are counted on one row each,
+    /// not listed by endpoint (ANT-T0612).
+    pub sweeps: Option<std::sync::Arc<crate::sweeps::Sweeps>>,
+    pub sweep_traffic: BTreeMap<usize, crate::sweeps::Traffic>,
 }
 
 /// The tables of the Network section's rebuilt tabs.
@@ -396,6 +400,22 @@ impl Inventory {
         } else {
             (source, source_port)
         };
+        // A frame to an address a scan reached counts on the scan's row; the
+        // capture keeps every frame, and the calls name each address.
+        if let Some(at) = self
+            .sweeps
+            .as_ref()
+            .and_then(|sweeps| sweeps.find(ip, port))
+        {
+            let capture = self.capture.clone();
+            self.sweep_traffic.entry(at).or_default().add(
+                &capture,
+                facts.frame,
+                facts.length,
+                facts.time,
+            );
+            return;
+        }
         let key = (ip, port, facts.protocol);
         if self.endpoints.len() >= INVENTORY_LIMIT && !self.endpoints.contains_key(&key) {
             self.omitted += 1;
@@ -626,6 +646,7 @@ impl Inventory {
             row[0].values.extend(net_tabs::source_values(&source));
             tables.endpoints.push(row);
         }
+        self.sweep_rows(&attribution, &mut tables.endpoints);
         for (name, host) in &self.hosts {
             let rcodes: Vec<String> = host.rcodes.iter().cloned().collect();
             let mut row = vec![

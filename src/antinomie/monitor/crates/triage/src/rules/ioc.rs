@@ -67,8 +67,76 @@ pub struct NetCall {
     pub last_ns: u64,
 }
 
-#[derive(Default)]
+/// Distinct addresses one task reached before its calls are a scan: they are
+/// listed as one summarised row instead of one row each (ANT-T0612).
+pub const SWEEP_ADDRESSES: usize = 256;
+/// Endpoints the sweeps of a run hold together; past it they are counted.
+pub const SWEEP_HELD: usize = 1 << 20;
+
+/// What one task's `connect`, `sendto` and `sendmsg` calls reached: a
+/// scanner's thousands of addresses become one row when there are at least
+/// [`SWEEP_ADDRESSES`] of them. The calls stay in the trace and every rule
+/// sees each of them.
+#[derive(Clone, Debug, Default)]
+pub struct Sweep {
+    /// The task's first such call.
+    pub who: Who,
+    /// The endpoints reached, at most [`SWEEP_HELD`] for the run.
+    pub endpoints: std::collections::HashSet<(IpAddr, u16, bool)>,
+    /// Endpoints past the cap, counted.
+    pub more: u64,
+    /// Calls by destination port.
+    pub ports: std::collections::BTreeMap<u16, u64>,
+    pub calls: u64,
+    pub last_ns: u64,
+}
+
+impl Sweep {
+    /// Distinct addresses reached, at least.
+    pub fn addresses(&self) -> usize {
+        self.endpoints
+            .iter()
+            .map(|(ip, _, _)| *ip)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    }
+
+    /// Enough addresses to be a scan.
+    pub fn is_scan(&self) -> bool {
+        self.endpoints.len() >= SWEEP_ADDRESSES && self.addresses() >= SWEEP_ADDRESSES
+    }
+
+    /// "scanned 16,384 addresses on ports 23, 2323".
+    pub fn summary(&self) -> String {
+        let mut ports: Vec<(u16, u64)> = self.ports.iter().map(|(p, n)| (*p, *n)).collect();
+        ports.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let shown: Vec<String> = ports
+            .iter()
+            .take(8)
+            .map(|(port, _)| port.to_string())
+            .collect();
+        let rest = ports.len().saturating_sub(shown.len());
+        let more = if self.more > 0 { " or more" } else { "" };
+        format!(
+            "scanned {}{more} addresses on port{} {}{}",
+            crate::values::thousands(self.addresses() as u64),
+            if ports.len() == 1 { "" } else { "s" },
+            shown.join(", "),
+            if rest > 0 {
+                format!(" and {rest} more")
+            } else {
+                String::new()
+            }
+        )
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct Log {
+    /// Each task's calls to addresses, by task cookie (ANT-T0612).
+    pub sweeps: std::collections::HashMap<u64, Sweep>,
+    /// Endpoints all sweeps hold.
+    pub sweep_held: usize,
     /// Every network call that names an address, for [`crate::net_attr`].
     pub net: Vec<NetCall>,
     /// Where each task's latest record to a peer is in `net`.
@@ -238,6 +306,25 @@ pub fn observe(cx: &Ctx, log: &mut Log) {
 }
 
 pub fn push(log: &mut Log, connection: Connection) {
+    let sweep = log
+        .sweeps
+        .entry(connection.who.cookie)
+        .or_insert_with(|| Sweep {
+            who: connection.who.clone(),
+            ..Sweep::default()
+        });
+    sweep.calls += 1;
+    sweep.last_ns = sweep.last_ns.max(connection.who.time_ns);
+    *sweep.ports.entry(connection.port).or_insert(0) += 1;
+    let endpoint = (connection.ip, connection.port, connection.udp);
+    if !sweep.endpoints.contains(&endpoint) {
+        if log.sweep_held < SWEEP_HELD {
+            sweep.endpoints.insert(endpoint);
+            log.sweep_held += 1;
+        } else {
+            sweep.more += 1;
+        }
+    }
     if log.connections.len() >= LIMIT {
         log.omitted += 1;
     } else {
@@ -267,6 +354,11 @@ impl Engine {
     /// The network calls seen so far, for flow attribution.
     pub fn net_calls(&self) -> &[NetCall] {
         &self.state.ioc.net
+    }
+
+    /// The scans the run's calls made so far (ANT-T0612).
+    pub fn sweeps(&self) -> crate::sweeps::Sweeps {
+        crate::sweeps::Sweeps::of(&self.state.ioc)
     }
 
     /// What the run's calls left for the IOC window.

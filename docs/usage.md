@@ -1400,6 +1400,11 @@ The network capture is the guest's own view on every route.
   the first HIGH finding of each rule in a run that is still going raises one
   toast; later matches of that rule add `×N` to it. It is raised when the run's
   index is read again, every 5 s while Triage is shown and every 15 s otherwise.
+- **A scanner's calls** (one process's `connect` and `sendto` to at least 256
+  addresses) are one row in **Network › Endpoints** and in the IOC list, "scanned
+  16,384 addresses on ports 23, 2323", with the frames and bytes of all of them.
+  The calls stay in the trace, every rule sees each of them, each address is
+  matched against the datasets, and an address that matched keeps its own row.
 - **Triage › IOC**: the run's indicators of compromise, matched offline against
   the abuse.ch datasets in **Tools > Detection rules > IOC**. The tabs are
   **Endpoints** (`ip:port`), **Domains** (DNS questions, TLS server names, HTTP

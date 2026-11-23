@@ -630,6 +630,8 @@ impl Scan {
                 .within(started_ms, facts.as_ref().and_then(|facts| facts.ended_ms))
                 .with_gateway(request.guest_gateway),
         ));
+        let sweeps = engine.sweeps();
+        network_request.sweeps = (!sweeps.is_empty()).then(|| Arc::new(sweeps));
         network_request.segments = segments
             .iter()
             .take(segments.len().saturating_sub(1))
@@ -865,10 +867,12 @@ impl Scan {
                     .unwrap_or_else(|| "it could not be indexed".into()),
             ),
         };
-        let ioc = ioc_scan::build(
+        let log = engine.take_ioc();
+        let sweeps = crate::sweeps::Sweeps::of(&log);
+        let mut ioc = ioc_scan::build(
             ioc_scan::Gathered {
                 collector: std::mem::take(&mut network.ioc).with_gateway(request.guest_gateway),
-                log: engine.take_ioc(),
+                log,
                 files: ioc_files,
                 read_hashes,
                 report: request.report.as_deref(),
@@ -889,6 +893,13 @@ impl Scan {
         )?;
         let (known, online) =
             ioc_scan::run_inputs(request.data_dir.as_deref(), &recording.directory);
+        // A scanner's addresses are one row; each was matched on its own.
+        ioc.indicators = sweeps.fold(
+            std::mem::take(&mut ioc.indicators),
+            &ioc.scan,
+            &online,
+            clock_anchor,
+        );
         let verdicts = ioc_scan::verdicts(&ioc, &known, &online);
         ioc_scan::list_findings(&mut engine, &ioc, &verdicts, clock_anchor);
         ioc_scan::annotate(&mut network.new_tabs, &network.http, &ioc, &verdicts);

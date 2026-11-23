@@ -97,6 +97,7 @@ pub mod sigma_events_tests;
 pub mod sorting;
 pub mod statistics;
 pub mod summary;
+pub mod sweeps;
 pub mod table;
 #[cfg(any(test, feature = "test-support"))]
 pub mod tests;
@@ -351,6 +352,9 @@ pub struct ScanRequest {
     /// The run's network calls, set by the scan once it has read them: what
     /// the capture's flows are matched against (see [`net_attr`]).
     pub attribution: Option<Arc<net_attr::NetAttribution>>,
+    /// The scans the calls made, set by the scan with `attribution`: their
+    /// endpoints are one row each in the Endpoints tab ([`sweeps`]).
+    pub sweeps: Option<Arc<sweeps::Sweeps>>,
     pub event_cache: Option<normalized::Cache>,
     pub sorts: [Option<sorting::Spec>; SLOTS],
     pub file_visibility: file_visibility::FileVisibility,
