@@ -10,7 +10,7 @@
 //! | `fixed` | the stage's fixed limit of design 4.1, when the input size is not known |
 //!
 //! The limit is `daemon.host_time_factor` (default 2) times the expected
-//! time, at least [`MIN_LIMIT`]. A `static_analysis.time_limit_per_tool_min`
+//! time, at least [`MIN_LIMIT`] ([`MIN_STATIC_LIMIT`] for a static tool). A `static_analysis.time_limit_per_tool_min`
 //! above 0 (of the preset, or of a Custom run) gives the static tools that
 //! fixed limit instead (`policy`). The `online` item (Check online) always
 //! has the fixed [`ONLINE_WAIT`] for the whole step. Time an item spends in the
@@ -36,6 +36,18 @@ pub const MEDIAN_KEEP: usize = 9;
 pub const MEDIAN_MIN: usize = 3;
 /// No item gets less time than this.
 pub const MIN_LIMIT: u64 = 30;
+/// No static tool gets less time than this. A static tool's wall time is
+/// dominated by what does not grow with the sample: starting the tool,
+/// reading cold files, and the processors other work takes. On a loaded
+/// host the estimate of a small sample (21 s for an 89 KB file) stopped
+/// `identification` after 42 s and the run ended `partial`. A floor keeps the
+/// estimate for what it is good at (big samples) and stops small ones from
+/// failing for the host's busyness; it is not scaled by the load, which is
+/// read once when the run enters the pool.
+pub const MIN_STATIC_LIMIT: u64 = 180;
+/// The most expected time the estimate gives a recording item (triage,
+/// detection, assess, report) before the load factor: half an hour.
+pub const RECORDING_ITEM_CAP_S: f64 = 1800.0;
 
 /// The expected time of one item and its limit, in seconds.
 #[derive(Clone, Debug, PartialEq)]
@@ -181,11 +193,17 @@ impl Timing {
                     })
                     .sum()
             }
-            ItemKind::Triage => 20.0 + 10.0 * recording?,
-            ItemKind::Detection => engines * (30.0 + 5.0 * recording?),
+            // Rates measured on the 2026-11 evaluation (66 runs, recordings of
+            // up to 3.3 GiB: triage 987 s, detection 166 s, assess 11 s and
+            // report 26 s at most), with room; the old rates were 20 to 100
+            // times too high and gave a 3-minute run a deadline of days.
+            ItemKind::Triage => (20.0 + 0.5 * recording?).min(RECORDING_ITEM_CAP_S),
+            ItemKind::Detection => {
+                (engines * (30.0 + 0.125 * recording?)).min(RECORDING_ITEM_CAP_S)
+            }
             ItemKind::Online => ONLINE_EXPECTED_S as f64,
-            ItemKind::Assess => 20.0 + 5.0 * recording?,
-            ItemKind::Report => 30.0 + 5.0 * recording?,
+            ItemKind::Assess => (10.0 + 0.03125 * recording?).min(RECORDING_ITEM_CAP_S),
+            ItemKind::Report => (20.0 + 0.0625 * recording?).min(RECORDING_ITEM_CAP_S),
         };
         Some(seconds * inputs.load.max(1.0))
     }
@@ -228,7 +246,11 @@ impl Timing {
         };
         let expected = expected.max(1);
         let limit = ((expected as f64) * self.factor.max(1.0)).ceil() as u64;
-        let limit = limit.max(MIN_LIMIT);
+        let floor = match kind {
+            ItemKind::Static(_) => MIN_STATIC_LIMIT,
+            _ => MIN_LIMIT,
+        };
+        let limit = limit.max(floor);
         if let (ItemKind::Static(group), Some(minutes)) = (kind, plan.static_limit_min) {
             // A fixed limit of the preset: tools x limit x 60 + 60.
             let minutes = if minutes == 0 {

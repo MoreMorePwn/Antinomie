@@ -875,6 +875,10 @@ fn analysis_failed_is_repeated_in_place_when_the_policy_retries_it() {
     assert_eq!(done.state, RunState::Succeeded);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(warnings(&w, &job), ["analysis_retry"]);
+    // T0613: the warning names the reason and the try.
+    let text = w.job(&job.id).warnings[0].text.clone();
+    assert!(text.contains("a transient fault"), "{text}");
+    assert!(text.contains("try 1 of 3"), "{text}");
     assert_eq!(
         w.job(&job.id).attempt,
         1,
@@ -1011,7 +1015,7 @@ fn static_policy(p: &mut crate::config::Preset) {
     p.static_analysis.enabled = true;
     p.static_analysis.triage_checks = vec![
         crate::api::spec::StaticCheck::Metadata,
-        crate::api::spec::StaticCheck::Strings,
+        crate::api::spec::StaticCheck::Floss,
     ];
     p.static_analysis.time_limit_per_tool_min = 1;
     p.required_stages = Vec::new();
@@ -1033,17 +1037,17 @@ fn the_static_analysis_of_the_library_copy_goes_through_the_engine() {
     });
     let done = finished(host(&w, &mut waiter, &job));
     assert_eq!(done.state, RunState::Succeeded);
-    // One work item per tool (ANT-T0454): one analysis each.
+    // The cheap checks are one item and FLOSS another (ANT-T0613): one analysis each.
     let sent = waiter.engine_mut().sent();
     assert_eq!(sent.len(), 2);
     let first = format!("{:?}", sent[0]);
     let second = format!("{:?}", sent[1]);
     assert!(
-        first.contains("AnalyzeSample") && first.contains("Metadata") && !first.contains("Strings"),
+        first.contains("AnalyzeSample") && first.contains("Metadata") && !first.contains("Floss"),
         "{first}"
     );
     assert!(
-        second.contains("Strings") && !second.contains("Metadata"),
+        second.contains("Floss") && !second.contains("Metadata"),
         "{second}"
     );
     assert!(first.contains(&job.sample.as_ref().unwrap().sha256.to_string()));

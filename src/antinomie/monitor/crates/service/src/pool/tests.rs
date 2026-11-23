@@ -147,20 +147,16 @@ fn the_items_follow_their_dependencies_and_regex_goes_with_strings() {
 fn an_older_job_starts_every_item_before_a_newer_job_starts_any() {
     let mut state = PoolState::new(2);
     // Submitted later, collected first: arrival is the submit time.
-    let newer = add(
-        &mut state,
-        job(2, 200),
-        plan(&[AnalysisKind::Strings], false),
-    );
+    let newer = add(&mut state, job(2, 200), plan(&[AnalysisKind::Floss], false));
     let older = add(
         &mut state,
         job(1, 100),
-        plan(&[AnalysisKind::Metadata], false),
+        plan(&[AnalysisKind::Capabilities], false),
     );
     let first = next(&mut state);
     let second = next(&mut state);
     assert_eq!(item(&first), (older.clone(), "triage".into()));
-    assert_eq!(item(&second), (older.clone(), "static:metadata".into()));
+    assert_eq!(item(&second), (older.clone(), "static:capabilities".into()));
     // Two items run: the pool is full.
     assert!(next(&mut state).is_none());
     done(&mut state, &first);
@@ -192,7 +188,7 @@ fn at_most_the_pool_size_runs_and_the_count_is_shown() {
     add(
         &mut state,
         job(1, 100),
-        plan(&[AnalysisKind::Metadata, AnalysisKind::Strings], false),
+        plan(&[AnalysisKind::Capabilities, AnalysisKind::Floss], false),
     );
     let first = next(&mut state);
     assert!(first.is_some());
@@ -210,7 +206,7 @@ fn the_head_waits_for_memory_and_nothing_jumps_it() {
     add(
         &mut state,
         job(2, 200),
-        plan(&[AnalysisKind::Metadata], false),
+        plan(&[AnalysisKind::Capabilities], false),
     );
     let mut short = || Some("memory: 1000 MiB are available, an item needs 2048 MiB".to_owned());
     assert!(state.next(1_000, &mut short, &no_deadline).is_none());
@@ -291,7 +287,11 @@ fn the_limit_is_twice_the_estimate_and_a_policy_limit_overrides_it() {
     assert_eq!(time.expected_s, 150, "90 s and 30 s a MiB");
     assert_eq!(time.limit_s, 300);
     let triage = timing.of(&ItemKind::Triage, &plain, &inputs);
-    assert_eq!((triage.expected_s, triage.limit_s), (120, 240));
+    assert_eq!(
+        (triage.expected_s, triage.limit_s),
+        (25, 50),
+        "20 s and half a second a MiB"
+    );
     // A loaded host stretches the estimate.
     let loaded = timing.of(
         &floss,
@@ -438,7 +438,7 @@ fn a_job_behind_a_long_queue_gets_the_time_of_the_work_ahead_too() {
 /// whole limit.
 #[test]
 fn bh_07_a_job_is_not_failed_by_its_deadline_while_an_item_is_within_its_limit() {
-    let plan = plan(&[AnalysisKind::Metadata], false);
+    let plan = plan(&[AnalysisKind::Capabilities], false);
     let items = items_for(&plan);
     let timing = Timing::default();
     // Three earlier jobs on this host: every item took one second.
@@ -495,7 +495,7 @@ fn the_deadline_covers_the_item_limits_and_waits_for_a_running_item() {
     assert_eq!(PoolState::budget_floor_ms(10, 4, 120, 2.0), 140_000);
     // Where the factor gives more, it stays.
     assert_eq!(PoolState::budget_floor_ms(100, 400, 60, 2.0), 1_000_000);
-    let plan = plan(&[AnalysisKind::Metadata], false);
+    let plan = plan(&[AnalysisKind::Capabilities], false);
     let job = job(1, 1);
     let id = job.id.clone();
     let key = PoolState::key(&job);
@@ -526,15 +526,15 @@ fn t0464_an_independent_item_of_the_head_job_starts_while_its_first_one_waits() 
     let older = add(
         &mut state,
         job(1, 100),
-        plan(&[AnalysisKind::Metadata, AnalysisKind::Strings], false),
+        plan(&[AnalysisKind::Capabilities, AnalysisKind::Floss], false),
     );
     let newer = add(
         &mut state,
         job(2, 200),
-        plan(&[AnalysisKind::Metadata], false),
+        plan(&[AnalysisKind::Capabilities], false),
     );
-    // Make `static:metadata` wait for `triage`: the job's first waiting item
-    // then depends on a running one, and `static:strings` does not.
+    // Make `static:capabilities` wait for `triage`: the job's first waiting item
+    // then depends on a running one, and `static:floss` does not.
     {
         let pool_job = state.jobs.values_mut().find(|j| j.job.id == older).unwrap();
         let names: Vec<String> = pool_job.items.iter().map(|i| i.kind.name()).collect();
@@ -542,8 +542,8 @@ fn t0464_an_independent_item_of_the_head_job_starts_while_its_first_one_waits() 
             names,
             [
                 "triage",
-                "static:metadata",
-                "static:strings",
+                "static:capabilities",
+                "static:floss",
                 "assess",
                 "report"
             ]
@@ -552,16 +552,16 @@ fn t0464_an_independent_item_of_the_head_job_starts_while_its_first_one_waits() 
     }
     let first = next(&mut state);
     assert_eq!(item(&first), (older.clone(), "triage".into()));
-    // `static:metadata` waits for `triage`; `static:strings` goes in its place.
+    // `static:capabilities` waits for `triage`; `static:floss` goes in its place.
     let second = next(&mut state);
-    assert_eq!(item(&second), (older.clone(), "static:strings".into()));
+    assert_eq!(item(&second), (older.clone(), "static:floss".into()));
     // A worker is free, but the older job still has an item that has not
     // started: nothing of the newer job starts.
     assert!(next(&mut state).is_none());
     done(&mut state, &first);
     // `triage` ended: the waiting item and `assess` start, in list order.
     let third = next(&mut state);
-    assert_eq!(item(&third), (older.clone(), "static:metadata".into()));
+    assert_eq!(item(&third), (older.clone(), "static:capabilities".into()));
     done(&mut state, &second);
     let fourth = next(&mut state);
     assert_eq!(item(&fourth), (older.clone(), "assess".into()));
@@ -584,12 +584,12 @@ fn t0464_an_item_that_goes_ahead_in_its_job_still_waits_for_memory() {
     let older = add(
         &mut state,
         job(1, 100),
-        plan(&[AnalysisKind::Metadata, AnalysisKind::Strings], false),
+        plan(&[AnalysisKind::Capabilities, AnalysisKind::Floss], false),
     );
     add(
         &mut state,
         job(2, 200),
-        plan(&[AnalysisKind::Metadata], false),
+        plan(&[AnalysisKind::Capabilities], false),
     );
     state
         .jobs
@@ -604,7 +604,7 @@ fn t0464_an_item_that_goes_ahead_in_its_job_still_waits_for_memory() {
     assert!(state.next(1_000, &mut short, &no_deadline).is_none());
     assert!(state.waiting_for.is_some());
     let second = next(&mut state);
-    assert_eq!(item(&second), (older, "static:strings".into()));
+    assert_eq!(item(&second), (older, "static:floss".into()));
 }
 
 /// ANT-T0471 (user decision 2026-11-12, replacing T0462 decision 2): at the
@@ -613,13 +613,13 @@ fn t0464_an_item_that_goes_ahead_in_its_job_still_waits_for_memory() {
 /// `deadline_exceeded` naming the stopped and the unstarted items.
 #[test]
 fn t0471_a_running_item_is_stopped_at_the_deadline_and_finished_results_are_kept() {
-    let plan = plan(&[AnalysisKind::Metadata], true);
+    let plan = plan(&[AnalysisKind::Capabilities], true);
     let job = job(1, 1);
     let id = job.id.clone();
     let key = PoolState::key(&job);
     let mut state = PoolState::new(2);
     state.jobs.insert(key, pool_job(job, plan, 5_000));
-    // triage and static:metadata start; both limits end at the deadline.
+    // triage and static:capabilities start; both limits end at the deadline.
     let first = state.next(0, &mut || None, &crate::pool::deadline_failure);
     let second = state.next(1_000, &mut || None, &crate::pool::deadline_failure);
     let (
@@ -640,7 +640,7 @@ fn t0471_a_running_item_is_stopped_at_the_deadline_and_finished_results_are_kept
     else {
         panic!("two items expected");
     };
-    assert_eq!(kind.name(), "static:metadata");
+    assert_eq!(kind.name(), "static:capabilities");
     assert_eq!((a, ua), (Duration::from_secs(5), Duration::from_secs(5)));
     assert_eq!((b, ub), (Duration::from_secs(4), Duration::from_secs(4)));
     // Triage finishes before the deadline: kept.
@@ -671,7 +671,7 @@ fn t0471_a_running_item_is_stopped_at_the_deadline_and_finished_results_are_kept
     assert_eq!(failure.code, FailureCode::DeadlineExceeded);
     assert_eq!(
         failure.detail.as_deref(),
-        Some("timed out: static:metadata; not started: detection, assess, report")
+        Some("timed out: static:capabilities; not started: detection, assess, report")
     );
     let views = &state.get(&id).unwrap().views;
     let states: Vec<(&str, HostItemState)> =
@@ -680,7 +680,7 @@ fn t0471_a_running_item_is_stopped_at_the_deadline_and_finished_results_are_kept
         states,
         vec![
             ("triage", HostItemState::Done),
-            ("static:metadata", HostItemState::TimedOut),
+            ("static:capabilities", HostItemState::TimedOut),
             ("detection", HostItemState::Skipped),
             ("assess", HostItemState::Skipped),
             ("report", HostItemState::Skipped),
@@ -701,7 +701,7 @@ fn t0471_a_running_item_is_stopped_at_the_deadline_and_finished_results_are_kept
 /// One that finished in its grace is `done`.
 #[test]
 fn t0471_an_item_cut_by_the_deadline_is_timed_out_unless_it_finished() {
-    let plan = plan(&[AnalysisKind::Metadata, AnalysisKind::Strings], false);
+    let plan = plan(&[AnalysisKind::Capabilities, AnalysisKind::Floss], false);
     let job = job(1, 1);
     let id = job.id.clone();
     let mut state = PoolState::new(3);
@@ -723,4 +723,83 @@ fn t0471_an_item_cut_by_the_deadline_is_timed_out_unless_it_finished() {
     assert_eq!(views[started[0]].state, HostItemState::TimedOut);
     assert_eq!(views[started[1]].state, HostItemState::Done);
     assert_eq!(views[started[2]].state, HostItemState::Failed);
+}
+
+#[test]
+fn t0613_a_small_sample_keeps_a_static_limit_a_loaded_host_cannot_cut_short() {
+    // The evaluation: identification of an 89 KB sample had an expected time
+    // of 21 s and a limit of 42 s, and was stopped at 54 s on a busy host.
+    let timing = Timing::default();
+    let inputs = Inputs {
+        sample_bytes: Some(89_232),
+        recording_bytes: Some(10 << 20),
+        load: 1.0,
+        tcg: 1.0,
+    };
+    let plain = plan(&[AnalysisKind::Identification], true);
+    let time = timing.of(
+        &ItemKind::Static(vec![AnalysisKind::Identification]),
+        &plain,
+        &inputs,
+    );
+    assert_eq!(time.expected_s, 21, "the estimate is as it was");
+    assert_eq!(time.limit_s, 180, "the limit has the static floor");
+    // The other items keep the 30 s floor.
+    let assess = timing.of(&ItemKind::Assess, &plain, &Inputs::default());
+    assert!(assess.limit_s >= 30);
+}
+
+#[test]
+fn t0613_recording_items_have_credible_estimates_for_a_big_recording() {
+    // The evaluation's recordings were up to 3.3 GiB and took triage 987 s,
+    // detection 166 s, assess 11 s and report 26 s at most. The old rates
+    // gave 22438 s, 33717 s, 11229 s and 11239 s.
+    let timing = Timing::default();
+    let plain = plan(&[], true);
+    let inputs = Inputs {
+        sample_bytes: Some(1 << 20),
+        recording_bytes: Some(3300 << 20),
+        load: 1.0,
+        tcg: 1.0,
+    };
+    for (kind, actual) in [
+        (ItemKind::Triage, 987),
+        (ItemKind::Detection, 166),
+        (ItemKind::Assess, 11),
+        (ItemKind::Report, 26),
+    ] {
+        let time = timing.of(&kind, &plain, &inputs);
+        assert!(
+            time.expected_s >= actual && time.expected_s <= 1800,
+            "{kind:?}: {} s against {actual} s",
+            time.expected_s
+        );
+    }
+    // A recording of any size is capped at half an hour (before the load).
+    let huge = Inputs {
+        recording_bytes: Some(1 << 40),
+        ..inputs
+    };
+    for kind in [
+        ItemKind::Triage,
+        ItemKind::Detection,
+        ItemKind::Assess,
+        ItemKind::Report,
+    ] {
+        assert!(
+            timing.of(&kind, &plain, &huge).expected_s <= 1800,
+            "{kind:?}"
+        );
+    }
+    // A 3-minute run's whole host stage stays within hours, not days.
+    let total: u64 = [
+        ItemKind::Triage,
+        ItemKind::Detection,
+        ItemKind::Assess,
+        ItemKind::Report,
+    ]
+    .iter()
+    .map(|kind| timing.of(kind, &plain, &inputs).expected_s)
+    .sum();
+    assert!(total < 3600, "{total} s");
 }

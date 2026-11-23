@@ -79,23 +79,45 @@ pub struct ItemSpec {
     pub after: Vec<usize>,
 }
 
-/// The static checks as items: one per tool, Regex with Strings (else with
-/// FLOSS), whose strings it matches.
+/// The checks that get an item of their own: each is a tool with its own
+/// cost and failure (capa, FLOSS, Ghidra, unpacking), so one that is slow or
+/// missing does not hold the others.
+fn own_item(kind: AnalysisKind) -> bool {
+    matches!(
+        kind,
+        AnalysisKind::Capabilities
+            | AnalysisKind::Floss
+            | AnalysisKind::Disassembly
+            | AnalysisKind::Decompilation
+            | AnalysisKind::Unpacking
+    )
+}
+
+/// The static checks as items (ANT-T0613, AN-01): the cheap checks (metadata,
+/// structures, strings, regex, entropy, hardening, rules, identification,
+/// embedded) are one item, so they take one pool worker, one sandbox and
+/// one pass over the sample instead of eight workers that each wait for the
+/// engine's single analysis slot; each heavy tool keeps its own. Regex
+/// matches the strings, so with FLOSS but no Strings it goes with FLOSS.
 pub fn static_groups(checks: &[AnalysisKind]) -> Vec<Vec<AnalysisKind>> {
-    let mut groups: Vec<Vec<AnalysisKind>> = checks
+    let regex_with_floss =
+        checks.contains(&AnalysisKind::Floss) && !checks.contains(&AnalysisKind::Strings);
+    let cheap: Vec<AnalysisKind> = checks
         .iter()
-        .filter(|k| **k != AnalysisKind::Regex)
-        .map(|k| vec![*k])
+        .copied()
+        .filter(|k| !own_item(*k) && !(*k == AnalysisKind::Regex && regex_with_floss))
         .collect();
-    if checks.contains(&AnalysisKind::Regex) {
-        let at = groups
-            .iter()
-            .position(|g| g[0] == AnalysisKind::Strings)
-            .or_else(|| groups.iter().position(|g| g[0] == AnalysisKind::Floss));
-        match at {
-            Some(at) => groups[at].push(AnalysisKind::Regex),
-            None => groups.push(vec![AnalysisKind::Regex]),
+    let mut groups: Vec<Vec<AnalysisKind>> = Vec::new();
+    if !cheap.is_empty() {
+        groups.push(cheap);
+    }
+    for kind in checks.iter().copied().filter(|k| own_item(*k)) {
+        let mut group = vec![kind];
+        if kind == AnalysisKind::Floss && regex_with_floss && checks.contains(&AnalysisKind::Regex)
+        {
+            group.push(AnalysisKind::Regex);
         }
+        groups.push(group);
     }
     groups
 }
@@ -492,7 +514,17 @@ impl<E: Engine> LaneStages<'_, E> {
             self.warn(
                 job,
                 "analysis_retry",
-                &format!("{}; the stages are run again", failure.message),
+                &format!(
+                    "{}{}; the stages are run again (try {} of {})",
+                    failure.message,
+                    failure
+                        .detail
+                        .as_deref()
+                        .map(|reason| format!(": {reason}"))
+                        .unwrap_or_default(),
+                    work.tries,
+                    work.plan.max_attempts.max(1)
+                ),
             );
             work.again();
             return Ok(PhaseEnd::Again);

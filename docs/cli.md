@@ -173,7 +173,7 @@ antinomie-cli base build --profile busybox
 
 `base install DIR` installs a folder that holds `bundle.json`, the kernel and the disk.
 `base build` makes one here (`--profile busybox|busybox-extra|debian-minimal|debian-xfce`).
-A base is named by its identity, the start of it (4 characters or more) or its label.
+A base is named by its identity, the start of it (4 characters or more) or its label, in any case (`busybox` and `BusyBox` are alike; an exact label wins over longer labels that start with it).
 
 ### 3. Make a VM
 
@@ -616,21 +616,17 @@ for run in "$@"; do
 done
 ```
 
-`triage` prints the recording's assessment (`matched_indicators`, `suspicious_behaviour`,
+`triage RUN` and `report RUN` take the Auto run id (`r_...`) as well as the recording's id; an Auto run that has no recording yet is refused with its state. `triage` prints the recording's assessment (`matched_indicators`, `suspicious_behaviour`,
 `observed_only`, `no_findings` or `inconclusive`) and its families. The label of an Auto run is in
 `auto result RUN -o json` as `.result.run.assessment.label`.
 
 ### Where the run is in the answer
 
-The commands do not wrap a run alike, so a script reads the run's id and state at different paths:
-
-| Command | The run is at |
-|---|---|
-| `auto submit` | `.result.run` (beside `.result.replayed` and `.result.reports`) |
-| `auto result` | `.result.run` (beside `.result.files`) |
-| `auto status RUN` | `.result` itself (`.result.state`, `.result.id`) |
-
-The shapes stay as they are in 0.9.1; 0.9.2 may make them alike.
+A command that answers with one run puts it at `.result.run`: `auto submit` (beside `.result.replayed` and
+`.result.reports`), `auto result` (beside `.result.files`), `auto status RUN`, `auto wait RUN` with one run,
+`auto cancel` and `auto rerun`. `auto list`, and `auto wait` with several runs, print the runs as their items.
+The run API's own `run.get` returns the run object itself, without the `run` wrapper; the CLI adds it so a
+script reads `.result.run.state` from any of these commands.
 
 ## Exit codes
 

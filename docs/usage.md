@@ -139,7 +139,7 @@ The **Base images** section in the left sidebar lists installed bases. Use
   (DVR services)** (see *The BusyBox camera base* below). A BusyBox base has
   BusyBox and glibc's runtime (its loader and libraries in `/lib`, from Debian
   13's `libc6`), so programs linked against glibc start too; an older BusyBox base has
-  none (its `bundle.json` lists no `program_interpreters`). No base ships uClibc, musl or Android's bionic:
+  none (its `bundle.json` lists no `program_interpreters`). No base ships uClibc, musl, Android's bionic or a 32-bit x86 (i386) glibc (`/lib/ld-linux.so.2`; the Debian bases have no `libc6:i386` either):
   a program that needs their loader does not start, and the guest's refusal (or,
   in Auto mode, the run's `unavailable_on_node` failure) names the loader. A short wizard asks
   installer-style questions (hostname; for Debian also language, keyboard, time

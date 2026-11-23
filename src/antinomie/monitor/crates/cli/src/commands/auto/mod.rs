@@ -13,7 +13,7 @@ mod init;
 mod lanes;
 pub(crate) mod link;
 mod render;
-mod runs;
+pub(crate) mod runs;
 pub(crate) mod submit;
 
 #[derive(Subcommand, Debug)]

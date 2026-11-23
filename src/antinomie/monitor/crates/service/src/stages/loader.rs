@@ -7,7 +7,7 @@
 //! Android's bionic, musl, or glibc of another architecture). A base without
 //! the list (older bases, the Debian bases) is not judged here: the guest
 //! reports a missing loader at launch, as before.
-use antinomie_monitor_core::analysis::{SampleElf, c_library};
+use antinomie_monitor_core::analysis::{SampleElf, c_library, loader_hint};
 use std::path::Path;
 
 /// The `program_interpreters` of the base in `directory`; `None` when its
@@ -42,8 +42,9 @@ pub fn missing_loader(head: &[u8], interpreters: &[String]) -> Option<MissingLoa
     let library =
         c_library(&interpreter).map_or(String::new(), |name| format!(" ({name}'s dynamic loader)"));
     let why = format!(
-        "the program needs the program interpreter {interpreter}{library}, which the lane's base does not have (it has {}), so it cannot start on this node",
-        interpreters.join(", ")
+        "the program needs the program interpreter {interpreter}{library}, which the lane's base does not have (it has {}), so it cannot start on this node.{}",
+        interpreters.join(", "),
+        loader_hint(&interpreter)
     );
     Some(MissingLoader { interpreter, why })
 }

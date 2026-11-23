@@ -61,8 +61,11 @@ run, and the run's host work goes to the **host work pool** (see below).
 ### The host work pool
 
 The host work of a run is split into items: `triage` (the Triage scan), one
-`static:<tool>` item for each static check (`static:strings+regex`: Regex reads
-the strings), `detection` (YARA, Sigma and IDS, after `triage`), `online`
+`static:...` item for the cheap static checks together (metadata, structures,
+strings, regex, entropy, hardening, rules, identification, embedded: they share one
+sandbox and one pass, and do not each wait for the engine's one analysis slot) and
+one for each of capa (`static:capabilities`), FLOSS, Ghidra's disassembly and
+decompilation, and unpacking, `detection` (YARA, Sigma and IDS, after `triage`), `online`
 (Check online, after `triage`, only when the preset has `[detection]
 check_online = true`), `assess` (the run's digest and the label, after
 `triage`, `detection` and `online`) and `report` (after all of them). At most `[daemon] host_workers` items run at once (2 by default),
@@ -91,7 +94,14 @@ mapping therefore applies to runs too.
   decompilation) share the processors with the emulated lanes, so their estimate
   is also multiplied by the engine's TCG multiplier (`start.tcg_multiplier`, 10 by
   default). It may take
-  `[daemon] host_time_factor` (2) times that, and at least 30 seconds. A preset that
+  `[daemon] host_time_factor` (2) times that, and at least 30 seconds (a static tool at
+  least 180 seconds: its wall time is mostly starting the tool, cold files and the
+  processors other work takes, none of which grows with the sample, so a small
+  sample on a busy host would otherwise be stopped by a limit of 40 seconds). The
+  estimate for the Triage scan, the detection engines, the assessment and the report
+  grows with the recording's size at the rates measured on 66 evaluation runs
+  (recordings up to 3.3 GiB took at most 987, 166, 11 and 26 seconds) and is capped
+  at 30 minutes before the host's load stretches it. A preset that
   sets `static_analysis.time_limit_per_tool_min` above 0 gives every static tool
   that fixed limit instead. A static item stopped at its limit says why: the limit
   it had and where it came from. The `online` item has a fixed 300 seconds for the

@@ -514,21 +514,29 @@ pub fn c_library(interpreter: &str) -> Option<&'static str> {
 /// leading space (empty when there is nothing to add): no base ships musl,
 /// uClibc or bionic; glibc's 64-bit loader is in the Debian bases and in
 /// BusyBox bases built with its runtime (ANT-T0556), not in older ones.
-fn loader_hint(interpreter: &str) -> String {
+pub fn loader_hint(interpreter: &str) -> String {
     match c_library(interpreter) {
-        Some("glibc") if GLIBC_BASE_LOADERS.contains(&interpreter) => {
-            " An older BusyBox base has no glibc: a BusyBox base built with glibc's runtime, or a Debian base, has it.".into()
-        }
+        Some("glibc") => match interpreter {
+            "/lib64/ld-linux-x86-64.so.2" | "/lib/ld-linux-x86-64.so.2" => {
+                " The x86-64 Debian bases and an x86-64 BusyBox base built with glibc's runtime have it; an older BusyBox base and every arm64 base do not.".into()
+            }
+            "/lib/ld-linux-aarch64.so.1" => {
+                " The arm64 bases (Debian and BusyBox built with glibc's runtime) have it; an x86-64 base does not.".into()
+            }
+            "/lib/ld-linux-armhf.so.3" => {
+                " The arm64 Debian bases (guest revision 21 or later) have it, for 32-bit ARM programs; no BusyBox base and no x86-64 base does.".into()
+            }
+            "/lib/ld-linux.so.2" => {
+                " It is the loader of 32-bit x86 (i386) glibc programs, and no shipped base has it: Debian Minimal and Debian Desktop have no i386 C library (libc6:i386), and a BusyBox base carries glibc's 64-bit runtime only. A base built with libc6:i386 would run it.".into()
+            }
+            _ => " No shipped base has this glibc loader.".into(),
+        },
         Some(name @ ("musl" | "uClibc" | "Android's bionic")) => {
             format!(" No Antinomie base ships {name}, so the program cannot start in any of them.")
         }
         _ => String::new(),
     }
 }
-
-/// The glibc loaders a BusyBox base built with glibc's runtime has (its
-/// bundle.json lists them in `program_interpreters`).
-const GLIBC_BASE_LOADERS: [&str; 2] = ["/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-aarch64.so.1"];
 
 /// What the host reads of a sample's ELF headers to say whether any installed
 /// base can run it (the Samples page; the same facts as `HostHead`).
@@ -1021,7 +1029,12 @@ mod tests {
         );
         assert!(loader_hint("/lib/ld-uClibc.so.0").contains("No Antinomie base ships uClibc"));
         assert!(loader_hint("/lib64/ld-linux-x86-64.so.2").contains("older BusyBox base"));
-        assert_eq!(loader_hint("/lib/ld-linux.so.2"), "");
+        // F14: the i386 loader says what has it (no shipped base does).
+        let i386 = loader_hint("/lib/ld-linux.so.2");
+        assert!(i386.contains("no shipped base has it"), "{i386}");
+        assert!(i386.contains("Debian Minimal"), "{i386}");
+        assert!(loader_hint("/lib/ld-linux-armhf.so.3").contains("arm64 Debian bases"));
+        assert!(loader_hint("/lib/ld-linux-aarch64.so.1").contains("arm64 bases"));
         assert_eq!(loader_hint("/tmp/loader"), "");
     }
 }
