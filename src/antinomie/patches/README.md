@@ -1,7 +1,7 @@
 # The Antinomie guest kernel patch series
 
 The guest kernel is Debian's `linux` 6.12.94-1 (trixie) with Antinomie's own
-patch series on top. The series is sixty topic patches; each one adds one
+patch series on top. The series is seventy-one topic patches; each one adds one
 part of the design and says, in its description, what it adds, why, which
 existing kernel files it hooks and why there, and which contract revision it
 belongs to.
@@ -95,6 +95,17 @@ changes. Line counts are added/removed lines of the patch.
 | 96 | let a session that is over hold no thread (no contract change) | +17 -3 | none (`debug.c`: `hook_session()`, `ant_dbg_wants_signals()` and `park_current()` ignore an EXITED or EXEC session) | none |
 | 97 | read at most 256 entries of an io_submit array (no contract change) | +25 -5 | none (`async_capture.c`: `ANT_AIO_SUBMIT_MAX`, `arg2.iocbpp[256]` RESOURCE_EXHAUSTED for the rest; 256 keeps the Entry record near a `writev` of UIO_MAXIOV vectors, which the host assembles fast) | none |
 | 98 | size recvmmsg's capture state by at most UIO_MAXIOV messages (no contract change) | +24 -4 | none (`native_capture.c`: both directions bounded, `__GFP_NOWARN`, `arg1.mmsg.1024.header` RESOURCE_EXHAUSTED for messages received past it; `recorder.c`: the compat capture alike) | none |
+| 99 | give a forked child the program's bytes when no session can follow it (no contract change) | +10 -2 | none (`debug.c`: `ant_dbg_fork()`'s failure path gives a child with its own memory the program's bytes back; the helper, out of line now, is `ant_dbg_unfollowed_bytes()`) | none |
+| 100 | keep the debugger's requests that came with a detach or a run's stop (no contract change) | +21 | none (`debug.c`: `ant_dbg_want_again()` in `dbg_work_fn()`) | none |
+| 101 | stop a group that was asked to stop during any continue (no contract change) | +4 -2 | none (`debug.c`: `do_cont()` takes up any pending interrupt) | none |
+| 102 | leave io_uring's kernel workers of a debugged program running (no contract change) | +18 -4 | none (`debug.c`: `ant_dbg_worker_task()`; `sync_threads()`, `all_parked()`, `ant_dbg_signal()`, `thread_created()` skip PF_USER_WORKER threads) | none |
+| 103 | let a vfork child's record go when its exec leaves the program (no contract change) | +51 -5 | none (`debug.c`: `ant_dbg_exec_left()`, the record's `left`, `ant_dbg_record_done()` for the reap and the hardware release; `park_current()`, `hw_triggered()` ignore a record that left) | none |
+| 104 | look a specimen's path up before opening it (no contract change) | +33 -4 | none (`specimen.c`: `ant_specimen_open()`: `kern_path()`, the kind check `ant_specimen_kind_ok()`, `dentry_open()`) | none |
+| 105 | record no system call that seccomp or a tracer skipped (no contract change) | +6 | none (`recorder.c`: `selected()` is false for a negative number) | none |
+| 106 | keep BPF_TASK_FD_QUERY's name ceiling from wrapping (no contract change) | +4 -1 | none (`native_capture.c`: the ceiling in 64 bits) | none |
+| 107 | record the completion of an io_uring IOPOLL request (no contract change) | +4 | none | `io_uring/rw.c` (`io_do_iopoll()` calls `ant_uring_complete()` for each completed request before the flush posts it) |
+| 108 | hide a process held at its exit from the rest of its run (no contract change) | +92 -2 | none (`exit_hold.c`: the leader's `exit_hidden`, `ant_task_hidden()`, uncounted in `ant_monitor_release()`) | `fs/proc/base.c` (`proc_pid_lookup()`, `next_tgid()`, `pid_revalidate()`, `proc_single_show()`), `kernel/signal.c` (`check_kill_permission()`), `kernel/pid.c` (`pidfd_open()`): a held process is gone for the other processes of its run until it is reaped |
+| 109 | report a file truncated during its hash as changed (no contract change) | +13 -4 | none (`hash.c`: an early end of file is OK with CHANGED, not READ_ERROR -ENODATA) | none |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`

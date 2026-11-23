@@ -62,6 +62,22 @@
  *   leafchld prints "leafchld pid=N", handles SIGCHLD, forks a child that
  *            exits after 200 ms, waits for the signal, reaps the child, prints
  *            "leafchld reaped" and exits 5
+ *   forkfill waits for a 'g' line, then forks ROUNDS children (24 by
+ *            default) at once, each calling child_site() and exiting 7, and
+ *            reaps what ends within FORKFILL_MS: "forkfill exits=E traps=T
+ *            other=O" (children still parked in a debug session are not
+ *            waited for), exit 0
+ *   vforksig handles SIGUSR1 and waits for a 'g' line, then vforks a child
+ *            that sends itself SIGUSR1 (in the parent's memory) and execs this
+ *            program in mode leafread; the parent reports "vfork child
+ *            exit=5"
+ *   leafread prints "leafread pid=N", reads stdin up to a line that starts with
+ *            'x' (the end of the parent's 'g' line is skipped) and exits 5
+ *   uringfifo makes a FIFO and submits an io_uring OPENAT of it for reading
+ *            on an io-wq worker (IOSQE_ASYNC: it blocks there until a writer
+ *            comes), prints "uring waiting", waits for a 'g' line, opens the
+ *            FIFO for writing and prints "uring openat res=R" with the
+ *            request's result, exit 0
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -70,7 +86,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <linux/io_uring.h>
+#include <sys/mman.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <time.h>
 #include <sys/wait.h>
@@ -227,6 +247,144 @@ static int gate(void)
     }
 }
 
+/* How long forkfill waits for its children to end. */
+#define FORKFILL_MS 6000
+
+static int forkfill(long children)
+{
+    int exits = 0, traps = 0, other = 0, left = 0;
+
+    if (!gate()) return 98;
+    for (long i = 0; i < children; i++) {
+        pid_t child = fork();
+        if (child == 0) {
+            child_site(i);
+            _exit(7);
+        }
+        if (child > 0) left++;
+    }
+    for (int waited = 0; left > 0 && waited < FORKFILL_MS; ) {
+        int status = 0;
+        pid_t done = waitpid(-1, &status, WNOHANG);
+        if (done > 0) {
+            left--;
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 7) exits++;
+            else if (WIFSIGNALED(status) && WTERMSIG(status) == SIGTRAP) traps++;
+            else other++;
+            continue;
+        }
+        usleep(20000);
+        waited += 20;
+    }
+    printf("forkfill exits=%d traps=%d other=%d\n", exits, traps, other);
+    fflush(stdout);
+    return 0;
+}
+
+static volatile sig_atomic_t usr1_seen;
+static void on_usr1(int signal)
+{
+    (void)signal;
+    usr1_seen = 1;
+}
+
+static int vforksig(void)
+{
+    int status = 0;
+    pid_t child;
+
+    signal(SIGUSR1, on_usr1);
+    if (!gate()) return 98;
+    child = vfork();
+    if (child == 0) {
+        char *args[] = { self_path, "leafread", NULL };
+        kill(getpid(), SIGUSR1);
+        execv(self_path, args);
+        _exit(99);
+    }
+    if (child > 0 && waitpid(child, &status, 0) == child)
+        printf("vfork child exit=%d sig=%d\n", WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+               WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    return 0;
+}
+
+static int leafread(void)
+{
+    char line[64];
+
+    printf("leafread pid=%d\n", (int)getpid());
+    fflush(stdout);
+    do {
+        if (!fgets(line, sizeof(line), stdin)) return 1;
+    } while (line[0] != 'x');
+    return 5;
+}
+
+/* One io_uring request, raw system calls: an OPENAT of a FIFO for reading,
+ * pushed onto an io-wq worker, where it blocks until a writer opens the FIFO.
+ */
+static int uringfifo(void)
+{
+    struct io_uring_params params;
+    struct io_uring_sqe *sqes;
+    struct io_uring_cqe *cqes;
+    unsigned char *ring;
+    unsigned *tail, *mask, *array, *cq_head, *cq_tail, *cq_mask;
+    size_t size;
+    char path[64];
+    int fd, writer;
+
+    snprintf(path, sizeof(path), "/tmp/p3fifo.%d", (int)getpid());
+    unlink(path);
+    if (mkfifo(path, 0600)) return 2;
+    memset(&params, 0, sizeof(params));
+    fd = (int)syscall(__NR_io_uring_setup, 4, &params);
+    if (fd < 0) {
+        printf("uring unavailable %d\n", errno);
+        return 2;
+    }
+    size = params.sq_off.array + params.sq_entries * sizeof(unsigned);
+    if (params.cq_off.cqes + params.cq_entries * sizeof(*cqes) > size)
+        size = params.cq_off.cqes + params.cq_entries * sizeof(*cqes);
+    ring = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd,
+                IORING_OFF_SQ_RING);
+    sqes = mmap(NULL, params.sq_entries * sizeof(*sqes), PROT_READ | PROT_WRITE,
+                MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_SQES);
+    if (ring == MAP_FAILED || sqes == MAP_FAILED) return 2;
+    tail = (unsigned *)(ring + params.sq_off.tail);
+    mask = (unsigned *)(ring + params.sq_off.ring_mask);
+    array = (unsigned *)(ring + params.sq_off.array);
+    cq_head = (unsigned *)(ring + params.cq_off.head);
+    cq_tail = (unsigned *)(ring + params.cq_off.tail);
+    cq_mask = (unsigned *)(ring + params.cq_off.ring_mask);
+    cqes = (struct io_uring_cqe *)(ring + params.cq_off.cqes);
+    memset(&sqes[0], 0, sizeof(sqes[0]));
+    sqes[0].opcode = IORING_OP_OPENAT;
+    sqes[0].fd = AT_FDCWD;
+    sqes[0].addr = (unsigned long)path;
+    sqes[0].open_flags = O_RDONLY | O_CLOEXEC;
+    sqes[0].flags = IOSQE_ASYNC;
+    sqes[0].user_data = 1;
+    array[*tail & *mask] = 0;
+    __atomic_store_n(tail, *tail + 1, __ATOMIC_RELEASE);
+    if (syscall(__NR_io_uring_enter, fd, 1, 0, 0, NULL, 0) != 1) return 2;
+    usleep(100000);
+    printf("uring waiting\n");
+    fflush(stdout);
+    if (!gate()) return 98;
+    /* A reader is waiting in the worker, so a non-blocking writer opens. */
+    writer = open(path, O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+    if (writer < 0) printf("uring writer open failed %d\n", errno);
+    while (__atomic_load_n(cq_tail, __ATOMIC_ACQUIRE) == *cq_head)
+        if (syscall(__NR_io_uring_enter, fd, 0, 1, IORING_ENTER_GETEVENTS, NULL, 0) < 0 &&
+            errno != EINTR)
+            return 2;
+    printf("uring openat res=%d\n", cqes[*cq_head & *cq_mask].res);
+    fflush(stdout);
+    unlink(path);
+    return 0;
+}
+
 static int churn(long threads)
 {
     printf("churn ready\n");
@@ -308,10 +466,14 @@ int main(int argc, char **argv)
     self_path[length > 0 ? length : 0] = 0;
     if (!strcmp(mode, "leaf")) return leaf();
     if (!strcmp(mode, "leafchld")) return leafchld();
+    if (!strcmp(mode, "leafread")) return leafread();
     print_symbols();
     printf("start\n");
     fflush(stdout);
     if (!strcmp(mode, "churn")) return churn(rounds);
+    if (!strcmp(mode, "forkfill")) return forkfill(argc > 2 ? rounds : 24);
+    if (!strcmp(mode, "vforksig")) return vforksig();
+    if (!strcmp(mode, "uringfifo")) return uringfifo();
     if (exec_chld) {
         char *args[] = { self_path, "leafchld", NULL };
         if (!gate()) return 98;

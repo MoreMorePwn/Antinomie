@@ -1,0 +1,66 @@
+Description: antinomie: keep the debugger's requests that came with a detach or a run's stop
+ The debug worker takes every request bit of a session at once, then
+ handled W_DETACH or W_RUNSTOP alone and went round again: the other
+ bits taken in that pass were dropped. The likely loss was a run's stop
+ (STOP_RUN) that came together with a detach that could not stop the
+ group: the session stayed, but the run's stop never took the engine's
+ bytes out or let the parked threads go, and the run ended only through
+ the SIGKILL escalation. A reap or a thread sync taken with either was
+ lost until the next one.
+ .
+ - After a detach the other bits go back for the next pass (the session
+   is gone if the detach succeeded, and nothing is kept then).
+ - After a run's stop only the bookkeeping (W_REAP, W_SYNC) goes back:
+   no stop or resume of the debugger's applies to a run being ended, as
+   before.
+ .
+ Found by the 0.9.0 bug hunt (KDBG-5). No contract change (revision 22).
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-22
+
+---
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 52b9a346a..288859dc6 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -2277,6 +2277,18 @@ void ant_debug_kick(struct task_struct *task)
+ 	rcu_read_unlock();
+ }
+ 
++/* Requests the worker took in one pass but did not handle in it go back for
++ * the next pass (nothing is left once the session is torn down).
++ */
++static void ant_dbg_want_again(struct ant_dbg *s, unsigned int want)
++{
++	if (!want || READ_ONCE(s->teardown))
++		return;
++	spin_lock_irq(&s->lock);
++	s->want |= want;
++	spin_unlock_irq(&s->lock);
++}
++
+ static void dbg_work_fn(struct work_struct *work)
+ {
+ 	struct ant_dbg *s = container_of(work, struct ant_dbg, work);
+@@ -2291,10 +2303,19 @@ static void dbg_work_fn(struct work_struct *work)
+ 			break;
+ 		if (want & W_DETACH) {
+ 			do_detach(s);
++			/* A detach that could not stop the group keeps the
++			 * session: what was asked with it (a run's stop, say)
++			 * still applies.
++			 */
++			ant_dbg_want_again(s, want & ~W_DETACH);
+ 			continue;
+ 		}
+ 		if (want & W_RUNSTOP) {
+ 			do_runstop(s);
++			/* The run is ending: no stop or resume of the debugger's
++			 * applies after it, its bookkeeping still does.
++			 */
++			ant_dbg_want_again(s, want & (W_REAP | W_SYNC));
+ 			continue;
+ 		}
+ 		if (want & W_REAP)

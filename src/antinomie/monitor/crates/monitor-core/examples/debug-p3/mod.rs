@@ -9,6 +9,7 @@ use antinomie_monitor_core::debug::{ChildRef, SessionOptions, StopEvent, ThreadA
 mod bughunt;
 mod engine;
 mod gdb;
+mod lows;
 mod session;
 mod steps;
 
@@ -226,6 +227,10 @@ pub fn run(bundle: &str, data: &str, dir: &str, only: &[String]) -> Result<(), S
         ("thread-churn", bughunt::thread_churn),
         ("thread-churn-nonstop", bughunt::thread_churn_nonstop),
         ("exec-signal", bughunt::exec_signal),
+        ("fork-full", lows::fork_full),
+        ("cont-stop", lows::cont_stop),
+        ("uring-stop", lows::uring_stop),
+        ("vfork-exec-left", lows::vfork_exec_left),
         // Restoring a snapshot changes the VM under the later tests: keep these last.
         ("snapshot", session::snapshot_with_debugger),
         ("snapshot-readopt", session::snapshot_readopt),

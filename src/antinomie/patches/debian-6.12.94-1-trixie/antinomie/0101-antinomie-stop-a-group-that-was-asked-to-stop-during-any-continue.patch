@@ -1,0 +1,39 @@
+Description: antinomie: stop a group that was asked to stop during any continue
+ STOP while a session is RESUMING only sets s->interrupt and answers;
+ do_cont() takes it up when it lets the threads go. It did so only when
+ a step was still in the kernel (-EINPROGRESS), and a step past a
+ breakpoint checked it on its own. For a plain continue (no thread to
+ step past a breakpoint), or a step that failed and resumed the group,
+ the interrupt was cleared and dropped: the host had its STOP
+ acknowledged, the program ran on, and the debugger waited for a stop
+ that never came (the host does not repeat STOP).
+ .
+ - do_cont() turns any pending interrupt into STOPPING and a stop
+   request once the threads run. The paths that stop on their own (a
+   finished step, a deferred event, a vfork) clear the interrupt
+   before, as they did.
+ .
+ Found by the 0.9.0 bug hunt (KDBG-6). No contract change (revision 22).
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-22
+
+---
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 288859dc6..f79b98f1d 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -2079,8 +2079,10 @@ run:
+ 	insert_breakpoints(as);
+ 	spin_lock_irq(&s->lock);
+ 	memset(&s->cur, 0, sizeof(s->cur));
+-	/* A stop asked for while a step was still in the kernel is done now. */
+-	stop = s->interrupt && error == -EINPROGRESS;
++	/* A stop asked for while the group was being resumed (a step still in
++	 * the kernel, or a plain continue) is done now: STOP acknowledged it.
++	 */
++	stop = s->interrupt;
+ 	s->interrupt = false;
+ 	spin_unlock_irq(&s->lock);
+ 	session_set_state(s, ANTC_DEBUG_RUNNING);

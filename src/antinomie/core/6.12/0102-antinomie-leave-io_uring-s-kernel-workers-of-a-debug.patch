@@ -1,0 +1,94 @@
+From a696dfa21e96506653e444d18cd2ef646ac90c91 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 22 Nov 2026 14:34:04 +0700
+Subject: [PATCH] antinomie: leave io_uring's kernel workers of a debugged
+ program running
+
+The io-wq workers and the SQPOLL thread io_uring creates are threads of
+the program's group (PF_USER_WORKER) that run no program code. A stop
+gave each of them a record and queued its park callback with
+TWA_SIGNAL, which makes signal_pending() true: a worker blocked
+interruptibly in a request (an IORING_OP_OPENAT of a FIFO with no
+writer yet, say) left it with -ERESTARTSYS, and the program got the
+request back as failed (-EINTR) for a stop it cannot see. ptrace never
+attaches to these threads either.
+
+- ant_dbg_worker_task(): sync_threads() does not record or stop them,
+  all_parked() does not wait for them, ant_dbg_signal() lets their
+  signals (SIGKILL, SIGSTOP) take the normal path, and a new one gets
+  no record at its creation.
+- The debugger's thread list therefore does not show them, as with a
+  tracer.
+
+Found by the 0.9.0 bug hunt (KDBG-8). No contract change (revision 22).
+---
+ kernel/antinomie/debug.c | 22 ++++++++++++++++++----
+ 1 file changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index f79b98f1d..15cf28b52 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -481,6 +481,16 @@ static void queue_thread(struct ant_dbg *s, struct ant_dbg_thread *t)
+ }
+ 
+ /* A record for a task, not yet in the list. */
++/* The kernel's own threads in a program's group (io_uring's io-wq workers and
++ * SQPOLL thread) run no program code: the engine never records or stops them,
++ * as ptrace cannot attach to them. Stopping one would interrupt the request it
++ * is blocked in, and the program would see that request fail with -EINTR.
++ */
++static bool ant_dbg_worker_task(struct task_struct *p)
++{
++	return READ_ONCE(p->flags) & PF_USER_WORKER;
++}
++
+ static struct ant_dbg_thread *record_alloc(struct ant_dbg *s, struct task_struct *task)
+ {
+ 	struct ant_dbg_thread *t = kzalloc(sizeof(*t), GFP_KERNEL);
+@@ -577,7 +587,7 @@ static int sync_threads(struct ant_dbg *s, bool stop_all)
+ 		more = false;
+ 		read_lock(&tasklist_lock);
+ 		for_each_thread(s->leader, p) {
+-			if (READ_ONCE(p->flags) & PF_EXITING)
++			if (READ_ONCE(p->flags) & PF_EXITING || ant_dbg_worker_task(p))
+ 				continue;
+ 			rcu_read_lock();
+ 			t = find_thread(s, p);
+@@ -689,7 +699,7 @@ static bool all_parked(struct ant_dbg *s)
+ 			return false;
+ 	read_lock(&tasklist_lock);
+ 	for_each_thread(s->leader, p) {
+-		if (READ_ONCE(p->flags) & PF_EXITING)
++		if (READ_ONCE(p->flags) & PF_EXITING || ant_dbg_worker_task(p))
+ 			continue;
+ 		rcu_read_lock();
+ 		ok = find_thread(s, p) != NULL;
+@@ -1555,10 +1565,13 @@ int ant_dbg_signal(int signr, struct kernel_siginfo *info, enum pid_type type)
+ {
+ 	struct sighand_struct *sighand = current->sighand;
+ 	struct ant_dbg_thread *t;
+-	struct ant_dbg *s = hook_session();
++	struct ant_dbg *s;
+ 	u32 pass = signr;
+ 	bool stop = true;
+ 
++	if (ant_dbg_worker_task(current))
++		return signr;
++	s = hook_session();
+ 	if (!s)
+ 		return signr;
+ 	current->jobctl |= JOBCTL_STOP_DEQUEUED;
+@@ -2687,7 +2700,8 @@ static void thread_created(struct ant_dbg *s, struct task_struct *child)
+ {
+ 	struct ant_dbg_thread_init *init;
+ 
+-	if (!record_add(s, child, NULL) || !hw_used(s) || !refcount_inc_not_zero(&s->refs))
++	if (ant_dbg_worker_task(child) || !record_add(s, child, NULL) || !hw_used(s) ||
++	    !refcount_inc_not_zero(&s->refs))
+ 		return;
+ 	init = kmalloc(sizeof(*init), GFP_KERNEL);
+ 	if (!init) {
+-- 
+2.53.0
+

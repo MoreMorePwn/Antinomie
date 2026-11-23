@@ -1,0 +1,149 @@
+Description: antinomie: let a vfork child's record go when its exec leaves the program
+ A task outside a session's group matches the session by its memory: a
+ vfork child (CLONE_VM | CLONE_VFORK) the session does not follow, as
+ posix_spawn() and system() make, that reaches a breakpoint in the
+ shared memory (on execve, say) is given a record in the parent's
+ session. After the child's exec the record stayed: ant_dbg_exec() found
+ no session for the new image and returned. Every later stop of the
+ program queued the park callback on that unrelated program and waited
+ for it (the new image sat in the program's stop and was listed among
+ its threads), and hw_sync() gave it the program's hardware breakpoints.
+ .
+ - ant_dbg_exec_left(), at every exec under a debugger: a record that a
+   task outside the session's group holds is marked as left (state
+   GONE), and the worker is asked to reap.
+ - ant_dbg_record_done(): a record that left is reaped like an exited
+   thread's once no callback is queued, and its hardware events are
+   released first (they would fire in the new image). Until then
+   park_current() does not park it and hw_triggered() ignores it.
+ .
+ Found by the 0.9.0 bug hunt (KDBG-9). No contract change (revision 22).
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-22
+
+---
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 15cf28b52..ec0d8871c 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -120,6 +120,7 @@ struct ant_dbg_thread {
+ 	bool step_sys;		/* the step ends at the exit of a system call */
+ 	bool step_rep;		/* a repeated string instruction: trap again in place */
+ 	bool step_quiet;	/* a step past a breakpoint that a continue left to finish */
++	bool left;		/* outside the group, it left the program's memory (exec) */
+ 	unsigned long step_pc;
+ 	struct ant_dbg_step step;
+ };
+@@ -648,6 +649,17 @@ static bool ant_dbg_record_hw(struct ant_dbg_thread *t)
+ 	return false;
+ }
+ 
++/* A record whose task is no longer the program's: it exited, or (a task
++ * outside the group that met the engine in the program's memory, such as a
++ * vfork child the session does not follow) it executed a new image. Neither
++ * can reach the record again: an exited task runs no task_work, and a
++ * replaced one no longer matches the session.
++ */
++static bool ant_dbg_record_done(struct ant_dbg_thread *t)
++{
++	return READ_ONCE(t->task->exit_state) || READ_ONCE(t->left);
++}
++
+ /* Forget threads that have fully exited, so a program that starts and ends
+  * threads for a long time does not use up the session's records. A record is
+  * safe to free once the task is a zombie (its task_work can no longer run), no
+@@ -660,7 +672,7 @@ static void reap_records(struct ant_dbg *s)
+ 
+ 	spin_lock_irq(&s->lock);
+ 	list_for_each_entry_safe(t, next, &s->threads, node) {
+-		if (!READ_ONCE(t->task->exit_state) || test_bit(0, &t->queued) ||
++		if (!ant_dbg_record_done(t) || test_bit(0, &t->queued) ||
+ 		    ant_dbg_record_hw(t))
+ 			continue;
+ 		list_del_rcu(&t->node);
+@@ -1106,6 +1118,8 @@ static void hw_triggered(struct perf_event *bp, struct perf_sample_data *data,
+ 	t = find_thread(s, current);
+ 	if (!t)
+ 		t = adopt_current(s);
++	else if (READ_ONCE(t->left))
++		t = NULL;	/* the new image of a task that left: not the program's */
+ 	if (t) {
+ 		t->pending_addr = bp->attr.bp_addr;
+ 		t->pending_aux = type == HW_BREAKPOINT_X ? 0 :
+@@ -1199,8 +1213,9 @@ static void hw_clear_all(struct ant_dbg *s)
+ 	mutex_unlock(&s->hw_lock);
+ }
+ 
+-/* A thread that has exited has its events detached; release them. s->hw_lock
+- * held.
++/* A thread that has exited has its events detached; release them, and those
++ * of a task that left the program by an exec (they would fire in the new
++ * image). s->hw_lock held.
+  */
+ static void hw_release_exited(struct ant_dbg *s)
+ {
+@@ -1208,7 +1223,7 @@ static void hw_release_exited(struct ant_dbg *s)
+ 	unsigned int slot;
+ 
+ 	for_each_record(t, s)
+-		if (READ_ONCE(t->task->exit_state) && !test_bit(0, &t->queued))
++		if (ant_dbg_record_done(t) && !test_bit(0, &t->queued))
+ 			for (slot = 0; slot < ANT_DBG_MAX_HW; slot++)
+ 				hw_unregister(t, slot);
+ }
+@@ -1420,7 +1435,7 @@ static void park_current(struct ant_dbg *s, struct ant_dbg_thread *t, u32 pendin
+ 	bool ns = nonstop(s);
+ 
+ 	rich = xchg(&t->pending_ev, NULL);
+-	if (READ_ONCE(s->teardown) || READ_ONCE(s->run_stopping))
++	if (READ_ONCE(s->teardown) || READ_ONCE(s->run_stopping) || READ_ONCE(t->left))
+ 		goto out;
+ 	/* Already parked: this is a callback that ran inside the park itself. */
+ 	if (READ_ONCE(t->state) == T_PARKED)
+@@ -3023,6 +3038,36 @@ static void mark_unfollowed_exec(struct ant_dbg *s)
+ 	wake_up_all(&s->wait);
+ }
+ 
++/* A task outside a session's group has a record there when it met the engine
++ * in the program's memory (a vfork child the session does not follow, stopped
++ * at a breakpoint before its exec). Its exec takes it out of that memory and
++ * the program: the record must not hold it (a later stop would park the new
++ * image, hw_sync() would give it watchpoints). It is marked as gone now and
++ * reaped, with its hardware events, by the worker.
++ */
++static void ant_dbg_exec_left(void)
++{
++	struct ant_dbg_thread *t;
++	struct ant_dbg *s;
++
++	rcu_read_lock();
++	list_for_each_entry_rcu(s, &sessions, node) {
++		if (READ_ONCE(s->teardown) || same_thread_group(current, s->leader))
++			continue;
++		t = find_thread(s, current);
++		if (!t)
++			continue;
++		spin_lock_irq(&s->lock);
++		WRITE_ONCE(t->left, true);
++		WRITE_ONCE(t->state, T_DEAD);
++		s->want |= W_REAP;
++		spin_unlock_irq(&s->lock);
++		wake_up_all(&s->wait);
++		queue_work_ref(s);
++	}
++	rcu_read_unlock();
++}
++
+ /* The program executed a new image (end of exec_binprm): with the EXEC option the
+  * session continues in it and the thread stops, reporting the path. Without
+  * that option the exec is terminal and stays so after the new image exits.
+@@ -3035,6 +3080,7 @@ void ant_dbg_exec(void)
+ 	struct ant_dbg *s;
+ 	struct file *exe;
+ 
++	ant_dbg_exec_left();
+ 	s = hook_session();
+ 	if (!s)
+ 		return;

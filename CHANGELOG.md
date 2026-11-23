@@ -12,7 +12,8 @@ the `antinomie-auto` systemd units and the example configuration, and the
 documents for the command line (`docs/usage.md`), Auto mode (`docs/auto-mode.md`),
 `service.toml` (`docs/service-config.md`) and the run API (`docs/run-api-1.md`
 with its JSON Schema) are back. The window is the 0.9.0 window; it runs the same
-bases (contract revision 22, `min_app_version` 0.9.0). Everything below is new in
+bases (contract revision 22, `min_app_version` 0.9.0), and 0.9.1's rebuilt bases
+(still revision 22) carry the guest fixes listed under Guest. Everything below is new in
 0.9.1: no earlier release shipped the command line, the daemon or the run API, so
 their entries are listed in full.
 
@@ -752,6 +753,23 @@ their entries are listed in full.
   architecture, revision and what it is for (`for Antinomie 0.9.0`, `for Antinomie
   0.8.0, outdated`), as the window does; the JSON adds `arch`, `min_app_version`,
   `built_with` and `status`.
+
+### Guest
+
+Guest fixes that ship with 0.9.1's bases (guest patches 99-109, no contract
+change); the 0.9.0 bases keep the old behavior.
+
+- **A process held at its exit for a dump trigger's core is hidden from the sample (ANT-T0596).** It was still listed in `/proc` with its `exe` link and answered `kill(pid, 0)`, for up to a few hundred milliseconds on a TCG guest, so a program that daemonizes and checks for a running copy of itself saw its own exiting parent and quit. For the run's other processes it is now gone from the moment it is held, as if it had exited and been reaped: `/proc` does not list or find it, and `kill`, `tgkill`, `sigqueue` and `pidfd_open` give ESRCH. The parent's `wait()` still returns only after the hold.
+- **A file truncated while the guest hashes it is reported as changed, not as "read error -61" (ANT-T0597).**
+- **A forked child no longer dies of SIGTRAP when the debugger cannot follow it (ANT-T0582).** With children followed and all 16 debug sessions in use, a new child ran with the debugger's breakpoint bytes still in its memory; it now gets the program's own bytes back.
+- **Stopping a run whose debugger could not detach no longer waits for the kill (ANT-T0582).** A Stop that came together with a detach that could not stop the program was dropped, and the run ended only through SIGKILL.
+- **Pause right after Continue no longer goes unanswered (ANT-T0582).** A stop that reached the guest while the program was still being resumed was acknowledged and dropped, and the debugger waited for a stop that never came.
+- **Pausing a program no longer fails its blocked io_uring requests (ANT-T0582).** The debugger stopped io_uring's kernel workers too, and a request blocked on one (opening a FIFO, say) failed with EINTR.
+- **A program started with posix_spawn or system() is no longer held by the parent's debugger after its exec (ANT-T0582).** A vfork child that had stopped in the parent's memory stayed one of the parent's threads after it executed a new program, which was then paused with the parent and listed among its threads.
+- **Analyze Only no longer opens a path before checking that it names a regular file (ANT-T0582).** A device node, FIFO or network file was opened first, and an open that blocked kept every later acquisition refused.
+- **A system call seccomp refused is no longer recorded as an unsupported x32 call (ANT-T0582).**
+- **A BPF_TASK_FD_QUERY name is no longer captured empty when the program changes its buffer length meanwhile (ANT-T0582).**
+- **Reads and writes of an io_uring ring with IORING_SETUP_IOPOLL are recorded as completed, not abandoned (ANT-T0582).**
 
 ## 0.9.0 — 2026-11-23
 

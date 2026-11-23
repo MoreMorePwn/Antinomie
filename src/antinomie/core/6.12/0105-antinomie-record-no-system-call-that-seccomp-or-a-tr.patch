@@ -1,0 +1,42 @@
+From 257f1efb085dcc9e7265424b8577b6d114bc93fe Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 22 Nov 2026 14:35:43 +0700
+Subject: [PATCH] antinomie: record no system call that seccomp or a tracer
+ skipped
+
+x86-64's syscall entry calls the recorder's hook with the number
+syscall_enter_from_user_mode() returns, which is -1 when seccomp
+(RET_ERRNO, RET_TRAP, RET_KILL) or a tracer skipped the call. -1 has
+the x32 bit set, so selected() took it as an x32 call and the run got
+a schema.unsupported_abi record for a call that never ran (and a
+32-bit entry got a compat record of number -1). arm64 leaves the hook
+out for a skipped call already.
+
+- selected() is false for a negative number: a skipped call leaves no
+  system call record, as on arm64.
+
+Found by the 0.9.0 bug hunt (K1-08a). No contract change (revision 22).
+---
+ kernel/antinomie/recorder.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 391fa85c9..5c1e7cc1e 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -678,6 +678,12 @@ static void vector_exit(struct ant_task *ctx, long result)
+ 
+ static bool selected(long nr)
+ {
++	/* A call seccomp (RET_ERRNO, RET_TRAP, RET_KILL) or a tracer skipped
++	 * reaches the hook as -1: no system call runs, and none is recorded.
++	 * Its ABI must not be worked out from it (-1 has x86-64's x32 bit set).
++	 */
++	if (nr < 0)
++		return false;
+ 	if (ant_arch_syscall_abi(nr) != ANT_ABI_NATIVE)
+ 		return true;
+ 	return nr >= ANT_ARCH_NR_BASE &&
+-- 
+2.53.0
+

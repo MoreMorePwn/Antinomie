@@ -10,6 +10,7 @@
 //!   uring-check legacy BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE
 //!   uring-check record BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE
 //!   uring-check bounds BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE
+//!   uring-check edges  BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE
 //!
 //! WORKLOAD is the static `ant-workload` sample and FIXTURE the static
 //! `tests/monitor/uring-fixture` program. `status` runs every case with and
@@ -32,8 +33,12 @@
 //! [`AIO_FLOOD_MS`] under never-drop, the recorder reads at most
 //! 256 `io_submit` entries and records the rest as one field it did not read,
 //! `recvmmsg` is recorded at entry and exit, and the guest kernel log has no
-//! warning. The data folder must be new and disposable. Every result is a
-//! `RESULT` line.
+//! warning. `edges` runs two low findings of that hunt and reads their
+//! recordings: a call seccomp skipped (K1-08a, x86-64's hook sees number -1)
+//! leaves no record of an x32 call, and a read of an IORING_SETUP_IOPOLL ring
+//! (K1-08e) is recorded as completed with its result, not abandoned (reported
+//! as skipped when the guest's disk cannot be polled). The data folder must be
+//! new and disposable. Every result is a `RESULT` line.
 #[path = "support/serial_ready.rs"]
 mod serial_ready;
 
@@ -919,6 +924,145 @@ fn bounds(bundle: &str, data: &str, workload: &str, fixture: &str) -> Result<(),
     Ok(())
 }
 
+/// An async record's scalar field (`async.stage`, `async.opcode`, ...).
+fn async_scalar(event: &EventSummary, key: &str) -> Option<u64> {
+    let field = event.fields.iter().find(|f| f.key == key)?;
+    let bytes = field.preview.get(..8)?;
+    Some(u64::from_le_bytes(bytes.try_into().ok()?))
+}
+
+/// The async record's system (`io_uring` or `AIO`).
+fn async_system(event: &EventSummary) -> String {
+    event
+        .fields
+        .iter()
+        .find(|f| f.key == "async.system")
+        .map(|f| {
+            String::from_utf8_lossy(&f.preview)
+                .trim_end_matches('\0')
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+/// IORING_OP_READ.
+const IORING_OP_READ: u64 = 22;
+/// Async lifecycle stages (contract): completed, abandoned.
+const STAGE_COMPLETED: u64 = 4;
+const STAGE_ABANDONED: u64 = 6;
+
+fn edges(bundle: &str, data: &str, workload: &str, fixture: &str) -> Result<(), String> {
+    let mut d = prepare(
+        bundle,
+        data,
+        "capture edges",
+        workload,
+        fixture,
+        STATUS_CPUS,
+    )?;
+    let mut runs = Vec::new();
+    for (label, needle) in [("seccomp-skip", "SECCOMP SKIP"), ("iopoll", "IOPOLL")] {
+        let id = d.launch(FIXTURE, &[label], false)?;
+        let watched = d.watch(&id, 120);
+        let line = d
+            .output(&id)
+            .lines()
+            .find(|line| line.starts_with(needle))
+            .unwrap_or_default()
+            .to_string();
+        result(format!(
+            "{label}: {} after {} ms; {line}",
+            d.describe(&id),
+            watched.elapsed.as_millis()
+        ));
+        if !watched.ended {
+            return Err(format!("{label} did not end"));
+        }
+        match d.execution(&id).and_then(|e| e.root_exit) {
+            Some(WaitStatus::Exited { code: 0 }) => {}
+            other => return Err(format!("{label} ended {other:?}: {line}")),
+        }
+        if line.contains("UNSUPPORTED") {
+            result(format!("SKIP {label}: {line}"));
+            continue;
+        }
+        let directory = d.run(&id).ok_or("run missing")?.directory.clone();
+        runs.push((label, directory));
+    }
+    kernel_log_clean(&mut d)?;
+    // The recordings are complete when the VM has stopped.
+    d.command(Command::Stop)?;
+    d.wait("VM stop", 90, |s| s.state == VmState::Stopped)?;
+    thread::sleep(Duration::from_secs(2));
+    for (label, directory) in &runs {
+        let scratch = d.options.data_dir.join(format!("assemble-{label}"));
+        let events = recorded_events(directory, scratch)?;
+        if *label == "seccomp-skip" {
+            let unnumbered: Vec<String> = events
+                .iter()
+                .filter(|e| e.syscall_nr == u64::MAX)
+                .map(|e| {
+                    let keys: Vec<&str> = e.fields.iter().take(4).map(|f| f.key.as_str()).collect();
+                    format!("phase {} {keys:?}", e.phase)
+                })
+                .collect();
+            result(format!(
+                "seccomp-skip: records with no number: {unnumbered:?}"
+            ));
+            if let Some(event) = events.iter().find(|e| {
+                // Entry and exit records only: lifecycle records (phase 3)
+                // carry no system call number.
+                (matches!(e.phase, 1 | 2) && e.syscall_nr == u64::MAX)
+                    || e.fields.iter().any(|f| f.key == "schema.unsupported_abi")
+            }) {
+                return Err(format!(
+                    "a skipped call was recorded: {} (number {:#x}, phase {})",
+                    event.syscall_name, event.syscall_nr, event.phase
+                ));
+            }
+            result(format!(
+                "seccomp-skip: {} events, none for the three skipped getppid calls",
+                events.len()
+            ));
+        } else {
+            let reads: Vec<&EventSummary> = events
+                .iter()
+                .filter(|e| {
+                    e.phase == 3
+                        && async_system(e) == "io_uring"
+                        && async_scalar(e, "async.opcode") == Some(IORING_OP_READ)
+                        && async_scalar(e, "async.final") == Some(1)
+                })
+                .collect();
+            if let Some(abandoned) = reads
+                .iter()
+                .find(|e| async_scalar(e, "async.stage") == Some(STAGE_ABANDONED))
+            {
+                return Err(format!(
+                    "the IOPOLL read was recorded as abandoned (request {:?})",
+                    async_scalar(abandoned, "async.request_id")
+                ));
+            }
+            let completed = reads
+                .iter()
+                .find(|e| async_scalar(e, "async.stage") == Some(STAGE_COMPLETED))
+                .ok_or_else(|| {
+                    format!(
+                        "no completion of the IOPOLL read ({} final records)",
+                        reads.len()
+                    )
+                })?;
+            let res = async_scalar(completed, "async.result").map(|r| r as i64);
+            if res != Some(4096) {
+                return Err(format!("the IOPOLL read was recorded with result {res:?}"));
+            }
+            result("iopoll: the read was recorded as completed with result 4096".into());
+        }
+    }
+    println!("PASS edges");
+    Ok(())
+}
+
 fn finish(mode: &str, failed: Vec<String>) -> Result<(), String> {
     if failed.is_empty() {
         println!("PASS {mode}");
@@ -1038,6 +1182,7 @@ fn main() {
         ["legacy", bundle, data, workload, fixture] => legacy(bundle, data, workload, fixture),
         ["record", bundle, data, workload, fixture] => record(bundle, data, workload, fixture),
         ["bounds", bundle, data, workload, fixture] => bounds(bundle, data, workload, fixture),
+        ["edges", bundle, data, workload, fixture] => edges(bundle, data, workload, fixture),
         ["boots", bundle, data, workload, fixture] => boots(bundle, data, workload, fixture, 3),
         ["boots", bundle, data, workload, fixture, count] => count
             .parse()
@@ -1045,7 +1190,7 @@ fn main() {
             .and_then(|count| boots(bundle, data, workload, fixture, count)),
         _ => {
             eprintln!(
-                "usage: uring-check status|legacy|record|boots|bounds BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE [COUNT]"
+                "usage: uring-check status|legacy|record|boots|bounds|edges BUNDLE NEW_DATA_DIR WORKLOAD FIXTURE [COUNT]"
             );
             std::process::exit(2);
         }

@@ -25,15 +25,35 @@
  * run time, prints "TRIGGER-FIXTURE dropped image running", sleeps SECONDS
  * (default 15) and exits 0. A core of it names the dropped file, a core of
  * the dropper does not.
+ *
+ *   trigger-fixture --selfscan SECONDS DELAY_MS
+ *
+ * The daemon case (ANT-T0596): it forks, the child forks again, and both
+ * parents exit at once, as a daemon starts. The grandchild waits DELAY_MS
+ * after the middle process said it is exiting (with the dump trigger's core
+ * on, the guest holds an exiting process for longer than that), then looks
+ * for a running copy of itself, as a sample that will not run twice does:
+ * another process whose /proc/PID/exe is its own image (the /proc listing,
+ * and both parents by number). A copy found: "selfscan found PID", exit 3.
+ * None: it checks that the middle process was in fact still there (its
+ * getppid() still names it while /proc and kill(pid, 0) no longer find it,
+ * which only a hidden exiting process looks like); if so, "selfscan alone,
+ * parent hidden", it writes /etc/cron.d/antinomie-selfscan (persistence.cron)
+ * and sleeps SECONDS; if not, the hold was over before it looked and the
+ * case proves nothing: "selfscan no hold seen", exit 4.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <pthread.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Written at run time by the executed copy only, so no other image holds it. */
@@ -132,6 +152,120 @@ static void drop_and_exec(const char *seconds, int spawn)
 	_exit(1);
 }
 
+static void selfscan_say(const char *format, ...)
+{
+	va_list args;
+
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
+	printf("\n");
+	fflush(stdout);
+}
+
+/* Whether process pid runs the image at self (its exe link names it). */
+static int runs_image(long pid, const char *self)
+{
+	char link[64], target[512];
+	ssize_t got;
+
+	snprintf(link, sizeof(link), "/proc/%ld/exe", pid);
+	got = readlink(link, target, sizeof(target) - 1);
+	if (got <= 0)
+		return 0;
+	target[got] = '\0';
+	return strcmp(target, self) == 0;
+}
+
+/* Another running copy of this program, by the /proc listing, or 0. */
+static long copy_listed(const char *self)
+{
+	struct dirent *entry;
+	long found = 0, pid;
+	char *end;
+	DIR *proc = opendir("/proc");
+
+	if (!proc)
+		return -1;
+	while (!found && (entry = readdir(proc))) {
+		pid = strtol(entry->d_name, &end, 10);
+		if (*end || pid <= 0 || pid == (long)getpid())
+			continue;
+		if (runs_image(pid, self))
+			found = pid;
+	}
+	closedir(proc);
+	return found;
+}
+
+static int selfscan(unsigned seconds, unsigned delay_ms)
+{
+	static const char entry[] = "# antinomie trigger fixture\n* * * * * root /bin/true\n";
+	struct timespec delay = {delay_ms / 1000, (long)(delay_ms % 1000) * 1000000L};
+	char self[512], proc_path[64], said;
+	pid_t first = getpid(), middle, child;
+	ssize_t got = readlink("/proc/self/exe", self, sizeof(self) - 1);
+	int pipefd[2], fd, hidden;
+	long found;
+
+	if (got <= 0 || pipe(pipefd) != 0)
+		return 1;
+	self[got] = '\0';
+	child = fork();
+	if (child < 0)
+		return 1;
+	if (child > 0)
+		_exit(0);
+	middle = getpid();
+	child = fork();
+	if (child < 0)
+		_exit(1);
+	if (child > 0) {
+		/* The middle process says it is exiting, then exits. */
+		if (write(pipefd[1], "x", 1) != 1)
+			_exit(1);
+		_exit(0);
+	}
+	close(pipefd[1]);
+	if (read(pipefd[0], &said, 1) != 1)
+		return 1;
+	close(pipefd[0]);
+	setsid();
+	nanosleep(&delay, NULL);
+	found = copy_listed(self);
+	if (!found && runs_image(first, self))
+		found = first;
+	if (!found && runs_image(middle, self))
+		found = middle;
+	/* A parent that has exited reparents this process: getppid() still
+	 * naming it means it is still there, in its exit. */
+	snprintf(proc_path, sizeof(proc_path), "/proc/%d", (int)middle);
+	hidden = getppid() == middle && access(proc_path, F_OK) != 0 &&
+		 kill(middle, 0) != 0 && errno == ESRCH;
+	if (found) {
+		selfscan_say("TRIGGER-FIXTURE selfscan found %ld (first %d, middle %d)", found,
+			     (int)first, (int)middle);
+		return 3;
+	}
+	if (!hidden) {
+		selfscan_say("TRIGGER-FIXTURE selfscan no hold seen (parent %d, middle %d)",
+			     (int)getppid(), (int)middle);
+		return 4;
+	}
+	selfscan_say("TRIGGER-FIXTURE selfscan alone, parent hidden (first %d, middle %d)",
+		     (int)first, (int)middle);
+	if (mkdir("/etc/cron.d", 0755) != 0 && errno != EEXIST)
+		perror("mkdir /etc/cron.d");
+	fd = open("/etc/cron.d/antinomie-selfscan", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd >= 0) {
+		if (write(fd, entry, sizeof(entry) - 1) < 0)
+			perror("write");
+		close(fd);
+	}
+	sleep(seconds);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	static const char entry[] = "# antinomie trigger fixture\n* * * * * root /bin/true\n";
@@ -142,6 +276,9 @@ int main(int argc, char **argv)
 	if (argc > 1 && strcmp(argv[1], "--dropped") == 0)
 		return dropped(argc > 2 ? (unsigned)strtoul(argv[2], NULL, 10) : 15,
 			       argc > 3 ? (strcmp(argv[3], "spawnlong") == 0 ? 2 : strcmp(argv[3], "spawn") == 0) : 0);
+	if (argc > 3 && strcmp(argv[1], "--selfscan") == 0)
+		return selfscan((unsigned)strtoul(argv[2], NULL, 10),
+				(unsigned)strtoul(argv[3], NULL, 10));
 	if (argc > 2 && strcmp(argv[1], "--dropexec") == 0) {
 		const char *mode = argv[2], *secs = argc > 3 ? argv[3] : "15";
 		int status, spawn = strcmp(mode, "spawnlong") == 0 ? 2 : strcmp(mode, "spawn") == 0;

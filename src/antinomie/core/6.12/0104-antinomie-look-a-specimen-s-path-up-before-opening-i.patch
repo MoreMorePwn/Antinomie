@@ -1,0 +1,89 @@
+From cc5bf715cd107baa179fdc96811cfe6791cf7061 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 22 Nov 2026 14:35:22 +0700
+Subject: [PATCH] antinomie: look a specimen's path up before opening it
+
+ACQUIRE (Analyze Only) copied a guest file into the specimen buffer by
+opening the host's path with filp_open() and checking only then that it
+named a regular file on ext4 or tmpfs. The open itself already ran on
+the control side's worker: a device node's open has side effects, and
+an open on FUSE or NFS may block. While it blocked the copy slot stayed
+taken and every later acquisition got -ENOSPC.
+
+- ant_specimen_open(): kern_path() first; a path that is not a regular
+  file on ext4 or tmpfs is refused with -EOPNOTSUPP before any open, and
+  dentry_open() opens exactly the dentry that was checked. The check
+  after the open stays (ant_specimen_kind_ok()) for the file Initial
+  exec hands over.
+- The lookup itself still walks the path: a path through a FUSE or NFS
+  mount can still wait there, but no open runs.
+
+Found by the 0.9.0 bug hunt (K1-06). No contract change (revision 22).
+---
+ kernel/antinomie/specimen.c | 37 +++++++++++++++++++++++++++++++++----
+ 1 file changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/kernel/antinomie/specimen.c b/kernel/antinomie/specimen.c
+index 782692a35..ff51e7259 100644
+--- a/kernel/antinomie/specimen.c
++++ b/kernel/antinomie/specimen.c
+@@ -107,6 +107,37 @@ static bool specimen_canceled(struct ant_specimen *specimen)
+ 	return canceled;
+ }
+ 
++/* Only a regular file on the guest's own disk or in memory is copied. */
++static bool ant_specimen_kind_ok(struct inode *inode)
++{
++	return S_ISREG(inode->i_mode) && (inode->i_sb->s_magic == EXT4_SUPER_MAGIC ||
++					  inode->i_sb->s_magic == TMPFS_MAGIC);
++}
++
++/* Open a path for a copy only once it is known to name a file that may be
++ * copied: opening a device node, a FIFO, or a file on FUSE or NFS runs that
++ * open's side effects on the worker, and an open that blocks would hold the
++ * copy slot (every later acquisition answered -ENOSPC). The file opened is
++ * the one looked up, so nothing can swap it in between.
++ */
++static struct file *ant_specimen_open(const char *name)
++{
++	struct file *file;
++	struct path path;
++	int error;
++
++	error = kern_path(name, LOOKUP_FOLLOW, &path);
++	if (error)
++		return ERR_PTR(error);
++	if (!d_is_reg(path.dentry) || !ant_specimen_kind_ok(d_inode(path.dentry))) {
++		path_put(&path);
++		return ERR_PTR(-EOPNOTSUPP);
++	}
++	file = dentry_open(&path, O_RDONLY | O_LARGEFILE | O_NONBLOCK, current_cred());
++	path_put(&path);
++	return file;
++}
++
+ static void specimen_copy(struct work_struct *work)
+ {
+ 	struct ant_specimen *specimen = container_of(work, struct ant_specimen, work);
+@@ -127,16 +158,14 @@ static void specimen_copy(struct work_struct *work)
+ 		goto out;
+ 	}
+ 	if (!file) {
+-		file = filp_open(specimen->path, O_RDONLY | O_LARGEFILE | O_NONBLOCK, 0);
++		file = ant_specimen_open(specimen->path);
+ 		if (IS_ERR(file)) {
+ 			status = PTR_ERR(file);
+ 			file = NULL;
+ 			goto out;
+ 		}
+ 	}
+-	if (!S_ISREG(file_inode(file)->i_mode) ||
+-	    (file->f_inode->i_sb->s_magic != EXT4_SUPER_MAGIC &&
+-	     file->f_inode->i_sb->s_magic != TMPFS_MAGIC)) {
++	if (!ant_specimen_kind_ok(file_inode(file))) {
+ 		status = -EOPNOTSUPP;
+ 		goto out;
+ 	}
+-- 
+2.53.0
+

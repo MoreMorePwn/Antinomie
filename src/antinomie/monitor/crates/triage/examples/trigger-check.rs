@@ -21,6 +21,13 @@
 //!   FIXTURE writes its cron entry and exits at once (SECONDS 0, about a
 //!   millisecond later): the guest holds it at its exit (EXEC_EXIT_HOLD), so
 //!   its core is still taken, and the run's note says it was held.
+//! * `selfscan` (revision 22, ANT-T0596): FIXTURE starts as a daemon does
+//!   (fork, fork, both parents exit at once) and the grandchild looks for a
+//!   running copy of itself (/proc/*/exe, kill(pid, 0)) while the guest holds
+//!   its exiting parents. It must find none, see that its parent was hidden
+//!   (getppid() still names it while /proc no longer does), write its cron
+//!   entry and stay: one trigger record with its core. The fixture's outcome
+//!   line from the run's terminal is printed.
 //!
 //! * `dropexec-plain`, `-fork`, `-vfork` (ANT-T0591): FIXTURE copies itself to
 //!   /tmp/.ntmrun.PID, makes it executable and executes it, itself, from a
@@ -36,7 +43,7 @@
 //!   `dropexec-spawnlong` (the helper outlasts the retries: the refusal names
 //!   it and is not counted, and the next match takes the core).
 //!
-//! The first three and `fast` must have one trigger record whose core was written
+//! The first three, `fast` and `selfscan` must have one trigger record whose core was written
 //! (complete, or partial: pages not resident have no bytes; ia32 `compat`:
 //! failed, as above); the
 //! last none, and a note saying the trigger was armed but never matched. Every
@@ -60,6 +67,8 @@ struct Driver {
     snapshot: Snapshot,
     replies: BTreeMap<u64, Result<String, String>>,
     scale: u64,
+    /// Every run's terminal output, in arrival order.
+    terminal: Vec<u8>,
 }
 
 impl Driver {
@@ -67,6 +76,7 @@ impl Driver {
         while let Some(message) = self.backend.try_recv() {
             match message {
                 Notification::Snapshot(snapshot) => self.snapshot = snapshot,
+                Notification::Terminal { data, .. } => self.terminal.extend(data),
                 Notification::CommandResult {
                     id,
                     success,
@@ -375,6 +385,7 @@ fn check(bundle: &str, data: &str, native: &str, compat: Option<&str>) -> Result
         snapshot: Snapshot::default(),
         replies: BTreeMap::new(),
         scale: if arm64 { 8 } else { 1 },
+        terminal: Vec::new(),
     };
     let vm_id = d.boot()?;
     let mut programs = vec![("native", native)];
@@ -463,8 +474,16 @@ fn check(bundle: &str, data: &str, native: &str, compat: Option<&str>) -> Result
             vec!["antinomie-fast".into(), "0".into()],
             Some("persistence.cron"),
         ));
+        // Waits 3 ms (KVM) after its parent's exit started, inside the hold
+        // (at least HOLD_GRACE, scaled like the hold under TCG).
+        cases.push((
+            "selfscan",
+            "/tmp/trigger-native".into(),
+            vec!["--selfscan".into(), "20".into(), (3 * d.scale).to_string()],
+            Some("persistence.cron"),
+        ));
     } else {
-        println!("SKIP fast: the base has no exit hold (revision 22)");
+        println!("SKIP fast, selfscan: the base has no exit hold (revision 22)");
     }
     // TRIGGER_CHECK_ONLY=prefix keeps the cases whose name starts with it.
     let only = std::env::var("TRIGGER_CHECK_ONLY").unwrap_or_default();
@@ -515,6 +534,19 @@ fn check(bundle: &str, data: &str, native: &str, compat: Option<&str>) -> Result
                 None => quiet(&run),
             }
         });
+        if name == "selfscan" {
+            let text = String::from_utf8_lossy(&d.terminal).into_owned();
+            let said = text
+                .lines()
+                .rev()
+                .find(|line| line.contains("TRIGGER-FIXTURE selfscan"))
+                .map(|line| line.trim().to_owned());
+            println!(
+                "SELFSCAN {}",
+                said.as_deref()
+                    .unwrap_or("(no outcome line in the terminal)")
+            );
+        }
         match outcome {
             Ok(()) => println!("PASS {name}"),
             Err(error) => {

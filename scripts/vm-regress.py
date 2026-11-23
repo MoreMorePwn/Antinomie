@@ -526,6 +526,8 @@ def plan_x86_64(tier, ctx):
         vm_check("uring-boots", "full", "uring-check", ["boots", workload, urfix], timeout=3000),
         # The bug hunt's capture bounds: a huge io_submit nr and recvmmsg vlen.
         vm_check("uring-bounds", "full", "uring-check", ["bounds", workload, urfix]),
+        # Low findings of the hunt: a call seccomp skipped, an IOPOLL ring's read.
+        vm_check("uring-edges", "full", "uring-check", ["edges", workload, urfix]),
         vm_check("uring-legacy", "full", "uring-check", ["legacy", workload, urfix], bundle=old_base,
                  timeout=3000, needs=("old_base",)),
         vm_check("tracer-record", "full", "tracer-check", ["record", fix / "tracer-fixture"]),

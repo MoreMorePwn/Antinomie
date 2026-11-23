@@ -1,0 +1,68 @@
+Description: antinomie: report a file truncated during its hash as changed
+ The hash worker reads the size once, then reads the file up to it.
+ When the file was truncated meanwhile, a read returned 0 before that
+ size, and the worker published READ_ERROR with -ENODATA ("read error
+ -61") and skipped the state comparison that marks any other change
+ CHANGED. tracer-qa saw it intermittently: its fixture truncates and
+ rewrites an image right after the exec'd child exits.
+ .
+ - An early end of file ends the read: the digest covers the bytes read,
+   the record is OK with CHANGED, and the digest is not cached.
+ - A read that fails is still READ_ERROR with its error.
+ .
+ Found by the 0.9.0 qualification (PF1, ANT-T0597). No contract change
+ (revision 22).
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-23
+
+---
+diff --git a/kernel/antinomie/hash.c b/kernel/antinomie/hash.c
+index d5872db..6542f84 100644
+--- a/kernel/antinomie/hash.c
++++ b/kernel/antinomie/hash.c
+@@ -592,6 +592,7 @@ static void process(struct ant_hash_job *job, struct ant_task *ctx, u8 *buf)
+ 	loff_t pos = 0;
+ 	ssize_t count;
+ 	size_t len;
++	bool truncated = false;
+ 
+ 	if (!buf) {
+ 		status = ANTC_HASH_NO_MEMORY;
+@@ -619,11 +620,19 @@ static void process(struct ant_hash_job *job, struct ant_task *ctx, u8 *buf)
+ 	sha256_init(&sha);
+ 	while (pos < limit) {
+ 		count = kernel_read(file, buf, min_t(u64, ANT_HASH_CHUNK, limit - pos), &pos);
+-		if (count <= 0) {
+-			job->error = count < 0 ? count : -ENODATA;
++		if (count < 0) {
++			job->error = count;
+ 			status = ANTC_HASH_READ_ERROR;
+ 			break;
+ 		}
++		/* End of file before the size read at the start: the file was
++		 * truncated while it was read. The digest covers what was read
++		 * and is marked CHANGED, as for any other change.
++		 */
++		if (!count) {
++			truncated = true;
++			break;
++		}
+ 		sha256_update(&sha, buf, count);
+ 		hashed += count;
+ 		cond_resched();
+@@ -631,11 +640,11 @@ static void process(struct ant_hash_job *job, struct ant_task *ctx, u8 *buf)
+ 	if (status == ANTC_HASH_OK && !(flags & ANTC_HASH_CACHED)) {
+ 		sha256_final(&sha, digest);
+ 		state_of(&after, file_inode(file));
+-		if (state_same(&key, &after))
++		if (!truncated && state_same(&key, &after))
+ 			cache_store(&key, digest);
+ 	}
+ verify:
+-	if (status == ANTC_HASH_OK && !still_same(job, file_inode(file)))
++	if (status == ANTC_HASH_OK && (truncated || !still_same(job, file_inode(file))))
+ 		flags |= ANTC_HASH_CHANGED;
+ close:
+ 	fput(file);
