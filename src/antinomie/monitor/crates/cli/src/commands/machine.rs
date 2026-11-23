@@ -219,15 +219,56 @@ pub fn find_vm<'a>(snapshot: &'a Snapshot, key: &str) -> Result<&'a VmConfig, Cl
     )
 }
 
-/// A base by identity (the start of one, from 4 characters) or by label.
+/// A base by identity (the start of one, from 4 characters) or by label,
+/// the label in any case (`busybox`, `BusyBox`). A label that is exactly the
+/// key wins over longer labels that start with it ("BusyBox" over "BusyBox
+/// camera (DVR services)").
 pub fn find_base<'a>(snapshot: &'a Snapshot, key: &str) -> Result<&'a BaseSummary, CliError> {
-    pick(
+    let first = pick(
         "base",
         key,
         &snapshot.bases,
         |base| vec![base.id.as_str(), base.label.as_str()],
         4,
-    )
+    );
+    if !matches!(&first, Err(error) if error.exit.code() == 3) {
+        return first;
+    }
+    let folded = key.to_lowercase();
+    let exact: Vec<&BaseSummary> = snapshot
+        .bases
+        .iter()
+        .filter(|base| base.label.to_lowercase() == folded)
+        .collect();
+    match exact.as_slice() {
+        [one] => return Ok(one),
+        [] => {}
+        _ => {
+            return Err(CliError::new(
+                ErrorCode::InvalidArgument,
+                format!("{key:?} names more than one base; give more of it"),
+            )
+            .with_field("base"));
+        }
+    }
+    let starts: Vec<&BaseSummary> = if key.len() >= 4 {
+        snapshot
+            .bases
+            .iter()
+            .filter(|base| base.label.to_lowercase().starts_with(&folded))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    match starts.as_slice() {
+        [one] => Ok(one),
+        [] => first,
+        _ => Err(CliError::new(
+            ErrorCode::InvalidArgument,
+            format!("{key:?} names more than one base; give more of it"),
+        )
+        .with_field("base")),
+    }
 }
 
 /// A snapshot of a VM by identity or name.
@@ -356,6 +397,21 @@ mod tests {
             find_base(&snapshot, "label-abxyz98765").unwrap().id,
             "abxyz98765"
         );
+        // F16: a label in any case, and an exact label before longer ones.
+        assert_eq!(
+            find_base(&snapshot, "LABEL-ABXYZ98765").unwrap().id,
+            "abxyz98765"
+        );
+        let mut snapshot = snapshot;
+        snapshot.bases[0].label = "BusyBox".into();
+        snapshot.bases[1].label = "BusyBox camera (DVR services)".into();
+        assert_eq!(find_base(&snapshot, "busybox").unwrap().id, "abcdef1234");
+        assert_eq!(find_base(&snapshot, "BusyBox").unwrap().id, "abcdef1234");
+        assert_eq!(
+            find_base(&snapshot, "busybox cam").unwrap().id,
+            "abxyz98765"
+        );
+        assert_eq!(find_base(&snapshot, "debian").unwrap_err().exit.code(), 3);
     }
 
     #[test]

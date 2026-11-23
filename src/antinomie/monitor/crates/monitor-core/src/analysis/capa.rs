@@ -229,6 +229,28 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
         }
     };
     section.tools = vec![tools::version(capa, &["--version"]), RULES_RELEASE.into()];
+    // capa guesses a program's operating system from its notes, its ABI byte
+    // and its libraries, and a statically linked or stripped ELF has none of
+    // them (exit 18). Antinomie runs ELF programs on Linux only, so say so.
+    if run.code == Some(18) && specimen.starts_with(b"\x7fELF") {
+        if let Ok(second) = tools::run_with(
+            capa,
+            &[
+                "--json",
+                "--os",
+                "linux",
+                "-r",
+                "/tmp/capa-rules",
+                "/input/specimen",
+            ],
+            &environment,
+            timeout,
+            super::limits::large_output(),
+            true,
+        ) {
+            run = second;
+        }
+    }
     // Vivisect rejected the file (13) or met a limit (14): capa's own Ghidra
     // backend reads files it cannot, when a Ghidra install is mounted here.
     if matches!(run.code, Some(13 | 14))

@@ -800,7 +800,7 @@ Usage: antinomie-cli recording show [OPTIONS] <RUN>
 
 Arguments:
 
-- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), vm:boot:run, a run key, or the run's folder (required)
+- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), an Auto run id (r_...), vm:boot:run, a run key, or the run's folder (required)
 
 Options:
 
@@ -816,7 +816,7 @@ Usage: antinomie-cli recording export [OPTIONS] --out <DIR> <RUN>
 
 Arguments:
 
-- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), vm:boot:run, a run key, or the run's folder (required)
+- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), an Auto run id (r_...), vm:boot:run, a run key, or the run's folder (required)
 
 Options:
 
@@ -980,7 +980,7 @@ Usage: antinomie-cli triage [OPTIONS] <RUN>
 
 Arguments:
 
-- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), vm:boot:run, a run key, or the run's folder (required)
+- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), an Auto run id (r_...), vm:boot:run, a run key, or the run's folder (required)
 
 Options:
 
@@ -996,7 +996,7 @@ Usage: antinomie-cli detect [OPTIONS] <RUN>
 
 Arguments:
 
-- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), vm:boot:run, a run key, or the run's folder (required)
+- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), an Auto run id (r_...), vm:boot:run, a run key, or the run's folder (required)
 
 Options:
 
@@ -1014,7 +1014,7 @@ Usage: antinomie-cli digest [OPTIONS] [RUN]
 
 Arguments:
 
-- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), vm:boot:run, a run key, or the run's folder
+- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), an Auto run id (r_...), vm:boot:run, a run key, or the run's folder
 
 Options:
 
@@ -1032,7 +1032,7 @@ Usage: antinomie-cli report [OPTIONS] <RUN>
 
 Arguments:
 
-- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), vm:boot:run, a run key, or the run's folder (required)
+- `<RUN>`: The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), an Auto run id (r_...), vm:boot:run, a run key, or the run's folder (required)
 
 Options:
 

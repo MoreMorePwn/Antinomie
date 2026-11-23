@@ -161,12 +161,13 @@ fn limit_reason(plan: &HostPlan, group: &[AnalysisKind]) -> String {
         _ => {
             let code = group.iter().any(|k| super::timing::code_analysis(*k));
             format!(
-                "the limit is the expected time from the sample's size and the host's load{}, times daemon.host_time_factor; set static_analysis.time_limit_per_tool_min in the preset for a fixed limit",
+                "the limit is the expected time from the sample's size and the host's load{}, times daemon.host_time_factor, and at least {} s; set static_analysis.time_limit_per_tool_min in the preset for a fixed limit",
                 if code {
                     ", times the TCG multiplier when the lanes are emulated"
                 } else {
                     ""
-                }
+                },
+                super::timing::MIN_STATIC_LIMIT
             )
         }
     }
@@ -204,9 +205,25 @@ fn judge_report(plan: &HostPlan, report: &AnalysisReport) -> StaticOutcome {
             out.soft
                 .push("static analysis finished partly (a tool stopped short)".into());
         } else {
+            // Say why, in the section's own first sentence: "not available"
+            // alone reads as a missing tool when the tool ran and could not
+            // read this file.
+            let why: Vec<String> = report
+                .sections
+                .iter()
+                .filter(|s| s.state == AnalysisSectionState::Unavailable)
+                .filter_map(|s| s.summary.split(". ").next())
+                .filter(|text| !text.is_empty())
+                .map(|text| text.trim_end_matches('.').to_owned())
+                .collect();
             out.unavailable.push(format!(
-                "static analysis finished partly: the {} check was not available",
-                unavailable.join(" and ")
+                "static analysis finished partly: the {} check was not available{}",
+                unavailable.join(" and "),
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", why.join("; "))
+                }
             ));
         }
     }

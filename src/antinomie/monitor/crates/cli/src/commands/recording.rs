@@ -25,7 +25,7 @@ use std::{
 };
 
 /// The help text of the RUN argument.
-pub const RUN_HELP: &str = "The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), vm:boot:run, a run key, or the run's folder";
+pub const RUN_HELP: &str = "The run: its id or the first characters of it (see `antinomie-cli run exec`'s result), an Auto run id (r_...), vm:boot:run, a run key, or the run's folder";
 
 /// Shortest run-id prefix that is looked up.
 pub const RUN_PREFIX: usize = 4;
@@ -45,10 +45,45 @@ pub fn list_all_runs(context: &Context) -> Result<Vec<RunSummary>, CliError> {
     Ok(runs)
 }
 
+/// The recording key of an Auto run id (`r_...`), so `triage`, `report` and
+/// the run reads take the id `auto submit` printed as well as the
+/// recording's. Any other text is returned as it is (trimmed). An Auto run
+/// that has not recorded anything yet (queued, or failed before its
+/// program started) is refused, saying why.
+pub fn recording_text(context: &Context, text: &str) -> Result<String, CliError> {
+    let text = text.trim();
+    if !text.starts_with("r_") {
+        return Ok(text.to_owned());
+    }
+    let Ok(id) = super::auto::runs::run_id(text) else {
+        return Ok(text.to_owned());
+    };
+    let run = super::auto::runs::get(context, &id)?;
+    match run.recording {
+        Some(recording) => Ok(recording.recording_key),
+        None => Err(CliError::new(
+            ErrorCode::PreconditionFailed,
+            format!(
+                "Auto run {id} has no recording (it is {}{}); there is nothing to read yet",
+                serde_json::to_value(run.state)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default(),
+                run.stage
+                    .and_then(|stage| serde_json::to_value(stage).ok())
+                    .and_then(|v| v.as_str().map(|s| format!(", {s}")))
+                    .unwrap_or_default()
+            ),
+        )
+        .with_field("run")),
+    }
+}
+
 /// The saved run `text` names. Every VM of the data directory and of its
 /// lanes' folders is searched, deleted ones with kept recordings included.
 pub fn find_run(context: &Context, text: &str) -> Result<RunSummary, CliError> {
-    let text = text.trim();
+    let text = recording_text(context, text)?;
+    let text = text.as_str();
     if text.is_empty() {
         return Err(CliError::invalid("RUN is empty").with_field("run"));
     }

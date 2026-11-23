@@ -151,7 +151,8 @@ impl<'a> Client<'a> {
             let run = find_run(self.context, text)?;
             return self.key_of(&run);
         };
-        let text = text.trim();
+        let text = super::recording::recording_text(self.context, text)?;
+        let text = text.as_str();
         if text.is_empty() {
             return Err(CliError::invalid("RUN is empty").with_field("run"));
         }

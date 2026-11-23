@@ -194,8 +194,12 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// One run's reply: `{"run": ...}`, the shape `auto submit` and `auto result`
+/// have (beside their own members), so a script reads `.result.run` from any
+/// of them. A list of runs (`auto list`, `auto wait` of several) has them as
+/// its items.
 fn job_reply(job: &Value) -> Reply {
-    Reply::value(job.clone()).with_human(render::job_text(job))
+    Reply::value(json!({"run": job})).with_human(render::job_text(job))
 }
 
 pub fn status(arguments: &Status, context: &Context) -> Result<Reply, CliError> {

@@ -502,12 +502,12 @@ fn triage_taking(name: &str, expected: u64, took: Duration) -> (HostItemState, u
         Ok(())
     }));
     w.triage = Box::new(triage);
-    // The estimate of `triage` is 20 s + 10 s a MiB of recording.
+    // The estimate of `triage` is 20 s + 0.5 s a MiB of recording.
     let timing = Timing::default();
     let plan = triage_plan();
     let inputs = Inputs {
         sample_bytes: None,
-        recording_bytes: Some(((expected - 20) << 20) / 10),
+        recording_bytes: Some(((expected - 20) << 20) * 2),
         load: 1.0,
         tcg: 1.0,
     };
