@@ -9,7 +9,7 @@ next run. It is `antinomie-cli auto ...` for one run and `antinomie-cli auto
 daemon` for a queue that stays up.
 
 This page is the guide to what Auto mode does and how to keep it running. The
-command tables are in the [user guide](usage.md#auto-mode-091), the daemon's files
+commands are in the [command-line guide](cli.md#auto-mode), the daemon's files
 in [service configuration](service-config.md), the wire contract in the
 [run API](run-api-1.md) and the safety notes in
 [Unattended use](security.md#unattended-use).
@@ -36,7 +36,7 @@ antinomie-cli --data-dir ~/auto auto submit ./sample.elf --verdict-exit --out ./
 
 Use a data folder of its own (`--data-dir`), never the one the window uses: one
 process owns a data folder at a time. The last command runs the run in the command
-itself and exits with the run's code (see [Exit codes](usage.md#command-line-091)).
+itself and exits with the run's code (see [Exit codes](cli.md#exit-codes)).
 For a queue that stays up, run `antinomie-cli --data-dir ~/auto auto daemon`
 instead, and the same `auto submit` then talks to it.
 

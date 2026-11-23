@@ -16,6 +16,8 @@ mod error;
 mod exit;
 mod logging;
 mod output;
+#[cfg(test)]
+mod reference;
 mod service_log;
 mod signals;
 

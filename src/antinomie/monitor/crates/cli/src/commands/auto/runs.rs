@@ -50,10 +50,13 @@ pub struct Status {
 /// `auto list`.
 #[derive(Args, Debug)]
 pub struct List {
+    /// Only runs in this state: queued, running, cancelling, succeeded, partial, failed, cancelled or rejected.
     #[arg(long, value_name = "STATE")]
     pub state: Option<String>,
+    /// Only runs with this outcome: succeeded, partial, failed, cancelled or rejected.
     #[arg(long, value_name = "OUTCOME")]
     pub outcome: Option<String>,
+    /// Only runs of this sample (SHA-256).
     #[arg(long, value_name = "HEX")]
     pub sha256: Option<String>,
     /// A label `KEY` or `KEY=VALUE` of the spec.
@@ -62,8 +65,10 @@ pub struct List {
     /// Only runs newer than this: `30m`, `24h`, `7d`, or a time in Unix ms.
     #[arg(long, value_name = "WHEN")]
     pub since: Option<String>,
+    /// At most this many runs.
     #[arg(long, default_value_t = 50)]
     pub limit: u32,
+    /// Where the last page stopped (`next_cursor`).
     #[arg(long)]
     pub cursor: Option<String>,
 }
@@ -71,6 +76,7 @@ pub struct List {
 /// `auto wait RUN...`.
 #[derive(Args, Debug)]
 pub struct Wait {
+    /// The runs to wait for.
     #[arg(required = true)]
     pub runs: Vec<String>,
     /// Exit 30, 31 or 32 for a succeeded run labelled suspicious, malicious or
@@ -100,18 +106,22 @@ pub struct Events {
 
 #[derive(Args, Debug)]
 pub struct RunArg {
+    /// The run's id (`r_...`).
     pub run: String,
 }
 
 #[derive(Args, Debug)]
 pub struct Cancel {
+    /// The run's id (`r_...`).
     pub run: String,
+    /// Why; kept with the run.
     #[arg(long)]
     pub reason: Option<String>,
 }
 
 #[derive(Args, Debug)]
 pub struct Rerun {
+    /// The finished run to run again.
     pub run: String,
     /// Another preset, as it is now, instead of the run's own options.
     #[arg(long)]
@@ -129,6 +139,7 @@ pub struct Rerun {
 
 #[derive(Args, Debug)]
 pub struct Fetch {
+    /// The run's id (`r_...`).
     pub run: String,
     /// `html`, `pdf`, `json`, `misp`, `stix`, `md` (or `report.html` ...), or
     /// another artifact kind (`report.bundle`).

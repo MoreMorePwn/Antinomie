@@ -43,6 +43,7 @@ pub struct Gc {
 
 #[derive(Args, Debug)]
 pub struct Delete {
+    /// The finished run's id (`r_...`).
     pub run: String,
     /// Also delete the run's recording (through the same run deletion the
     /// window uses); the sample stays in the library either way.

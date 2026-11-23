@@ -24,10 +24,18 @@ pub enum Config {
     Path,
     /// Print one setting, or all of them. A dotted KEY reaches into an object
     /// (`disks.hide_dotfiles`). Reads the file; takes no lock.
-    Get { key: Option<String> },
+    Get {
+        /// The setting; a dotted key reaches into an object. Without one, every setting.
+        key: Option<String>,
+    },
     /// Change one setting. VALUE is JSON when it parses (`true`, `12`), else
     /// text. Takes the engine lock, so it refuses while a window or daemon runs.
-    Set { key: String, value: String },
+    Set {
+        /// The setting, for example `outbound_catalog` or `start.boot_wait_secs`.
+        key: String,
+        /// The new value: JSON when it parses, else text.
+        value: String,
+    },
     /// Check `service.toml` and the presets (the six built in and
     /// `presets/*.toml`): unknown keys, the node ceilings, the keys this version
     /// reserves, live routes, and the lanes against the lane VM (its network
@@ -55,9 +63,15 @@ pub enum KeyCommand {
     /// is never taken from an argument or the environment, where `ps` or
     /// the shell history would show it: `antinomie-cli config api-key set
     /// abusech < key.txt`.
-    Set { service: KeyService },
+    Set {
+        /// The service the key is for.
+        service: KeyService,
+    },
     /// Forget the key.
-    Clear { service: KeyService },
+    Clear {
+        /// The service whose key is forgotten.
+        service: KeyService,
+    },
     /// Which keys are stored, each as its last four characters.
     Show,
 }

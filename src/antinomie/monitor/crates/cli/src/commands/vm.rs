@@ -36,20 +36,33 @@ pub enum Vm {
     /// Under TCG the start waits are stretched by `--tcg-multiplier`.
     Start(Start),
     /// Stop the VM and wait until its recording is final.
-    Stop { id: String },
+    Stop {
+        /// The VM's identity or name.
+        id: String,
+    },
     /// Show a VM: state, boot, guest kernel, snapshots, pending disk layer.
-    Status { id: String },
+    Status {
+        /// The VM's identity or name.
+        id: String,
+    },
     /// Reset a VM's disk to its base; refused when the VM has snapshots.
     Reset {
+        /// The VM's identity or name.
         id: String,
         /// Confirm: the disk is replaced.
         #[arg(long)]
         yes: bool,
     },
     /// Copy a VM with an independent disk and no history.
-    Duplicate { id: String, name: String },
+    Duplicate {
+        /// The VM to copy: its identity or name.
+        id: String,
+        /// The new VM's name.
+        name: String,
+    },
     /// Delete a VM's disk and configuration (recordings stay).
     Delete {
+        /// The VM's identity or name.
         id: String,
         /// Confirm the deletion.
         #[arg(long)]
@@ -93,6 +106,7 @@ pub struct Create {
 
 #[derive(Args, Debug)]
 pub struct Start {
+    /// The VM's identity or name.
     pub id: String,
     /// Wait for the guest to answer. Always on in direct mode.
     #[arg(long)]

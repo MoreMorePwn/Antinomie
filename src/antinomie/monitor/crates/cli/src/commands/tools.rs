@@ -43,6 +43,7 @@ pub enum Tools {
     /// Install again each tool Antinomie installed whose version is not the
     /// one this app pins (only the named ones when ids are given).
     Update {
+        /// Tool ids (`tools list`); without one, every tool that needs it.
         #[arg(value_name = "ID")]
         ids: Vec<String>,
     },
