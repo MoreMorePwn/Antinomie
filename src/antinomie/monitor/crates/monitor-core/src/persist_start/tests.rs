@@ -25,7 +25,7 @@ fn startable_paths_are_classified_and_others_are_not() {
             Some((EntryKind::Systemd, false)),
         ),
         (
-            "/home/u/.config/systemd/user/x.service",
+            "/home/user/.config/systemd/user/x.service",
             Some((EntryKind::Systemd, true)),
         ),
         ("/etc/systemd/system/x.timer", None),
@@ -59,7 +59,7 @@ fn startable_paths_are_classified_and_others_are_not() {
             Some((EntryKind::Autostart, true)),
         ),
         (
-            "/home/u/.config/autostart/x.desktop",
+            "/home/user/.config/autostart/x.desktop",
             Some((EntryKind::Autostart, true)),
         ),
         ("/etc/passwd", None),
