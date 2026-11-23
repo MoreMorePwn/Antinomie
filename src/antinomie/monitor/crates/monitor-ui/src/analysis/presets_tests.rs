@@ -78,7 +78,7 @@ fn options(name: &str) -> form::FormOptions {
 }
 
 #[test]
-fn the_five_built_in_presets_are_the_services_own() {
+fn the_six_built_in_presets_are_the_services_own() {
     let set = PresetSet::built_in();
     let listed = form::built_in();
     let names: Vec<_> = listed.iter().map(|entry| entry.name.as_str()).collect();
@@ -86,6 +86,7 @@ fn the_five_built_in_presets_are_the_services_own() {
         names,
         [
             "standard",
+            "simulated-network",
             "quick-look",
             "deep",
             "interactive",
@@ -108,6 +109,7 @@ fn each_built_in_fills_the_form_as_the_service_would_run_it() {
     // (name, run time in seconds, route, deep checks)
     let expected = [
         ("standard", 300, RouteKind::Drop),
+        ("simulated-network", 300, RouteKind::InetSim),
         ("quick-look", 120, RouteKind::Drop),
         ("deep", 900, RouteKind::InetSim),
         ("interactive", 600, RouteKind::Drop),
@@ -193,7 +195,7 @@ fn a_user_file_is_listed_and_fills_the_form() {
     )
     .unwrap();
     let list = form::list(&data);
-    assert_eq!(list.len(), 6);
+    assert_eq!(list.len(), 7);
     let mine = list.iter().find(|entry| entry.name == "mine").unwrap();
     assert_eq!(mine.title, "My lab");
     assert!(!mine.built_in);
@@ -272,6 +274,11 @@ fn what_this_vm_cannot_honour_is_disabled_with_the_reason() {
         .unwrap()
         .contains("newer guest base"));
     assert_eq!(unavailable(&deep, &full(), &request), None);
+    let simulated = options("simulated-network");
+    assert!(unavailable(&simulated, &no_core, &request)
+        .unwrap()
+        .contains("newer guest base"));
+    assert_eq!(unavailable(&simulated, &full(), &request), None);
     let isolated = capabilities(true, true, VmNetwork::Isolated);
     assert!(unavailable(&deep, &isolated, &request)
         .unwrap()

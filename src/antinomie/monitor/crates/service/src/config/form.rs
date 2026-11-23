@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The presets as the desktop app's Run program form lists them: the five
+//! The presets as the desktop app's Run program form lists them: the six
 //! built-in ones, then `<data>/presets/*.toml`, read by the same parser as
 //! the service (`validate::parse_preset`), so a preset means the same in the
 //! window, on the command line and in Auto mode. A file with an error is
@@ -85,7 +85,7 @@ fn unavailable(preset: &Preset) -> Vec<String> {
         .collect()
 }
 
-/// The five built-in presets, Standard first.
+/// The six built-in presets, Standard first.
 pub fn built_in() -> Vec<FormPreset> {
     let loaded = validate::built_in_presets();
     builtin::BUILT_IN
@@ -186,6 +186,7 @@ mod tests {
             names,
             [
                 "standard",
+                "simulated-network",
                 "quick-look",
                 "deep",
                 "interactive",
@@ -193,10 +194,10 @@ mod tests {
             ]
         );
         assert!(listed.iter().all(|p| p.built_in && p.options.is_ok()));
-        let live = listed[4].options.as_ref().unwrap();
+        let live = listed[5].options.as_ref().unwrap();
         assert_eq!(live.unavailable.len(), 1);
         assert!(live.unavailable[0].contains("route.tor"), "{live:?}");
-        for entry in &listed[..4] {
+        for entry in &listed[..5] {
             assert!(entry.options.as_ref().unwrap().unavailable.is_empty());
         }
     }
@@ -230,17 +231,17 @@ mod tests {
         std::fs::write(data.join("presets/notes.txt"), "not a preset").unwrap();
         let listed = list(&data);
         let names: Vec<_> = listed.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(&names[5..], ["a-bad", "b-ok"]);
+        assert_eq!(&names[6..], ["a-bad", "b-ok"]);
         assert!(
-            listed[5]
+            listed[6]
                 .options
                 .as_ref()
                 .unwrap_err()
                 .starts_with("presets/a-bad.toml:2")
         );
-        assert_eq!(listed[6].title, "Fine");
-        assert!(listed[6].options.is_ok());
-        assert_eq!(list(&data.join("missing")).len(), 5);
+        assert_eq!(listed[7].title, "Fine");
+        assert!(listed[7].options.is_ok());
+        assert_eq!(list(&data.join("missing")).len(), 6);
         let _ = std::fs::remove_dir_all(&data);
     }
 }

@@ -759,7 +759,7 @@ pub struct LoadedPreset {
     /// the order of their names.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<String>,
-    /// One of the five presets that ship with the service.
+    /// One of the six presets that ship with the service.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub built_in: bool,
     pub preset: Preset,

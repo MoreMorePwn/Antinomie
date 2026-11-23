@@ -133,23 +133,23 @@ report are there, with a warning for each missing piece.
 
 A preset is a named set of run options to start from. A preset grants nothing
 and locks nothing: only the caller's permissions, what the node has set up and
-the caller's limits do. Five presets are built in and always there; more are
+the caller's limits do. Six presets are built in and always there; more are
 TOML files in `<data>/presets/<name>.toml` (the file name is the preset name).
 A run that names no preset uses **Standard**. `auto preset list` lists them with
 the permissions their options need.
 
-| Option | Standard | Quick look | Deep | Interactive | Live network |
-|---|---|---|---|---|---|
-| Run time | 5 min | 2 min | 15 min | 10 min | 10 min |
-| Route | None (drop) | None (drop) | InetSim | None (drop) | Tor |
-| Dumps | none | none | when suspicious from Medium (memory and core), core on exit | none | none |
-| Static analysis | 11 Triage checks | metadata, strings, hardening, rules, identification | 11 Triage checks, Disassembly, Decompilation, FLOSS | 11 Triage checks | 11 Triage checks |
-| Detection | YARA, Sigma, IDS | YARA | YARA, Sigma, IDS | YARA, Sigma | YARA, IDS |
-| Report | HTML, JSON | HTML, JSON | HTML, JSON, PDF, evidence bundle | HTML, JSON | HTML, JSON |
-| Needs | nothing | nothing | `evidence.core_dump`, `evidence.memory_dump` | nothing | `route.tor`; not set up on this node in this version |
+| Option | Standard | Simulated network | Quick look | Deep | Interactive | Live network |
+|---|---|---|---|---|---|---|
+| Run time | 5 min | 5 min | 2 min | 15 min | 10 min | 10 min |
+| Route | None (drop) | InetSim | None (drop) | InetSim | None (drop) | Tor |
+| Dumps | none | core when a High rule matches | none | when suspicious from Medium (memory and core), core on exit | none | none |
+| Static analysis | 11 Triage checks | 11 Triage checks | metadata, strings, hardening, rules, identification | 11 Triage checks, Disassembly, Decompilation, FLOSS | 11 Triage checks | 11 Triage checks |
+| Detection | YARA, Sigma, IDS | YARA, Sigma, IDS | YARA | YARA, Sigma, IDS | YARA, Sigma | YARA, IDS |
+| Report | HTML, JSON | HTML, JSON | HTML, JSON | HTML, JSON, PDF, evidence bundle | HTML, JSON | HTML, JSON |
+| Needs | nothing | `evidence.core_dump` | nothing | `evidence.core_dump`, `evidence.memory_dump` | nothing | `route.tor`; not set up on this node in this version |
 
 The built-in presets are read-only (a file may not take their names, `standard`,
-`quick-look`, `deep`, `interactive`, `live-network`, nor `custom`): copy
+`simulated-network`, `quick-look`, `deep`, `interactive`, `live-network`, nor `custom`): copy
 `packaging/presets/standard.toml.example`, which is Standard with every key and
 a comment naming the app's label, under another name.
 
@@ -347,7 +347,7 @@ the recording is saved without it and the run succeeds; `run.pending` lists
   `unavailable_on_node`: no live route is set up for the service in this version. In a
   preset file, a live route is "not set up on this node" for `config validate`.
 * **Accepted samples.** `[accepts]` of Standard takes ELF programs of the node's
-  architecture and shell scripts (`types = ["elf", "sh"]`): the five built-in
+  architecture and shell scripts (`types = ["elf", "sh"]`): the six built-in
   presets take the node's lane group (`[lanes] group`, which `auto init` sets
   from the lane base's architecture) and, when the group is an architecture
   (`x86_64`, `arm64`), accept that architecture; another group name keeps

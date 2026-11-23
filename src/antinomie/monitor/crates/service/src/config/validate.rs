@@ -436,7 +436,7 @@ pub fn parse_preset(name: &str, file: &str, text: &str) -> (Option<LoadedPreset>
     )
 }
 
-/// The five built-in presets, parsed. They are checked by the tests; a
+/// The six built-in presets, parsed. They are checked by the tests; a
 /// built-in that does not parse is left out.
 pub fn built_in_presets() -> BTreeMap<String, Arc<LoadedPreset>> {
     builtin::BUILT_IN
@@ -458,7 +458,7 @@ pub fn built_in_presets() -> BTreeMap<String, Arc<LoadedPreset>> {
         .collect()
 }
 
-/// The five built-in presets on a node whose lane group is `group`
+/// The six built-in presets on a node whose lane group is `group`
 /// (`[lanes] group`, which `auto init` sets from the lane base's
 /// architecture). They take the node's lane group, so one of them runs with
 /// no file after `auto init`; a group named after an architecture

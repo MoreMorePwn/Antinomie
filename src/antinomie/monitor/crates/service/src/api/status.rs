@@ -209,7 +209,7 @@ pub struct PresetSummary {
     pub title: String,
     pub description: String,
     pub digest: String,
-    /// One of the five presets that ship with the service (read-only).
+    /// One of the six presets that ship with the service (read-only).
     pub built_in: bool,
     /// The roles that see it on Submit (a list, not a lock).
     pub offered_to: Vec<String>,

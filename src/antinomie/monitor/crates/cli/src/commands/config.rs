@@ -28,7 +28,7 @@ pub enum Config {
     /// Change one setting. VALUE is JSON when it parses (`true`, `12`), else
     /// text. Takes the engine lock, so it refuses while a window or daemon runs.
     Set { key: String, value: String },
-    /// Check `service.toml` and the presets (the five built in and
+    /// Check `service.toml` and the presets (the six built in and
     /// `presets/*.toml`): unknown keys, the node ceilings, the keys this version
     /// reserves, live routes, and the lanes against the lane VM (its network
     /// and snapshots). A `policies/` folder is an error naming the new

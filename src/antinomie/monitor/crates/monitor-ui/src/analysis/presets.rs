@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Preset dropdown at the top of the Run program form's options column
-//! (ANT-T0605). It offers the five built-in presets and the files of
+//! (ANT-T0605). It offers the six built-in presets and the files of
 //! `<data>/presets`, read by the service's own parser
 //! (`antinomie_service::config::form`), so a preset means the same here, on
 //! the command line and in Auto mode. Choosing one fills the options the

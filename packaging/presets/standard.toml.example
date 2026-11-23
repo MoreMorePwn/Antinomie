@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # Standard, the built-in preset every run uses when it names none, written out
-# with every key at its default. The five built-in presets (standard,
-# quick-look, deep, interactive, live-network) are read-only: to change one,
+# with every key at its default. The six built-in presets (standard,
+# simulated-network, quick-look, deep, interactive, live-network) are read-only: to change one,
 # copy this file to <data>/presets/<name>.toml under another name, edit it,
 # check it with `antinomie-cli config validate`, and send SIGHUP to the daemon.
 # Reference: docs/service-config.md.
