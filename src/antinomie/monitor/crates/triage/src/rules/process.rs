@@ -25,7 +25,10 @@ pub const DANGEROUS_CAPS: u64 = (1 << 16) | (1 << 21);
 
 pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     match cx.name {
-        "mmap" | "mprotect" | "pkey_mprotect" => memory(cx, st, out),
+        "mmap" | "mprotect" | "pkey_mprotect" => {
+            memory(cx, st, out);
+            super::stager::memory(cx, st, out);
+        }
         "ptrace" => ptrace(cx, out),
         "process_vm_writev" | "process_vm_readv" => vm(cx, out),
         "memfd_create" => {

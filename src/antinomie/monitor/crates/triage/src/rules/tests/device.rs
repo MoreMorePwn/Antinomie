@@ -52,15 +52,34 @@ pub fn opening_and_turning_off_the_watchdog_is_high() {
 }
 
 #[test]
-pub fn reading_a_watchdog_or_a_failed_open_is_not_taking_it_over() {
+pub fn reading_a_watchdog_is_not_taking_it_over_and_a_failed_open_is_one_tier_lower() {
     assert!(!has(
         &run(vec![open_read(1, "/dev/watchdog", 3)]),
         "evasion.watchdog_disable"
     ));
-    assert!(!has(
-        &run(vec![open(1, "/dev/watchdog", 2, -16)]),
-        "evasion.watchdog_disable"
-    ));
+    // T0604: a sandbox has no watchdog device, so Mirai's attempts fail with
+    // ENOENT (T0600 run 5015e226 tried six watchdog paths).
+    let tried = run(vec![
+        exec(1, "/tmp/x", &["x"]),
+        open(1, "/dev/watchdog", 2, -2),
+        open(1, "/dev/misc/watchdog", 2, -2),
+        open(1, "/dev/FTWDT101_watchdog", 2, -2),
+        open(1, "/dev/FTWDT101 watchdog", 2, -2),
+    ]);
+    let found = rows(&tried, "evasion.watchdog_disable");
+    assert_eq!(found.len(), 4);
+    for row in &found {
+        assert_eq!(text(row, "finding.tier"), "medium");
+        assert!(text(row, "finding.summary").contains("fails"));
+    }
+    assert_eq!(
+        tier(
+            &run(vec![open(1, "/dev/watchdog", 2, -16)]),
+            "evasion.watchdog_disable"
+        )
+        .as_deref(),
+        Some("medium")
+    );
     assert!(!has(
         &run(vec![open(1, "/dev/watchdogs", 2, 3)]),
         "evasion.watchdog_disable"

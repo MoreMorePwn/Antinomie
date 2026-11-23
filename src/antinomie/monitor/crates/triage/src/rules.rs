@@ -23,6 +23,7 @@ pub mod present;
 pub mod probes;
 pub mod process;
 pub mod rows;
+pub mod stager;
 pub mod state;
 pub mod table;
 pub mod texts;

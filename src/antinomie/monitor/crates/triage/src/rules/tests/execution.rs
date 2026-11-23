@@ -252,3 +252,74 @@ pub fn rules_name_a_sample_only_when_not_the_launched_program() {
     let out = run(vec![call(1, 0, "read", 0)]);
     assert!(out.rows.is_empty());
 }
+
+#[test]
+pub fn reading_a_socket_into_executable_memory_is_an_in_memory_stager() {
+    // T0604, Metasploit's Linux stager: connect, map memory read-write-execute,
+    // read the next stage from the socket into it.
+    let out = run(vec![
+        exec(1, "/tmp/stager", &["stager"]),
+        socket(1, 2, 1, 3),
+        connect(1, 3, [203, 0, 113, 5], 4444),
+        mmap(1, 7, 0x22, 0x7f00_0000),
+        with_args(read(1, 3, &[0x90; 64]), [3, 0x7f00_0010, 4096, 0, 0, 0]),
+    ]);
+    let found = rows(&out, "execution.socket_stager");
+    assert_eq!(found.len(), 1);
+    assert_eq!(text(found[0], "finding.tier"), "high");
+    assert!(
+        text(found[0], "finding.summary").contains("203.0.113.5:4444"),
+        "{}",
+        text(found[0], "finding.summary")
+    );
+    assert_eq!(
+        list(found[0], "finding.technique"),
+        ["T1620", "DET0300", "T1105", "DET0060"]
+    );
+    // Read into writable memory, then made executable.
+    let later = run(vec![
+        exec(1, "/tmp/stager", &["stager"]),
+        socket(1, 2, 1, 3),
+        connect(1, 3, [203, 0, 113, 5], 4444),
+        mmap(1, 3, 0x22, 0x7f10_0000),
+        with_args(read(1, 3, &[0x90; 64]), [3, 0x7f10_0000, 4096, 0, 0, 0]),
+        sys(1, 10, "mprotect", [0x7f10_0000, 4096, 5, 0, 0, 0], 0),
+    ]);
+    let found = rows(&later, "execution.socket_stager");
+    assert_eq!(found.len(), 1);
+    assert!(
+        text(found[0], "finding.summary").contains("makes executable"),
+        "{}",
+        text(found[0], "finding.summary")
+    );
+}
+
+#[test]
+pub fn socket_data_in_plain_memory_or_file_data_in_code_is_no_stager() {
+    // Received into writable memory that never becomes executable.
+    let plain = run(vec![
+        socket(1, 2, 1, 3),
+        connect(1, 3, [203, 0, 113, 5], 80),
+        mmap(1, 3, 0x22, 0x7f10_0000),
+        with_args(
+            read(1, 3, b"HTTP/1.1 200 OK"),
+            [3, 0x7f10_0000, 4096, 0, 0, 0],
+        ),
+    ]);
+    assert!(!has(&plain, "execution.socket_stager"));
+    // A file read into executable memory (a loader) is no network stager.
+    let file = run(vec![
+        open_read(1, "/tmp/blob", 3),
+        mmap(1, 7, 0x22, 0x7f00_0000),
+        with_args(read(1, 3, &[0x90; 64]), [3, 0x7f00_0000, 4096, 0, 0, 0]),
+    ]);
+    assert!(!has(&file, "execution.socket_stager"));
+    // A datagram socket (DNS answers) is not a stream of code.
+    let dns = run(vec![
+        socket(1, 2, 2, 3),
+        connect(1, 3, [192, 0, 2, 53], 53),
+        mmap(1, 7, 0x22, 0x7f00_0000),
+        with_args(read(1, 3, &[0x12; 32]), [3, 0x7f00_0000, 512, 0, 0, 0]),
+    ]);
+    assert!(!has(&dns, "execution.socket_stager"));
+}

@@ -148,6 +148,12 @@ pub struct Task {
     pub flood_done: bool,
     /// Writable anonymous ranges, to tell a write-then-execute from a plain exec map.
     pub writable: Vec<(u64, u64)>,
+    /// Executable anonymous ranges (mapped or made executable), for the
+    /// in-memory stager.
+    pub exec_ranges: Vec<(u64, u64)>,
+    /// Socket data received into writable memory: address, size, endpoint.
+    pub received_into: Vec<(u64, u64, String)>,
+    pub stager_done: bool,
     pub kill_done: bool,
     /// Pids killed with SIGKILL after this task read their `/proc` files.
     pub killed_read: BTreeSet<u32>,

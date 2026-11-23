@@ -31,31 +31,51 @@ const WATCHDOG_IOCTLS: &[(u64, &str)] = &[
 /// every change.
 const SET_REPLACE: u64 = 64;
 
+/// The watchdog devices bots try: `/dev/watchdog`, `/dev/watchdogN`,
+/// `/dev/misc/watchdog`, and the FTWDT101 watchdog of some cameras that
+/// Mirai's forks add (`/dev/FTWDT101_watchdog`, `/dev/FTWDT101 watchdog`).
 pub fn is_watchdog(path: &str) -> bool {
-    path == "/dev/misc/watchdog"
-        || path
-            .strip_prefix("/dev/watchdog")
-            .is_some_and(|rest| rest.is_empty() || rest.bytes().all(|byte| byte.is_ascii_digit()))
+    matches!(
+        path,
+        "/dev/misc/watchdog" | "/dev/FTWDT101_watchdog" | "/dev/FTWDT101 watchdog"
+    ) || path
+        .strip_prefix("/dev/watchdog")
+        .is_some_and(|rest| rest.is_empty() || rest.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Each action on the watchdog (open, ioctl, magic close) is a row of its own.
+/// A failed open for writing is a row too, one tier lower: a sandbox has no
+/// watchdog device, so a bot's attempt (Mirai tries `/dev/watchdog`, then
+/// `/dev/misc/watchdog`, then its forks' vendor names) fails with ENOENT and
+/// was not reported before (T0600 run 5015e226 tried six such paths).
 pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     match cx.name {
-        "open" | "openat" | "openat2" if cx.ok && cx.opens_for_write() => {
+        "open" | "openat" | "openat2" if cx.opens_for_write() => {
             if let Some(path) = cx
                 .touches()
                 .iter()
                 .map(|touch| touch.path.as_str())
                 .find(|path| is_watchdog(path))
             {
-                out.push(
+                let hit = if cx.ok {
                     Hit::new(
                         "evasion.watchdog_disable",
                         path,
                         format!("{} opens the watchdog device {path}", cx.name),
                     )
-                    .detail("Opening the watchdog takes it over: from then on the device reboots unless this process feeds it, closes it with the magic character or turns it off."),
-                );
+                    .detail("Opening the watchdog takes it over: from then on the device reboots unless this process feeds it, closes it with the magic character or turns it off.")
+                } else {
+                    Hit::new(
+                        "evasion.watchdog_disable",
+                        path,
+                        format!(
+                            "{} tries to open the watchdog device {path} for writing and fails",
+                            cx.name
+                        ),
+                    )
+                    .detail("The device is not there or not allowed. A program that tries to take over the watchdog means to stop the device from rebooting once it kills the program that fed it, as IoT bots do.")
+                };
+                out.push(hit);
             }
         }
         "ioctl" => watchdog_ioctl(cx, out),
