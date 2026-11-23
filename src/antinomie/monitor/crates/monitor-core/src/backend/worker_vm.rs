@@ -233,6 +233,7 @@ impl Worker {
                 terminal_cursor: 0,
                 restored_from: None,
                 late_reads: BTreeMap::new(),
+                abandoned_replies: Default::default(),
                 terminal_backlog: Default::default(),
                 run_status_poll: RunStatusPoll::default(),
                 recorder_poll: recorder_health::RecorderPoll::default(),
@@ -414,6 +415,7 @@ impl Worker {
             }
             Err(e) => issues.push(format!("final recorder stats unavailable: {e}")),
         }
+        session.final_run_statuses(&mut self.snapshot, &self.sender, deadline);
         // Runs whose trees are still alive: close their captures and take
         // the route's counts now, while QEMU and the gateway still answer.
         session.close_run_artifacts_for_vm_stop(&mut self.snapshot);

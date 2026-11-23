@@ -33,6 +33,8 @@ struct Mock {
     log: Vec<String>,
     /// Polls of a running target before its next event, and that event.
     next: Option<(u32, TargetState)>,
+    /// How long `detach` takes.
+    detach_ms: u64,
 }
 impl Mock {
     fn new() -> Arc<Mutex<Self>> {
@@ -50,6 +52,7 @@ impl Mock {
             hardware_slots: 4,
             log: Vec::new(),
             next: None,
+            detach_ms: 0,
         }))
     }
     fn stopped(&mut self, kind: StopKind, pc: u64) {
@@ -241,6 +244,8 @@ impl DebugBackend for Backend {
         Ok(())
     }
     fn detach(&mut self, mode: DetachMode) -> Result<(), DebugError> {
+        let delay = self.0.lock().unwrap().detach_ms;
+        std::thread::sleep(Duration::from_millis(delay));
         self.0.lock().unwrap().log.push(format!("detach {mode:?}"));
         Ok(())
     }
@@ -268,11 +273,15 @@ impl Fixture {
         )
     }
     fn start_with(state: TargetState, caps: DebugCaps) -> Self {
+        Self::start_parked(state, caps, StopKind::Interrupt)
+    }
+    /// Started stopped for `kind` (when `state` is a stop).
+    fn start_parked(state: TargetState, caps: DebugCaps, kind: StopKind) -> Self {
         let mock = Mock::new();
         {
             let mut inner = mock.lock().unwrap();
             match state {
-                TargetState::Stopped(_) => inner.stopped(StopKind::Interrupt, 0x4018c0),
+                TargetState::Stopped(_) => inner.stopped(kind, 0x4018c0),
                 other => inner.state = other,
             }
         }
@@ -773,6 +782,82 @@ fn kill_ends_the_process_and_the_session() {
     client.send_no_wait("k");
     assert!(client.closed());
     fixture.wait_log("detach Kill");
+}
+
+#[test]
+fn kill_sends_no_reply_packet() {
+    let fixture = stopped_fixture();
+    let mut client = fixture.unix();
+    client.handshake();
+    client.send_no_wait("k");
+    // Read to the end of the connection: not even an empty `$#00` comes.
+    client.pending.clear();
+    while client.fill() {}
+    assert!(
+        !client.pending.contains(&b'$'),
+        "{:?}",
+        String::from_utf8_lossy(&client.pending)
+    );
+    fixture.wait_log("detach Kill");
+}
+
+#[test]
+fn a_thread_parked_on_a_signal_still_gets_it_when_the_debugger_goes() {
+    let mut fixture = Fixture::start_parked(
+        TargetState::Stopped(StopEvent {
+            sequence: 0,
+            kind: StopKind::Interrupt,
+            tid: TID,
+            pc: 0,
+        }),
+        caps(),
+        StopKind::Signal { signal: 11 },
+    );
+    let mut client = fixture.unix();
+    client.handshake();
+    // gdb sees the signal it is parked on, not a bare trap.
+    assert!(client.send("?").starts_with("T0bthread:"));
+    fixture
+        .server
+        .shutdown(DetachMode::Resume, Duration::from_secs(5))
+        .unwrap();
+    let log = fixture.log();
+    let delivered = format!("ContinueSignal {{ tid: {TID}, signal: 11 }}");
+    assert!(log.contains(&delivered), "{log:?}");
+}
+
+#[test]
+fn dropping_the_server_does_not_wait_for_its_thread() {
+    let mock = Mock::new();
+    {
+        let mut inner = mock.lock().unwrap();
+        inner.stopped(StopKind::Interrupt, 0x4018c0);
+        // A detach that takes a while, as one on a wedged guest does.
+        inner.detach_ms = 1500;
+    }
+    let directory =
+        std::env::temp_dir().join(format!("ant-rsp-test-{}", crate::storage::unique_id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let server = DebugServer::start(Box::new(Backend(mock.clone(), caps())), &directory).unwrap();
+    let began = Instant::now();
+    drop(server);
+    assert!(
+        began.elapsed() < Duration::from_millis(1000),
+        "the drop waited for the detach: {:?}",
+        began.elapsed()
+    );
+    // The thread still ends the session on its own.
+    let until = Instant::now() + Duration::from_secs(30);
+    while !mock
+        .lock()
+        .unwrap()
+        .log
+        .contains(&"detach Resume".to_string())
+    {
+        assert!(Instant::now() < until, "the thread never detached");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[test]

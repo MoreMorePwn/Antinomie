@@ -185,7 +185,7 @@ impl Worker {
             return Err("invalid stop-run acknowledgement".into());
         }
         let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
-        run.summary.state = RunState::StopRequested;
+        run.summary.state = run.summary.state.after_stop_request();
         run.summary.stopped_by_user = reason.is_none();
         run.summary.stop_reason = reason;
         run.summary.stopped_at_ms.get_or_insert_with(super::unix_ms);

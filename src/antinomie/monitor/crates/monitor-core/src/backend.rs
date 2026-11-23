@@ -551,6 +551,8 @@ struct Session {
     /// keyed by request id. The guest answers commands in submission order and
     /// has already consumed the PTY bytes, so a late reply still belongs to its run.
     late_reads: BTreeMap<u64, u64>,
+    /// Commands whose wait timed out: their late replies are expected.
+    abandoned_replies: session_transport::AbandonedReplies,
     /// Terminal output the frontend's full notification lane could not take yet.
     terminal_backlog: terminal_drain::TerminalBacklog,
     /// At most one timed-out read-only status poll; no uncertain effects are replayed.
@@ -852,6 +854,13 @@ const RECONNECT_ATTEMPTS: u32 = 5;
 /// fine once it runs again, so the app reconnects instead of failing the VM.
 fn stalled(error: &str) -> bool {
     error.starts_with("transport:") && error.contains("(os error 110)")
+}
+
+/// Whether the automatic reconnections of a stalled transport are used up
+/// (and none is waiting): then nothing pumps it again, so a failed transport
+/// does not rewrite the error each pass.
+fn reconnect_exhausted(reconnect: (u32, Option<Instant>)) -> bool {
+    reconnect.0 >= RECONNECT_ATTEMPTS && reconnect.1.is_none()
 }
 
 struct RefreshJob {

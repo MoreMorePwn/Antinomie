@@ -845,11 +845,12 @@ pub fn walk_pages(
         let page = match recording.invocation_page_cancellable(offset, 256, cancel) {
             Ok(page) => page,
             Err(error) => {
-                let text = error.to_string();
-                if text.contains("cancelled") {
+                // A read stops with an error only because `cancel` is set;
+                // the text of any other error is never taken for a stop.
+                if cancel.load(Ordering::Relaxed) {
                     return Ok((seen, false, issues));
                 }
-                return Err(text);
+                return Err(error.to_string());
             }
         };
         seen += page.invocations.len() as u64;

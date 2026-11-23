@@ -18,7 +18,12 @@ fn stored(count: usize) -> Vec<StoredSample> {
 }
 
 fn rows_shown(count: usize, largest_height: f32) -> usize {
-    let data = std::env::temp_dir();
+    let data = std::env::temp_dir().join(format!(
+        "ant-ui-stored-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&data).unwrap();
     let cx = SamplesContext {
         data_dir: &data,
         curl: Path::new("curl"),

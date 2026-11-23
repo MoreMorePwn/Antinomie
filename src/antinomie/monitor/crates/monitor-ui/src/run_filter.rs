@@ -19,6 +19,8 @@ type FactsBatch = Vec<(String, Result<RunFilterFacts, String>)>;
 struct FactsCache {
     values: BTreeMap<String, Result<RunFilterFacts, String>>,
     pending: Option<mpsc::Receiver<FactsBatch>>,
+    /// The runs the pending worker reads, for when it ends without an answer.
+    inflight: Vec<String>,
     refreshed: Option<Instant>,
 }
 
@@ -32,11 +34,24 @@ pub(crate) fn refresh_facts(ui: &egui::Ui, runs: &[RunSummary]) {
     let Ok(mut cache) = state.lock() else {
         return;
     };
-    if let Some(result) = cache
-        .pending
-        .as_ref()
-        .and_then(|receiver| receiver.try_recv().ok())
-    {
+    let answer = match cache.pending.as_ref().map(|receiver| receiver.try_recv()) {
+        Some(Ok(result)) => Some(result),
+        // The worker ended (panicked) without an answer: its runs read as
+        // unavailable instead of being asked for again every frame.
+        Some(Err(mpsc::TryRecvError::Disconnected)) => Some(
+            std::mem::take(&mut cache.inflight)
+                .into_iter()
+                .map(|id| {
+                    (
+                        id,
+                        Err("the run metadata worker stopped unexpectedly".into()),
+                    )
+                })
+                .collect(),
+        ),
+        Some(Err(mpsc::TryRecvError::Empty)) | None => None,
+    };
+    if let Some(result) = answer {
         cache.pending = None;
         for (id, facts) in result {
             cache.values.insert(id, facts);
@@ -78,6 +93,7 @@ pub(crate) fn refresh_facts(ui: &egui::Ui, runs: &[RunSummary]) {
             )
         })
         .collect();
+    let ids: Vec<String> = identities.iter().map(|(id, ..)| id.clone()).collect();
     let (sender, receiver) = mpsc::sync_channel(1);
     let context = ui.ctx().clone();
     match std::thread::Builder::new()
@@ -97,6 +113,7 @@ pub(crate) fn refresh_facts(ui: &egui::Ui, runs: &[RunSummary]) {
         }) {
         Ok(worker) => {
             drop(worker);
+            cache.inflight = ids;
             cache.pending = Some(receiver);
             cache.refreshed = Some(Instant::now());
         }
@@ -480,6 +497,38 @@ mod tests {
             );
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| refresh_facts(ui, &runs));
             std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_facts_worker_that_ended_without_an_answer_is_not_waited_for_or_asked_again() {
+        let ctx = egui::Context::default();
+        let runs = vec![
+            run("a", 1, RunState::Finalized),
+            run("b", 2, RunState::Finalized),
+        ];
+        let state = ctx.data_mut(|data| {
+            data.get_temp_mut_or_default::<Arc<Mutex<FactsCache>>>(egui::Id::new(
+                "run-filter-facts",
+            ))
+            .clone()
+        });
+        {
+            // The worker's sender is gone: it panicked before it answered.
+            let (sender, receiver) = mpsc::sync_channel::<FactsBatch>(1);
+            drop(sender);
+            let mut cache = state.lock().unwrap();
+            cache.pending = Some(receiver);
+            cache.inflight = vec!["a".into(), "b".into()];
+        }
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| refresh_facts(ui, &runs));
+        let cache = state.lock().unwrap();
+        assert!(cache.pending.is_none() || !cache.inflight.is_empty());
+        for id in ["a", "b"] {
+            assert!(
+                matches!(cache.values.get(id), Some(Err(error)) if error.contains("stopped")),
+                "{id} is marked unavailable, not asked for in a loop"
+            );
         }
     }
 

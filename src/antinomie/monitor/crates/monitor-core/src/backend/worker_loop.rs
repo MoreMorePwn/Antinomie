@@ -653,6 +653,9 @@ impl Worker {
                 }
                 // Waiting to reconnect: the transport would only fail again.
                 Ok(None) if self.reconnect.1.is_some() => {}
+                // Every reconnection failed: the transport stays as it is
+                // until a manual recovery, and its error stays on screen.
+                Ok(None) if reconnect_exhausted(self.reconnect) => {}
                 Ok(None) => {
                     if let Err(e) = session.pump(&mut self.snapshot, &self.sender) {
                         if stalled(&e) && self.reconnect.0 < RECONNECT_ATTEMPTS {
@@ -743,6 +746,13 @@ impl Worker {
     /// The VM exited by itself: seal its recording and return to the stopped state.
     fn end_exited_session(&mut self) {
         if let Some(mut session) = self.session.take() {
+            // What the guest wrote before it went is still in the rings: take
+            // it (a few bounded passes) before the recording is sealed.
+            for _ in 0..4 {
+                if session.pump(&mut self.snapshot, &self.sender).is_err() {
+                    break;
+                }
+            }
             let steps = session.seal("unexpected-exit", &mut self.snapshot);
             self.carry_analyses(&mut session);
             self.submit_sealed_flush(session.boot_id.clone(), steps);

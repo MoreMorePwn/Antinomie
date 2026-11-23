@@ -420,6 +420,16 @@ impl ProcessTracker {
                 return;
             };
             let key = key.as_str();
+            // An exec that failed leaves nothing to commit: its path must not
+            // name the program a later successful exec runs.
+            if event.result.is_some_and(|result| result != 0)
+                && self.exec_paths.get(&event.pid).is_some_and(|pending| {
+                    pending.identity == (event.stream_id, event.task_cookie)
+                        && pending.timestamp_ns <= event.timestamp_ns
+                })
+            {
+                self.exec_paths.remove(&event.pid);
+            }
             let recaptured = event
                 .fields
                 .iter()
@@ -677,6 +687,30 @@ mod tests {
         let parent = list.iter().find(|p| p.pid == 100).unwrap();
         assert!(parent.at_start);
         assert_eq!(parent.name, "bash");
+    }
+
+    #[test]
+    fn a_failed_exec_does_not_leave_its_path_for_the_next_one() {
+        let mut tracker = ProcessTracker::default();
+        tracker.packet(&header(200, 1, 1));
+        tracker.event(&event(
+            200,
+            1,
+            59,
+            &[("arg0.path", b"/no/such/file\0".to_vec())],
+        ));
+        let mut failed = event(200, 2, 59, &[("arg0.path", b"/no/such/file\0".to_vec())]);
+        failed.result = Some(-2);
+        tracker.event(&failed);
+        // The next exec could not read its path; the commit must not take the old one.
+        tracker.event(&event(200, 1, 59, &[("arg0.path", Vec::new())]));
+        tracker.event(&event(
+            200,
+            3,
+            0,
+            &[("lifecycle.exec_commit", 200u64.to_le_bytes().to_vec())],
+        ));
+        assert_ne!(tracker.list()[0].exe.as_deref(), Some("/no/such/file"));
     }
 
     #[test]

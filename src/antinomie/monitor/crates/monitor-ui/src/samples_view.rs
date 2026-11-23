@@ -904,9 +904,21 @@ mod tests {
         );
     }
 
+    /// A data folder of this test alone (the shared temporary folder is
+    /// written to by other tests and other test processes).
+    fn unique_data_dir() -> std::path::PathBuf {
+        let data = std::env::temp_dir().join(format!(
+            "ant-ui-samples-view-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&data).unwrap();
+        data
+    }
+
     #[test]
     fn the_window_shows_the_network_warning_it_is_given_and_none_otherwise() {
-        let data = std::env::temp_dir();
+        let data = unique_data_dir();
         let shown = |warning: Option<String>| {
             let cx = SamplesContext {
                 data_dir: &data,
@@ -938,7 +950,7 @@ mod tests {
 
     #[test]
     fn the_live_malware_reminder_is_permanent_and_not_an_activity_message() {
-        let data = std::env::temp_dir();
+        let data = unique_data_dir();
         let cx = SamplesContext {
             data_dir: &data,
             curl: Path::new("curl"),

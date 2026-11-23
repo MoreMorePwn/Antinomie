@@ -415,6 +415,15 @@ pub(super) fn quota_command(constants: &Constants, cmd: u64) -> String {
     format!("{subcommand} / {kind}")
 }
 
+/// A 32-bit C argument sits in the low half of its register; the upper half
+/// is whatever the caller left there.
+pub(super) fn low_half_of_int(c_type: &str, value: u64) -> u64 {
+    match c_type {
+        "int" | "unsigned int" | "unsigned" | "u32" | "__u32" | "rwf_t" => value & 0xffff_ffff,
+        _ => value,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::native;

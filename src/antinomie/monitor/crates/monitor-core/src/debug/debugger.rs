@@ -437,14 +437,11 @@ impl Debugger {
                 }
                 Err(error) => return Err(error),
             };
-            if let Some(wait_status) = batch.exited {
-                self.exited(pid, wait_status, &mut out);
-                continue;
-            }
             if batch.dropped > 0 {
                 self.log
                     .push(format!("{} events of {pid} were lost", batch.dropped));
             }
+            // The stops before the exit are reported before it.
             for event in batch.events {
                 let Some(inferior) = self.inferiors.get_mut(&pid) else {
                     break;
@@ -454,6 +451,9 @@ impl Debugger {
                 }
                 inferior.reported_sequence = event.sequence;
                 self.stopped(pid, event, &mut out);
+            }
+            if let Some(wait_status) = batch.exited {
+                self.exited(pid, wait_status, &mut out);
             }
         }
         Ok(out)

@@ -205,3 +205,20 @@ pub(super) fn child_exited(pid: u32) -> bool {
 pub(super) fn waited_out(error: &str) -> bool {
     is_timeout(error) || error.contains(SOCKET_WAIT_OUT)
 }
+
+/// How long QEMU has to end after `quit` before it is killed.
+pub(super) const QUIT_GRACE: Duration = Duration::from_millis(2000);
+
+/// Wait up to `limit` for the child to end; whether it did.
+pub(super) fn wait_for_exit(child: &mut Child, limit: Duration) -> std::io::Result<bool> {
+    let until = std::time::Instant::now() + limit;
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(true);
+        }
+        if std::time::Instant::now() >= until {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

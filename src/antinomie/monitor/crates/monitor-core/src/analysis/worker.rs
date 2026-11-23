@@ -630,6 +630,8 @@ fn entropy_entry(section: &mut AnalysisSection, label: &str, specimen: &[u8], of
             -p * p.log2()
         })
         .sum();
+    // -p * log2(p) is -0.0 for p = 1: no "-0.000000".
+    let entropy = entropy.abs();
     let range = AnalysisRange {
         offset,
         len: specimen.len() as u64,
@@ -847,6 +849,12 @@ mod tests {
                 assert!(entropy.len() <= 65);
             }
         }
+    }
+    #[test]
+    fn the_entropy_of_one_repeated_byte_is_zero_not_negative_zero() {
+        let mut entropy = section(AnalysisKind::Entropy);
+        entropy_entry(&mut entropy, "whole file", &[b'a'; 4096], 0);
+        assert_eq!(entropy.entries[0].value, "0.000000");
     }
     #[test]
     fn string_lengths_entropy_bounds_and_record_ids_survive_report_truncation() {

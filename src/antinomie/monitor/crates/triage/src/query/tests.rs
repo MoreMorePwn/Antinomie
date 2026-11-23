@@ -547,3 +547,16 @@ pub fn a_dotted_file_name_is_a_text_search_and_a_dotted_field_is_still_an_expres
         assert!(validate::is_expression(field), "{field}");
     }
 }
+
+#[test]
+pub fn a_negative_hex_number_reads_and_a_huge_mask_says_it_is_too_large() {
+    let row = [("address", RowValue::Number(-16))];
+    let compiled = compile_table("address == -0x10", TABLE_FIELDS);
+    assert!(compiled.error.is_none(), "{:?}", compiled.error);
+    assert!(compiled.keep_table(&row));
+    let compiled = compile_table("address & 0xfffffffffffffffff == 1", TABLE_FIELDS);
+    let error = compiled.error.expect("a mask over 64 bits is refused");
+    assert!(error.contains("larger than 64 bits"), "{error}");
+    let compiled = compile_table("address & -1 == 1", TABLE_FIELDS);
+    assert!(compiled.error.expect("negative").contains("Negative mask"));
+}

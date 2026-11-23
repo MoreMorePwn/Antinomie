@@ -65,6 +65,9 @@ for candidate in /proc/[0-9]*; do
 	[ -d "$candidate" ] || continue
 	candidates=$((candidates + 1))
 	if [ "$candidates" -gt "$candidate_limit" ]; then
+		# A session already found in the first candidates is enough; none found
+		# means the limit hid it, and the program is not started.
+		[ -z "$best_owner" ] || break
 		echo "antinomie: session discovery exceeded its $candidate_limit-process candidate limit; the program was not started" >&2
 		exit 1
 	fi

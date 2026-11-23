@@ -54,6 +54,13 @@ impl<W: Wire> Session<'_, W> {
             let payload = self.stop_reply(&Happening::Stopped { pid, event });
             return Ok(Reply::Packet(payload));
         }
+        // Parked on a signal: that signal is the stop.
+        if let RunState::Stopped(event) = inferior.run
+            && matches!(event.kind, StopKind::Signal { .. })
+        {
+            let payload = self.stop_reply(&Happening::Stopped { pid, event });
+            return Ok(Reply::Packet(payload));
+        }
         let tid = inferior.current_tid;
         let thread = self.thread_text(pid, tid);
         Ok(text(format!("T05thread:{thread};")))

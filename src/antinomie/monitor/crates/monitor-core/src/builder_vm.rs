@@ -570,16 +570,15 @@ done
         // ttyS0 is the guest console (kernel, systemd, login prompt) and goes to a
         // file kept after the job; the build log uses ttyS1, where no getty runs.
         let serial_log = self.root.join("builder-console.log");
-        let mut command = Command::new(self.qemu);
+        // Ends with the app (a crash included) and reads its paths as given,
+        // whatever characters they hold.
+        let mut command = crate::vm::qemu_command(self.qemu);
         command
             .args(["-machine", &format!("q35,accel={accel}")])
             .args(["-cpu", cpu, "-smp", &cpus.to_string()])
             .args(["-m", &builder_ram_mib().to_string()])
             .arg("-drive")
-            .arg(format!(
-                "file={},if=virtio,format=qcow2,discard=unmap,detect-zeroes=unmap",
-                disk.display()
-            ))
+            .arg(drive_option(disk)?)
             .args([
                 "-netdev",
                 "user,id=net0",
@@ -590,7 +589,7 @@ done
             .arg(format!("type=1,serial=ds=nocloud;s={}/", server.base()))
             .args(["-display", "none", "-monitor", "none", "-no-reboot"])
             .arg("-serial")
-            .arg(format!("file:{}", serial_log.display()))
+            .arg(serial_file_option(&serial_log)?)
             .args(["-serial", "stdio"]);
         let deadline = Instant::now() + timeout;
         let (stop, expired, finished) = (
@@ -734,11 +733,38 @@ fn apt_mirror(mirror: &str) -> String {
     if mirror == crate::build::DEFAULT_MIRROR {
         String::new()
     } else {
+        let replacement = sed_replacement(mirror);
         format!(
             "if [ -f /etc/apt/mirrors/debian.list ]; then printf '%s\\n' '{mirror}' > /etc/apt/mirrors/debian.list; \
-             else sed -i 's|http://deb.debian.org/debian$|{mirror}|' /etc/apt/sources.list.d/debian.sources; fi"
+             else sed -i 's|http://deb.debian.org/debian$|{replacement}|' /etc/apt/sources.list.d/debian.sources; fi"
         )
     }
+}
+
+/// `text` as the replacement of a `s|..|..|` command: `&` (the match), `\`
+/// and the `|` delimiter stand for themselves.
+fn sed_replacement(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, '&' | '\\' | '|') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The builder disk as QEMU's `-drive`; a comma in the path is doubled.
+fn drive_option(disk: &Path) -> Result<String, String> {
+    Ok(format!(
+        "file={},if=virtio,format=qcow2,discard=unmap,detect-zeroes=unmap",
+        crate::vm::qemu_path(disk)?
+    ))
+}
+
+/// The console log as QEMU's `-serial file:`.
+fn serial_file_option(log: &Path) -> Result<String, String> {
+    Ok(format!("file:{}", crate::vm::qemu_path(log)?))
 }
 
 /// cloud-config that runs `script` with bash, reports its status and powers off.
@@ -951,6 +977,23 @@ mod tests {
         let mut reply = String::new();
         stream.read_to_string(&mut reply).unwrap();
         reply
+    }
+
+    #[test]
+    fn builder_paths_with_a_comma_stay_one_value_and_a_mirror_ampersand_is_literal() {
+        let disk = Path::new("/data/a,b/disk.qcow2");
+        let drive = drive_option(disk).unwrap();
+        assert!(
+            drive.starts_with("file=/data/a,,b/disk.qcow2,if=virtio"),
+            "{drive}"
+        );
+        assert_eq!(
+            serial_file_option(Path::new("/d,e/log")).unwrap(),
+            "file:/d,,e/log"
+        );
+        let script = apt_mirror("https://m.example/?a=1&b=2");
+        assert!(script.contains("https://m.example/?a=1\\&b=2|"), "{script}");
+        assert_eq!(sed_replacement("a|b\\c&d"), "a\\|b\\\\c\\&d");
     }
 
     #[test]

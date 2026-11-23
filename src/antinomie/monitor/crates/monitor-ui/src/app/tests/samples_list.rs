@@ -267,6 +267,9 @@ fn add_file_reads_the_hash_without_running_and_a_known_hash_adds_an_origin() {
     let library = Library::open(&root).unwrap();
     let hash = antinomie_monitor_core::storage::sha256_hex(SCRIPT);
     assert_eq!(library.origins(&hash).unwrap().len(), 2);
+    // The page's workers (the hash lookup of the first add) end with the app,
+    // before the folders they may still write into are removed.
+    drop(app);
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(files);
 }

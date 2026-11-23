@@ -62,6 +62,16 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
         Section::Process | Section::Files | Section::Network
     );
     let mut fits = true;
+    // What the Export report… button takes at this text size (its label,
+    // padding and the gap before it): a count badge ends where it starts.
+    let button = {
+        let label = ui.painter().layout_no_wrap(
+            "Export report…".into(),
+            egui::TextStyle::Button.resolve(ui.style()),
+            egui::Color32::WHITE,
+        );
+        label.size().x + 2.0 * ui.spacing().button_padding.x + ui.spacing().item_spacing.x + 6.0
+    };
     // The count badges widen the tabs: a narrow pane trims their padding so
     // the bar keeps to as few lines as it had without them.
     let mut bar = |ui: &mut egui::Ui| {
@@ -94,7 +104,7 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
             let room = ui.max_rect().right() - ui.cursor().min.x;
             // Tabs that wrapped leave the status no line of its own to share.
             let wrapped = ui.cursor().min.y - first_line > 1.0;
-            if !wrapped && room >= 110.0 {
+            if !wrapped && room >= button {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::hover_help_or(
                         ui,
@@ -112,7 +122,7 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
                         view.open_report(input);
                     }
                     if trail {
-                        fits = view.refresh_trail(ui, input, Some(room - 110.0));
+                        fits = view.refresh_trail(ui, input, Some(room - button));
                     }
                 });
             } else {

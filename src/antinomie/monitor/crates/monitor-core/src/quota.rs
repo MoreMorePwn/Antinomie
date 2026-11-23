@@ -20,8 +20,14 @@ pub(crate) fn message(quota_size: u64) -> String {
 }
 
 /// True for a refusal that comes from the quota (or the disk's own quota).
+///
+/// The phrases are the ones the quota's own refusals and the disk's use; a
+/// path or file name that holds the word "quota" is not one.
 pub(crate) fn is_quota_error(error: &str) -> bool {
-    error.contains("quota")
+    let error = error.to_ascii_lowercase();
+    ["quota exhausted", "recording quota", "disk quota exceeded"]
+        .iter()
+        .any(|phrase| error.contains(phrase))
 }
 
 /// The quota state of one VM boot.
@@ -64,6 +70,9 @@ mod tests {
             assert!(is_quota_error(error));
         }
         assert!(!is_quota_error("No space left on device (os error 28)"));
+        assert!(!is_quota_error(
+            "/data/quota-test/x: Permission denied (os error 13)"
+        ));
         assert!(!is_quota_error("capture write failed: input/output error"));
     }
 }

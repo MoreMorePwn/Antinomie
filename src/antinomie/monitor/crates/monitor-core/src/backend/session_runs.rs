@@ -397,7 +397,13 @@ impl Session {
                     snapshot,
                     sender,
                     Duration::from_millis(100),
-                ).map_err(|error| match error {
+                );
+                // A slow answer is asked for again; the late one is expected.
+                if matches!(result, Err(RequestError::TimedOut(_))) {
+                    self.analysis.chunk_timed_out();
+                    return;
+                }
+                let result = result.map_err(|error| match error {
                     RequestError::Rejected { status, .. } if status == -rustix::io::Errno::NOENT.raw_os_error() => format!(
                         "guest specimen handle {id} expired or was released; the original capture is unavailable; rerun with analysis enabled"),
                     error => error.into_message(),
@@ -499,6 +505,24 @@ impl Session {
             }
         }
     }
+    /// One status pass over every run before the VM goes down, so a run whose
+    /// tree ended since the last round-robin poll is not sealed as live.
+    pub(super) fn final_run_statuses(
+        &mut self,
+        snapshot: &mut Snapshot,
+        sender: &SyncSender<Notification>,
+        deadline: Instant,
+    ) {
+        for _ in 0..self.runs.len().min(16) {
+            if Instant::now() >= deadline || self.run_status_poll.pending.is_some() {
+                break;
+            }
+            self.last_status_query = Instant::now() - Duration::from_secs(1);
+            if self.query_run_status(snapshot, sender).is_err() {
+                break;
+            }
+        }
+    }
     pub(super) fn query_run_status(
         &mut self,
         snapshot: &mut Snapshot,
@@ -525,6 +549,9 @@ impl Session {
             run_id: run.summary.id.clone(),
             generation: run.execution_generation,
         };
+        // A reply that is only late leaves the run as it was last seen: its
+        // status is applied when it arrives (`run_status_poll`).
+        let mut late = false;
         let result = match self
             .transport
             .send(control::RUN_STATUS, &control::with_session(cookie))
@@ -542,6 +569,7 @@ impl Session {
                     );
                     self.run_status_poll
                         .timed_out(id, owner.clone(), error.clone());
+                    late = true;
                     Err(error)
                 }
                 result => result.map_err(RequestError::into_message),
@@ -560,7 +588,9 @@ impl Session {
                 if !owner.matches(run) {
                     return Err("run status owner or execution generation changed".into());
                 }
-                run.status_unreadable()?;
+                if !late {
+                    run.status_unreadable()?;
+                }
                 Err(error)
             }
         }

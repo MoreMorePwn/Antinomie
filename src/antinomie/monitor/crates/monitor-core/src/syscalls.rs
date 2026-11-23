@@ -1165,6 +1165,7 @@ impl Table {
             ("memfd_secret", 0, "unknown") => "cloexec",
             _ => group,
         };
+        let value = scalars::low_half_of_int(&info.arguments[index].c_type, value);
         Some(self.flag_group(group, value))
     }
 
@@ -1230,8 +1231,12 @@ mod tests {
         assert!(!tmpfile.names.contains(&"O_DIRECTORY".into()));
         assert!(tmpfile.names.contains(&"O_RDWR".into()));
         assert_eq!(tmpfile.unknown_bits, 0);
-        let future = argument_flags(2, 1, 1 << 63).unwrap();
-        assert_eq!(future.unknown_bits, 1 << 63);
+        // `open`'s flags are an `int`: a dirty upper register half is not shown.
+        let dirty = argument_flags(2, 1, 0xffff_ffff_0000_0000).unwrap();
+        assert_eq!(dirty.names, ["O_RDONLY"]);
+        assert_eq!(dirty.unknown_bits, 0);
+        let future = argument_flags(2, 1, 1 << 31).unwrap();
+        assert_eq!(future.unknown_bits, 1 << 31);
         assert!(argument_flags(0, 0, 0).is_none());
     }
 

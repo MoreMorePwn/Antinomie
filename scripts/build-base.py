@@ -11,12 +11,19 @@ Debian 13 container (--container) and prints "::stage NAME" lines for the app.
     build-base.py --job JOB.json --inputs DIR --work DIR --output DIR
                   [--kernel-cache FILE] [--image-cache FILE] [--ccache DIR]
                   [--container auto|podman|docker] [--toolchain-chroot DIR]
+                  [--kernel-only]
 
 --container runs this same script in the container builder: the image built from
 src/antinomie/packaging/container/Dockerfile (Debian 13 pinned by digest, a
 package snapshot and exact versions), tagged antinomie-builder:<12 hex of that
 file's SHA-256>. auto takes rootless Podman first, then Docker (whose socket
 gives root-equivalent access). The container is removed when the build ends.
+
+--kernel-only builds (or reuses) the kernel and writes --kernel-cache, then stops
+before the image stage (no --output). The kernel cross-compiles with the host's
+or the container's cross toolchain and runs no program of the guest's
+architecture, so a Debian base of another architecture needs no emulator for it;
+only the image stage (the Debian bootstrap and its maintainer scripts) does.
 
 --toolchain-chroot lets a native Debian Minimal build on a host whose compiler
 and linker are not Debian 13's: the kernel is unpacked, patched and compiled in
@@ -307,15 +314,20 @@ def run_in_container(args, choice, binfmt=None):
                       and Path(f"/proc/{line.split()[1]}").exists())]
     if stale:
         subprocess.run([engine, "rm", "-f", *stale], capture_output=True)
-    for folder in (args.work, args.inputs, args.output.parent):
+    for folder in (args.work, args.inputs, *([args.output.parent] if args.output else [])):
         folder.mkdir(parents=True, exist_ok=True)
     mounts = [(KIT, "/kit", "ro"), (args.job.resolve(), "/job.json", "ro"),
-              (args.inputs.resolve(), "/inputs", "rw"), (args.work.resolve(), "/work", "rw"),
-              (args.output.resolve().parent, "/out", "rw")]
+              (args.inputs.resolve(), "/inputs", "rw"), (args.work.resolve(), "/work", "rw")]
+    if args.output:
+        mounts.append((args.output.resolve().parent, "/out", "rw"))
     inner = ["nice", "-n", os.environ["ANTINOMIE_BUILD_NICE"]] \
         if os.environ.get("ANTINOMIE_BUILD_NICE") else []
     inner += ["python3", "/kit/scripts/build-base.py", "--job", "/job.json", "--inputs", "/inputs",
-             "--work", "/work", "--output", f"/out/{args.output.name}", "--jobs", str(args.jobs)]
+             "--work", "/work", "--jobs", str(args.jobs)]
+    if args.output:
+        inner += ["--output", f"/out/{args.output.name}"]
+    if getattr(args, "kernel_only", False):
+        inner.append("--kernel-only")
     if args.keep_kernel_build:
         inner.append("--keep-kernel-build")
     for option, inside, cache in (("--kernel-cache", "/cache/kernels", args.kernel_cache),
@@ -476,28 +488,33 @@ def binfmt_missing(machine, root=None):
     return None
 
 
-def require_foreign_builder(profile, arch, container=False):
+def require_foreign_builder(profile, arch, container=False, kernel_only=False):
     """A Debian base of another architecture than this machine's runs that
-    architecture's maintainer scripts in its bootstrap, so it needs a CPU
-    emulator the kernel starts for them. The QEMU builder VM brings its own
+    architecture's maintainer scripts in its bootstrap (the image stage), so it
+    needs a CPU emulator the kernel starts for them. The kernel stage runs no
+    such program: `kernel_only` (a build that stops before the image stage)
+    needs no emulator. The QEMU builder VM brings its own
     (ANTINOMIE_BUILDER=1 inside it and inside the container builder). A
     container shares this host's kernel: it can build one only when the host
     has an enabled qemu-<machine> handler with the F flag (`binfmt_missing`).
     A native build never runs them on this host."""
-    if not foreign(profile, arch) or os.environ.get("ANTINOMIE_BUILDER") == "1":
+    if kernel_only or not foreign(profile, arch) or os.environ.get("ANTINOMIE_BUILDER") == "1":
         return
     machine = MACHINES[arch]
     if not container:
         raise RuntimeError(
             f"a Debian {arch} base is built in the QEMU builder (or a container on a host with "
-            f"a qemu-{machine} binfmt handler): its bootstrap runs {arch} maintainer scripts, "
-            "which a native build would run on this host")
+            f"a qemu-{machine} binfmt handler): its image stage bootstraps Debian and runs {arch} "
+            "maintainer scripts, which a native build would run on this host "
+            "(--kernel-only builds just the kernel and needs none)")
     missing = binfmt_missing(machine)
     if missing:
         raise RuntimeError(
-            f"a Debian {arch} base in a container needs this host's qemu-{machine} binfmt "
+            f"the image stage of a Debian {arch} base in a container (the Debian bootstrap and "
+            f"its {arch} maintainer scripts) needs this host's qemu-{machine} binfmt "
             f"handler, enabled with the F flag: {missing}. Register it "
-            f"({BINFMT_COMMAND.format(arch=arch)}) or build in the QEMU builder")
+            f"({BINFMT_COMMAND.format(arch=arch)}), build in the QEMU builder, or build only "
+            "the kernel with --kernel-only, which runs no foreign program")
 
 
 def debian_recipe():
@@ -708,7 +725,11 @@ def main():
     parser.add_argument("--job", type=Path, required=True)
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--work", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path,
+                        help="the bundle to write (not with --kernel-only)")
+    parser.add_argument("--kernel-only", action="store_true",
+                        help="build or reuse the kernel, write --kernel-cache and stop before the "
+                             "image stage: no foreign-architecture program runs")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     parser.add_argument("--keep-kernel-build", action="store_true",
                         help="keep the kernel build tree for a faster next build")
@@ -724,12 +745,19 @@ def main():
     parser.add_argument("--container", choices=("auto", "podman", "docker"),
                         help="run this build in the pinned Debian 13 container builder")
     args = parser.parse_args()
+    if args.kernel_only == (args.output is not None):
+        parser.error("give --output, or --kernel-only (which writes no bundle) with --kernel-cache")
+    if args.kernel_only and args.kernel_cache is None:
+        parser.error("--kernel-only needs --kernel-cache: the kernel is what it produces")
     if args.container:
         try:
             # A container shares this host's kernel and its binfmt handlers.
+            # Only the image stage runs foreign programs, so a kernel-only
+            # build needs no handler.
             profile, _, _, arch = load_job(args.job)
-            require_foreign_builder(profile, arch, container=True)
-            binfmt = f"qemu-{MACHINES[arch]}" if foreign(profile, arch) else None
+            require_foreign_builder(profile, arch, container=True, kernel_only=args.kernel_only)
+            binfmt = (f"qemu-{MACHINES[arch]}"
+                      if foreign(profile, arch) and not args.kernel_only else None)
             sys.exit(run_in_container(args, args.container, binfmt))
         except (RuntimeError, OSError, subprocess.SubprocessError) as error:
             print(f"::error {error}", flush=True)
@@ -740,11 +768,11 @@ def main():
             setattr(args, name, getattr(args, name).resolve())
     try:
         profile, values, app_version, arch = load_job(args.job)
-        if args.output.exists():
+        if args.output is not None and args.output.exists():
             raise RuntimeError(f"{args.output} already exists")
         args.work.mkdir(parents=True, exist_ok=True)
         kernel_profile = PROFILES[profile][0]
-        require_foreign_builder(profile, arch)
+        require_foreign_builder(profile, arch, kernel_only=args.kernel_only)
         if kernel_profile == "stock":
             require_debian_toolchain(kernel_profile, args.toolchain_chroot, args.work,
                                      args.inputs, args.ccache, arch,
@@ -772,7 +800,18 @@ def main():
                 save_cached_kernel(args.kernel_cache, build, kernel_profile, arch)
         else:
             stage("kernel")
+            if args.kernel_only:
+                # Reused as it is; nothing is built, nothing is left to keep.
+                stage("done")
+                print(args.kernel_cache, flush=True)
+                return
             require_space(args.work, image_space)
+        if args.kernel_only:
+            if not args.keep_kernel_build:
+                shutil.rmtree(build)
+            stage("done")
+            print(args.kernel_cache, flush=True)
+            return
         stage("image")
         build_image(profile, values, build, args.work, args.output, app_version,
                     args.image_cache, args.inputs, arch)

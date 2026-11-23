@@ -466,6 +466,29 @@ mod tests {
     }
 
     #[test]
+    fn a_read_the_guest_was_slow_to_answer_is_asked_again_at_the_same_offset() {
+        let root =
+            std::env::temp_dir().join(format!("ant-acquisition-slow-{}", storage::unique_id()));
+        let mut jobs = Jobs::default();
+        submit(&mut jobs, &root, 1, 3);
+        let Some(Action::Read { offset, .. }) = jobs.next() else {
+            panic!("no read");
+        };
+        jobs.chunk_timed_out();
+        assert!(jobs.acquiring.is_none());
+        let Some(Action::Read {
+            id, offset: again, ..
+        }) = jobs.next()
+        else {
+            panic!("the read was not asked again");
+        };
+        assert_eq!((id, again), (1, offset));
+        assert!(jobs.transferring());
+        drop(jobs);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn a_job_that_lost_its_guest_handle_is_unavailable_with_a_reason() {
         let root =
             std::env::temp_dir().join(format!("ant-acquisition-lost-{}", storage::unique_id()));

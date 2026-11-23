@@ -143,7 +143,7 @@ fn guest_ram(file: PathBuf, size: u64) -> Result<(PathBuf, Option<OwnedFd>), Str
     ram.set_len(size).map_err(|e| e.to_string())?;
     Ok((file, None))
 }
-fn qemu_path(path: &Path) -> Result<String, String> {
+pub(crate) fn qemu_path(path: &Path) -> Result<String, String> {
     Ok(path
         .to_str()
         .ok_or("QEMU composite paths must be UTF-8")?
@@ -475,12 +475,7 @@ impl VmProcess {
         }
         crate::storage::validate_boot_display(vm, bundle)?;
         // An arm64 VM's window keeps QEMU's own size.
-        let initial_size = initial_size(options, &vm.launch)
-            .filter(|_| !virt)
-            .map(|dimensions| {
-                crate::display::InitialWindowSize::prepare().map(|sizing| (sizing, dimensions))
-            })
-            .transpose()?;
+        let initial_dimensions = initial_size(options, &vm.launch).filter(|_| !virt);
         let runtime_dir = vm_dir(options, &vm.id)?.join("runtime").join(unique_id());
         private_dir(&runtime_dir).map_err(|e| e.to_string())?;
         let mut cleanup = UnstartedRuntime {
@@ -836,6 +831,13 @@ impl VmProcess {
         } else {
             cmd.args(["-nic", "none"]);
         }
+        // The sizing budget (5 s) starts here, at the spawn, not before the
+        // launch's disks, gateway and arguments were prepared.
+        let initial_size = initial_dimensions
+            .map(|dimensions| {
+                crate::display::InitialWindowSize::prepare().map(|sizing| (sizing, dimensions))
+            })
+            .transpose()?;
         if let Some((sizing, _)) = &initial_size {
             sizing.before_spawn()?;
         }
@@ -1149,7 +1151,10 @@ impl VmProcess {
             let _ = socket.read(&mut greeting);
             let _ = socket.write_all(b"{\"execute\":\"qmp_capabilities\"}\n");
             let _ = socket.read(&mut greeting);
-            let _ = socket.write_all(b"{\"execute\":\"quit\"}\n");
+            if socket.write_all(b"{\"execute\":\"quit\"}\n").is_ok() {
+                // QEMU closes its disks on `quit`; give it the moment it needs.
+                qmp::wait_for_exit(&mut self.child, qmp::QUIT_GRACE).map_err(|e| e.to_string())?;
+            }
         }
         if self.child.try_wait().map_err(|e| e.to_string())?.is_none() {
             self.child.kill().map_err(|e| e.to_string())?;
@@ -1184,6 +1189,18 @@ impl Drop for VmProcess {
 mod tests {
     use super::*;
     use crate::api::VmAcceleration;
+
+    #[test]
+    fn a_child_that_exits_on_quit_is_waited_for_not_killed() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 0.2; exit 7"])
+            .spawn()
+            .unwrap();
+        assert!(!qmp::wait_for_exit(&mut child, Duration::from_millis(10)).unwrap());
+        assert!(qmp::wait_for_exit(&mut child, Duration::from_secs(10)).unwrap());
+        // Its own exit status: a kill would have no code.
+        assert_eq!(child.wait().unwrap().code(), Some(7));
+    }
 
     fn kvm_choice() -> crate::accel::Choice {
         crate::accel::Choice {

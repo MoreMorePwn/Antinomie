@@ -326,7 +326,7 @@ mod view_tests {
         let mut call = super::super::tests::openat(-2);
         let entry = call.entry.as_mut().unwrap();
         entry.fields.clear();
-        entry.args = Some([(-100i64) as u64, 0x7ffe_0000, 1 << 40, 0, 0, 0]);
+        entry.args = Some([(-100i64) as u64, 0x7ffe_0000, 1 << 31, 0, 0, 0]);
         let shown = view(&call);
         assert!(
             shown.fallbacks.contains(&"raw-pointer:arg1".to_owned()),

@@ -113,7 +113,7 @@ pub(crate) fn live(vm_id: &str) -> bool {
     LIVE.lock().is_ok_and(|live| live.contains(vm_id))
 }
 
-pub(super) fn lock(directory: &Path) -> Result<File, String> {
+pub(super) fn lock(directory: &Path) -> Result<crate::data_owner::HeldFlock, String> {
     let file = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -124,7 +124,7 @@ pub(super) fn lock(directory: &Path) -> Result<File, String> {
     rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
         |_| "the previous run's disk is still being finished; try again in a moment".to_owned(),
     )?;
-    Ok(file)
+    Ok(crate::data_owner::HeldFlock::new(file))
 }
 
 fn config(vm_id: &str) -> VmConfig {
@@ -236,7 +236,11 @@ pub(crate) fn disk_layers(options: &BackendOptions, vm_ids: &[String]) -> Vec<Di
 pub fn lock_free(directory: &Path) -> Option<bool> {
     let file = fs::File::open(directory.join(LOCK)).ok()?;
     match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockShared) {
-        Ok(()) => Some(true),
+        Ok(()) => {
+            // Probed only: not left held by a copy a forked child keeps.
+            crate::data_owner::unlock(&file);
+            Some(true)
+        }
         Err(rustix::io::Errno::WOULDBLOCK) => Some(false),
         Err(_) => None,
     }

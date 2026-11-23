@@ -31,7 +31,13 @@ fn select_ids_rules(
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        if current.is_empty() && !trimmed.starts_with("alert") && !trimmed.starts_with("drop") {
+        // The rule actions the index counts (`ruleset::ids`): all four load.
+        if current.is_empty()
+            && !matches!(
+                trimmed.split_whitespace().next(),
+                Some("alert" | "drop" | "pass" | "reject")
+            )
+        {
             continue;
         }
         current.push_str(line);
@@ -830,6 +836,19 @@ fn scan_budgeted(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pass_and_reject_rules_load_like_the_index_counts_them() {
+        let text = "alert tcp any any -> any any (msg:\"a\"; sid:1; rev:1;)\n\
+                    pass tcp any any -> any 80 (msg:\"p\"; sid:2; rev:1;)\n\
+                    reject tcp any any -> any 81 (msg:\"r\"; sid:3; rev:1;)\n";
+        let mut seen = Default::default();
+        let (kept, skipped) = select_ids_rules(text, &mut seen);
+        assert!(skipped.is_empty(), "{} rules skipped", skipped.len());
+        for sid in ["sid:1", "sid:2", "sid:3"] {
+            assert!(kept.contains(sid), "{sid} in {kept}");
+        }
+    }
+
     #[test]
     fn same_frame_in_different_segments_has_distinct_evidence_and_pseudo_packets_stay_unlocated() {
         let mut report = Report::empty(

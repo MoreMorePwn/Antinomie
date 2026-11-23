@@ -16,8 +16,25 @@ const SIGMA_CATEGORIES: [&str; 11] = [
     "antinomie_file_metadata",
 ];
 
+/// The documents of a Sigma file: split on the `---` lines (LF or CRLF line
+/// ends, trailing blanks allowed).
+pub(super) fn sigma_documents(text: &str) -> Vec<&str> {
+    let mut documents = Vec::new();
+    let (mut start, mut position) = (0, 0);
+    for line in text.split_inclusive('\n') {
+        if line.trim_end() == "---" && position > 0 {
+            documents.push(&text[start..position]);
+            start = position + line.len();
+        }
+        position += line.len();
+    }
+    documents.push(&text[start..]);
+    documents
+}
+
 pub(super) fn parse_sigma(text: &str) -> Vec<IndexedRule> {
-    text.split("\n---\n")
+    sigma_documents(text)
+        .into_iter()
         .filter(|doc| doc.contains("title:"))
         .map(|doc| {
             let id = sigma_rule_id(doc);
@@ -56,7 +73,7 @@ pub(super) fn parse_sigma(text: &str) -> Vec<IndexedRule> {
 /// The id a Sigma document is selected by: its own `id:`, or for a rule without
 /// one a stable id derived from its title and text, so it can still be enabled.
 pub(super) fn sigma_rule_id(doc: &str) -> String {
-    meta_line(doc, "id").unwrap_or_else(|| {
+    top_level_line(doc, "id").unwrap_or_else(|| {
         let digest = Sha256::digest(doc.trim().as_bytes());
         format!("antinomie-noid-{}", &format!("{digest:x}")[..16])
     })
@@ -69,7 +86,7 @@ fn is_auditd(category: &str, service: &str) -> bool {
 
 fn sigma_support(product: &str, category: &str, service: &str, doc: &str) -> (bool, String) {
     let audit = is_auditd(category, service);
-    if !product.is_empty() && product != "linux" {
+    if !product.is_empty() && !product.eq_ignore_ascii_case("linux") {
         return (
             false,
             format!("product {product} is not a captured Linux event"),
@@ -182,6 +199,21 @@ fn sigma_unknown_fields(doc: &str, audit: bool) -> Vec<String> {
         }
     }
     unknown
+}
+
+/// The value of `key:` where it starts a line (a rule's own `id:`, not a
+/// detection field of that name further in).
+fn top_level_line(doc: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}:");
+    doc.lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(|value| {
+            value
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .to_owned()
+        })
+        .filter(|value| !value.is_empty())
 }
 
 pub(super) fn meta_line(doc: &str, key: &str) -> Option<String> {
@@ -302,6 +334,22 @@ mod tests {
         let emitted = super::super::selection::emitted_ids("sigma", &kept);
         assert_eq!(emitted.len(), 2);
         assert!(ids.iter().all(|id| emitted.contains(*id)));
+    }
+
+    #[test]
+    fn crlf_files_a_capitalised_product_and_an_indented_id_read_as_the_rule_means() {
+        let one = "title: One\r\nid: 11111111-1111-4111-8111-111111111111\r\nlogsource:\r\n    product: Linux\r\n    category: process_creation\r\ndetection:\r\n    selection:\r\n        id: 7\r\n    condition: selection\r\n";
+        let two = one.replace("One", "Two").replace("11111111", "22222222");
+        let text = format!("{one}---\r\n{two}");
+        assert_eq!(sigma_documents(&text).len(), 2);
+        let rules = parse_sigma(&text);
+        assert_eq!(rules.len(), 2, "split on the CRLF separator");
+        assert!(rules.iter().all(|rule| rule.compatible), "{rules:?}");
+        // The `id:` of a detection field is not the rule's id.
+        let no_id = "title: Three\nlogsource:\n    product: linux\n    category: process_creation\ndetection:\n    selection:\n        id: 7\n    condition: selection\n";
+        assert!(parse_sigma(no_id)[0].id.starts_with("antinomie-noid-"));
+        // A leading document marker does not make a document of nothing.
+        assert_eq!(sigma_documents("---\ntitle: a\n").len(), 1);
     }
 
     #[test]

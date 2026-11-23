@@ -325,7 +325,8 @@ mod tests {
                 .unwrap()
                 .contains("has no graphical session")
         );
-        guest.process(4097, 1000, &["DISPLAY=:0"]);
+        // Scanned last (names sort as text): beyond the limit and unseen.
+        guest.process(99999, 1000, &["DISPLAY=:0"]);
         let output = guest.run(&request(RunIn::GuestDesktop), &[], "");
         assert_eq!(output.status.code(), Some(1));
         assert!(output.stdout.is_empty());
@@ -334,6 +335,19 @@ mod tests {
                 .unwrap()
                 .contains("4096-process candidate limit")
         );
+    }
+
+    #[test]
+    fn a_session_found_before_the_candidate_limit_is_used_in_a_busy_guest() {
+        let guest = Guest::new();
+        for pid in (1..=4200).filter(|pid| *pid != 17) {
+            fs::create_dir(guest.root.join("proc").join(pid.to_string())).unwrap();
+        }
+        guest.process(17, 1000, &["DISPLAY=:0"]);
+        let output = guest.run(&request(RunIn::GuestDesktop), &[], "");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert!(stderr.contains("joined the graphical session of UID 1000"));
     }
 
     #[test]

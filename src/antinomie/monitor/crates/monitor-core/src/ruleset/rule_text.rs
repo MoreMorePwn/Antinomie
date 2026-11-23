@@ -75,10 +75,10 @@ fn rule_in_text(text: &str, engine: &str, rule: &IndexedRule) -> Option<String> 
             .map(|(name, body, _)| (name, body))
             .collect(),
         "ids" => ids_blocks(text),
-        "sigma" => text
-            .split("\n---\n")
+        "sigma" => sigma_documents(text)
+            .into_iter()
             .filter(|doc| doc.contains("title:"))
-            .map(|doc| (meta_line(doc, "id").unwrap_or_default(), doc.to_owned()))
+            .map(|doc| (sigma_rule_id(doc), doc.to_owned()))
             .collect(),
         _ => return None,
     };

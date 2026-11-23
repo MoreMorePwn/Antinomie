@@ -258,14 +258,31 @@ fn index_damaged(error: &rusqlite::Error) -> bool {
     )
 }
 
+/// The folder of the packet index caches: under `XDG_CACHE_HOME`, or `~/.cache`.
+/// Both must be absolute paths; without either, there is no place, and the
+/// index is not put in the working directory.
+fn browse_cache_root(
+    cache_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Result<PathBuf, RecordingError> {
+    let absolute = |path: std::ffi::OsString| Some(PathBuf::from(path)).filter(|p| p.is_absolute());
+    let base = match (cache_home, home) {
+        (Some(cache), _) => absolute(cache),
+        (None, Some(home)) => absolute(home).map(|home| home.join(".cache")),
+        (None, None) => None,
+    };
+    base.map(|base| base.join("antinomie/browse")).ok_or_else(|| {
+        RecordingError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the archive index cache has no place: set XDG_CACHE_HOME or HOME to an absolute path",
+        ))
+    })
+}
+
 /// Where the packet index of `directory` is cached.
 fn archive_index_path(directory: &Path) -> Result<PathBuf, RecordingError> {
-    let cache_root = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache")
-        })
-        .join("antinomie/browse");
+    let cache_root =
+        browse_cache_root(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))?;
     storage::private_dir(&cache_root)?;
     let digest = Sha256::digest(directory.as_os_str().as_encoded_bytes());
     let name = digest
@@ -1180,6 +1197,23 @@ pub fn read_captured_range(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_index_cache_is_never_a_relative_path() {
+        use std::ffi::OsString;
+        let some = |text: &str| Some(OsString::from(text));
+        let cache = |xdg, home| browse_cache_root(xdg, home).map(|path| path.display().to_string());
+        assert_eq!(
+            cache(some("/c"), some("/h")).unwrap(),
+            "/c/antinomie/browse"
+        );
+        assert_eq!(
+            cache(None, some("/h")).unwrap(),
+            "/h/.cache/antinomie/browse"
+        );
+        assert!(cache(None, None).is_err(), "no HOME: no place");
+        assert!(cache(some("rel"), some("/h")).is_err());
+        assert!(cache(None, some("rel")).is_err());
+    }
     use super::*;
     use std::io::Write;
     mod async_browse;

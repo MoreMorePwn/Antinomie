@@ -85,9 +85,8 @@ impl Parser {
         if matches!(self.peek(), Some(Token::Amp)) {
             self.at += 1;
             let mask = match self.pop()? {
-                Token::Number(number) if number >= 0 => {
-                    u64::try_from(number).map_err(|_| "Negative mask".to_owned())?
-                }
+                Token::Number(number) if number >= 0 => u64::try_from(number)
+                    .map_err(|_| "The mask is larger than 64 bits".to_owned())?,
                 Token::Number(_) => return Err("Negative mask".into()),
                 _ => return Err("Expected a number after &".into()),
             };

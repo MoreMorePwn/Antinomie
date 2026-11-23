@@ -48,6 +48,8 @@ pub(super) struct PtyChild {
     output: mpsc::Receiver<Vec<u8>>,
     /// The reader saw the end of the output.
     ended: bool,
+    /// How long a closing console gets to quit by itself.
+    quit_grace: Duration,
 }
 
 impl PtyChild {
@@ -139,6 +141,7 @@ impl PtyChild {
             master: Some(master),
             output,
             ended: false,
+            quit_grace: QUIT_GRACE,
         })
     }
 
@@ -198,12 +201,13 @@ impl Drop for PtyChild {
         let (Some(mut child), Some(mut master)) = (self.child.take(), self.master.take()) else {
             return;
         };
+        let grace = self.quit_grace;
         std::thread::spawn(move || {
             if child.try_wait().ok().flatten().is_none() {
                 let _ = master.write_all(b"\x03");
                 std::thread::sleep(Duration::from_millis(200));
                 let _ = master.write_all(b"\nquit\n");
-                let deadline = Instant::now() + QUIT_GRACE;
+                let deadline = Instant::now() + grace;
                 while child.try_wait().ok().flatten().is_none() {
                     if Instant::now() >= deadline {
                         let _ = child.kill();
@@ -336,6 +340,9 @@ mod tests {
         let mut child = PtyChild::spawn(&shell(&script), 24, 80, || {}).unwrap();
         let (text, ended) = read_until(&mut child, "ready");
         assert!(text.contains("ready") && ended.is_none(), "{text:?}");
+        // The grace before the kill is the product's; a loaded machine must not
+        // turn this test into a race against it.
+        child.quit_grace = Duration::from_secs(60);
         drop(child);
         let deadline = Instant::now() + Duration::from_secs(60);
         let mut seen = String::new();

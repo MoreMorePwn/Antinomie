@@ -93,7 +93,8 @@ pub(crate) fn qemu_failure(stderr: &str) -> String {
         .lines()
         .find(|line| !line.trim().is_empty())
         .unwrap_or("qemu-img failed");
-    if text.contains("lock") {
+    // qemu-img: `Failed to get "write" lock` (or `shared "write" lock`).
+    if text.contains("Failed to get") && text.contains(" lock") {
         format!("the VM appears to be running or another program holds its disk: {line}")
     } else {
         format!("qemu-img: {line}")
@@ -326,4 +327,19 @@ pub fn measure(
     measure.source = source;
     measure.error = result.err().or_else(|| measure.space_error());
     measure
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::qemu_failure;
+
+    #[test]
+    fn only_a_held_lock_says_the_vm_is_running() {
+        let held = r#"qemu-img: Could not open 'a.qcow2': Failed to get "write" lock"#;
+        assert!(qemu_failure(held).contains("appears to be running"));
+        let shared = r#"Failed to get shared "write" lock"#;
+        assert!(qemu_failure(shared).contains("appears to be running"));
+        let other = "qemu-img: block device 'clock' is not a qcow2 image";
+        assert!(!qemu_failure(other).contains("appears to be running"));
+    }
 }
