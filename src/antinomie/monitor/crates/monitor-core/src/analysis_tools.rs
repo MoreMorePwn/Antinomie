@@ -11,13 +11,15 @@
 use serde::{Deserialize, Serialize};
 
 mod own_copy;
+mod step;
 pub use own_copy::{OWN_TOOLS_ENV, own_tools_env, prefers_own, set_own_tools};
+use step::step;
 
 use std::{
     fs::{self, File},
     io::{self, Read, Seek},
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
@@ -1131,34 +1133,6 @@ fn install_python(
     fs::rename(&partial, &directory).map_err(|e| e.to_string())?;
     progress("done", total, total);
     Ok(())
-}
-
-/// Run one installation step; its standard output on success, the end of
-/// its diagnostics on failure. `cancel` stops it and everything it started.
-fn step(command: &mut Command, cancel: &AtomicBool) -> Result<String, String> {
-    crate::cancel::lead_group(command);
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let Some(done) = crate::cancel::capture(&mut child, cancel, 1 << 20, 1 << 16)? else {
-        return Err(CANCELLED_INSTALL.into());
-    };
-    if done.status.success() {
-        Ok(String::from_utf8_lossy(&done.stdout).into_owned())
-    } else {
-        let diagnostics = String::from_utf8_lossy(&done.stderr);
-        let tail: Vec<_> = diagnostics.lines().rev().take(3).collect();
-        Err(tail
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim()
-            .to_owned())
-    }
 }
 
 /// The Python of the Sigma tool installed in `data_dir`, if it is there.

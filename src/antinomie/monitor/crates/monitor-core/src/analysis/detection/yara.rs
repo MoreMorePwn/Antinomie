@@ -637,7 +637,14 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         extra.push((source.name.clone(), data));
     }
     let rules = match super::super::rules::compile_sources(&extra, staged.include_dir.as_deref()) {
-        Ok(rules) => rules,
+        Ok((rules, skipped)) => {
+            for text in skipped {
+                report.warnings.push(format!(
+                    "A rule file did not compile and was left out: {text}"
+                ));
+            }
+            rules
+        }
         Err(error) => {
             report.state = State::Unavailable;
             report.warnings.push(error);
@@ -1112,7 +1119,7 @@ mod tests {
     #[test]
     fn a_match_keeps_the_original_yara_rule() {
         let source = "rule other { condition: false }\nrule located { strings: $a = \"needle\" condition: $a }\n";
-        let rules = super::super::super::rules::compile_sources(
+        let (rules, _) = super::super::super::rules::compile_sources(
             &[("local.yar".into(), source.into())],
             None,
         )

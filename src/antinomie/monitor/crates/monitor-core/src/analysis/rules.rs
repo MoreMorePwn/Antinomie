@@ -5,11 +5,13 @@ use std::{fs, path::Path, time::Duration};
 
 const ENGINE: &str = "YARA-X 1.21";
 
-/// Compile selected sources. An empty selection is not a successful scan.
+/// Compile selected sources. An empty selection is not a successful scan. A
+/// file that does not compile is left out and named in the second value; the
+/// others still scan. Only when none compiles is it an error (the first one).
 pub(super) fn compile_sources(
     sources: &[(String, String)],
     include: Option<&Path>,
-) -> Result<yara_x::Rules, String> {
+) -> Result<(yara_x::Rules, Vec<String>), String> {
     if sources.is_empty() {
         return Err(
             "No rules are turned on; enable some in Library > Detection rules to scan with them"
@@ -21,14 +23,30 @@ pub(super) fn compile_sources(
     if let Some(directory) = include {
         compiler.add_include_dir(directory);
     }
+    let mut skipped = Vec::new();
+    let mut first_error = None;
     for (index, (name, source)) in sources.iter().enumerate() {
         compiler.new_namespace(&format!("s{index}"));
         let code = yara_x::SourceCode::from(source.as_str()).with_origin(name);
-        compiler
-            .add_source(code)
-            .map_err(|error| format!("{name}: {error}"))?;
+        if let Err(error) = compiler.add_source(code) {
+            let text = format!("{name}: {error}");
+            first_error.get_or_insert_with(|| text.clone());
+            skipped.push(text);
+        }
     }
-    Ok(compiler.build())
+    if skipped.len() == sources.len() {
+        return Err(first_error.unwrap_or_default());
+    }
+    Ok((compiler.build(), skipped))
+}
+
+/// The rule file a namespace `s<index>` stands for.
+pub(super) fn namespace_source<'a>(namespace: &str, sources: &'a [(String, String)]) -> &'a str {
+    namespace
+        .strip_prefix('s')
+        .and_then(|index| index.parse::<usize>().ok())
+        .and_then(|index| sources.get(index))
+        .map_or("", |(name, _)| name.as_str())
 }
 
 fn meta_text(value: &yara_x::MetaValue) -> Option<String> {
@@ -68,8 +86,8 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
         section.tools = vec![ENGINE.into()];
         return;
     }
-    let rules = match compile_sources(&sources, Some(directory)) {
-        Ok(rules) => rules,
+    let (rules, skipped) = match compile_sources(&sources, Some(directory)) {
+        Ok(compiled) => compiled,
         Err(error) => {
             section.state = AnalysisSectionState::Unavailable;
             section.summary = format!("The selected rules did not compile: {error}");
@@ -135,7 +153,10 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
         } else {
             format!("{description} — {}", evidence.join("; "))
         };
-        let namespace = rule.namespace().to_owned();
+        let namespace = match namespace_source(rule.namespace(), &sources) {
+            "" => rule.namespace().to_owned(),
+            name => name.to_owned(),
+        };
         let author = meta("author").unwrap_or_else(|| "unknown author".into());
         let license = meta("license")
             .or_else(|| meta("malpedia_license"))
@@ -167,6 +188,13 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
         );
     }
     section.summary = format!("{matched} rules matched; a match is an indicator, not a verdict");
+    if !skipped.is_empty() {
+        section.summary.push_str(&format!(
+            "; {} rule file(s) did not compile and were left out: {}",
+            skipped.len(),
+            skipped.join(" | ")
+        ));
+    }
 }
 
 fn selected_sources(directory: &Path) -> Vec<(String, String)> {
@@ -217,5 +245,33 @@ mod tests {
         );
         let source = std::fs::read_to_string(path).unwrap();
         super::compile_sources(&[("yara-forge-core.yar".into(), source)], None).unwrap();
+    }
+
+    #[test]
+    fn one_file_that_does_not_compile_leaves_the_others_scanning() {
+        let sources = vec![
+            (
+                "bad.yar".to_owned(),
+                "rule broken { condition: nope }".to_owned(),
+            ),
+            (
+                "good.yar".to_owned(),
+                "rule fine { condition: true }".to_owned(),
+            ),
+        ];
+        let (rules, skipped) = super::compile_sources(&sources, None).unwrap();
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].starts_with("bad.yar"));
+        let mut scanner = yara_x::Scanner::new(&rules);
+        let results = scanner.scan(b"x").unwrap();
+        let hits: Vec<_> = results
+            .matching_rules()
+            .map(|r| (r.identifier().to_owned(), r.namespace().to_owned()))
+            .collect();
+        assert_eq!(hits, vec![("fine".to_owned(), "s1".to_owned())]);
+        assert_eq!(super::namespace_source("s1", &sources), "good.yar");
+        assert_eq!(super::namespace_source("antinomie", &sources), "");
+        let only_bad = &sources[..1];
+        assert!(super::compile_sources(only_bad, None).is_err());
     }
 }
