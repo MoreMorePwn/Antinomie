@@ -163,6 +163,7 @@ fn queued_json_stays_fast_while_recording_saturates_the_disk() {
                     data: vec![0x5a; 1024 * 1024],
                     rollback: 0,
                     error: slot.clone(),
+                    digest: None,
                 });
             }
         })

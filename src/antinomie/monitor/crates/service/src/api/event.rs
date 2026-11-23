@@ -56,6 +56,28 @@ pub struct MetricsHealth {
     pub shedding: bool,
 }
 
+/// The parts of `collect` that `run.collect` times (ANT-T0612).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectPart {
+    /// The wait for the network capture, memory dump and core dump.
+    Evidence,
+    /// Telemetry the engine still took after the program ended, and the
+    /// recording writer's backlog (overlaps `evidence`).
+    Telemetry,
+    /// From `Stop` until the VM is stopped.
+    Stop,
+    /// Saving the recording after the stop: the writes, `fsync`, the raw
+    /// recording's SHA-256 and the final files.
+    Saving,
+    /// The VM's disk layer after the boot: the merge, and the copy of the
+    /// earlier bytes of the files the run changed when it could not wait.
+    DiskLayer,
+    /// After the lane let the VM go: how long the `triage` item waited for
+    /// the copy of the earlier bytes (a scan of the whole recording).
+    EarlierBytes,
+}
+
 /// The `lane.state` values (design 5.4.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -125,6 +147,15 @@ pub enum EventBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
+    /// One part of `collect` is over: how long it took, and what it waited
+    /// for (`detail`). No host paths.
+    #[serde(rename = "run.collect")]
+    RunCollect {
+        part: CollectPart,
+        duration_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
     /// Triage finished.
     #[serde(rename = "run.assessment")]
     RunAssessment { assessment: Box<Assessment> },
@@ -191,6 +222,7 @@ impl EventBody {
             | Self::RunWarning { .. }
             | Self::RunArtifact { .. }
             | Self::RunTrigger { .. }
+            | Self::RunCollect { .. }
             | Self::RunAssessment { .. }
             | Self::RunRequeued { .. }
             | Self::RunFinished { .. }

@@ -478,12 +478,31 @@ impl<E: Engine> LaneStages<'_, E> {
         limit: Duration,
     ) -> Result<TriageDone, StageStop> {
         let triage: &dyn HostTriage = self.env.triage;
-        self.progress(job, Stage::Analyse, "indexing the recording");
+        // The earlier bytes may still be being copied after the lane let the
+        // VM go (ANT-T0612): Triage reads them, so it waits.
+        let boot = super::earlier::boot_dir(job)
+            .filter(|boot| antinomie_monitor_core::earlier_kept::pending(boot).is_some());
+        self.progress(
+            job,
+            Stage::Analyse,
+            if boot.is_some() {
+                "waiting for the copy of the earlier bytes of changed files"
+            } else {
+                "indexing the recording"
+            },
+        );
         let worked = self.bounded(limit, |cancel| {
+            let waited = boot.as_deref().and_then(|boot| {
+                super::earlier::wait_for_copy(boot, cancel, super::earlier::ADOPT_AFTER)
+            });
             let saved = triage.open_run(job)?;
             let scan = triage.index(&saved, cancel)?;
-            Ok::<_, String>((saved, scan))
+            Ok::<_, String>((saved, scan, waited))
         });
+        if let Ok(Ok((_, _, Some(waited)))) = &worked {
+            self.earlier_waited(job, *waited);
+        }
+        let worked = worked.map(|done| done.map(|(saved, scan, _)| (saved, scan)));
         Ok(match worked {
             Ok(Ok(done)) => Ok(done),
             Ok(Err(error)) => Err((format!("the Triage scan failed: {error}"), false)),
@@ -497,6 +516,23 @@ impl<E: Engine> LaneStages<'_, E> {
                 ))
             }
         })
+    }
+
+    /// How long Triage waited for the earlier bytes copied after the lane
+    /// let the VM go: a `run.collect` part and a daemon log line.
+    fn earlier_waited(&self, job: &Run, waited: Duration) {
+        let ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX);
+        let _ = self.env.store.emit_collect(
+            &job.id,
+            crate::api::event::CollectPart::EarlierBytes,
+            ms,
+            Some("Triage waited for the copy of the earlier bytes of changed files, made after the VM was let go".into()),
+        );
+        (self.env.log)(&format!(
+            "run={} the earlier bytes were copied after the lane let the VM go; Triage waited {:.1} s for them",
+            job.id,
+            waited.as_secs_f64()
+        ));
     }
 
     /// The detection item: the preset's engines over the indexed run. A

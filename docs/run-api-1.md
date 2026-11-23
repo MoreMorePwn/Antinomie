@@ -246,6 +246,7 @@ for engine scope), `gseq` (across the service, persisted, never reused), `ts_ms`
 | `run.warning` | `{code, text}` |
 | `run.artifact` | `{artifact}` |
 | `run.trigger` | `{trigger?, note?}`: the preset's dump trigger took a dump (`trigger`: rule, tier, summary, syscall, pid, at_ms, and the `memory` and `core` dump with state, size, capture_id, error, note (what a complete core lacks: pages that were not in memory, and the rule that took it); no host path) or did less than asked (`note`) |
+| `run.collect` | `{part, duration_ms, detail?}`: one part of `collect` is over. `part` is `evidence` (the network capture, memory and core dumps), `telemetry` (what the engine still took after the program ended; overlaps `evidence`), `stop`, `saving` (the recording's writes, `fsync`, SHA-256 and final files), `disk_layer` (the merge of the VM's disk layer), or, after the lane let the VM go, `earlier_bytes` (how long the `triage` item waited for the copy of the earlier bytes of changed files); no host paths |
 | `run.assessment` | `{assessment}` |
 | `run.requeued` | `{attempt, reason}`; a `run.state` event with `state: queued` follows |
 | `run.finished` | `{outcome, failure?}`; the last event of a run |

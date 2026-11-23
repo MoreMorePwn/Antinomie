@@ -263,6 +263,7 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
                 triage: &triage(&data),
                 tags: &NoTags,
                 data_dir: &data,
+                log: &|line| eprintln!("{line}"),
             },
             lane: LaneId::new(1),
         };
@@ -471,6 +472,7 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
                     triage: &triage(&data),
                     tags: &NoTags,
                     data_dir: &data,
+                    log: &|line| eprintln!("{line}"),
                 },
                 lane: LaneId::new(1),
             };

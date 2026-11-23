@@ -31,6 +31,27 @@ use std::{
 /// Bytes the queue may hold before submitters wait.
 const QUEUE_LIMIT: usize = 256 * 1024 * 1024;
 
+/// The SHA-256 of an appended file as the writer wrote it, so the end of a
+/// recording does not read the whole file again (ANT-T0612). `None` inside
+/// when a write failed: the file was cut back and the sum no longer holds.
+pub(crate) type RunningDigest = Arc<Mutex<Option<sha2::Sha256>>>;
+
+/// A new running digest of an empty file.
+pub(crate) fn running_digest() -> RunningDigest {
+    Arc::new(Mutex::new(Some(<sha2::Sha256 as sha2::Digest>::new())))
+}
+
+/// The SHA-256 of everything written so far, in hex, unless a write failed.
+pub(crate) fn digest_hex(digest: &RunningDigest) -> Option<String> {
+    let state = digest.lock().ok()?.clone()?;
+    Some(
+        sha2::Digest::finalize(state)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
+}
+
 /// The first write error of one raw capture or assembler.
 pub(crate) type ErrorSlot = Arc<Mutex<Option<String>>>;
 
@@ -62,6 +83,9 @@ pub(crate) enum Op {
         data: Vec<u8>,
         rollback: u64,
         error: ErrorSlot,
+        /// The SHA-256 of the file so far, carried on as each block is
+        /// written; `None` inside once a write failed.
+        digest: Option<RunningDigest>,
     },
     /// Write `data` at `offset` of an open file (object segments and index).
     WriteAt {
@@ -158,12 +182,25 @@ fn run(writer: &'static Writer) {
                 data,
                 rollback,
                 error,
+                digest,
             } => {
-                if error_of(&error).is_none()
-                    && let Err(e) = (&*file).write_all(&data)
+                let written = error_of(&error).is_none() && {
+                    match (&*file).write_all(&data) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            let _ = file.set_len(rollback);
+                            fail(&error, format!("capture write failed: {e}"));
+                            false
+                        }
+                    }
+                };
+                if let Some(digest) = digest
+                    && let Ok(mut sum) = digest.lock()
                 {
-                    let _ = file.set_len(rollback);
-                    fail(&error, format!("capture write failed: {e}"));
+                    match (written, sum.as_mut()) {
+                        (true, Some(sum)) => sha2::Digest::update(sum, &data),
+                        _ => *sum = None,
+                    }
                 }
             }
             Op::WriteAt {

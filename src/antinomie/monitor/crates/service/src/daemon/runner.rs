@@ -61,6 +61,7 @@ impl<'a, E: Engine> StagesRunner<'a, E> {
                 triage: self.env.triage,
                 tags: self.env.tags,
                 data_dir: self.env.data_dir,
+                log: self.log,
             },
             lane: self.lane.clone(),
         }

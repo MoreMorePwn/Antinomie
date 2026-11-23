@@ -14,7 +14,7 @@
 //! `layer_s` for it would hang the job and the daemon's stop (ANT-T0475). The
 //! layer stays pending, so the lane takes no job until the engine has finished
 //! it.
-use super::{LaneStages, StageStop};
+use super::{LaneStages, StageStop, collect_parts::CollectClock};
 use crate::{
     api::run::{Outcome, Run, RunState},
     engine::Engine,
@@ -43,6 +43,8 @@ pub enum Stopped {
 pub const LOW_DISK_SETTLE: Duration = Duration::from_secs(60);
 /// How often the floor is looked at during the settle wait.
 const SETTLE_LOOK: Duration = Duration::from_secs(5);
+/// How often a timed settle wait reads the snapshot (`run.collect`).
+const SETTLE_TICK: Duration = Duration::from_millis(250);
 
 impl<E: Engine> LaneStages<'_, E> {
     /// Stop the lane VM if the engine runs it and wait until the recording is
@@ -65,6 +67,19 @@ impl<E: Engine> LaneStages<'_, E> {
         vm: &str,
         stop_limit: Duration,
         end_cancel: bool,
+    ) -> Result<Stopped, StageStop> {
+        self.stop_lane_vm_timed(job, vm, stop_limit, end_cancel, None)
+    }
+
+    /// [`stop_lane_vm_with`](Self::stop_lane_vm_with) that notes in `clock`
+    /// when the VM stopped, the recording was saved and the layer settled.
+    pub(crate) fn stop_lane_vm_timed(
+        &mut self,
+        job: &Run,
+        vm: &str,
+        stop_limit: Duration,
+        end_cancel: bool,
+        clock: Option<&mut CollectClock>,
     ) -> Result<Stopped, StageStop> {
         self.waiter.drain()?;
         let snapshot = self.waiter.snapshot();
@@ -95,7 +110,7 @@ impl<E: Engine> LaneStages<'_, E> {
                 Err(other) => return Err(StageStop::Abort(other)),
             }
         }
-        self.settle_recording(vm, end_cancel.then_some(job))
+        self.settle_recording(vm, end_cancel.then_some(job), clock)
     }
 
     /// Wait until the VM is stopped and its recording final (`layer_s`), or
@@ -104,26 +119,44 @@ impl<E: Engine> LaneStages<'_, E> {
         &mut self,
         vm: &str,
         cancel_ends: Option<&Run>,
+        mut clock: Option<&mut CollectClock>,
     ) -> Result<Stopped, StageStop> {
         let what = "the recording to settle after the stop";
         let deadline = self.waiter.now_ms() + crate::waiter::millis(SETTLE_WAIT);
         let mut low_since: Option<u64> = None;
+        // Timed waits look every `SETTLE_TICK`; the floor still every
+        // `SETTLE_LOOK`.
+        let tick = if clock.is_some() {
+            SETTLE_TICK
+        } else {
+            SETTLE_LOOK
+        };
+        let mut next_look = self.waiter.now_ms() + crate::waiter::millis(SETTLE_LOOK);
         loop {
             if let Some(job) = cancel_ends {
                 self.end_cancel_early(job);
             }
             let left = deadline.saturating_sub(self.waiter.now_ms());
-            let slice = Duration::from_millis(left).min(SETTLE_LOOK);
-            match self
+            let slice = Duration::from_millis(left).min(tick);
+            let waited = self
                 .waiter
-                .wait_until(what, Some(slice), |s| settled_after_stop(s, vm))
-            {
+                .wait_until(what, Some(slice), |s| settled_after_stop(s, vm));
+            if let Some(clock) = clock.as_deref_mut() {
+                clock
+                    .settle
+                    .see(self.waiter.now_ms(), self.waiter.snapshot(), vm);
+            }
+            match waited {
                 Ok(()) => return Ok(Stopped::Settled),
                 Err(WaitError::TimedOut { what }) => {
                     let now = self.waiter.now_ms();
                     if now >= deadline {
                         return Ok(Stopped::Unsettled(format!("timed out waiting for {what}")));
                     }
+                    if now < next_look {
+                        continue;
+                    }
+                    next_look = now + crate::waiter::millis(SETTLE_LOOK);
                     let Some(words) = self.env.host.low_disk() else {
                         low_since = None;
                         continue;

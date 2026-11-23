@@ -15,6 +15,7 @@ fn appends_and_positioned_writes_land_in_order_and_errors_are_reported() {
             data: part.to_vec(),
             rollback: 0,
             error: slot.clone(),
+            digest: None,
         });
     }
     for (offset, part) in [(3, &b"def"[..]), (0, b"abc")] {
@@ -55,6 +56,7 @@ fn a_ticket_waits_for_its_own_write_and_no_ticket_waits_for_nothing() {
         data: b"late".to_vec(),
         rollback: 0,
         error: slot,
+        digest: None,
     });
     // A recording that submitted nothing does not wait for a stalled disk.
     let started = Instant::now();
@@ -81,6 +83,7 @@ fn try_submit_returns_when_the_bounded_queue_is_full() {
         data: b"full".to_vec(),
         rollback: 0,
         error: slot.clone(),
+        digest: None,
     })
     .unwrap_or_else(|_| panic!("bounded writer accepted the first operation"));
     let started = Instant::now();
@@ -89,6 +92,7 @@ fn try_submit_returns_when_the_bounded_queue_is_full() {
         data: b"x".to_vec(),
         rollback: 4,
         error: slot,
+        digest: None,
     });
     // A full queue answers at once; the bound is loose for a loaded host.
     assert!(started.elapsed() < Duration::from_secs(10));
@@ -115,6 +119,7 @@ fn time_spent_waiting_for_the_writer_is_counted_on_the_waiting_thread_only() {
         data: b"x".to_vec(),
         rollback: 0,
         error: error_slot(),
+        digest: None,
     });
     let before = blocked_on_this_thread();
     // The private writer is looked up per thread; resume it from this one
@@ -163,7 +168,47 @@ fn a_raw_capture_keeps_what_a_full_queue_cannot_take_and_saves_it_later() {
     capture.sync().unwrap();
     assert!(!backlogged());
     assert_eq!(std::fs::read(root.join("telemetry.raw")).unwrap(), expected);
+    // The writer summed the blocks as it wrote them: the same SHA-256 as a
+    // read of the whole file (ANT-T0612).
+    assert_eq!(
+        capture.sha256(),
+        crate::samples::file_sha256(&root.join("telemetry.raw"))
+    );
     drop(capture);
     drop(slow);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_running_digest_stops_holding_after_a_failed_write() {
+    let root =
+        std::env::temp_dir().join(format!("ant-writer-digest-{}", crate::storage::unique_id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let digest = running_digest();
+    let good = Arc::new(File::create(root.join("good")).unwrap());
+    for part in [&b"one"[..], b"two"] {
+        wait_for(submit(Op::Append {
+            file: good.clone(),
+            data: part.to_vec(),
+            rollback: 0,
+            error: error_slot(),
+            digest: Some(digest.clone()),
+        }));
+    }
+    assert_eq!(
+        digest_hex(&digest),
+        crate::samples::file_sha256(&root.join("good"))
+    );
+    let read_only = Arc::new(File::open(root.join("good")).unwrap());
+    let slot = error_slot();
+    wait_for(submit(Op::Append {
+        file: read_only,
+        data: b"x".to_vec(),
+        rollback: 6,
+        error: slot.clone(),
+        digest: Some(digest.clone()),
+    }));
+    assert!(error_of(&slot).is_some());
+    assert_eq!(digest_hex(&digest), None);
     std::fs::remove_dir_all(root).unwrap();
 }

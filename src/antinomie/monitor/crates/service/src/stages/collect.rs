@@ -23,7 +23,9 @@
 //! `cancelled` as soon as it is seen, with its finish time (A37): steps 2 and
 //! 3 can take as long as a big recording takes to save, and the lane keeps
 //! the job's VM until they are over.
-use super::{LaneStages, Launched, STOP_WAIT, StageStop, cleanup::Stopped};
+use super::{
+    LaneStages, Launched, STOP_WAIT, StageStop, cleanup::Stopped, collect_parts::CollectClock,
+};
 use crate::{
     api::{
         failure::{Failure, FailureCode},
@@ -54,6 +56,18 @@ fn fail(code: FailureCode, message: &str, detail: Option<&str>) -> StageStop {
 }
 
 impl<E: Engine> LaneStages<'_, E> {
+    /// The parts of `collect` as `run.collect` events and one daemon log
+    /// line (best effort: a job a cancel ended takes no more events).
+    fn report_collect(&self, job: &Run, clock: &CollectClock) {
+        for (part, duration_ms, detail) in clock.parts() {
+            let _ = self
+                .env
+                .store
+                .emit_collect(&job.id, *part, *duration_ms, detail.clone());
+        }
+        (self.env.log)(&clock.line(job, self.waiter.now_ms()));
+    }
+
     /// What the policy's dump trigger did goes into the job's run and on the
     /// event stream (best effort: the evidence itself is already kept).
     fn record_triggers(&self, job: &Run, run_id: &str, artifacts: Option<&RunArtifacts>) {
@@ -85,10 +99,13 @@ impl<E: Engine> LaneStages<'_, E> {
         // 4.6.3): a VM that failed on the full disk after the stop, or
         // evidence the full disk kept from completing, are warnings then.
         let floor_stopped = self.floor_stopped(job);
+        let mut clock = CollectClock::new(began, self.waiter.snapshot());
+        let mut waited: Vec<&'static str> = Vec::new();
         loop {
             while self.waiter.pump(Duration::ZERO)?.is_some() {
                 dog.heard(self.waiter.now_ms());
             }
+            clock.observe(self.waiter.now_ms(), self.waiter.snapshot());
             if self.waiter.cancel_requested() {
                 cancelled = true;
                 break;
@@ -116,6 +133,11 @@ impl<E: Engine> LaneStages<'_, E> {
                 )
             })?;
             let pending = pending_parts(&run, evidence.as_ref());
+            for part in &pending {
+                if !waited.contains(part) {
+                    waited.push(part);
+                }
+            }
             let late = self.waiter.now_ms() >= began + EVIDENCE_WAIT.as_millis() as u64;
             let cut_by_floor = floor_stopped && (vm_failed || late) && !pending.is_empty();
             if pending.is_empty() || (late && may_stay_pending(&pending)) || cut_by_floor {
@@ -193,7 +215,13 @@ impl<E: Engine> LaneStages<'_, E> {
         // A person's cancel ends the job now; the lane still stops the VM
         // and keeps the recording (A37).
         let ended = cancelled && self.end_cancel_early(job);
-        let stopped = self.stop_lane_vm_with(job, &vm, STOP_WAIT, true)?;
+        let now = self.waiter.now_ms();
+        clock.evidence(now, &waited);
+        clock.stop_sent(now);
+        let stopped = self.stop_lane_vm_timed(job, &vm, STOP_WAIT, true, Some(&mut clock));
+        clock.settled(self.waiter.now_ms());
+        self.report_collect(job, &clock);
+        let stopped = stopped?;
         if ended || self.end_cancel_early(job) {
             return Ok(CollectEnd {
                 outcome: Outcome::Cancelled,

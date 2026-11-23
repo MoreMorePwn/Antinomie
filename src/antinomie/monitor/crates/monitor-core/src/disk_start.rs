@@ -49,7 +49,7 @@ pub struct Layer {
 }
 
 impl Layer {
-    fn of(path: &Path) -> Result<Self, String> {
+    pub(crate) fn of(path: &Path) -> Result<Self, String> {
         let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(Self {
             path: path.to_path_buf(),
@@ -245,7 +245,17 @@ impl DiskStart {
     }
 
     /// The record in `boot_dir`, if the boot has one.
+    /// The boot's record as a reader uses it: while the boot's earlier
+    /// bytes are still to be copied, the sealed layer that was kept aside
+    /// stands in for the one the VM has merged since ([`crate::earlier_kept`]).
     pub fn load(boot_dir: &Path) -> Option<Self> {
+        let mut start = Self::load_as_saved(boot_dir)?;
+        crate::earlier_kept::substitute(boot_dir, &mut start);
+        Some(start)
+    }
+
+    /// The boot's record as it was saved at the start.
+    pub fn load_as_saved(boot_dir: &Path) -> Option<Self> {
         let path = boot_dir.join(FILE);
         let mut text = String::new();
         File::open(path)

@@ -402,8 +402,14 @@ fn settle(options: &BackendOptions, directory: &Path, record: &Record) -> Result
     let mut entering = record.clone();
     // The marker is advice for readers; the work goes on without it.
     let _ = entering.enter(directory, LayerPhase::Finalizing);
-    // The earlier bytes first: they are read from `A`, which the merge changes.
-    if let Err(why) = crate::file_before_store::copy_for(record) {
+    // The earlier bytes are read from `A`, which the merge changes: `A` is
+    // kept aside when it is small, so the copy runs once the VM is free
+    // (ANT-T0612); otherwise the copy comes first.
+    let deferred = crate::file_before_store::copier_available()
+        && owned(directory, &record.sealed).is_ok_and(|sealed| {
+            crate::earlier_kept::keep(&record.boot_dir, &record.boot_id, &sealed).is_ok()
+        });
+    if !deferred && let Err(why) = crate::file_before_store::copy_for(record) {
         crate::file_before_store::note_not_copied(&record.boot_dir, &record.boot_id, &why);
     }
     let sealed = owned(directory, &record.sealed)?;
@@ -449,6 +455,9 @@ fn settle(options: &BackendOptions, directory: &Path, record: &Record) -> Result
     };
     fs::remove_file(Record::path(directory)).map_err(|e| format!("run layer record: {e}"))?;
     sync_directory(directory)?;
+    if deferred {
+        crate::earlier_kept::spawn_finish(record.boot_dir.clone());
+    }
     if outcome == Outcome::KeptInChain {
         // A boot that ended with a restore left both files behind the new
         // working disk; they stay only while a checkpoint's chain reaches

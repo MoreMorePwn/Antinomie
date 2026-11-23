@@ -180,6 +180,7 @@ impl HostPool {
                 triage: &*self.env.triage,
                 tags: &*self.env.tags,
                 data_dir: &self.env.data_dir,
+                log: &*self.env.log,
             },
             lane,
         }

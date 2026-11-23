@@ -572,7 +572,12 @@ impl ProgramRun {
             .execution
             .as_ref()
             .map_or(0, |execution| execution.async_loss_count);
-        let trace = crate::samples::file_sha256(&self.summary.directory.join("telemetry.raw"))
+        // Summed as it was written; read again only when that sum does not
+        // hold (a failed write).
+        let trace = self
+            .capture
+            .sha256()
+            .or_else(|| crate::samples::file_sha256(&self.summary.directory.join("telemetry.raw")))
             .unwrap_or_else(|| "unreadable".into());
         log.ended(format!(
             "{} records saved, {} async observations lost, {} dropped by the recorder; recording SHA-256 {}",

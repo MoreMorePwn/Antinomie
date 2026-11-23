@@ -126,6 +126,14 @@ fn a_crash_leaves_a_bootable_disk_and_the_next_start_finishes_it() {
             .boot_id,
         "b2"
     );
+    // The copy may run after the merge, on a thread of its own (ANT-T0612:
+    // another test of the process may have named a copy program).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while crate::earlier_kept::pending(&first.boot_dir).is_some()
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     let index = crate::file_before_store::Index::load(&first.boot_dir).unwrap();
     assert!(!index.complete);
     assert!(index.note.unwrap().contains("not (fully) copied"));
