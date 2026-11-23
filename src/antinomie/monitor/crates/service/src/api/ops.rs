@@ -599,6 +599,23 @@ pub struct RunDeleteParams {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Deleted {
     pub deleted: bool,
+    /// What `run.delete` removed besides the record: the recording and the
+    /// static analyses, when `with_recording` was set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<Leftover>,
+    /// What it left: without `with_recording`, the recording and the static
+    /// analyses of the run (the analyses go with `auto gc`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kept: Vec<Leftover>,
+}
+
+/// A recording or a static analysis folder a deletion removed or left.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Leftover {
+    /// `recording` or `analysis`.
+    pub what: String,
+    pub path: String,
+    pub bytes: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

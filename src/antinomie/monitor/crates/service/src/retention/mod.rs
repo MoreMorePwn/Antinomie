@@ -6,6 +6,7 @@
 //! | Recordings of auto jobs | Each run a job's attempts recorded (an attempt retried after its launch leaves one too). After `recordings_days` (14), through the engine's own deletion (`samples::delete_run` with a plan, as the window does); a failed job keeps its recording until `jobs_days` while `keep_failed` is set |
 //! | Size cap | Above `max_recordings_gib` (200) the oldest recordings go first (those `keep_failed` protects last) |
 //! | Run records and artifacts | After `jobs_days` (90): the rows, the events and the job's folder; a job whose recording is still there loses the recording first, or stays; so does a job whose recording cannot be read |
+//! | Static analyses of auto runs (`<data>/analyses/<id>`) | With the run's record (`jobs_days`), with `auto delete --with-recording`, and when the run's record is already gone (a plain `auto delete`, or a record removed some other way). Only the folders the `analyse` stage marked as an auto run's; an analysis from the window or `auto analyze` is never removed |
 //! | Staged uploads | 24 hours (the staging store's own expiry) |
 //! | Rejected inbox files | 7 days |
 //! | Processed inbox files | `[inbox] processed_keep_days` (7): plain files of `inbox/processed/` older than that |
@@ -24,6 +25,7 @@
 //! may hold the traffic or memory of other runs of the VM, so they go only
 //! with the VM, or when the user removes them.
 
+pub mod analyses;
 mod runs;
 #[cfg(test)]
 mod tests;
@@ -34,6 +36,7 @@ use crate::{
     api::{
         error::{ApiError, ErrorCode},
         ids::RunId,
+        ops::Leftover,
         run::{Outcome, Run},
     },
     config::service::Retention as RetentionConfig,
@@ -52,8 +55,8 @@ pub const REJECTED_DAYS: u64 = 7;
 /// What a pass did or would do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Action {
-    /// `recording`, `run` (the run's record), `upload`, `rejected_file`,
-    /// `processed_file`.
+    /// `recording`, `run` (the run's record), `analysis` (a static analysis
+    /// folder of an auto run), `upload`, `rejected_file`, `processed_file`.
     pub kind: String,
     /// The run (`r_...`).
     #[serde(rename = "run")]
@@ -287,6 +290,9 @@ impl Retention<'_> {
             self.remove_job(&job, &mut report);
         }
 
+        // Rule 5 (before the files, so a dry run lists it with the rest).
+        self.orphaned_analyses(&mut report);
+
         // Rule 4: uploads and rejected files.
         if let Some(uploads) = self.uploads {
             let count = if dry_run {
@@ -423,6 +429,7 @@ impl Retention<'_> {
         if report.dry_run {
             report.freed_bytes += dir_bytes;
             report.actions.push(action);
+            self.remove_analyses(&job.id, "with the run's record", report);
             return;
         }
         match self.store.delete_job(&job.id) {
@@ -435,6 +442,7 @@ impl Retention<'_> {
                     job.id, removed.bytes
                 ));
                 report.actions.push(action);
+                self.remove_analyses(&job.id, "with the run's record", report);
             }
             Err(error) => {
                 (self.log)(&format!(
@@ -444,6 +452,68 @@ impl Retention<'_> {
                 report
                     .errors
                     .push(format!("run {}: {}", job.id, error.message));
+            }
+        }
+    }
+
+    /// The auto analysis folders of the run `id`, or of a run whose record is
+    /// gone when `id` is given by [`Self::orphaned_analyses`]: removed, or in
+    /// a dry run only listed.
+    fn remove_analyses(&self, id: &RunId, why: &str, report: &mut GcReport) {
+        let roots = self.runs.analysis_roots();
+        for folder in analyses::of_run(&roots, id) {
+            self.remove_analysis(&folder, why, report);
+        }
+    }
+
+    fn remove_analysis(&self, folder: &analyses::Folder, why: &str, report: &mut GcReport) {
+        let name = folder
+            .path
+            .file_name()
+            .map(|n| clean(&n.to_string_lossy()))
+            .unwrap_or_default();
+        let mut action = Action {
+            kind: "analysis".into(),
+            job: Some(folder.run.clone()),
+            run: None,
+            detail: format!("static analysis {name} ({why})"),
+            bytes: folder.bytes,
+            done: false,
+        };
+        if report.dry_run {
+            report.freed_bytes += folder.bytes;
+            report.actions.push(action);
+            return;
+        }
+        match analyses::remove(folder) {
+            Ok(()) => {
+                action.done = true;
+                report.freed_bytes += folder.bytes;
+                (self.log)(&format!(
+                    "gc: deleted the static analysis {name} of run={} ({why}), freed {} bytes",
+                    folder.run, folder.bytes
+                ));
+                report.actions.push(action);
+            }
+            Err(error) => report.errors.push(format!(
+                "static analysis {name} of run {}: {error}",
+                folder.run
+            )),
+        }
+    }
+
+    /// Rule 5: the analysis folders of an auto run whose record is gone.
+    fn orphaned_analyses(&self, report: &mut GcReport) {
+        let roots = self.runs.analysis_roots();
+        for folder in analyses::marked(&roots) {
+            let Ok(id) = RunId::try_from(folder.run.clone()) else {
+                continue;
+            };
+            match self.store.get(&id) {
+                Err(error) if error.code == ErrorCode::NotFound => {
+                    self.remove_analysis(&folder, "its run record is gone", report);
+                }
+                _ => {}
             }
         }
     }
@@ -529,16 +599,26 @@ fn clean(text: &str) -> String {
         .collect()
 }
 
-/// `run.delete`: remove an ended job and, when asked, its recording first. A
-/// recording with an open read, or still being written, is a `conflict` and
-/// nothing is removed.
+/// What `run.delete` removed and what it left, in the words of the output.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Deletion {
+    pub removed: Vec<Leftover>,
+    pub kept: Vec<Leftover>,
+}
+
+/// `run.delete`: remove an ended job and, when asked, its recording and its
+/// static analyses first. A recording with an open read, or still being
+/// written, is a `conflict` and nothing is removed. Without
+/// `with_recording` the recording and the analyses stay, and the answer says
+/// where they are and how big (`auto gc` removes the analyses of a run whose
+/// record is gone; the recording goes by its own age).
 pub fn delete_job(
     store: &Store,
     runs: &dyn Runs,
     id: &RunId,
     with_recording: bool,
     log: &dyn Fn(&str),
-) -> Result<(), ApiError> {
+) -> Result<Deletion, ApiError> {
     let job = store.get(id)?;
     if !job.state.is_terminal() {
         return Err(ApiError::new(
@@ -547,38 +627,82 @@ pub fn delete_job(
         )
         .with_detail("reason", serde_json::json!("invalid_transition")));
     }
-    if with_recording {
-        // The job's run and every run an earlier attempt recorded: all are
-        // checked first, so an open or unfinished one removes nothing.
-        let mut all = Vec::new();
-        if job.recording.is_some() {
-            all.push(job.clone());
-        }
-        all.extend(earlier_runs(store, &job)?);
-        let mut present = Vec::new();
-        for run in all {
-            match runs.inspect(&run).map_err(|e| {
-                ApiError::new(
+    let mut deletion = Deletion::default();
+    // The job's run and every run an earlier attempt recorded: all are
+    // checked first, so an open or unfinished one removes nothing.
+    let mut all = Vec::new();
+    if job.recording.is_some() {
+        all.push(job.clone());
+    }
+    all.extend(earlier_runs(store, &job)?);
+    let mut present = Vec::new();
+    for run in all {
+        let state = match runs.inspect(&run) {
+            Ok(state) => state,
+            // A recording nobody asked to delete need not be readable.
+            Err(_) if !with_recording => continue,
+            Err(e) => {
+                return Err(ApiError::new(
                     ErrorCode::Internal,
                     format!("the recording is not readable: {e}"),
-                )
-            })? {
-                RunState::Gone => {}
-                RunState::Present { in_progress, bytes } => {
-                    if runs.is_open(&run) || in_progress {
-                        return Err(ApiError::recording_open("open"));
-                    }
-                    present.push((run, bytes));
+                ));
+            }
+        };
+        match state {
+            RunState::Gone => {}
+            RunState::Present { in_progress, bytes } => {
+                if with_recording && (runs.is_open(&run) || in_progress) {
+                    return Err(ApiError::recording_open("open"));
                 }
+                present.push((run, bytes));
             }
         }
-        for (run, freed) in present {
+    }
+    for (run, freed) in present {
+        let path = run
+            .recording
+            .as_ref()
+            .and_then(|r| r.directory.clone())
+            .unwrap_or_default();
+        let leftover = Leftover {
+            what: "recording".into(),
+            path,
+            bytes: freed,
+        };
+        if with_recording {
             runs.delete(&run, &actor_for(&run))
                 .map_err(|e| ApiError::new(ErrorCode::Internal, format!("recording: {e}")))?;
             log(&format!(
                 "delete: deleted the recording of run={id} recording={}, freed {freed} bytes",
                 run.recording.as_ref().map_or("?", |r| r.run_id.as_str())
             ));
+            deletion.removed.push(leftover);
+        } else {
+            deletion.kept.push(leftover);
+        }
+    }
+    let roots = runs.analysis_roots();
+    for folder in analyses::of_run(&roots, id) {
+        let leftover = Leftover {
+            what: "analysis".into(),
+            path: folder.path.display().to_string(),
+            bytes: folder.bytes,
+        };
+        if with_recording {
+            analyses::remove(&folder).map_err(|e| {
+                ApiError::new(
+                    ErrorCode::Internal,
+                    format!("static analysis {}: {e}", folder.path.display()),
+                )
+            })?;
+            log(&format!(
+                "delete: deleted the static analysis {} of run={id}, freed {} bytes",
+                folder.path.display(),
+                folder.bytes
+            ));
+            deletion.removed.push(leftover);
+        } else {
+            deletion.kept.push(leftover);
         }
     }
     let removed = store.delete_job(id)?;
@@ -586,5 +710,5 @@ pub fn delete_job(
         "delete: deleted run={id}, freed {} bytes",
         removed.bytes
     ));
-    Ok(())
+    Ok(deletion)
 }

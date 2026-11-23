@@ -4076,11 +4076,48 @@
       "properties": {
         "deleted": {
           "type": "boolean"
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Leftover"
+          },
+          "description": "What `run.delete` removed besides the record: the recording and the\nstatic analyses, when `with_recording` was set."
+        },
+        "kept": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Leftover"
+          },
+          "description": "What it left: without `with_recording`, the recording and the static\nanalyses of the run (the analyses go with `auto gc`)."
         }
       },
       "required": [
         "deleted"
       ]
+    },
+    "Leftover": {
+      "type": "object",
+      "properties": {
+        "what": {
+          "type": "string",
+          "description": "`recording` or `analysis`."
+        },
+        "path": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "what",
+        "path",
+        "bytes"
+      ],
+      "description": "A recording or a static analysis folder a deletion removed or left."
     },
     "EventsSubscribeParams": {
       "type": "object",

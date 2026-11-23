@@ -154,6 +154,9 @@ pub struct JobWork {
     /// Optional static checks whose tool is not there (A07).
     pub unavailable: Vec<String>,
     pub digest_note: Option<String>,
+    /// The static analyses the static items started (ids under
+    /// `<data>/analyses`), oldest first; kept over a retry of the stages.
+    pub static_reports: Vec<String>,
     /// The report's failure, read by [`LaneStages::end_report`].
     pub report_failure: Option<Failure>,
     /// Runs of the two stages so far (an `analysis_failed` retry is another).
@@ -171,6 +174,7 @@ impl JobWork {
             incomplete: Vec::new(),
             unavailable: Vec::new(),
             digest_note: None,
+            static_reports: Vec::new(),
             report_failure: None,
             tries: 1,
         }
@@ -285,8 +289,12 @@ impl<E: Engine> LaneStages<'_, E> {
                 if let Some(reason) = super::analyse::not_applicable(group, job) {
                     return Ok(ended(HostItemState::Skipped, Some(reason)));
                 }
-                let (outcome, timed_out, waited_ms) =
-                    self.static_item(job, &plan, group, limit, until)?;
+                let mut started = None;
+                let result = self.static_item(job, &plan, group, limit, until, &mut started);
+                if let Some(id) = started {
+                    lock(work).static_reports.push(id);
+                }
+                let (outcome, timed_out, waited_ms) = result?;
                 let words: Vec<String> =
                     outcome.hard.iter().chain(&outcome.soft).cloned().collect();
                 let state = if timed_out {
@@ -444,6 +452,11 @@ impl<E: Engine> LaneStages<'_, E> {
                 .map_err(|e| self.store_error(Stage::Analyse, e))?;
             if let Some(note) = &work.digest_note {
                 let _ = store.add_warning(&job.id, "digest_incomplete", note);
+            }
+            if !work.static_reports.is_empty()
+                && let Some(problem) = self.env.triage.attach_static(job, &work.static_reports)
+            {
+                self.warn(job, "static_analysis_not_joined", &problem);
             }
             for problem in &work.problems {
                 self.warn(job, "analysis_failed", problem);

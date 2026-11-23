@@ -4,6 +4,7 @@
 //! the snapshot (`launch_s` 30). A run that the engine already reports as
 //! `FailedToStart` or `LaunchUnconfirmed` is `launch_failed`.
 use super::{LaneStages, Launched, Prepared, Provisioned, StageStop};
+use crate::waiter::WaitError;
 use crate::{
     api::spec::Route,
     api::{
@@ -15,7 +16,35 @@ use crate::{
     store::JobPatch,
     waiter::{Phase, phase, route_of},
 };
-use antinomie_monitor_core::{RunSummary, samples::SampleRef};
+use antinomie_monitor_core::{ExecRequest, RunSummary, samples::SampleRef};
+use std::time::Duration;
+
+/// How long a launch that needs the guest's process-core limits waits for
+/// them on a guest the KVM speed boots: the guest reports them a moment after
+/// it is up, on the first run after a boot just ahead of the launch (T0611,
+/// F10). Under TCG the wait is stretched by the engine's multiplier.
+const CORE_LIMITS_WAIT_S: f64 = 10.0;
+/// The longest the wait gets, whatever the multiplier.
+const CORE_LIMITS_WAIT_MAX_S: f64 = 120.0;
+
+/// Whether a request needs the guest's process-core limits to be checked.
+fn wants_core(request: &ExecRequest) -> bool {
+    request.core_dump_on_exit || request.dump_trigger.as_ref().is_some_and(|plan| plan.core)
+}
+
+/// How long to wait for the guest's process-core limits before the launch:
+/// none when the request takes no core or the limits are known.
+pub(super) fn core_limits_wait(
+    request: &ExecRequest,
+    known: bool,
+    tcg_factor: f64,
+) -> Option<Duration> {
+    (wants_core(request) && !known).then(|| {
+        Duration::from_secs_f64(
+            (CORE_LIMITS_WAIT_S * tcg_factor.max(1.0)).min(CORE_LIMITS_WAIT_MAX_S),
+        )
+    })
+}
 
 fn fail(message: &str, detail: Option<&str>) -> StageStop {
     StageStop::Failed(Failure::new(
@@ -60,6 +89,27 @@ impl<E: Engine> LaneStages<'_, E> {
         // launch its static analysis (T0344); it is gone when the launch ends.
         let staged = crate::host_copy::StagedCopy::stage(self.env.data_dir, sample.sha256.as_str());
         request.host_copy = staged.as_ref().map(|copy| copy.path().to_owned());
+        // The engine refuses a core it cannot check against the guest's
+        // limits, and the guest reports them a moment after it is up: wait
+        // for them (bounded) instead of failing the first run of a lane.
+        if let Some(limit) = core_limits_wait(
+            &request,
+            self.waiter.snapshot().guest_core_limits.is_some(),
+            self.env.triage.tcg_factor(),
+        ) {
+            match self.waiter.wait_until(
+                "the guest's process-core limits",
+                Some(limit),
+                |snapshot| snapshot.guest_core_limits.is_some(),
+            ) {
+                // Past the limit the engine's own refusal says what is missing.
+                Ok(()) | Err(WaitError::TimedOut { .. }) => {}
+                Err(other) => {
+                    drop(staged);
+                    return Err(StageStop::Abort(other));
+                }
+            }
+        }
         let launched = self.waiter.launch_request(request.clone());
         drop(staged);
         let run = launched?;
@@ -142,5 +192,63 @@ impl<E: Engine> LaneStages<'_, E> {
         store
             .emit_run_started(&job.id, &run.id, Some(run.pid).filter(|p| *p != 0), route)
             .map_err(|e| self.store_error(Stage::Launch, e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use antinomie_monitor_core::dump_trigger::DumpTrigger as DumpTriggerPlan;
+
+    fn core_on_exit() -> ExecRequest {
+        ExecRequest {
+            core_dump_on_exit: true,
+            ..ExecRequest::default()
+        }
+    }
+
+    #[test]
+    fn a_core_request_waits_for_limits_the_guest_has_not_reported() {
+        let wait = core_limits_wait(&core_on_exit(), false, 1.0).unwrap();
+        assert_eq!(wait, Duration::from_secs(10));
+        let trigger = ExecRequest {
+            dump_trigger: Some(DumpTriggerPlan {
+                core: true,
+                ..DumpTriggerPlan::default()
+            }),
+            ..ExecRequest::default()
+        };
+        assert!(core_limits_wait(&trigger, false, 1.0).is_some());
+    }
+
+    #[test]
+    fn nothing_waits_when_no_core_is_asked_or_the_limits_are_known() {
+        assert_eq!(core_limits_wait(&ExecRequest::default(), false, 1.0), None);
+        assert_eq!(core_limits_wait(&core_on_exit(), true, 1.0), None);
+        let memory_only = ExecRequest {
+            dump_trigger: Some(DumpTriggerPlan {
+                core: false,
+                ..DumpTriggerPlan::default()
+            }),
+            ..ExecRequest::default()
+        };
+        assert_eq!(core_limits_wait(&memory_only, false, 1.0), None);
+    }
+
+    #[test]
+    fn the_wait_stretches_under_tcg_up_to_a_bound() {
+        assert_eq!(
+            core_limits_wait(&core_on_exit(), false, 4.0),
+            Some(Duration::from_secs(40))
+        );
+        assert_eq!(
+            core_limits_wait(&core_on_exit(), false, 50.0),
+            Some(Duration::from_secs(120))
+        );
+        // A factor under 1 never shortens it.
+        assert_eq!(
+            core_limits_wait(&core_on_exit(), false, 0.0),
+            Some(Duration::from_secs(10))
+        );
     }
 }
