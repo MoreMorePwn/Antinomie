@@ -388,6 +388,13 @@ the title, with its **Refresh Explorer** button on the name's right. Right-click
 **Send and Run** (opens Upload file filled in), **Send to VM** (uploads it to
 `/tmp` in the running VM at once and does not run it) and **Add to Samples…**.
 **File > Import sample…** opens the Samples page's **Add file** dialog.
+A ZIP with one file in it (MalwareBazaar's `infected` archives) is opened in memory and the
+file inside is added: the dialog shows an **Archive** row with the password (empty means
+`infected`) and **Keep the ZIP as it is**, and the Type row says where the file came from. The
+archive's name and SHA-256 are recorded as the origin in the custody log. A ZIP of several
+encrypted files is refused with its list; use `sample add --entry NAME` on the command line.
+An ELF shared library has the type `elf_library`; its window greys **Run in VM…** (a library
+crashes when started) and keeps **Load into…**.
 
 The Base images table lists each installed base as "name · architecture ·
 revision" (for example "BusyBox · arm64 · r22") with a **Revision** column; the

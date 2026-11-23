@@ -102,9 +102,20 @@ impl Service {
             .map(library::tag_of_api)
             .collect::<Result<Vec<_>, _>>()?;
         let client = &ctx.caller.client_id;
-        let (sha256, new) =
-            self.intake
-                .add_upload(client, upload, request.name.as_deref(), tags, client)?;
+        let archive = antinomie_monitor_core::samples::ArchiveOptions {
+            password: request.archive_password.clone(),
+            entry: request.entry.clone(),
+            keep_archive: request.keep_archive,
+            limit: None,
+        };
+        let (sha256, new) = self.intake.add_upload(
+            client,
+            upload,
+            request.name.as_deref(),
+            tags,
+            &archive,
+            client,
+        )?;
         let sha = crate::api::ids::Sha256Hex::try_from(sha256)
             .map_err(|e| ApiError::new(ErrorCode::Internal, e.to_string()))?;
         let mut sample = library::get(

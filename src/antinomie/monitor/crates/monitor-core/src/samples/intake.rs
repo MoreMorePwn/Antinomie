@@ -7,6 +7,7 @@ use super::{
     MAX_SAMPLE, SampleInfo, archive,
     custody::CustodyEvent,
     library::{Library, NewOrigin, OriginKind, Tag, now_ms},
+    unwrap::{self, ArchiveOptions, unwrap_zip},
 };
 use rusqlite::{OptionalExtension, params};
 use sha1::Sha1;
@@ -39,9 +40,13 @@ pub struct FileProbe {
     pub name: String,
     pub size: u64,
     pub sha256: String,
-    /// `elf`, `sh`, `py`, `exe`… (see [`detect_type`]).
+    /// `elf`, `elf_library`, `sh`, `py`, `exe`… (see [`detect_type`]); of the
+    /// file inside when it is an archive that is unwrapped.
     pub file_type: String,
     pub arch: String,
+    /// The file name of the archive the sample would be unwrapped from; empty
+    /// for a file added as it is. `name`, `size` and `sha256` are the sample's.
+    pub unwrapped_from: String,
     /// Another route already brought these bytes in.
     pub known: bool,
 }
@@ -74,7 +79,14 @@ fn read_file(path: &Path) -> Result<Vec<u8>, String> {
 /// architecture of an ELF. Magic only: nothing is parsed further.
 pub fn detect_type(bytes: &[u8]) -> (&'static str, Option<&'static str>) {
     if let Some(arch) = super::elf_arch(bytes) {
-        return ("elf", Some(arch));
+        // A shared library is its own type: it is not run, it is loaded into
+        // a program (see `elf_kind`).
+        let kind = if super::elf_kind::is_shared_library(bytes) {
+            "elf_library"
+        } else {
+            "elf"
+        };
+        return (kind, Some(arch));
     }
     if let Some(rest) = bytes.strip_prefix(b"#!") {
         let line = rest.split(|b| *b == b'\n').next().unwrap_or_default();
@@ -132,7 +144,13 @@ fn describe(origin: &NewOrigin) -> String {
             let name = Path::new(place)
                 .file_name()
                 .map_or_else(|| place.clone(), |name| name.to_string_lossy().into_owned());
-            format!("{kind}: {name}")
+            let detail = origin.detail.as_str();
+            // A sample taken out of an archive says which (name and hash).
+            if detail.starts_with(unwrap::DETAIL_PREFIX) {
+                format!("{kind}: {name} ({detail})")
+            } else {
+                format!("{kind}: {name}")
+            }
         }
         Some(place) => format!("{kind}: {place}"),
         None => kind.to_owned(),
@@ -143,13 +161,29 @@ impl Library {
     /// Read and hash a file without keeping anything. For the Add file…
     /// dialog.
     pub fn probe_file(&self, path: &Path) -> Result<FileProbe, String> {
-        let bytes = read_file(path)?;
+        self.probe_file_with(path, &ArchiveOptions::default())
+    }
+
+    /// [`Self::probe_file`] for what [`Self::add_file_with`] would add: the
+    /// file inside a ZIP that is unwrapped (in memory) is the one described.
+    pub fn probe_file_with(
+        &self,
+        path: &Path,
+        archive: &ArchiveOptions,
+    ) -> Result<FileProbe, String> {
+        let raw = read_file(path)?;
+        let outer = path
+            .file_name()
+            .map_or(String::new(), |name| name.to_string_lossy().into_owned());
+        let (bytes, name, unwrapped_from) = match unwrap_zip(&raw, archive)? {
+            Some(inner) => (inner.bytes, inner.entry, outer),
+            None => (raw, outer, String::new()),
+        };
         let (file_type, arch) = detect_type(&bytes);
         let sha256 = hex(Sha256::digest(&bytes));
         Ok(FileProbe {
-            name: path
-                .file_name()
-                .map_or(String::new(), |name| name.to_string_lossy().into_owned()),
+            name,
+            unwrapped_from,
             size: bytes.len() as u64,
             known: self.contains(&sha256)?,
             sha256,
@@ -165,25 +199,49 @@ impl Library {
     pub fn add_file(
         &mut self,
         path: &Path,
-        mut new: NewSample,
+        new: NewSample,
         delete_original: bool,
     ) -> Result<Added, String> {
-        let bytes = read_file(path)?;
+        self.add_file_with(path, new, delete_original, &ArchiveOptions::default())
+    }
+
+    /// [`Self::add_file`] with the say over a ZIP: one with a single file is
+    /// unwrapped in memory (see [`unwrap_zip`]) and its file is the sample;
+    /// the custody origin records the archive's name and SHA-256. With
+    /// `delete_original` the archive is the original that is deleted.
+    pub fn add_file_with(
+        &mut self,
+        path: &Path,
+        mut new: NewSample,
+        delete_original: bool,
+        archive: &ArchiveOptions,
+    ) -> Result<Added, String> {
+        let raw = read_file(path)?;
+        let outer_name = path
+            .file_name()
+            .map_or(String::new(), |name| name.to_string_lossy().into_owned());
+        let outer_sha256 = hex(Sha256::digest(&raw));
+        let inner = unwrap_zip(&raw, archive)?;
+        let bytes = match &inner {
+            Some(inner) => inner.bytes.as_slice(),
+            None => raw.as_slice(),
+        };
         if new.origin.kind == OriginKind::default() && new.origin.path.is_empty() {
             new.origin.path = path.display().to_string();
         }
         if new.origin.name.is_empty() {
-            new.origin.name = path
-                .file_name()
-                .map_or(String::new(), |name| name.to_string_lossy().into_owned());
+            new.origin.name.clone_from(&outer_name);
         }
-        let added = self.add_bytes(&bytes, new)?;
+        if let Some(inner) = &inner {
+            unwrap::mark_origin(&mut new, &outer_name, inner);
+        }
+        let added = self.add_bytes(bytes, new)?;
         if delete_original {
             let archive = self.archive_path(&added.sha256)?;
             if !archive::verify(&archive, &added.sha256).is_ok() {
                 return Err("the archive did not read back; the original was kept".into());
             }
-            if hex(Sha256::digest(read_file(path)?)) != added.sha256 {
+            if hex(Sha256::digest(read_file(path)?)) != outer_sha256 {
                 return Err("the file changed after it was added; the original was kept".into());
             }
             fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -250,7 +308,8 @@ impl Library {
                 .unwrap_or_default()
                 .to_owned();
         }
-        let file_type = if info.file_type.is_empty() {
+        // What the bytes say wins for a library: MalwareBazaar calls it `elf`.
+        let file_type = if file_type == "elf_library" || info.file_type.is_empty() {
             file_type.to_owned()
         } else {
             info.file_type.clone()
@@ -386,6 +445,20 @@ impl Library {
             .filter(|record| record.removed_ms.is_none())
             .ok_or("this sample is not in the library")?;
         super::open_sample(&self.archive_path(&record.sha256)?, &record.sha256)
+    }
+
+    /// The sample is an ELF shared library, which loads into a program and
+    /// is not run itself. Recorded as `elf_library` when it was added; a
+    /// sample added before that, as `elf`, is read once to tell.
+    pub fn is_shared_library(&self, sha256: &str) -> Result<bool, String> {
+        let Some(record) = self.get(sha256)?.filter(|r| r.removed_ms.is_none()) else {
+            return Ok(false);
+        };
+        Ok(match record.file_type.to_ascii_lowercase().as_str() {
+            "elf_library" => true,
+            "elf" => super::elf_kind::is_shared_library(&self.open_bytes(&record.sha256)?),
+            _ => false,
+        })
     }
 
     /// Read the archive back and compare; the result is an event.

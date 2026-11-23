@@ -1067,3 +1067,165 @@ fn the_custody_writer_retries_a_busy_database_and_drops_nothing() {
         "{events:?}"
     );
 }
+
+fn added_from_file(name: &str) -> NewSample {
+    NewSample {
+        origin: NewOrigin {
+            path: format!("/tmp/inbox/{name}"),
+            ..NewOrigin::default()
+        },
+        ..NewSample::default()
+    }
+}
+
+fn aes_zip(name: &str, body: &[u8], password: &str) -> Vec<u8> {
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    writer
+        .start_file(
+            name,
+            zip::write::SimpleFileOptions::default()
+                .with_aes_encryption(zip::AesMode::Aes256, password),
+        )
+        .unwrap();
+    writer.write_all(body).unwrap();
+    writer.finish().unwrap().into_inner()
+}
+
+#[test]
+fn a_password_archive_is_unwrapped_and_the_custody_names_the_outer_archive() {
+    let root = temp("unwrap-add");
+    let mut library = Library::open(&root).unwrap();
+    let outer = aes_zip("payload.sh", SCRIPT, ARCHIVE_PASSWORD);
+    let path = root.join("feed.zip");
+    fs::write(&path, &outer).unwrap();
+    let probe = library
+        .probe_file_with(&path, &ArchiveOptions::default())
+        .unwrap();
+    assert_eq!(
+        (probe.name.as_str(), probe.file_type.as_str()),
+        ("payload.sh", "sh")
+    );
+    assert_eq!(probe.unwrapped_from, "feed.zip");
+    assert_eq!(probe.sha256, sha(SCRIPT));
+    let added = library
+        .add_file_with(
+            &path,
+            added_from_file("feed.zip"),
+            false,
+            &ArchiveOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(added.sha256, sha(SCRIPT));
+    let record = library.get(&added.sha256).unwrap().unwrap();
+    assert_eq!(
+        (record.name.as_str(), record.file_type.as_str()),
+        ("payload.sh", "sh")
+    );
+    assert_eq!(library.open_bytes(&added.sha256).unwrap(), SCRIPT);
+    let text: String = library
+        .custody_entries(&added.sha256)
+        .unwrap()
+        .iter()
+        .map(|entry| entry.detail.clone())
+        .collect();
+    assert!(
+        text.contains("feed.zip") && text.contains(&sha(&outer)),
+        "{text}"
+    );
+    assert!(!text.contains("/tmp/inbox"));
+    // The outer ZIP was never added as a sample.
+    assert!(library.get(&sha(&outer)).unwrap().is_none());
+    // Kept on request.
+    let keep = ArchiveOptions {
+        keep_archive: true,
+        ..Default::default()
+    };
+    let kept = library
+        .add_file_with(&path, added_from_file("feed.zip"), false, &keep)
+        .unwrap();
+    assert_eq!(kept.sha256, sha(&outer));
+    assert_eq!(library.get(&kept.sha256).unwrap().unwrap().file_type, "zip");
+    // delete_original removes the archive, checked against its own hash.
+    let other = root.join("other.zip");
+    fs::write(
+        &other,
+        aes_zip("o.sh", b"#!/bin/sh\nexit 0\n", ARCHIVE_PASSWORD),
+    )
+    .unwrap();
+    library
+        .add_file_with(
+            &other,
+            added_from_file("other.zip"),
+            true,
+            &ArchiveOptions::default(),
+        )
+        .unwrap();
+    assert!(!other.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn an_archive_with_the_wrong_password_adds_nothing() {
+    let root = temp("unwrap-wrong");
+    let mut library = Library::open(&root).unwrap();
+    let path = root.join("x.zip");
+    fs::write(&path, aes_zip("a.sh", SCRIPT, "other")).unwrap();
+    let error = library
+        .add_file_with(
+            &path,
+            NewSample::default(),
+            false,
+            &ArchiveOptions::default(),
+        )
+        .unwrap_err();
+    assert!(error.contains("--archive-password"), "{error}");
+    assert!(library.list().unwrap().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_library_is_its_own_type_even_when_the_source_says_elf() {
+    use super::elf_kind::tests::elf as build;
+    let library_bytes = build(true, 3, false, Some(&[]));
+    let program = build(true, 3, true, Some(&[(1, 1)]));
+    assert_eq!(detect_type(&library_bytes), ("elf_library", Some("x86_64")));
+    assert_eq!(detect_type(&program), ("elf", Some("x86_64")));
+    let root = temp("elf-library");
+    let mut library = Library::open(&root).unwrap();
+    let info = SampleInfo {
+        file_type: "elf".into(),
+        ..SampleInfo::default()
+    };
+    let added = library
+        .add_bytes(
+            &library_bytes,
+            NewSample {
+                info: Some(info),
+                ..NewSample::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        library.get(&added.sha256).unwrap().unwrap().file_type,
+        "elf_library"
+    );
+    assert!(library.is_shared_library(&added.sha256).unwrap());
+    let program_added = library.add_bytes(&program, NewSample::default()).unwrap();
+    assert!(!library.is_shared_library(&program_added.sha256).unwrap());
+    // A library recorded as `elf` before the type existed is read once to tell.
+    let old = build(false, 3, false, Some(&[]));
+    let old_added = library
+        .add_bytes(
+            &old,
+            NewSample {
+                info: Some(SampleInfo {
+                    file_type: "elf".into(),
+                    ..SampleInfo::default()
+                }),
+                ..NewSample::default()
+            },
+        )
+        .unwrap();
+    assert!(library.is_shared_library(&old_added.sha256).unwrap());
+    fs::remove_dir_all(root).unwrap();
+}

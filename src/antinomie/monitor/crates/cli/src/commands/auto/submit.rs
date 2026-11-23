@@ -77,6 +77,14 @@ pub struct Submit {
     /// Program arguments (`program.arguments`).
     #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "ARG")]
     pub args: Vec<String>,
+    /// The sample is a shared library: run this program in the guest (an
+    /// absolute path to a dynamically linked program, for example `/bin/ls` on
+    /// a Debian base; BusyBox programs are static, so there use the loader
+    /// `/lib/ld-linux-x86-64.so.2` with `--args /lib/libc.so.6`) with the
+    /// library in `LD_PRELOAD` (`program.load_into`). A sample that is a
+    /// program runs as usual.
+    #[arg(long = "load-into", value_name = "PROGRAM")]
+    pub load_into: Option<String>,
     /// An environment entry (repeatable); replaces the preset's environment
     /// (a PATH is added when none is given).
     #[arg(long = "env", value_name = "KEY=VALUE")]
@@ -198,6 +206,9 @@ pub fn spec_of(arguments: &Submit) -> Result<Value, CliError> {
     }
     if !arguments.args.is_empty() {
         set("program", "arguments", json!(arguments.args));
+    }
+    if let Some(program) = &arguments.load_into {
+        set("program", "load_into", json!(program));
     }
     if !arguments.env.is_empty() {
         set("program", "environment", json!(arguments.env));
@@ -621,6 +632,8 @@ mod tests {
             "--no-defang",
             "--idempotency-key",
             "k1",
+            "--load-into",
+            "/bin/ls",
             "--args",
             "-v",
             "x",
@@ -633,7 +646,7 @@ mod tests {
                 "idempotency_key": "k1",
                 "overrides": {
                     "program": {"run_time_s": 60, "arguments": ["-v", "x"], "user": "custom",
-                                "uid": 1000, "gid": 100},
+                                "uid": 1000, "gid": 100, "load_into": "/bin/ls"},
                     "network": {"route": "inet_sim"},
                     "static_analysis": {"enabled": true, "triage_checks": ["strings", "entropy"],
                                         "deep_checks": []},

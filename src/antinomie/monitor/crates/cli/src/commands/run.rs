@@ -353,6 +353,19 @@ fn exec(arguments: &Exec, context: &Context) -> Result<Reply, CliError> {
         )
         .with_field("sample"));
     }
+    // A shared library only crashes when started; say what to do instead.
+    if arguments.load_into.is_none()
+        && open_existing(context.data_dir())?
+            .and_then(|library| library.is_shared_library(&record.sha256).ok())
+            .unwrap_or(false)
+    {
+        return Err(
+            CliError::invalid(antinomie_monitor_core::samples::library_refusal(
+                "give --load-into PROGRAM, a dynamically linked program, for example --load-into /bin/ls on a Debian base (BusyBox programs are static: use --load-into /lib/ld-linux-x86-64.so.2 --args /lib/libc.so.6)",
+            ))
+            .with_field("sample"),
+        );
+    }
     let mut engine = DirectEngine::start(context)?;
     let outcome = exec_on(arguments, context, &mut engine, request, &record);
     engine.finish();

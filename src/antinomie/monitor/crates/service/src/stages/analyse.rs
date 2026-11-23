@@ -126,7 +126,7 @@ fn check_name(kind: AnalysisKind) -> String {
 /// the item applies, or when it holds another check.
 pub(super) fn not_applicable(group: &[AnalysisKind], job: &Run) -> Option<String> {
     let sample = job.sample.as_ref()?;
-    if !sample.kind.eq_ignore_ascii_case("elf") {
+    if !antinomie_monitor_core::samples::is_elf_type(&sample.kind) {
         return None;
     }
     let arch = crate::arch::canonical(sample.architecture.as_deref()?)?;

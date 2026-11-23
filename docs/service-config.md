@@ -49,6 +49,13 @@ runs while a window or the daemon owns the data directory.
   `trigger_core`); `read_non_resident_pages` without a trigger core is a
   warning. `static_analysis.triage_checks` take the eleven Triage checks,
   `deep_checks` only `disassembly`, `decompilation` and `floss`.
+- `program.load_into` (empty by default) is an absolute guest path: for a sample that is an ELF
+  shared library (type `elf_library`), the program that runs with the library in `LD_PRELOAD`.
+  Without it a library is refused with `sample_type_denied`; a sample that is a program runs
+  as usual. `accepts.types` may list `elf_library`. The program must be dynamically linked
+  (`/bin/ls` on a Debian base); BusyBox programs are static and ignore `LD_PRELOAD`, so on a
+  BusyBox base use the loader, `/lib/ld-linux-x86-64.so.2`, with `program.arguments =
+  ["/lib/libc.so.6"]`.
 - The keys this version reserves are accepted at their default only, else an error
   "arrives in a later version": `program.source` (`upload`), `executable` (empty),
   `preload` and `extra_files` (empty), `run_in` (`app_terminal`),

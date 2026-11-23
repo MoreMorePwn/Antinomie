@@ -745,6 +745,16 @@ pub struct SampleAddParams {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<Tag>>,
+    /// The password of a ZIP with one encrypted file, which is opened in
+    /// memory and added as the sample (`infected` when none is given).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_password: Option<String>,
+    /// The file to take from a ZIP of several.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    /// Add a ZIP as the sample itself; open nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_archive: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

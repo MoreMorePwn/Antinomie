@@ -131,6 +131,10 @@ pub struct Program {
     pub run_time_s: u32,
     pub preload: Vec<Preload>,
     pub extra_files: Vec<ExtraFile>,
+    /// For a shared library sample: the guest program that runs with the
+    /// library in `LD_PRELOAD` (an absolute path; empty: a library is
+    /// refused). A sample that is a program runs as usual.
+    pub load_into: String,
 }
 
 impl Default for Program {
@@ -152,6 +156,7 @@ impl Default for Program {
             run_time_s: 300,
             preload: Vec::new(),
             extra_files: Vec::new(),
+            load_into: String::new(),
         }
     }
 }

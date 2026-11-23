@@ -77,18 +77,37 @@ impl<E: Engine> LaneStages<'_, E> {
             )));
         }
         let mut request = prepared.effective.request.clone();
-        request.path = guest_path.clone();
-        request.sample = Some(SampleRef {
-            sha256: sample.sha256.to_string(),
-            name: sample.name.clone(),
-        });
+        // A shared library runs inside the preset's program, with the
+        // library in LD_PRELOAD (as `run exec --load-into`); the run is
+        // linked to the library from the upload's record.
+        let load_into = (!prepared.effective.load_into.is_empty())
+            .then_some(prepared.effective.load_into.as_str())
+            .filter(|_| {
+                antinomie_monitor_core::samples::Library::open(self.env.data_dir)
+                    .and_then(|library| library.is_shared_library(sample.sha256.as_str()))
+                    .unwrap_or(false)
+            });
+        if let Some(program) = load_into {
+            request.path = program.to_owned();
+            request.env.retain(|item| !item.starts_with("LD_PRELOAD="));
+            request.env.push(format!("LD_PRELOAD={guest_path}"));
+        } else {
+            request.path = guest_path.clone();
+            request.sample = Some(SampleRef {
+                sha256: sample.sha256.to_string(),
+                name: sample.name.clone(),
+            });
+        }
         request
             .validate()
             .map_err(|message| fail("the launch request is refused", Some(&message)))?;
         // The library's copy vouches for the host copy and gives a refused
         // launch its static analysis (T0344); it is gone when the launch ends.
         let staged = crate::host_copy::StagedCopy::stage(self.env.data_dir, sample.sha256.as_str());
-        request.host_copy = staged.as_ref().map(|copy| copy.path().to_owned());
+        request.host_copy = staged
+            .as_ref()
+            .filter(|_| load_into.is_none())
+            .map(|copy| copy.path().to_owned());
         // The engine refuses a core it cannot check against the guest's
         // limits, and the guest reports them a moment after it is up: wait
         // for them (bounded) instead of failing the first run of a lane.

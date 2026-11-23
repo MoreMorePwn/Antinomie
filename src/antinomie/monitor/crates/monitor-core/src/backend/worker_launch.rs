@@ -142,6 +142,19 @@ impl Worker {
                 })
                 .unwrap_or(None);
         }
+        // A shared library started as a program only crashes; say so. It
+        // runs inside a host program (`load_into`: the program is the path,
+        // the library is in LD_PRELOAD).
+        if let Ok(library) = crate::samples::Library::open(&self.options.data_dir)
+            && let Ok(Some(started)) = library.identify_run(&session.vm.id, &request.path, &[])
+            && library.is_shared_library(&started.sha256).unwrap_or(false)
+        {
+            return Err(crate::samples::library_refusal(
+                "a dynamically linked one, for example `run exec --load-into /bin/ls` on a Debian base \
+                 (BusyBox programs are static: there use the loader, `--load-into /lib/ld-linux-x86-64.so.2 \
+                 --args /lib/libc.so.6`), or Load into… in the sample's window",
+            ));
+        }
         // Libraries named in LD_PRELOAD, LD_AUDIT or the arguments, by the
         // hash the library recorded when it sent each file into this VM.
         if request.preloaded.is_empty() {
