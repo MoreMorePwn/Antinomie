@@ -728,6 +728,17 @@ their entries are listed in full.
 - **Getting started: Install all missing stops when the app refuses an install (ANT-T0581).** The queue waited for ever; it now says the install did not start. A request made while the app dependencies are still being checked no longer opens the dependencies window.
 - **Recording settings that were not saved are put back when Settings closes (ANT-T0581).** Quota, shutdown timeout and base were kept in the settings file though the backend never got them; Save also updates the app's own copy now.
 - **Triage: a missing HTTP response frame no longer shifts the responses of the other requests, address lookups stop after 40 seconds, and the annotation cache drops one entry at its limit (ANT-T0581).**
+- **`capabilities` shows a running daemon's whole answer.** It printed an empty
+  `features` list and only the lane count from the daemon; it now prints the
+  daemon's capabilities, with the run API features it serves (`upload.chunked`,
+  `events.resume`, `recording.query`, `library.read`, and `lanes.multi`, which the
+  daemon now sends). The features are listed in `docs/run-api-1.md`.
+- **`base list --remote` says which bases are for this app.** It listed every
+  catalog base with only its revision in the JSON, so the three BusyBox entries
+  looked alike. It now puts this app's bases first and shows each one's
+  architecture, revision and what it is for (`for Antinomie 0.9.0`, `for Antinomie
+  0.8.0, outdated`), as the window does; the JSON adds `arch`, `min_app_version`,
+  `built_with` and `status`.
 
 ## 0.9.0 — 2026-11-23
 

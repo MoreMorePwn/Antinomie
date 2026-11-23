@@ -13,7 +13,7 @@ use crate::{
     output::{Reply, table},
 };
 use antinomie_monitor_core::{
-    BaseProblem, Command, Snapshot,
+    BaseProblem, Command, RemoteBase, RevisionStatus, Snapshot,
     build::{BUILD_PROFILES, BuildMode, BuildOptions, BuildRequest},
     settings,
 };
@@ -194,33 +194,42 @@ fn list(
             .iter()
             .map(|base| base.id.clone())
             .collect();
-        let items: Vec<Value> = engine
-            .snapshot()
-            .remote_bases
+        // This app's bases first (current, then the newest revision), so the
+        // one to download is at the top, as the window's "For Antinomie" group.
+        let remote = this_apps_first(&engine.snapshot().remote_bases);
+        let items: Vec<Value> = remote
             .iter()
             .map(|base| {
                 json!({
                     "id": base.identity,
                     "label": base.label,
                     "kind": base.kind,
+                    "arch": antinomie_service::arch::of_guest(base.arch),
                     "kernel_version": base.kernel_version,
                     "min_ram_mib": base.min_ram_mib,
                     "min_disk_gib": base.min_disk_gib,
                     "total_size": base.total_size,
                     "revision": base.revision,
+                    "min_app_version": base.min_app_version,
+                    "built_with": base.built_with,
+                    "status": status_name(remote_status(base)),
+                    "for": RevisionStatus::describe(
+                        base.revision,
+                        base.min_app_version.as_deref()
+                    ),
                     "installed": installed.contains(&base.identity),
                 })
             })
             .collect();
-        let rows: Vec<Vec<String>> = engine
-            .snapshot()
-            .remote_bases
+        let rows: Vec<Vec<String>> = remote
             .iter()
             .map(|base| {
                 vec![
                     base.identity.chars().take(12).collect(),
                     base.label.clone(),
-                    base.kind.clone(),
+                    antinomie_service::arch::of_guest(base.arch).to_owned(),
+                    base.revision.map_or_else(|| "-".into(), |r| r.to_string()),
+                    RevisionStatus::describe(base.revision, base.min_app_version.as_deref()),
                     format!("{} MiB", base.total_size / (1 << 20)),
                     if installed.contains(&base.identity) {
                         "installed".into()
@@ -233,7 +242,10 @@ fn list(
         let human = if rows.is_empty() {
             "the catalog lists no bases\n".to_owned()
         } else {
-            table(&["ID", "LABEL", "KIND", "SIZE", ""], &rows)
+            table(
+                &["ID", "LABEL", "ARCH", "REVISION", "FOR", "SIZE", ""],
+                &rows,
+            )
         };
         return Ok(Reply::list(items, None).with_human(human));
     }
@@ -245,6 +257,38 @@ fn list(
         .chain(snapshot.base_problems.iter().map(problem_value))
         .collect();
     Ok(Reply::list(items, None).with_human(bases_table(snapshot)))
+}
+
+/// The catalog's bases with this app's first: the current ones, then the
+/// others newest revision first, and the ones that need a newer app last.
+fn this_apps_first(bases: &[RemoteBase]) -> Vec<&RemoteBase> {
+    let mut sorted: Vec<&RemoteBase> = bases.iter().collect();
+    sorted.sort_by_key(|base| {
+        let status = remote_status(base);
+        (
+            status != RevisionStatus::Current,
+            status == RevisionStatus::NeedsNewerApp,
+            std::cmp::Reverse(base.revision),
+        )
+    });
+    sorted
+}
+
+/// Whether this app can use a catalog base, as the window's base list says.
+fn remote_status(base: &RemoteBase) -> RevisionStatus {
+    RevisionStatus::of_base(base.revision, base.min_app_version.as_deref())
+}
+
+/// The `status` of `base list --remote`: `current` (built for this app),
+/// `outdated` (an earlier app's; it works but lacks later behaviour),
+/// `needs_newer_app` or `legacy` (built before revisions were recorded).
+fn status_name(status: RevisionStatus) -> &'static str {
+    match status {
+        RevisionStatus::Current => "current",
+        RevisionStatus::Outdated => "outdated",
+        RevisionStatus::NeedsNewerApp => "needs_newer_app",
+        RevisionStatus::Legacy => "legacy",
+    }
 }
 
 /// The catalog is the one thing a base command fetches from the network, so
@@ -475,5 +519,61 @@ mod tests {
         assert_eq!(error.exit.code(), 5);
         assert!(error.message.contains("outbound_catalog"));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod remote_list_tests {
+    use super::*;
+    use antinomie_monitor_core::api::{APP_REVISION, GuestArch};
+
+    fn catalog_base(label: &str, revision: Option<u32>, min_app: Option<&str>) -> RemoteBase {
+        RemoteBase {
+            identity: format!("{label:0<64}"),
+            label: label.into(),
+            kind: "busybox".into(),
+            kernel_version: "6.12.94".into(),
+            fixed_display: true,
+            min_ram_mib: 256,
+            min_disk_gib: 1,
+            total_size: 1 << 20,
+            revision,
+            min_app_version: min_app.map(str::to_owned),
+            built_with: None,
+            arch: GuestArch::X86_64,
+        }
+    }
+
+    #[test]
+    fn the_remote_list_puts_this_apps_bases_first_and_names_their_status() {
+        let bases = [
+            catalog_base("old", Some(16), Some("0.6.0")),
+            catalog_base("newer", Some(APP_REVISION + 1), Some("99.0.0")),
+            catalog_base("current", Some(APP_REVISION), None),
+            catalog_base("previous", Some(20), Some("0.8.0")),
+            catalog_base("unversioned", None, None),
+        ];
+        let order: Vec<&str> = this_apps_first(&bases)
+            .iter()
+            .map(|base| base.label.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            ["current", "previous", "old", "unversioned", "newer"]
+        );
+        let names: Vec<&str> = this_apps_first(&bases)
+            .iter()
+            .map(|base| status_name(remote_status(base)))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "current",
+                "outdated",
+                "outdated",
+                "legacy",
+                "needs_newer_app"
+            ]
+        );
     }
 }

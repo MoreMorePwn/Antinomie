@@ -2432,12 +2432,21 @@ install to a daemon is [above](#command-line-and-automation-091). The web layer 
   warning, never a missing tool, when it stays below 4,096 (`soft_limit`,
   `hard_limit`); raise the hard limit (`ulimit -Hn`, `LimitNOFILE=` in a unit).
 - `capabilities` prints the API version, the app version and revision, the lane
-  count, the report formats and the accelerator (`kvm` or `tcg`).
+  count, the report formats and the accelerator (`kvm` or `tcg`). When a daemon
+  answers, it prints the daemon's whole answer instead: also the accepted types and
+  architectures, the routes, the static checks, the detection engines, the IOC
+  datasets, the queries and the run API `features` it serves. Without a daemon
+  `features` is empty: no run API is served.
 - `doctor` also reports who owns the data directory (`data_dir.owner`, from
   `run/owner.json`, ignored when its process is gone). A command that needs the
   engine while the window owns the directory exits 21 and names the window.
 - **Bases.** `base list` lists the installed bases (`--remote` fetches and lists the
-  catalog's; needs `config set outbound_catalog true`, exit 5 otherwise). `base install
+  catalog's; needs `config set outbound_catalog true`, exit 5 otherwise). The remote
+  list puts this app's bases first and shows each one's architecture, guest contract
+  revision and what it is for, as the window's base list does: `for Antinomie 0.9.0`,
+  `for Antinomie 0.8.0, outdated` or `needs Antinomie … or newer`. The JSON adds
+  `arch`, `min_app_version`, `built_with` and `status` (`current`, `outdated`,
+  `needs_newer_app`, `legacy`). `base install
   DIR` installs a boot-bundle folder. `base download ID [--wait]` fetches one from the
   catalog and `base build [--profile busybox|busybox-extra|debian-minimal|debian-xfce] [--engine
   automatic|native|podman|docker|qemu] [--name N]` builds one here; both wait for the

@@ -147,7 +147,7 @@ pub struct Capabilities {
     pub app_version: String,
     /// `APP_REVISION`.
     pub app_revision: u32,
-    /// Concurrent VMs (1 in the first release).
+    /// The lanes the daemon runs (`[daemon] lanes`, 1 to 4).
     pub lanes: u32,
     /// The minimum of 5.4.1 for the current lane.
     pub max_sample_bytes: u64,
@@ -164,8 +164,9 @@ pub struct Capabilities {
     /// A `tcg` service says so because runs are slow.
     pub accelerator: Accelerator,
     pub queries: QueryCatalogue,
-    /// Strings such as `upload.chunked`, `events.resume`, `recording.query`,
-    /// `lanes.multi`.
+    /// The optional run API features this service serves: `upload.chunked`,
+    /// `events.resume`, `recording.query`, `library.read`, `lanes.multi`
+    /// (docs/run-api-1.md, "Features").
     pub features: Vec<String>,
 }
 

@@ -480,6 +480,7 @@ impl Service {
                 "events.resume".into(),
                 "recording.query".into(),
                 "library.read".into(),
+                "lanes.multi".into(),
             ],
         };
         for name in set.names() {

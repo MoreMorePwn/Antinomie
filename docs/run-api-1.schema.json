@@ -2847,7 +2847,7 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "description": "Concurrent VMs (1 in the first release)."
+          "description": "The lanes the daemon runs (`[daemon] lanes`, 1 to 4)."
         },
         "max_sample_bytes": {
           "type": "integer",
@@ -2908,7 +2908,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Strings such as `upload.chunked`, `events.resume`, `recording.query`,\n`lanes.multi`."
+          "description": "The optional run API features this service serves: `upload.chunked`,\n`events.resume`, `recording.query`, `library.read`, `lanes.multi`\n(docs/run-api-1.md, \"Features\")."
         }
       },
       "required": [

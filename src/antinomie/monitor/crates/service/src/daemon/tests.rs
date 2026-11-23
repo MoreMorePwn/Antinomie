@@ -391,11 +391,15 @@ fn the_queue_pauses_and_resumes_and_capabilities_follow_the_policies() {
         caps["max_sample_bytes"],
         crate::intake::size_limit(64, Some(512))
     );
-    assert!(
-        caps["features"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("events.resume"))
+    assert_eq!(
+        caps["features"],
+        json!([
+            "upload.chunked",
+            "events.resume",
+            "recording.query",
+            "library.read",
+            "lanes.multi"
+        ])
     );
     let presets = call(&svc, "preset.list", json!({})).unwrap();
     assert_eq!(presets["presets"][0]["name"], "standard");

@@ -81,6 +81,19 @@ The rest of the namespaces `run.*` and `preset.*` (`run.end`, `run.annotate`,
 and the reserved `recording.*` names are reserved: a binding must not invent
 operations in them.
 
+### Features
+
+`capabilities.features` lists the optional parts of this API the service serves, so
+a client can check before it uses one. A client must ignore a name it does not know.
+
+| Feature | The service serves |
+|---|---|
+| `upload.chunked` | `upload.begin`, `upload.put`, `upload.finish`: a sample sent in chunks |
+| `events.resume` | `events.subscribe` from a stored event on: a client that reconnects goes on from the last event it saw, nothing missed or repeated |
+| `recording.query` | The recording queries (see "Recording queries, version 1") |
+| `library.read` | Reading the sample library: `sample.list`, `sample.get` and the other `sample.*` reads |
+| `lanes.multi` | Several lanes (`[daemon] lanes`, 1 to 4); `capabilities.lanes` is how many run now |
+
 ## Run spec
 
 Exactly one of `sample.sha256`, `sample.path` (local-only) or `sample.upload_id`

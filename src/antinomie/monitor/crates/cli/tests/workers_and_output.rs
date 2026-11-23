@@ -97,6 +97,8 @@ fn capabilities_has_the_api_version_and_a_usage_error_is_exit_2() {
     let value: serde_json::Value = serde_json::from_slice(&capabilities.stdout).unwrap();
     assert_eq!(value["result"]["api_version"], 1);
     assert_eq!(value["result"]["lanes"], 1);
+    // No daemon answers here: no run API is served, so no features.
+    assert_eq!(value["result"]["features"], serde_json::json!([]));
     let bad = cli(&["-o", "json", "no-such-command"]);
     assert_eq!(bad.status.code(), Some(2));
     let value: serde_json::Value = serde_json::from_slice(&bad.stdout).unwrap();

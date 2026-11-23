@@ -2136,6 +2136,8 @@ pub struct RemoteBase {
     pub revision: Option<u32>,
     pub min_app_version: Option<String>,
     pub built_with: Option<String>,
+    /// The guest architecture (the catalog's `arch`; absent is x86-64).
+    pub arch: GuestArch,
 }
 
 /// Progress of the single active remote base download.
@@ -2189,6 +2191,7 @@ impl From<&crate::distribution::CatalogBase> for RemoteBase {
             revision: base.antinomie_revision,
             min_app_version: base.min_app_version.clone(),
             built_with: base.built_with.clone(),
+            arch: base.guest_arch(),
         }
     }
 }

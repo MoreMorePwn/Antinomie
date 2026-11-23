@@ -533,6 +533,7 @@ pub(super) fn catalog_base(
         revision,
         min_app_version: None,
         built_with: None,
+        arch: antinomie_monitor_core::api::GuestArch::X86_64,
     }
 }
 
