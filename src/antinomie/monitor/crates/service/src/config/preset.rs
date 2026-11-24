@@ -428,6 +428,13 @@ pub struct StaticAnalysis {
     /// 0: each tool's own limit (the host's expected time of the tool); 1 to
     /// 480 minutes: that fixed limit for every tool.
     pub time_limit_per_tool_min: u32,
+    /// Reuse a complete static result of the same file made with the same
+    /// tools, rules and limits instead of running the check again (ANT-T0618).
+    /// `false` runs every check fresh.
+    pub reuse_results: bool,
+    /// Run capa even when its history says it will not finish within 1.5 times
+    /// its limit on a file like this one (ANT-T0618).
+    pub force_capa: bool,
     pub ghidra_disassembly: bool,
     /// Checks whose timing out or stopping short fails the `analyse` stage.
     pub required_checks: Vec<StaticCheck>,
@@ -445,6 +452,8 @@ impl Default for StaticAnalysis {
             triage_checks: TRIAGE_CHECKS.to_vec(),
             deep_checks: Vec::new(),
             time_limit_per_tool_min: 0,
+            reuse_results: true,
+            force_capa: false,
             ghidra_disassembly: false,
             required_checks: Vec::new(),
             rebuilt_file_mib: 16,

@@ -274,13 +274,12 @@ impl PoolState {
             if !has_queued || head_seen {
                 continue;
             }
-            head_seen = true;
-            if !free {
-                continue;
-            }
             // The head job: its first item not started whose dependencies
             // have ended, in list order (option B: one waiting for the items
-            // before it lets a later independent one of this job start).
+            // before it lets a later independent one of this job start). A
+            // head job with nothing ready (its items wait for others still
+            // running) holds nothing back: the next job's ready item starts
+            // (audit AN-15).
             let Some(index) = (0..job.items.len()).find(|i| {
                 job.views[*i].state == HostItemState::Queued
                     && job.in_phase(*i)
@@ -288,6 +287,10 @@ impl PoolState {
             }) else {
                 continue;
             };
+            head_seen = true;
+            if !free {
+                continue;
+            }
             if let Some(why) = memory() {
                 self.waiting_for = Some(why);
                 continue;

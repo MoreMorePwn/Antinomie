@@ -26,6 +26,8 @@ pub(super) fn plan(statics: &[AnalysisKind], engines: bool) -> HostPlan {
         static_checks: statics.to_vec(),
         static_limit_min: None,
         static_limits: Default::default(),
+        reuse_results: true,
+        force_capa: false,
         required_checks: Vec::new(),
         triage: true,
         engines: if engines {
@@ -165,17 +167,20 @@ fn an_older_job_starts_every_item_before_a_newer_job_starts_any() {
     let third = next(&mut state);
     assert_eq!(item(&third), (older.clone(), "assess".into()));
     done(&mut state, &second);
-    // The older job's report waits for the end of analyse: the head waits,
-    // and no item of the newer job goes ahead of it.
-    assert!(next(&mut state).is_none());
+    // The older job's report waits for the end of analyse: it has nothing
+    // ready, so the newer job's first item takes the free worker (AN-15).
+    let early = next(&mut state);
+    assert_eq!(item(&early), (newer.clone(), "triage".into()));
     done(&mut state, &third);
     assert!(matches!(next(&mut state), Some(Task::EndAnalyse(id)) if id == older));
     state.analyse_ended(&older, Ok(PhaseEnd::Next));
     let report = next(&mut state);
     assert_eq!(item(&report), (older.clone(), "report".into()));
-    // Every item of the older job has started: the newer job's turn.
+    // Every item of the older job has started and the pool is full.
+    assert!(next(&mut state).is_none());
+    done(&mut state, &early);
     let fifth = next(&mut state);
-    assert_eq!(item(&fifth), (newer.clone(), "triage".into()));
+    assert_eq!(item(&fifth), (newer.clone(), "static:floss".into()));
     done(&mut state, &report);
     assert!(matches!(next(&mut state), Some(Task::Conclude(id)) if id == older));
     assert!(state.concluded(&older, Concluded::Done).is_some());
@@ -555,9 +560,12 @@ fn t0464_an_independent_item_of_the_head_job_starts_while_its_first_one_waits() 
     // `static:capabilities` waits for `triage`; `static:floss` goes in its place.
     let second = next(&mut state);
     assert_eq!(item(&second), (older.clone(), "static:floss".into()));
-    // A worker is free, but the older job still has an item that has not
-    // started: nothing of the newer job starts.
-    assert!(next(&mut state).is_none());
+    // A worker is free and the older job's `static:capabilities` waits for
+    // `triage`, which is running: the older job has nothing ready, so the
+    // newer job's first item takes the free worker (ANT-T0618, AN-15).
+    let early = next(&mut state);
+    assert_eq!(item(&early), (newer.clone(), "triage".into()));
+    assert!(next(&mut state).is_none(), "the pool is full");
     done(&mut state, &first);
     // `triage` ended: the waiting item and `assess` start, in list order.
     let third = next(&mut state);
@@ -572,8 +580,11 @@ fn t0464_an_independent_item_of_the_head_job_starts_while_its_first_one_waits() 
     state.analyse_ended(&older, Ok(PhaseEnd::Next));
     let report = next(&mut state);
     assert_eq!(item(&report), (older.clone(), "report".into()));
-    // Every item of the older job has started: the newer job's turn.
-    assert_eq!(item(&next(&mut state)), (newer, "triage".into()));
+    // Every item of the older job has started: the newer job goes on.
+    assert_eq!(
+        item(&next(&mut state)),
+        (newer, "static:capabilities".into())
+    );
 }
 
 /// ANT-T0464: the memory floor holds for an item that starts in place of a
@@ -802,4 +813,71 @@ fn t0613_recording_items_have_credible_estimates_for_a_big_recording() {
     .map(|kind| timing.of(kind, &plain, &inputs).expected_s)
     .sum();
     assert!(total < 3600, "{total} s");
+}
+
+#[test]
+fn t0618_a_head_job_with_only_waiting_items_lets_a_newer_job_use_the_free_worker() {
+    let mut state = PoolState::new(2);
+    let older = add(
+        &mut state,
+        job(1, 100),
+        plan(&[AnalysisKind::Capabilities], true),
+    );
+    let newer = add(&mut state, job(2, 200), plan(&[AnalysisKind::Floss], false));
+    let triage = next(&mut state);
+    let capa = next(&mut state);
+    assert_eq!(item(&triage), (older.clone(), "triage".into()));
+    assert_eq!(item(&capa), (older.clone(), "static:capabilities".into()));
+    // `detection` waits for `triage`, `assess` for it too: with `triage` and
+    // capa running nothing of the head is ready. One worker frees up.
+    done(&mut state, &capa);
+    let other = next(&mut state);
+    assert_eq!(item(&other), (newer.clone(), "triage".into()));
+    // The head's `detection` is ready once `triage` ended and goes first.
+    done(&mut state, &triage);
+    done(&mut state, &other);
+    let detection = next(&mut state);
+    assert_eq!(item(&detection), (older.clone(), "detection".into()));
+}
+
+#[test]
+fn t0618_capa_history_predicts_only_what_each_comparable_run_supports() {
+    use crate::stages::{reuse::over_limit, timing::Medians};
+    let mib = 1 << 20;
+    let history = Medians::none();
+    assert_eq!(
+        history.capa_prediction(5 * mib),
+        None,
+        "no history, no prediction"
+    );
+    history.record_capa(5 * mib, 400, true);
+    history.record_capa(5 * mib, 410, true);
+    assert_eq!(
+        history.capa_prediction(5 * mib),
+        None,
+        "two runs are too few"
+    );
+    history.record_capa(6 * mib, 420, true);
+    // A stopped run counts as twice its time; the least of three is 800 s.
+    let (seconds, runs) = history.capa_prediction(5 * mib).unwrap();
+    assert_eq!((seconds, runs), (800, 3));
+    assert!(over_limit(Some((seconds, runs)), Duration::from_secs(400)).is_some());
+    assert!(over_limit(Some((seconds, runs)), Duration::from_secs(600)).is_none());
+    // One quick run of a file this size or bigger takes the prediction away.
+    history.record_capa(16 * mib, 29, false);
+    assert_eq!(history.capa_prediction(5 * mib), Some((29, 3)));
+    // Smaller files than the sample do not count for it.
+    for _ in 0..3 {
+        history.record_capa(100 * 1024, 45, false);
+    }
+    assert_eq!(
+        history.capa_prediction(150 * 1024).map(|(s, _)| s),
+        Some(29)
+    );
+    assert_eq!(history.capa_prediction(5 * mib).map(|(s, _)| s), Some(29));
+    assert_eq!(
+        history.capa_prediction(50 * mib),
+        None,
+        "nothing this big yet"
+    );
 }

@@ -9,7 +9,7 @@ use std::{
 };
 
 const MANAGED: &str = "/opt/antinomie-tools/capa/capa";
-const RULES: &[u8] = include_bytes!("../../assets/rules/capa-rules-v9.4.0.tar.gz");
+pub(super) const RULES: &[u8] = include_bytes!("../../assets/rules/capa-rules-v9.4.0.tar.gz");
 pub(super) const RULES_RELEASE: &str = "capa-rules v9.4.0";
 /// Where the sandbox mounts capa's compiled-rule cache.
 pub(super) const CACHE_MOUNT: &str = "/cache/capa";
@@ -182,24 +182,38 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
         );
         return;
     };
-    let unpacked = fs::write("/tmp/capa-rules.tar.gz", RULES)
-        .map_err(|e| e.to_string())
-        .and_then(|()| {
-            tools::run(
-                "/usr/bin/tar",
-                &["-xzf", "/tmp/capa-rules.tar.gz", "-C", "/tmp"],
-                &[],
-                Duration::from_secs(60),
-                4096,
-            )
-            .and_then(|run| {
-                if run.success {
-                    Ok(())
-                } else {
-                    Err("rules archive did not unpack".into())
-                }
+    // The host unpacked the bundled rules once and mounted them read-only;
+    // without that mount (no tools folder) they are unpacked here, as before.
+    let mounted = Path::new(super::tool_cache::CAPA_RULES_MOUNT)
+        .join("LICENSE.txt")
+        .is_file();
+    let rules_dir = if mounted {
+        super::tool_cache::CAPA_RULES_MOUNT
+    } else {
+        "/tmp/capa-rules"
+    };
+    let unpacked = if mounted {
+        Ok(())
+    } else {
+        fs::write("/tmp/capa-rules.tar.gz", RULES)
+            .map_err(|e| e.to_string())
+            .and_then(|()| {
+                tools::run(
+                    "/usr/bin/tar",
+                    &["-xzf", "/tmp/capa-rules.tar.gz", "-C", "/tmp"],
+                    &[],
+                    Duration::from_secs(60),
+                    4096,
+                )
+                .and_then(|run| {
+                    if run.success {
+                        Ok(())
+                    } else {
+                        Err("rules archive did not unpack".into())
+                    }
+                })
             })
-        });
+    };
     if let Err(error) = unpacked {
         section.state = AnalysisSectionState::Unavailable;
         section.summary = format!("capa rules unavailable: {error}");
@@ -215,7 +229,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
     }
     let mut run = match tools::run_with(
         capa,
-        &["--json", "-r", "/tmp/capa-rules", "/input/specimen"],
+        &["--json", "-r", rules_dir, "/input/specimen"],
         &environment,
         timeout,
         super::limits::large_output(),
@@ -241,7 +255,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
                 "--os",
                 "linux",
                 "-r",
-                "/tmp/capa-rules",
+                rules_dir,
                 "/input/specimen",
             ],
             &environment,
@@ -263,14 +277,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
             .collect();
         if let Ok(second) = tools::run_with(
             capa,
-            &[
-                "--json",
-                "-b",
-                "ghidra",
-                "-r",
-                "/tmp/capa-rules",
-                "/input/specimen",
-            ],
+            &["--json", "-b", "ghidra", "-r", rules_dir, "/input/specimen"],
             &environment,
             timeout,
             super::limits::large_output(),

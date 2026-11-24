@@ -24,6 +24,7 @@ mod groups;
 mod ids;
 mod index;
 mod packs;
+mod profile_use;
 mod registry;
 mod requirements;
 mod rule_text;
@@ -41,16 +42,16 @@ pub(crate) use exclusions::selection_exclusion;
 pub use yara::meta_get;
 
 pub use self::{
-    abusech::*, catalog::*, groups::*, index::*, packs::*, registry::*, requirements::*,
-    rule_text::*, selection::*, source_catalog::*, source_fetch::*, source_install::*,
-    source_yara::REPOSITORY_LICENSE_META,
+    abusech::*, catalog::*, groups::*, index::*, packs::*, profile_use::*, registry::*,
+    requirements::*, rule_text::*, selection::*, source_catalog::*, source_fetch::*,
+    source_install::*, source_yara::REPOSITORY_LICENSE_META,
 };
 use self::{
     files::*, ids::*, sigma::*, source_archive::*, source_sigma::*, source_yara::*, yara::*,
 };
 pub use engines::{
     DEFAULT_SIGMA_PYTHON, ToolConfig, ToolFacts, ToolProbe, mark_tool_facts_stale,
-    refresh_tool_facts, sigma_interpreter, tool_facts, try_tool_facts,
+    refresh_tool_facts, sigma_interpreter, tool_facts, tool_facts_for, try_tool_facts,
 };
 
 /// The catalog schema that lists hosted archives.

@@ -636,7 +636,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
         });
         extra.push((source.name.clone(), data));
     }
-    let rules = match super::super::rules::compile_sources(&extra, staged.include_dir.as_deref()) {
+    let rules = match super::super::rules::compile_cached(&extra, staged.include_dir.as_deref()) {
         Ok((rules, skipped)) => {
             for text in skipped {
                 report.warnings.push(format!(

@@ -21,10 +21,16 @@ pub fn static_reports_for(data_dir: &Path, sha256: &str) -> Vec<super::AnalysisR
     let Ok(listed) = std::fs::read_dir(data_dir.join("analyses")) else {
         return Vec::new();
     };
+    let needle = sha256.to_ascii_lowercase().into_bytes();
     let mut found: Vec<(std::time::SystemTime, super::AnalysisReport)> = listed
         .filter_map(Result::ok)
         .filter_map(|entry| {
-            let report = super::jobs::open_report(&entry.path()).ok()?;
+            // Only a report that names the hash is parsed: the folder grows
+            // with every analysis ever made (audit AN-16).
+            let report = super::jobs::open_report_if(&entry.path(), |text| {
+                !needle.is_empty() && text.windows(needle.len()).any(|window| window == needle)
+            })
+            .ok()??;
             let modified = std::fs::metadata(entry.path().join("report.json"))
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
@@ -173,5 +179,66 @@ mod tests {
             sample_analysis_directory(Path::new("/d"), "abc"),
             Path::new("/d/analyses/abc")
         );
+    }
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+
+    /// By hand (ANT-T0618 measurement of AN-16): the lookup of one sample's
+    /// reports among many analysis folders, each report parsed as before and
+    /// only the ones that name the hash as now.
+    #[test]
+    #[ignore = "timing"]
+    fn time_the_lookup_among_many_reports() {
+        let data = std::env::temp_dir().join(format!("ant-lookup-{}", crate::storage::unique_id()));
+        let analyses = data.join("analyses");
+        std::fs::create_dir_all(&analyses).unwrap();
+        let wanted = "ab".repeat(32);
+        for n in 0..300u32 {
+            let sha = if n % 30 == 0 {
+                wanted.clone()
+            } else {
+                format!("{n:064x}")
+            };
+            let selection = super::super::AnalysisSelection::default();
+            let mut report = super::super::jobs::new_report("sample:x", &selection);
+            report.state = super::super::AnalysisState::Complete;
+            report.specimen_sha256 = Some(sha);
+            for section in &mut report.sections {
+                section.state = super::super::AnalysisSectionState::Complete;
+                section.summary = "x".repeat(200);
+            }
+            let folder = analyses.join(&report.id);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join("report.json"),
+                serde_json::to_vec(&report).unwrap(),
+            )
+            .unwrap();
+        }
+        let t = std::time::Instant::now();
+        let mut before = 0;
+        for entry in std::fs::read_dir(&analyses).unwrap().flatten() {
+            if super::super::jobs::open_report(&entry.path())
+                .is_ok_and(|r| r.specimen_sha256.as_deref() == Some(wanted.as_str()))
+            {
+                before += 1;
+            }
+        }
+        eprintln!(
+            "TIMING parse every report (300): {:.4} s, {before} found",
+            t.elapsed().as_secs_f64()
+        );
+        let t = std::time::Instant::now();
+        let found = static_reports_for(&data, &wanted);
+        eprintln!(
+            "TIMING prefilter (300): {:.4} s, {} found",
+            t.elapsed().as_secs_f64(),
+            found.len()
+        );
+        assert_eq!(before, found.len());
+        let _ = std::fs::remove_dir_all(data);
     }
 }

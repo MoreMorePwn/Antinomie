@@ -41,8 +41,8 @@ use crate::{
     stages::{
         LaneEnv, LaneStages, NoHostChecks, StageStop,
         host::{HostTriage, SampleTags},
-        items::{JobWork, PhaseEnd, host_item, items_for},
-        plan,
+        items::{ItemKind, JobWork, PhaseEnd, host_item, items_for},
+        plan, reuse,
         timing::{Timing, inputs_of},
     },
     store::{Store, lock},
@@ -88,6 +88,13 @@ pub struct HostPool {
     /// Store writes of the items, in the order of the changes.
     persist: Mutex<()>,
     dead: std::sync::atomic::AtomicBool,
+}
+
+/// Whether an item ended with a result taken from an earlier analysis.
+fn is_reuse(end: &crate::stages::items::ItemEnd) -> bool {
+    end.note
+        .as_deref()
+        .is_some_and(|note| note.starts_with("reused from"))
 }
 
 fn stop_of(stop: StageStop) -> PoolStop {
@@ -445,6 +452,29 @@ impl HostPool {
         self.wake.notify_all();
     }
 
+    /// Why capa is not run for this job's sample, when its history says it
+    /// will take over 1.5 times its limit and the preset does not force it.
+    fn capa_skip(
+        &self,
+        job: &Run,
+        plan: &plan::HostPlan,
+        kind: &ItemKind,
+        limit: Duration,
+    ) -> Option<String> {
+        let ItemKind::Static(group) = kind else {
+            return None;
+        };
+        let capa = antinomie_monitor_core::analysis::AnalysisKind::Capabilities;
+        // A check the preset requires is never left out for a prediction.
+        if plan.force_capa || !group.contains(&capa) || plan.required_checks.contains(&capa) {
+            return None;
+        }
+        let size = job.sample.as_ref()?.size;
+        let (seconds, runs) =
+            reuse::over_limit(self.env.timing.medians.capa_prediction(size), limit)?;
+        Some(reuse::skip_text(seconds, limit.as_secs(), runs))
+    }
+
     fn job_of(&self, id: &RunId) -> Option<(Run, Arc<Mutex<JobWork>>)> {
         let state = lock(&self.state);
         state.get(id).map(|j| (j.job.clone(), Arc::clone(&j.work)))
@@ -479,6 +509,9 @@ impl HostPool {
                 let mut stages = self.stages(waiter, procs, lane);
                 stages.cancel_hook(&job);
                 let plan = lock(&work).plan.clone();
+                // capa is not started when its history says it will not finish
+                // (audit AN-02b); a result of the same file is still reused.
+                let skip = self.capa_skip(&job, &plan, &kind, limit);
                 let result = if begin_analyse {
                     stages.begin_analyse(&job, &plan)
                 } else if !kind.is_analyse() {
@@ -486,14 +519,36 @@ impl HostPool {
                 } else {
                     Ok(())
                 }
-                .and_then(|()| stages.run_item_until(&job, &work, &kind, limit, until));
+                .and_then(|()| match (&skip, &kind) {
+                    (Some(text), ItemKind::Static(group)) => {
+                        stages.skip_static(&job, &work, group, text)
+                    }
+                    _ => stages.run_item_until(&job, &work, &kind, limit, until),
+                });
                 stages.waiter.clear_cancel();
                 let seconds = waiter.now_ms().saturating_sub(began) / 1000;
                 if let Ok(end) = &result
                     && end.state == HostItemState::Done
                 {
                     let ran = waiter.now_ms().saturating_sub(began + end.waited_ms);
-                    self.env.timing.medians.record(&name, ran / 1000);
+                    // A result taken from an earlier analysis took no time.
+                    if skip.is_none() && !is_reuse(end) {
+                        self.env.timing.medians.record(&name, ran / 1000);
+                    }
+                }
+                if let (Ok(end), ItemKind::Static(group), Some(sample)) =
+                    (&result, &kind, job.sample.as_ref())
+                    && group.contains(&antinomie_monitor_core::analysis::AnalysisKind::Capabilities)
+                    && skip.is_none()
+                    && matches!(end.state, HostItemState::Done | HostItemState::TimedOut)
+                    && !is_reuse(end)
+                {
+                    let ran = waiter.now_ms().saturating_sub(began + end.waited_ms);
+                    self.env.timing.medians.record_capa(
+                        sample.size,
+                        ran / 1000,
+                        end.state == HostItemState::TimedOut,
+                    );
                 }
                 let disconnected =
                     matches!(&result, Err(StageStop::Abort(WaitError::Disconnected(_))));

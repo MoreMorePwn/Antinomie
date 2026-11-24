@@ -74,6 +74,8 @@ triage_checks = ["metadata", "structures", "strings", "regex", "entropy", "harde
                  "rules", "identification", "capabilities", "embedded", "unpacking"]
 deep_checks = []                               # disassembly | decompilation | floss
 time_limit_per_tool_min = 0                    # Time limit per tool: 0 = each tool's own, up to 480
+reuse_results = true                           # Reuse a complete result of the same file, tools, rules and limits
+force_capa = false                             # Run capa even when its history predicts it will not finish
 ghidra_disassembly = false                     # Ghidra for Disassembly
 required_checks = []
 rebuilt_file_mib = 16                          # Rebuilt file bytes (Triage), per file (later)

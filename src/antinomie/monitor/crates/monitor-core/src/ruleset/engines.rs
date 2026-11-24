@@ -155,6 +155,26 @@ pub fn tool_facts(config: &ToolConfig) -> ToolFacts {
     assemble(config, suricata, sigma)
 }
 
+/// Facts for `config` with only the probes `engine` is evaluated by: a YARA
+/// profile needs no Sigma or Suricata probe, so building or reading one starts
+/// no interpreter and no `suricata -V`. The other tools read as unknown, and
+/// the engine's digest and requirements do not look at them.
+pub fn tool_facts_for(engine: &str, config: &ToolConfig) -> ToolFacts {
+    let skipped = || ToolProbe::Unknown(format!("not probed for the {engine} engine"));
+    let sigma = if engine == "sigma" {
+        let key = sigma_key(&config.sigma_python);
+        cached(&key, || probe_sigma(&config.sigma_python))
+    } else {
+        skipped()
+    };
+    let suricata = if engine == "ids" {
+        cached(&suricata_key(), probe_suricata)
+    } else {
+        skipped()
+    };
+    assemble(config, suricata, sigma)
+}
+
 /// Cached facts for `config` without blocking. When a probe is still needed
 /// it starts in the background, this returns `None`, and `ready` runs once the
 /// result is stored. Stale facts are returned while a refresh runs.

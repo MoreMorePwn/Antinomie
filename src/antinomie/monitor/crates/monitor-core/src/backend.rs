@@ -249,7 +249,7 @@ impl Backend {
                     deferred_flush: None,
                     flusher,
                     disk_job: None,
-                    host_analysis: crate::analysis::jobs::Jobs::with_tools(host_tools_dir),
+                    host_analysis: crate::analysis::HostAnalysis::configured(host_tools_dir),
                     debug: debug_service,
                     evidence: Default::default(),
                     boot_wait_state: Default::default(),
@@ -836,7 +836,7 @@ struct Worker {
     /// tab's lease; see `worker_disks`).
     disk_job: Option<crate::disks::job::Job>,
     /// Static analysis of host files, which needs no VM.
-    host_analysis: crate::analysis::jobs::Jobs,
+    host_analysis: crate::analysis::HostAnalysis,
     /// The guest debugger and the server thread's request queue.
     debug: DebugService,
     /// Evidence deletions, off this thread (see `evidence_delete`).

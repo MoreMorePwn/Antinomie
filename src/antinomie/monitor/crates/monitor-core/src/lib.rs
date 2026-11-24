@@ -125,6 +125,7 @@ mod build_git_head;
 #[doc(hidden)]
 pub mod fuzz_entry;
 pub use analysis::*;
+pub use analysis::{host_analyses, set_host_analyses};
 pub use api::*;
 pub use backend::{Backend, split_run_record};
 pub use control::specimen_ram_bound;

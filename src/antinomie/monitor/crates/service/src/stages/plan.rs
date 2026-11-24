@@ -178,6 +178,10 @@ pub struct HostPlan {
     /// The engine's size limits and the Ghidra choice
     /// (`static_analysis.limits`, `ghidra_disassembly`).
     pub static_limits: AnalysisLimits,
+    /// `static_analysis.reuse_results`.
+    pub reuse_results: bool,
+    /// `static_analysis.force_capa`.
+    pub force_capa: bool,
     /// Checks whose timeout fails the stage (`static_analysis.required_checks`).
     pub required_checks: Vec<AnalysisKind>,
     pub triage: bool,
@@ -240,6 +244,8 @@ pub fn hosted(preset: &Preset) -> HostPlan {
         static_checks: s.checks().into_iter().map(kind_of).collect(),
         static_limit_min: s.fixed_limit_min(),
         static_limits: s.engine_limits(),
+        reuse_results: s.reuse_results,
+        force_capa: s.force_capa,
         required_checks: s.required_checks.iter().map(|c| kind_of(*c)).collect(),
         triage: preset.triage.enabled,
         engines,

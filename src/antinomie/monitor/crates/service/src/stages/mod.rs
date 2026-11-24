@@ -54,6 +54,7 @@ mod report;
 #[cfg(test)]
 mod resources_tests;
 pub mod retry;
+pub(crate) mod reuse;
 mod run;
 #[cfg(test)]
 mod run_tests;

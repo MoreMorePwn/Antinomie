@@ -263,16 +263,28 @@ fn read_pipe(mut pipe: impl Read + Send + 'static, max_output: usize) -> PipeRea
 }
 
 /// The first line a tool prints for `args` (its version), or the tool name.
+/// A version the tool printed is kept in the host's version cache when the
+/// sandbox mounts one (audit AN-17): capa's and FLOSS's launchers take about
+/// two seconds to say it, and it is the same for every job of the same file.
 pub(super) fn version(path: &str, args: &[&str]) -> String {
-    run(path, args, &[], Duration::from_secs(20), 4096)
-        .ok()
+    if let Some(kept) = super::tool_cache::kept_version(path, args) {
+        return kept;
+    }
+    let run = run(path, args, &[], Duration::from_secs(20), 4096).ok();
+    let line = run
+        .as_ref()
         .and_then(|run| run.stdout.lines().next().map(|l| l.trim().to_owned()))
-        .filter(|line| !line.is_empty())
-        .unwrap_or_else(|| {
-            Path::new(path)
-                .file_name()
-                .map_or(path.to_owned(), |n| n.to_string_lossy().into_owned())
-        })
+        .filter(|line| !line.is_empty());
+    if let Some(line) = &line
+        && run.as_ref().is_some_and(|run| run.success)
+    {
+        super::tool_cache::keep_version(path, args, line);
+    }
+    line.unwrap_or_else(|| {
+        Path::new(path)
+            .file_name()
+            .map_or(path.to_owned(), |n| n.to_string_lossy().into_owned())
+    })
 }
 
 #[cfg(test)]

@@ -303,7 +303,7 @@ pub fn freeze(
         return Err("cancelled".into());
     }
     let tools = ruleset::ToolConfig::from_sigma_setting(&request.settings.effective_sigma_python());
-    let facts = ruleset::tool_facts(&tools);
+    let facts = ruleset::tool_facts_for(engine_key(request.engine), &tools);
     let snap = ruleset::snapshot_from(
         &data_dir,
         engine_key(request.engine),
@@ -317,6 +317,10 @@ pub fn freeze(
         enabled_rules: snap.enabled_rules,
         excluded_rules: snap.excluded_rules,
         warnings: snap.warnings,
+        engine_identity: match &facts.suricata {
+            ruleset::ToolProbe::Found { identity, .. } => identity.clone(),
+            _ => String::new(),
+        },
     });
     Ok(())
 }

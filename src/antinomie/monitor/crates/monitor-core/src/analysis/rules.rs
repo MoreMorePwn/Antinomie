@@ -40,6 +40,21 @@ pub(super) fn compile_sources(
     Ok((compiler.build(), skipped))
 }
 
+/// [`compile_sources`], unless the host already compiled these sources in the
+/// profile folder `include` (see `compiled_rules`): then the stored rules are
+/// loaded, which takes a third of the time.
+pub(super) fn compile_cached(
+    sources: &[(String, String)],
+    include: Option<&Path>,
+) -> Result<(yara_x::Rules, Vec<String>), String> {
+    if let Some(directory) = include
+        && let Some(hit) = super::compiled_rules::load(directory, sources)
+    {
+        return Ok(hit);
+    }
+    compile_sources(sources, include)
+}
+
 /// The rule file a namespace `s<index>` stands for.
 pub(super) fn namespace_source<'a>(namespace: &str, sources: &'a [(String, String)]) -> &'a str {
     namespace
@@ -86,7 +101,7 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
         section.tools = vec![ENGINE.into()];
         return;
     }
-    let (rules, skipped) = match compile_sources(&sources, Some(directory)) {
+    let (rules, skipped) = match compile_cached(&sources, Some(directory)) {
         Ok(compiled) => compiled,
         Err(error) => {
             section.state = AnalysisSectionState::Unavailable;
@@ -197,7 +212,7 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
     }
 }
 
-fn selected_sources(directory: &Path) -> Vec<(String, String)> {
+pub(super) fn selected_sources(directory: &Path) -> Vec<(String, String)> {
     let mut files = Vec::new();
     let _ = collect_sources(directory, &mut files);
     files.sort();

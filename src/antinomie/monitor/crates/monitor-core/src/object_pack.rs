@@ -27,7 +27,9 @@
 //! that name it. [`PackWriter::sync`] makes the files durable.
 mod index;
 
-pub(crate) use index::{ChunkLocation, lookup, next_read_epoch, read_at, read_field_range};
+pub(crate) use index::{
+    ChunkLocation, cache_file_of, discard_cache, lookup, next_read_epoch, read_at, read_field_range,
+};
 
 use crate::writer::{self, ErrorSlot, Op};
 use sha2::{Digest, Sha256};

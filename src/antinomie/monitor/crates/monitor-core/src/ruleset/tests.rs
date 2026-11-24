@@ -1353,6 +1353,7 @@ fn group_migration_reconciles_only_the_selected_revision() {
 }
 
 mod meta_case;
+mod profile_use;
 mod rule_text;
 mod source_catalog;
 mod source_fixture;

@@ -215,6 +215,7 @@ mod tests {
             liveness: Default::default(),
             host_copy: None,
             supplement: None,
+            rules_use: None,
         }
     }
 
