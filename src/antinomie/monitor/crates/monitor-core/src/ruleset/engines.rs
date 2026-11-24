@@ -7,6 +7,13 @@
 //! the scan does not use. Results are cached per tool configuration and
 //! refreshed in the background, so a tool installed during a session is picked
 //! up without restarting the application.
+//!
+//! A probe starts a process (the interpreter with pySigma, `suricata -V`), so
+//! an answer is kept for [`FRESH_FOR`] and asked again earlier only when its
+//! key changes (the interpreter's path, size or modification time; the
+//! Suricata binary's), or when [`mark_tool_facts_stale`] says the user may have
+//! installed or removed something: the app calls it when Settings opens and
+//! when a tool install ends.
 
 use std::{
     collections::HashMap,
@@ -18,8 +25,10 @@ use std::{
 /// Interpreter the Sigma scan runs when no interpreter is configured.
 pub const DEFAULT_SIGMA_PYTHON: &str = "/usr/bin/python3";
 
-/// How long a probe result is used before it is refreshed in the background.
-const FRESH_FOR: Duration = Duration::from_secs(60);
+/// How long a probe result is used before it is refreshed in the background
+/// when nothing says it changed (a package installed into the same
+/// interpreter leaves no mark that is cheap to read).
+const FRESH_FOR: Duration = Duration::from_secs(30 * 60);
 /// Upper bound on one probe, including interpreter start-up.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long an answer of "unknown" (the probe timed out or printed nothing
@@ -142,7 +151,7 @@ impl ToolFacts {
 pub fn tool_facts(config: &ToolConfig) -> ToolFacts {
     let sigma_key = sigma_key(&config.sigma_python);
     let sigma = cached(&sigma_key, || probe_sigma(&config.sigma_python));
-    let suricata = cached(SURICATA_KEY, probe_suricata);
+    let suricata = cached(&suricata_key(), probe_suricata);
     assemble(config, suricata, sigma)
 }
 
@@ -159,13 +168,28 @@ pub fn try_tool_facts(
     let notify = std::sync::Arc::clone(&ready);
     let sigma = peek(&sigma_key, move || probe_sigma(&python), move || notify());
     let notify = std::sync::Arc::clone(&ready);
-    let suricata = peek(SURICATA_KEY, probe_suricata, move || notify());
+    let suricata = peek(&suricata_key(), probe_suricata, move || notify());
     Some(assemble(config, suricata?, sigma?))
 }
 
-/// Forget every probe result, for example after the user installs a tool.
+/// Forget every probe result.
 pub fn refresh_tool_facts() {
     cache().clear();
+}
+
+/// The user may have installed, updated or removed a tool (Settings opened, an
+/// install ended): the next use asks again in the background and shows the
+/// old answer until the new one is in, so nothing flickers to "checking".
+pub fn mark_tool_facts_stale() {
+    mark_stale_where(|_| true);
+}
+
+fn mark_stale_where(which: impl Fn(&str) -> bool) {
+    for (key, entry) in cache().iter_mut() {
+        if which(key) {
+            entry.stale = true;
+        }
+    }
 }
 
 fn assemble(config: &ToolConfig, suricata: ToolProbe, sigma: ToolProbe) -> ToolFacts {
@@ -178,7 +202,41 @@ fn assemble(config: &ToolConfig, suricata: ToolProbe, sigma: ToolProbe) -> ToolF
     }
 }
 
-const SURICATA_KEY: &str = "suricata";
+/// The cache key of the Suricata probe: the candidate binaries that exist,
+/// with their size and modification time, so a new or replaced binary is a
+/// different key and is probed at once.
+fn suricata_key() -> String {
+    suricata_key_of(&suricata_candidates())
+}
+
+fn suricata_key_of(candidates: &[PathBuf]) -> String {
+    let mut key = String::from("suricata");
+    for path in candidates.iter().filter(|path| path.is_file()) {
+        let stamp = std::fs::metadata(path).map_or_else(
+            |_| "?".to_owned(),
+            |meta| {
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |time| time.as_nanos());
+                format!("{}:{modified}", meta.len())
+            },
+        );
+        key.push_str(&format!(":{}:{stamp}", path.display()));
+    }
+    key
+}
+
+/// The binaries a Suricata probe tries, first one first.
+fn suricata_candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(path) = std::env::var_os("ANTINOMIE_SURICATA") {
+        paths.push(PathBuf::from(path));
+    }
+    paths.extend(crate::dependencies::SURICATA.iter().map(PathBuf::from));
+    paths
+}
 
 /// The interpreter path plus its file identity, so replacing the interpreter
 /// at the same path is a different key.
@@ -201,6 +259,9 @@ struct Entry {
     probe: Option<ToolProbe>,
     probed_at: Instant,
     refreshing: bool,
+    /// The user may have changed the tools since the probe: ask again, while
+    /// the old answer is still used.
+    stale: bool,
 }
 
 fn cache() -> MutexGuard<'static, HashMap<String, Entry>> {
@@ -234,6 +295,7 @@ fn store(key: &str, probe: ToolProbe) {
     {
         entry.probed_at = Instant::now();
         entry.refreshing = false;
+        entry.stale = false;
         return;
     }
     if entries.len() >= CACHE_COUNT
@@ -251,6 +313,7 @@ fn store(key: &str, probe: ToolProbe) {
             probe: Some(probe),
             probed_at: Instant::now(),
             refreshing: false,
+            stale: false,
         },
     );
 }
@@ -259,6 +322,7 @@ fn cached(key: &str, probe: impl FnOnce() -> ToolProbe) -> ToolProbe {
     if let Some(entry) = cache().get(key)
         && let Some(result) = &entry.probe
         && entry.probed_at.elapsed() < FRESH_FOR
+        && !entry.stale
         && !matches!(result, ToolProbe::Unknown(_))
     {
         return result.clone();
@@ -292,7 +356,8 @@ fn peek(
                 if entry
                     .probe
                     .as_ref()
-                    .is_some_and(|probe| entry.probed_at.elapsed() < fresh_for(probe)) =>
+                    .is_some_and(|probe| entry.probed_at.elapsed() < fresh_for(probe))
+                    && !entry.stale =>
             {
                 return entry.probe.clone();
             }
@@ -308,6 +373,7 @@ fn peek(
                         probe: None,
                         probed_at: Instant::now(),
                         refreshing: true,
+                        stale: false,
                     },
                 );
                 (None, true)
@@ -421,12 +487,7 @@ fn sigma_from_output(stdout: &str) -> ToolProbe {
 }
 
 fn probe_suricata() -> ToolProbe {
-    let mut paths = Vec::new();
-    if let Some(path) = std::env::var_os("ANTINOMIE_SURICATA") {
-        paths.push(PathBuf::from(path));
-    }
-    paths.extend(crate::dependencies::SURICATA.iter().map(PathBuf::from));
-    for path in paths.iter().filter(|path| path.is_file()) {
+    for path in suricata_candidates().iter().filter(|path| path.is_file()) {
         let Some(text) = path.to_str() else {
             continue;
         };
@@ -560,6 +621,59 @@ mod tests {
         assert!(matches!(tool_facts(&other).sigma, ToolProbe::Broken(_)));
         let missing = ToolConfig::from_sigma_setting(dir.join("none").to_str().unwrap());
         assert!(matches!(tool_facts(&missing).sigma, ToolProbe::Absent(_)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_probe_is_kept_until_the_tools_may_have_changed() {
+        let dir = std::env::temp_dir().join(format!("ant-keep-{}", crate::storage::unique_id()));
+        let python = fake_python(
+            &dir,
+            "python",
+            r#"echo x >> "$(dirname "$0")/runs"; echo '{"pysigma": "2.0.1", "pysigma-backend-sqlite": "2.1.0", "backend_import": "ok"}'"#,
+        );
+        let runs =
+            || std::fs::read_to_string(dir.join("runs")).map_or(0, |text| text.lines().count());
+        let config = ToolConfig::from_sigma_setting(python.to_str().unwrap());
+        for _ in 0..5 {
+            assert!(matches!(tool_facts(&config).sigma, ToolProbe::Found { .. }));
+        }
+        assert_eq!(runs(), 1, "one process for five uses");
+        // Settings opened or a tool installed: the next use asks once more.
+        mark_stale_where(|key| key.contains(dir.to_str().unwrap()));
+        for _ in 0..5 {
+            assert!(matches!(tool_facts(&config).sigma, ToolProbe::Found { .. }));
+        }
+        assert_eq!(runs(), 2, "one more process after the mark");
+        // A different interpreter file is a different key and is asked at once.
+        std::fs::write(
+            &python,
+            "#!/bin/sh\necho y >> \"$(dirname \"$0\")/runs\"; echo '{\"pysigma\": \"2.0.2\", \"pysigma-backend-sqlite\": \"2.1.0\", \"backend_import\": \"ok\"}'\n",
+        )
+        .unwrap();
+        assert!(matches!(tool_facts(&config).sigma, ToolProbe::Found { .. }));
+        assert_eq!(runs(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_suricata_key_follows_the_binary_on_disk() {
+        let dir = std::env::temp_dir().join(format!("ant-suri-{}", crate::storage::unique_id()));
+        let binary = fake_python(&dir, "suricata", "echo suricata 7");
+        let before = suricata_key_of(std::slice::from_ref(&binary));
+        assert!(before.contains(binary.to_str().unwrap()), "{before}");
+        assert_eq!(
+            suricata_key_of(std::slice::from_ref(&binary)),
+            before,
+            "a stat, not a probe"
+        );
+        std::fs::write(&binary, "#!/bin/sh\necho suricata 8 changed\n").unwrap();
+        assert_ne!(
+            suricata_key_of(std::slice::from_ref(&binary)),
+            before,
+            "a replaced binary is a new key"
+        );
+        assert_eq!(suricata_key_of(&[dir.join("none")]), "suricata");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

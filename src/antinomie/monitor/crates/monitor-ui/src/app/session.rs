@@ -229,6 +229,8 @@ impl MonitorApp {
             && !before.finished
             && after.finished
         {
+            // A tool was installed or removed: the rule engines look again.
+            antinomie_monitor_core::ruleset::mark_tool_facts_stale();
             self.status = match &after.error {
                 None => format!("{} installed", after.name),
                 Some(error) => format!("{} was not installed: {error}", after.name),

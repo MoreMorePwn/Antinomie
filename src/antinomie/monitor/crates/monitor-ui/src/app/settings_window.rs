@@ -188,6 +188,13 @@ impl MonitorApp {
 
     /// Settings: the page list, the page and a footer that stays in view.
     pub(super) fn settings_window(&mut self, ctx: &egui::Context) {
+        // The rule engines' tool probes are kept between uses; opening
+        // Settings is when a tool the user installed meanwhile is looked for.
+        let shown = egui::Id::new("settings-window-shown");
+        if !ctx.data_mut(|data| data.get_temp::<bool>(shown).unwrap_or(false)) {
+            antinomie_monitor_core::ruleset::mark_tool_facts_stale();
+            ctx.data_mut(|data| data.insert_temp(shown, true));
+        }
         let mut open = true;
         let mut save = false;
         let mut close = false;
@@ -307,6 +314,9 @@ impl MonitorApp {
         if save {
             self.update_options();
             self.settings_open = false;
+        }
+        if !self.settings_open {
+            ctx.data_mut(|data| data.remove_temp::<bool>(shown));
         }
     }
 
