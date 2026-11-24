@@ -13,7 +13,7 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     os::{
         fd::AsFd,
-        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+        unix::fs::{MetadataExt, OpenOptionsExt},
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -22,7 +22,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 const MAX_SNAPSHOT_SIZE: u64 = 16 * 1024 * 1024 * 1024;
@@ -82,50 +82,6 @@ pub enum FieldRegistry {
     Loading,
     Ready(Arc<Vec<PacketField>>),
     Unavailable(String),
-}
-
-struct Scratch {
-    path: PathBuf,
-}
-
-impl Scratch {
-    fn new() -> Result<Self, String> {
-        static SERIAL: AtomicU64 = AtomicU64::new(0);
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_nanos();
-        for _ in 0..32 {
-            let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "antinomie-packet-{}-{stamp}-{serial}",
-                std::process::id()
-            ));
-            match fs::DirBuilder::new().mode(0o700).create(&path) {
-                Ok(()) => return Ok(Self { path }),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(format!("packet snapshot directory: {e}")),
-            }
-        }
-        Err("could not create private packet snapshot directory".into())
-    }
-    fn file(&self, name: &str) -> Result<File, String> {
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(self.path.join(name))
-            .map_err(|e| format!("packet snapshot file: {e}"))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        // Nothing here is user evidence. On failure the OS retains only private
-        // temporary files; the original capture is never a cleanup target.
-        let _ = fs::remove_dir_all(&self.path);
-    }
 }
 
 struct Snapshot {
@@ -1188,12 +1144,14 @@ fn read_lines(
 
 mod parse;
 mod pdml;
+mod scratch;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub use pdml::parse as fuzz_pdml;
 mod process;
 mod rows;
 use process::run_process;
+use scratch::Scratch;
 
 /// Seconds TShark may spend on one capture (0 is the default, 300): set from
 /// Settings > Detection rules by the app.
@@ -1217,7 +1175,8 @@ mod tests {
     use super::process::ProcessReader;
     use super::rows::ROW_FIELDS;
     use super::*;
-    use std::os::unix::net::UnixStream;
+    use std::os::unix::{fs::DirBuilderExt, net::UnixStream};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// How long a test waits for TShark, a sandbox or a reader to do what it
     /// was asked. Every wait here ends on the event itself; the limit only
