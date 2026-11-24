@@ -26,8 +26,19 @@ const WIDTH: f32 = 380.0;
 /// Corner radius of a toast, and the thickness of its countdown bar.
 const CORNER: u8 = 8;
 const BAR: f32 = 3.0;
-/// Repaint step while a countdown bar is moving.
-const BAR_FRAME: Duration = Duration::from_millis(33);
+/// Repaint step while a countdown bar is moving, by the toast's level: the
+/// bar is about 360 px long, so a 6 s toast needs a step of 100 ms to move in
+/// small jumps, and a 30 s toast moves 3 px in 250 ms. Software GL paints a
+/// frame in about 27 ms of CPU, so every step counts.
+const BAR_FRAME_INFO: Duration = Duration::from_millis(100);
+const BAR_FRAME_WARN: Duration = Duration::from_millis(200);
+const BAR_FRAME_ERROR: Duration = Duration::from_millis(250);
+/// The slowest step, for what a countdown asks of the app at most.
+#[cfg(test)]
+const BAR_FRAME: Duration = BAR_FRAME_ERROR;
+/// The longest gap between two frames that the countdown counts as time
+/// passing; a longer one was the window sleeping.
+const MAX_TICK: f64 = 0.5;
 const MARGIN: f32 = 16.0;
 /// Height at the bottom of a window kept clear for its footer buttons.
 const FOOTER: f32 = 64.0;
@@ -100,6 +111,18 @@ pub(crate) struct Toasts {
     rows: Vec<(Level, String)>,
     /// Y of the status bar's top edge; the stack sits above it.
     floor: Option<f32>,
+    /// `input.time` of the last frame that ran the timers, `None` while the
+    /// stack is empty so a toast raised after a pause does not start used.
+    clock: Option<f64>,
+}
+
+/// How often a running countdown of `level` repaints the window.
+fn bar_frame(level: Level) -> Duration {
+    match level {
+        Level::Info => BAR_FRAME_INFO,
+        Level::Warn => BAR_FRAME_WARN,
+        Level::Error => BAR_FRAME_ERROR,
+    }
 }
 
 fn lifetime(level: Level) -> Option<f64> {
@@ -212,6 +235,15 @@ impl Toasts {
             }
             true
         });
+    }
+
+    /// Seconds since the last frame that ran the timers, at frame time `now`.
+    /// The frame's own `stable_dt` is a guess of 1/60 s when the last frame did
+    /// not ask for an immediate repaint, which the countdown's slower steps do
+    /// not, so the clock is read instead.
+    fn elapsed(&mut self, now: f64) -> f64 {
+        let last = self.clock.replace(now);
+        last.map_or(0.0, |last| (now - last).clamp(0.0, MAX_TICK))
     }
 
     pub(crate) fn dismiss(&mut self, id: u64) {
@@ -584,9 +616,13 @@ fn placement(
 /// Draw the stack and run the timers. Returns the clicked action links, for
 /// the app to carry out.
 pub(crate) fn show(ctx: &egui::Context) -> Vec<Action> {
-    let dt = f64::from(ctx.input(|input| input.stable_dt)).min(0.5);
+    let now = ctx.input(|input| input.time);
     let (items, floor, hidden) = with(ctx, |toasts| {
+        let dt = toasts.elapsed(now);
         toasts.tick(dt);
+        if toasts.items.is_empty() {
+            toasts.clock = None;
+        }
         let hidden = toasts.items.len().saturating_sub(VISIBLE);
         (toasts.items[hidden..].to_vec(), toasts.floor, hidden)
     });
@@ -655,11 +691,13 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Action> {
     });
     // Only a shown, running countdown needs frames; a hovered one is paused
     // and a sticky one has no bar, and the pointer wakes the app on its own.
-    if items
+    if let Some(step) = items
         .iter()
-        .any(|toast| toast.left.is_some() && !toast.hovered)
+        .filter(|toast| toast.left.is_some() && !toast.hovered)
+        .map(|toast| bar_frame(toast.level))
+        .min()
     {
-        ctx.request_repaint_after(BAR_FRAME);
+        ctx.request_repaint_after(step);
     }
     follow
 }
