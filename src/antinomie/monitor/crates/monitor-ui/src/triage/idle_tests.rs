@@ -201,13 +201,20 @@ fn the_index_thread_wakes_the_window_when_its_result_is_in() {
     raw.sync_all().unwrap();
     let ctx = egui::Context::default();
     theme::install(&ctx);
+    // egui calls the repaint callback only for a request sooner than the one
+    // pending, so a wake that lands while the frames' own repaint is pending
+    // never reaches it. The view wakes this context instead: no frame runs on
+    // it and nothing else asks it to repaint, so the index thread's request
+    // is always seen.
+    let watch = egui::Context::default();
     let woken_by = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
     let log = std::sync::Arc::clone(&woken_by);
-    ctx.set_request_repaint_callback(move |_| {
+    watch.set_request_repaint_callback(move |_| {
         let name = std::thread::current().name().unwrap_or("").to_owned();
         log.lock().unwrap().push(name);
     });
     let mut view = TriageView::default();
+    view.wake = Some(watch);
     view.refresh_seconds = 3600;
     // A view on a tab with no spinner of its own, so the delay is the view's.
     view.section = Section::Process;
