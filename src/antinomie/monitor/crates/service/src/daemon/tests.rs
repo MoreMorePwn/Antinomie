@@ -637,7 +637,11 @@ fn the_lane_runs_jobs_in_queue_order_and_a_submit_wakes_it() {
         running.store().get(&second.id).unwrap().state == RunState::Succeeded
     });
     assert_eq!(*running.ran.lock().unwrap(), vec![first.id, second.id]);
-    // A lane command is served while idle.
+    // A lane command is served while idle. The job is marked succeeded inside
+    // its lane turn; the lane reads idle only when the turn returns.
+    running.wait_for("the lane to be idle", || {
+        *running.svc.service.slots[0].phase.lock().unwrap() == Phase::Idle
+    });
     let answer = running
         .svc
         .service
