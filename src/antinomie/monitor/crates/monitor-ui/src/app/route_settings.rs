@@ -16,6 +16,7 @@ use antinomie_monitor_core::{
     analysis_tools::ToolStatus,
     route::{self, InetSimMode, RouteConfig, RouteKind, TelnetLogins, TorMode},
 };
+use crate::background::Task;
 use std::{
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver},
@@ -57,7 +58,13 @@ pub(super) struct RouteSettings {
     /// and says why, and saving replaces the file.
     load_error: Option<String>,
     status: Option<(String, bool)>,
+    /// What the last lookup found on `PATH`; empty until the first one is
+    /// in. The lookup walks every `PATH` directory, which is slow where
+    /// `PATH` lists Windows folders (WSL), so a worker does it.
     programs: Vec<RouteProgram>,
+    lookup: Option<Task<Vec<RouteProgram>>>,
+    /// Look the programs up again as soon as no lookup is running.
+    lookup_wanted: bool,
     testing: Option<(RouteKind, Receiver<Tested>)>,
     tested: Option<Tested>,
     /// The blocked-ports field as typed, while it is being edited.
@@ -77,7 +84,9 @@ impl RouteSettings {
             config,
             load_error,
             status: None,
-            programs: look_up(),
+            programs: Vec::new(),
+            lookup: None,
+            lookup_wanted: true,
             testing: None,
             tested: None,
             ports_text: None,
@@ -95,6 +104,8 @@ impl RouteSettings {
             load_error: None,
             status: None,
             programs: Vec::new(),
+            lookup: None,
+            lookup_wanted: false,
             testing: None,
             tested: None,
             ports_text: None,
@@ -102,8 +113,23 @@ impl RouteSettings {
         }
     }
 
+    /// Look the programs up again (the page opened: a program installed
+    /// meanwhile is found). The last answer stays until the new one is in.
     fn detect(&mut self) {
-        self.programs = look_up();
+        self.lookup_wanted = true;
+    }
+
+    /// Call every frame: takes a finished lookup and starts a wanted one on a
+    /// worker, which wakes the window when it has the answer.
+    pub fn pump(&mut self, ctx: &egui::Context) {
+        if let Some(found) = self.lookup.as_ref().and_then(Task::done) {
+            self.programs = found;
+            self.lookup = None;
+        }
+        if self.lookup_wanted && self.lookup.is_none() {
+            self.lookup_wanted = false;
+            self.lookup = Some(Task::spawn(ctx, look_up));
+        }
     }
 
     pub fn programs(&self) -> &[RouteProgram] {
@@ -643,6 +669,31 @@ mod tests {
         assert_eq!(routes.status.as_ref().map(|s| s.1), Some(true));
         assert_eq!(routes.config.socks5.password, "hunter2");
         assert_eq!(RouteSettings::load(&dir).config.socks5.username, "u");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loading_does_not_walk_path_and_a_worker_fills_the_programs_in() {
+        let dir = scratch("programs");
+        let mut routes = RouteSettings::load(&dir);
+        assert!(
+            routes.programs().is_empty(),
+            "nothing is looked up before the first frame"
+        );
+        let ctx = egui::Context::default();
+        routes.pump(&ctx);
+        let started = std::time::Instant::now();
+        while routes.programs().is_empty() {
+            assert!(started.elapsed().as_secs() < 60, "the lookup never came");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            routes.pump(&ctx);
+        }
+        let names: Vec<_> = routes.programs().iter().map(|p| p.name).collect();
+        assert_eq!(names, ["tor", "wireproxy", "inetsim"]);
+        // Opening the page asks again; the last answer stays until the new one.
+        routes.detect();
+        routes.pump(&ctx);
+        assert_eq!(routes.programs().len(), 3);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

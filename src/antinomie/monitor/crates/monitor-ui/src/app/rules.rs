@@ -15,6 +15,8 @@ impl MonitorApp {
     }
 
     pub(super) fn poll_rules(&mut self, ctx: &egui::Context) {
+        // The route programs are looked up on a worker, not before the first frame.
+        self.routes.pump(ctx);
         self.rules_ui.tick(ctx, &self.options.data_dir);
         let changed = self.rules_ui.changed();
         if changed {
