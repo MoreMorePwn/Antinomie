@@ -83,6 +83,9 @@ pub(crate) struct Job {
     host_copy: Option<host_copy::HostCopy>,
     /// Set when the job runs checks added to a finished analysis.
     pub(super) supplement: Option<supplement::Supplement>,
+    /// The rule profile the sandbox reads in place, marked in use until the
+    /// job (and so its worker) is gone (ANT-T0618, audit AN-04).
+    rules_use: Option<crate::ruleset::ProfileUse>,
 }
 #[derive(Default)]
 pub(crate) struct Jobs {
@@ -241,6 +244,12 @@ impl Jobs {
                 .sum::<u64>(),
         )
     }
+    /// How many analyses of this queue have not ended.
+    pub(crate) fn load(&self) -> usize {
+        self.queue.len()
+            + usize::from(self.active.is_some())
+            + usize::from(self.acquiring.is_some())
+    }
     #[cfg(test)]
     pub fn pending_count(&self) -> usize {
         self.queue.len()
@@ -314,6 +323,7 @@ impl Jobs {
                 liveness: Default::default(),
                 host_copy: None,
                 supplement: None,
+                rules_use: None,
             };
             self.queue.push_back(job);
             Ok(())
@@ -538,6 +548,17 @@ impl Jobs {
                     self.finish(job);
                     return;
                 }
+            }
+        }
+        let wants_rules = job
+            .report
+            .sections
+            .iter()
+            .any(|s| s.kind == AnalysisKind::Rules && s.state == AnalysisSectionState::Pending);
+        if wants_rules && job.rules_use.is_none() {
+            match stage_static_rules(&job.directory) {
+                Ok(profile) => job.rules_use = profile,
+                Err(error) => eprintln!("analysis rules could not be staged: {error}"),
             }
         }
         match spawn_worker(&job, self.tools_dir.as_deref()) {
@@ -897,18 +918,29 @@ pub(super) fn directory_len(path: &Path) -> Result<u64, String> {
     }
     Ok(total)
 }
-fn stage_static_rules(job_dir: &Path) -> Result<(), String> {
+/// Mark the rule profile a pending Rules check reads, found from the job's
+/// folder up to the data folder that holds the registry. A registry that
+/// cannot be read costs the rule matches, not the whole analysis.
+fn stage_static_rules(job_dir: &Path) -> Result<Option<crate::ruleset::ProfileUse>, String> {
     let mut cursor = Some(job_dir.to_path_buf());
     for _ in 0..8 {
         let Some(dir) = cursor else {
-            return Ok(());
+            return Ok(None);
         };
         if dir.join("rules/registry.json").is_file() {
-            return crate::ruleset::publish_static(&dir, &job_dir.join("rules"));
+            let profile = crate::ruleset::use_static_profile(&dir, job_dir)?;
+            // Compile the profile in the background for the jobs after this one
+            // (and detection), which load it instead (audit AN-06).
+            if let Some(profile) = &profile
+                && let Ok(Some(second)) = crate::ruleset::use_static_profile(&dir, job_dir)
+            {
+                super::compiled_rules::warm(profile.directory().to_path_buf(), second);
+            }
+            return Ok(profile);
         }
         cursor = dir.parent().map(Path::to_path_buf);
     }
-    Ok(())
+    Ok(None)
 }
 
 /// `last` is the worker's final report; otherwise a progress snapshot, which
@@ -975,6 +1007,16 @@ pub(super) fn read_report(
 
 /// Read an archived report without acquiring or analyzing its specimen again.
 pub fn open_report(directory: &Path) -> Result<AnalysisReport, String> {
+    open_report_if(directory, |_| true)?.ok_or_else(|| "no report".into())
+}
+
+/// [`open_report`] when `wanted` accepts the file's lower-cased text, `None`
+/// when it does not: a search for one specimen's reports (audit AN-16) reads
+/// each file but parses and validates only the ones that name it.
+pub fn open_report_if(
+    directory: &Path,
+    wanted: impl Fn(&[u8]) -> bool,
+) -> Result<Option<AnalysisReport>, String> {
     let path = directory.join("report.json");
     let mut encoded = Vec::new();
     crate::archive_io::open_regular(directory, &path)
@@ -986,9 +1028,12 @@ pub fn open_report(directory: &Path) -> Result<AnalysisReport, String> {
     if encoded.len() > REPORT_MAX_SIZE {
         return Err("archived analysis report exceeds bound".into());
     }
+    if !wanted(&encoded.to_ascii_lowercase()) {
+        return Ok(None);
+    }
     let report: AnalysisReport = serde_json::from_slice(&encoded).map_err(|e| e.to_string())?;
     super::validation::validate_report(&report)?;
-    Ok(report.settled())
+    Ok(Some(report.settled()))
 }
 #[cfg(test)]
 mod progress_tests;
@@ -1107,6 +1152,7 @@ mod tests {
                     liveness: Default::default(),
                     host_copy: None,
                     supplement: None,
+                    rules_use: None,
                 }),
                 queue: VecDeque::new(),
                 acquiring: None,
@@ -1425,6 +1471,7 @@ time.sleep(30)
             liveness: Default::default(),
             host_copy: None,
             supplement: None,
+            rules_use: None,
         };
         let started = Instant::now();
         let mut child = spawn_worker_binary(
@@ -1673,6 +1720,7 @@ time.sleep(30)
             liveness: Default::default(),
             host_copy: None,
             supplement: None,
+            rules_use: None,
         };
         let mut child = spawn_worker_binary(
             &job,

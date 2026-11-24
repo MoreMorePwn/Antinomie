@@ -25,7 +25,7 @@ pub const PROCESS_TREE_LIMIT: usize = 262_144;
 
 mod async_page;
 mod call_reader;
-mod index_cache;
+pub(crate) mod index_cache;
 mod index_lock;
 use index_lock::retry_index_busy;
 pub use index_lock::with_index_wait;

@@ -63,6 +63,7 @@ fn production_sandbox_publishes_light_results_while_heavy_tool_runs() {
         liveness: Default::default(),
         host_copy: None,
         supplement: None,
+        rules_use: None,
     };
     let mut child = spawn_worker_binary(&job, &executable, Some(&tools)).unwrap();
     let mut watch = progress::Watch::default();

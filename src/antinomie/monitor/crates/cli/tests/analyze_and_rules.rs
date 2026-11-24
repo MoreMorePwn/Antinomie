@@ -228,3 +228,98 @@ fn analyze_refuses_bad_arguments_before_starting_the_engine() {
     assert!(!data.exists());
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// ANT-T0618 (AN-04): the Rules check reads the rule profile in place, read-only,
+/// and a job folder holds no copy of it. A marker lives while the job runs and
+/// is gone after it.
+#[test]
+fn analyze_reads_the_rule_profile_in_place_without_copying_it() {
+    use antinomie_monitor_core::ruleset::{PackEntry, install_archive};
+    use sha2::{Digest, Sha256};
+    if !Path::new("/usr/bin/bwrap").exists() || !Path::new("/usr/bin/tar").exists() {
+        eprintln!("skipped: bubblewrap or tar is not installed");
+        return;
+    }
+    let root = scratch("analyze-rules");
+    let data = root.join("data");
+    let source = root.join("pack/rules");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("always.yar"),
+        "rule AlwaysMatches { condition: true }\n",
+    )
+    .unwrap();
+    let archive = root.join("pack.tar.gz");
+    let made = Command::new("/usr/bin/tar")
+        .args(["-czf", archive.to_str().unwrap(), "-C"])
+        .arg(root.join("pack"))
+        .arg("rules")
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let bytes = std::fs::read(&archive).unwrap();
+    let entry = PackEntry {
+        id: "sample".into(),
+        engine: "yara".into(),
+        name: "Sample".into(),
+        version: "1".into(),
+        upstream_revision: "abc".into(),
+        upstream_url: "https://example.invalid/rules".into(),
+        download_url: "https://example.invalid/sample.tar.gz".into(),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        size: bytes.len() as u64,
+        app: ">=0.6.2".into(),
+        engine_requirement: "YARA-X 1.21".into(),
+        rules: 1,
+        helpers: 0,
+        license: "example".into(),
+        evidence: vec!["sample".into()],
+        limits: Vec::new(),
+    };
+    install_archive(&data, &entry, &bytes).unwrap();
+    let sample = root.join("sample.bin");
+    std::fs::copy("/bin/true", &sample).unwrap();
+    let (code, value) = cli(&[
+        "-o",
+        "json",
+        "--data-dir",
+        data.to_str().unwrap(),
+        "--timeout",
+        "240",
+        "analyze",
+        sample.to_str().unwrap(),
+        "--checks",
+        "metadata,rules",
+    ]);
+    if code == 20 {
+        eprintln!("skipped: the analysis sandbox is not usable here: {value}");
+        let _ = std::fs::remove_dir_all(&root);
+        return;
+    }
+    assert_eq!(code, 0, "{value}");
+    let result = &value["result"];
+    let rules = result["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|section| section["kind"] == "rules")
+        .expect("a rules section");
+    assert_eq!(rules["state"], "complete", "{rules}");
+    assert!(
+        rules["summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("1 rules matched"),
+        "{rules}"
+    );
+    // No copy in the job folder; the profile is where it was built, with no
+    // marker left behind by the finished job.
+    let directory = Path::new(result["directory"].as_str().unwrap());
+    assert!(!directory.join("rules").exists());
+    let profiles = rules_root(&data).join("profiles/yara");
+    assert_eq!(
+        std::fs::read_dir(profiles.join(".in-use")).map_or(0, Iterator::count),
+        0
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}

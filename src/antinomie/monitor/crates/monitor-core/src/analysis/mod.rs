@@ -9,23 +9,27 @@ pub use types::*;
 mod binwalk;
 mod bounds;
 mod capa;
+mod compiled_rules;
 mod decompile;
 pub mod detection;
 mod disasm;
 mod disasm_aarch64;
 mod disasm_arm;
 mod elf_facts;
+mod tool_cache;
 pub(crate) use elf_facts::HostHead;
 #[cfg(test)]
 pub(crate) use elf_facts::fixtures::elf64 as elf64_fixture;
 pub use elf_facts::{SampleElf, c_library, loader_hint, report_notes};
 mod floss;
 mod ghidra_listing;
+mod host_pool;
 mod ident;
 mod limits;
 mod listing;
 mod progress;
 pub mod properties;
+mod reuse;
 mod rules;
 mod sample;
 mod sealed;
@@ -39,6 +43,8 @@ pub use decompile::{decompile_captured_core, sparse_core_plan, synthetic_capture
 pub use disasm::{ARCHITECTURE_MARK, DecodedInstruction, decode_window};
 pub use disasm_aarch64::decode_window_aarch64;
 pub use disasm_arm::{ArmMode, decode_span_arm, decode_window_arm, thumb_len};
+pub(crate) use host_pool::HostAnalysis;
+pub use host_pool::{host_analyses, set_host_analyses};
 pub use limits::{
     AnalysisLimits, LIMIT_FIELDS, LimitField, LimitSetting, TIMEOUT_MAX_SECONDS, TimedTool,
     ToolTimeouts, duration_text, fixed_limits_text,
@@ -46,6 +52,10 @@ pub use limits::{
 pub use listing::{
     LISTING_PAGE_MAX_ROWS, ghidra_row_of, read_ghidra_disassembly_page, read_listing_page,
     read_listing_page_sorted, read_listing_page_with,
+};
+pub use reuse::{
+    Found, Reused, adopt, find as find_reusable, key as reuse_key, remember as remember_reuse,
+    skipped_report,
 };
 pub use sample::{anonymous_copy, sample_analysis_directory, static_reports_for, static_rule_hits};
 pub use specimen::read_specimen_range;

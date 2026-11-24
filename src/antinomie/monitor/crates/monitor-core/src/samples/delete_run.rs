@@ -638,7 +638,10 @@ pub fn delete_as(
         }
     }
     for (root, dir) in &plan.folders {
+        // The caches built from the recording go with it (audit AN-05).
+        let caches = crate::recording::index_cache::DerivedCaches::of(dir);
         remove_run_folder(root, dir, &plan.run_id)?;
+        caches.remove();
     }
     let detail = if notes.is_empty() {
         "no artefacts".to_owned()

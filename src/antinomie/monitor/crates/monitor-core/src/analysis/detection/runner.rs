@@ -57,6 +57,11 @@ pub struct FrozenSelection {
     pub enabled_rules: u64,
     pub excluded_rules: u64,
     pub warnings: Vec<String>,
+    /// What the engine called itself when the selection was captured (the
+    /// IDS's `suricata -V` line), so the worker need not ask again. Empty
+    /// when not known.
+    #[serde(default)]
+    pub engine_identity: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -302,6 +307,7 @@ fn managed_sources(
             enabled_rules: live.enabled_rules,
             excluded_rules: live.excluded_rules,
             warnings: live.warnings,
+            engine_identity: String::new(),
         }
     };
     staged.selection = snap.digest;
@@ -1633,6 +1639,7 @@ mod tests {
                 enabled_rules: 1,
                 excluded_rules: 0,
                 warnings: vec!["kept".into()],
+                engine_identity: String::new(),
             }),
         };
         let mut staged = Staged {

@@ -156,14 +156,12 @@ pub(super) fn spawn_worker_binary(
     .arg("--ro-bind")
     .arg(job.directory.join("specimen"))
     .arg("/input/specimen");
-    // A rule registry that cannot be staged costs the rule matches, not the
-    // whole analysis (a Metadata-only job never needed them).
-    if let Err(error) = stage_static_rules(&job.directory) {
-        eprintln!("analysis rules could not be staged: {error}");
-    }
-    let rules = job.directory.join("rules");
-    if rules.is_dir() {
-        cmd.arg("--ro-bind").arg(&rules).arg("/input/rules");
+    // The rule profile is read in place: content addressed, never written,
+    // and marked in use while this job lives (`Job::rules_use`).
+    if let Some(rules) = &job.rules_use {
+        cmd.arg("--ro-bind")
+            .arg(rules.directory())
+            .arg("/input/rules");
     }
     cmd.arg("--ro-bind")
         .arg(job.directory.join("request.json"))
@@ -189,6 +187,7 @@ pub(super) fn spawn_worker_binary(
     if has(AnalysisKind::Capabilities) {
         super::capa::mount_cache(&mut cmd, tools);
     }
+    crate::analysis::tool_cache::mount(&mut cmd, tools, has(AnalysisKind::Capabilities));
     if std::env::var("ANTINOMIE_ANALYSIS_TOOLS").as_deref() == Ok("managed") {
         cmd.args(["--setenv", "ANTINOMIE_ANALYSIS_TOOLS", "managed"]);
     }

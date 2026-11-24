@@ -25,6 +25,8 @@ const READ_PIECE: usize = 64 * 1024;
 const UPDATE_PIECE: u64 = 1024 * 1024;
 const MAX_CACHED_CONNECTIONS: usize = 8;
 const STATE_ID: i64 = 1;
+/// Bytes the packed-object caches may hold before the least recently used go.
+const OBJECT_CACHE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 type CacheConnections = Mutex<Vec<(PathBuf, Arc<Mutex<Connection>>)>>;
 static CACHE_CONNECTIONS: OnceLock<CacheConnections> = OnceLock::new();
 
@@ -77,6 +79,36 @@ fn cache_path(objects: &Path) -> io::Result<PathBuf> {
         known.push((key, path.clone()));
     }
     Ok(path)
+}
+
+/// The cache file of the packed-object index of `objects`, when the folder is
+/// there to name it (ANT-T0618, audit AN-05).
+pub(crate) fn cache_file_of(objects: &Path) -> Option<PathBuf> {
+    cache_path(objects).ok()
+}
+
+/// Remove the cache file `path` of the packed-object index of `objects` with
+/// its journal, after the run that owned them was deleted, and let go of the
+/// connection this process keeps to it. Returns the bytes freed.
+pub(crate) fn discard_cache(objects: &Path, path: &Path) -> u64 {
+    forget_cache_path(objects);
+    let dropped = CACHE_CONNECTIONS.get().and_then(|connections| {
+        let mut entries = connections.lock().ok()?;
+        let index = entries.iter().position(|(cached, _)| cached == path)?;
+        Some(entries.remove(index).1)
+    });
+    drop(dropped);
+    let mut freed = 0;
+    for suffix in ["", "-journal", "-wal", "-shm"] {
+        let mut file = path.as_os_str().to_owned();
+        file.push(suffix);
+        let file = PathBuf::from(file);
+        let len = fs::metadata(&file).map_or(0, |meta| meta.len());
+        if fs::remove_file(&file).is_ok() {
+            freed += len;
+        }
+    }
+    freed
 }
 
 /// Forget the remembered location of `objects` (its cache directory is gone).
@@ -233,6 +265,9 @@ fn cached_connection(path: &Path) -> io::Result<Arc<Mutex<Connection>>> {
                 evicted = Some(entries.remove(0).1);
             }
             entries.push((path.to_path_buf(), Arc::clone(&candidate)));
+            // A new connection is a use of this cache: stamp it, and let the
+            // oldest caches go when the folder is over its cap (AN-05).
+            crate::recording::index_cache::used_within(path, OBJECT_CACHE_MAX_BYTES);
             candidate
         }
     };

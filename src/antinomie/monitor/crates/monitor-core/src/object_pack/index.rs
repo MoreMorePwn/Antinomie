@@ -5,7 +5,7 @@
 //! SQLite database indexes it incrementally so field/chunk metadata does not
 //! grow with the size of a recording in host memory.
 mod cache;
-pub(crate) use cache::next_read_epoch;
+pub(crate) use cache::{cache_file_of, discard_cache, next_read_epoch};
 #[cfg(test)]
 mod tests;
 

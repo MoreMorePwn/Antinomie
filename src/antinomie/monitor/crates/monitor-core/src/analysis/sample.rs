@@ -21,10 +21,16 @@ pub fn static_reports_for(data_dir: &Path, sha256: &str) -> Vec<super::AnalysisR
     let Ok(listed) = std::fs::read_dir(data_dir.join("analyses")) else {
         return Vec::new();
     };
+    let needle = sha256.to_ascii_lowercase().into_bytes();
     let mut found: Vec<(std::time::SystemTime, super::AnalysisReport)> = listed
         .filter_map(Result::ok)
         .filter_map(|entry| {
-            let report = super::jobs::open_report(&entry.path()).ok()?;
+            // Only a report that names the hash is parsed: the folder grows
+            // with every analysis ever made (audit AN-16).
+            let report = super::jobs::open_report_if(&entry.path(), |text| {
+                !needle.is_empty() && text.windows(needle.len()).any(|window| window == needle)
+            })
+            .ok()??;
             let modified = std::fs::metadata(entry.path().join("report.json"))
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);

@@ -15,7 +15,13 @@ pub fn selection_digest_of(
 /// Build the profile for the current registry, probing the tools in `tools`.
 pub fn snapshot(data_dir: &Path, engine: &str, tools: &ToolConfig) -> Result<Snapshot, String> {
     let registry = load_registry(data_dir)?;
-    snapshot_from(data_dir, engine, &registry, &tool_facts(tools), None)
+    snapshot_from(
+        data_dir,
+        engine,
+        &registry,
+        &tool_facts_for(engine, tools),
+        None,
+    )
 }
 
 /// Build the profile for `registry`, which was captured when the scan was admitted.
@@ -42,6 +48,7 @@ pub fn snapshot_from(
             .unwrap_or_default()
             .contains("\"enabled_ids\"")
     {
+        super::profile_use::note_use(&directory);
         let note = fs::read_to_string(directory.join("warnings.txt")).unwrap_or_default();
         let counts = fs::read_to_string(directory.join("counts.txt")).unwrap_or_default();
         let mut parts = counts.split_whitespace();
@@ -228,17 +235,6 @@ pub fn reap_staging(data_dir: &Path, older_than: std::time::Duration) -> Result<
         }
     }
     Ok(removed)
-}
-
-pub fn publish_static(data_dir: &Path, dest: &Path) -> Result<(), String> {
-    let snap = snapshot(data_dir, "yara", &ToolConfig::default())?;
-    if dest.exists() {
-        fs::remove_dir_all(dest).map_err(|error| error.to_string())?;
-    }
-    let Some(source) = snap.directory else {
-        return Ok(());
-    };
-    copy_tree_regular(&source, dest)
 }
 
 fn support_hashes(root: &Path) -> Result<Vec<serde_json::Value>, String> {

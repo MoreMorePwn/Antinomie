@@ -142,6 +142,7 @@ fn worker_job(dir: &Path, script: &str) -> Job {
         liveness: Default::default(),
         host_copy: None,
         supplement: None,
+        rules_use: None,
     };
     job.child = Some(spawn_worker_binary(&job, &worker, None).unwrap());
     job

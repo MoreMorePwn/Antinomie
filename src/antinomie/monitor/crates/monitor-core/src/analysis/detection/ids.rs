@@ -554,17 +554,34 @@ fn scan_budgeted(
     let mut coverage = Coverage::default();
     // Rules the managed selection already left out count the same as these.
     coverage.add_selection_exclusions(Engine::Ids, &staged.warnings);
-    let version =
-        super::super::tools::run_with(tool, &["-V"], tool_env, Duration::from_secs(20), 4096, true)
-            .map(|run| {
-                run.stderr
-                    .lines()
-                    .chain(run.stdout.lines())
-                    .find(|line| !line.is_empty())
-                    .unwrap_or("suricata")
-                    .to_owned()
-            })
-            .unwrap_or_else(|_| "suricata".into());
+    // The admission step read the version once; ask the tool only when it
+    // did not (a scan without a frozen selection).
+    let version = match staged
+        .request
+        .frozen
+        .as_ref()
+        .map(|frozen| frozen.engine_identity.as_str())
+        .filter(|identity| !identity.is_empty())
+    {
+        Some(identity) => identity.to_owned(),
+        None => super::super::tools::run_with(
+            tool,
+            &["-V"],
+            tool_env,
+            Duration::from_secs(20),
+            4096,
+            true,
+        )
+        .map(|run| {
+            run.stderr
+                .lines()
+                .chain(run.stdout.lines())
+                .find(|line| !line.is_empty())
+                .unwrap_or("suricata")
+                .to_owned()
+        })
+        .unwrap_or_else(|_| "suricata".into()),
+    };
     let mut rules = Vec::new();
     let mut seen_sids = std::collections::BTreeSet::new();
     let mut classification_bytes = None;
@@ -662,12 +679,10 @@ fn scan_budgeted(
             evaluated += 1;
             continue;
         }
-        let t0 = Instant::now();
         progress.stage(ScanTarget::CaptureSegment {
             index: index as u64 + 1,
             total: capture_total.max(1),
         });
-        eprintln!("DBG stage took {:?}", t0.elapsed());
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             report
                 .warnings
