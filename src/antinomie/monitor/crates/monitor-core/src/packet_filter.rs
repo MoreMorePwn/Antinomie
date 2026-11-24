@@ -353,9 +353,22 @@ struct Shared {
     result: Mutex<Option<PacketFilterEvent>>,
     fields: Mutex<FieldRegistry>,
     cleanup_error: Mutex<Option<String>>,
+    /// Told when a result or the field registry arrives, so a window need not
+    /// poll for them.
+    waker: Mutex<Option<Wake>>,
 }
 
+type Wake = Arc<dyn Fn() + Send + Sync>;
+
 impl Shared {
+    /// Tell the window (if it asked to be told) that something is ready.
+    fn notify(&self) {
+        let wake = self.waker.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+
     fn new(stop: Arc<AtomicBool>) -> Self {
         Self {
             pending: Mutex::new(None),
@@ -365,6 +378,7 @@ impl Shared {
             result: Mutex::new(None),
             fields: Mutex::new(FieldRegistry::Loading),
             cleanup_error: Mutex::new(None),
+            waker: Mutex::new(None),
         }
     }
 }
@@ -420,6 +434,20 @@ impl PacketFilterWorker {
             thread: Some(thread),
             detail_thread: Some(detail_thread),
         })
+    }
+
+    /// Call `wake` from the worker threads whenever the field registry or a
+    /// result is ready (a window requests a repaint), so the caller can look
+    /// at `fields`, `poll` and `poll_detail` when told, with a slow poll as a
+    /// safety net only. Called at once if the registry is already in.
+    pub fn set_wake(&self, wake: impl Fn() + Send + Sync + 'static) {
+        let wake: Wake = Arc::new(wake);
+        for shared in [&self.shared, &self.detail] {
+            *shared.waker.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&wake));
+        }
+        if !matches!(self.fields(), FieldRegistry::Loading) {
+            wake();
+        }
     }
 
     pub fn fields(&self) -> FieldRegistry {
@@ -569,6 +597,7 @@ fn next_job(worker: &Shared) -> Option<Job> {
 fn publish(worker: &Shared, generation: u64, event: PacketFilterEvent) {
     if !cancelled(worker, generation) {
         *worker.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(event);
+        worker.notify();
     }
 }
 
@@ -601,6 +630,7 @@ fn filter_loop(program: &Path, worker: &Shared, save_cache: bool) {
         Ok(fields) => FieldRegistry::Ready(Arc::new(fields)),
         Err(error) => FieldRegistry::Unavailable(error),
     };
+    worker.notify();
     let version = parse::tshark_version(program, worker).unwrap_or_default();
     let mut snapshot: Option<Arc<Snapshot>> = None;
     let mut open: Option<OpenCapture> = None;
@@ -1205,6 +1235,43 @@ mod tests {
         let rows = ensure_rows(Path::new("tshark"), "test", &mut open, snapshot, true);
         wait_parsed(&rows);
         rows
+    }
+
+    #[test]
+    fn the_worker_wakes_its_window_when_the_field_registry_and_results_arrive() {
+        use std::sync::atomic::AtomicUsize;
+        // No such TShark: the registry is "unavailable", which is an answer.
+        let worker =
+            PacketFilterWorker::with_program(PathBuf::from("/nonexistent/tshark"), false).unwrap();
+        let woken = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&woken);
+        worker.set_wake(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while matches!(worker.fields(), FieldRegistry::Loading) {
+            assert!(Instant::now() < deadline, "the registry never came");
+            thread::sleep(Duration::from_millis(10));
+        }
+        // Told once the registry is in, whether before or after set_wake.
+        while woken.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "no wake for the registry");
+            thread::sleep(Duration::from_millis(10));
+        }
+        // A published result wakes too.
+        let before = woken.load(Ordering::SeqCst);
+        let generation = worker.shared.generation.load(Ordering::Acquire);
+        publish(
+            &worker.shared,
+            generation,
+            PacketFilterEvent::Detail {
+                generation,
+                number: 1,
+                result: Err("test".into()),
+            },
+        );
+        assert!(woken.load(Ordering::SeqCst) > before);
+        assert!(worker.poll().is_some());
     }
 
     fn wait_parsed(rows: &RowStore) {

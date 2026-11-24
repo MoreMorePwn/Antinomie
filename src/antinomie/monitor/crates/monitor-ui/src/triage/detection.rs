@@ -759,14 +759,22 @@ impl View {
             }
         }
         self.consider_auto(ctx, input);
-        if self.rx.is_some()
+        // Every worker behind these receivers wakes the window when it sends
+        // (the loader, the detector, the file read, the digest, the selection
+        // and the registry), so a slow safety poll is all they need. The
+        // detector also reports its progress through a channel that does not
+        // wake: while a scan runs, the progress line is looked at four times a
+        // second.
+        if self.progress_rx.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        } else if self.rx.is_some()
             || self.byte_rx.is_some()
             || self.digest_rx.is_some()
             || self.selection_rx.is_some()
             || self.registry_rx.is_some()
             || self.pending.is_some()
         {
-            ctx.request_repaint_after(Duration::from_millis(100));
+            ctx.request_repaint_after(crate::background::WAKE_FALLBACK);
         }
     }
     /// The whole Detection page in one vertical scroll area, so a section that

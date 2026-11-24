@@ -205,6 +205,9 @@ pub(crate) struct TriageView {
     /// got: the window waits for it instead of reading the run a second time.
     digest_wait: Option<String>,
     scan_rx: Option<Receiver<(u64, Result<ArchiveScan, String>)>>,
+    /// The window, for the index thread to wake when its result is in; set by
+    /// the first `tick`.
+    wake: Option<egui::Context>,
     /// Result generation. A late index from a previous capture is discarded.
     scan_generation: u64,
     pending_generation: Option<u64>,
@@ -321,6 +324,7 @@ impl Default for TriageView {
             scan_cancel: None,
             digest_wait: None,
             scan_rx: None,
+            wake: None,
             scan_generation: 0,
             pending_generation: None,
             scan: None,
@@ -503,6 +507,9 @@ impl TriageView {
     }
 
     pub(crate) fn tick(&mut self, ctx: &egui::Context, input: TriageInput<'_>) {
+        if self.wake.is_none() {
+            self.wake = Some(ctx.clone());
+        }
         let key = report_export::context_key(&input);
         if self.context_key.as_deref() != Some(&key) {
             self.stop_scan();
