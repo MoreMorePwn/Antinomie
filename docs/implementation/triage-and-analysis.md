@@ -265,11 +265,20 @@ Host only: `monitor-ui/src/triage/graph/`, nothing needs a guest change.
   sizes by; painting stays one pass over the overview index, so zoom costs no more at
   120,000 findings. Opening the graph from the strip or its pop-out calls
   `TriageView::clear_finding_filters`, so the graph starts on what the strip shows.
-* **Spinners.** `theme::spinner` turns in 100 ms steps and asks for a repaint
-  every 100 ms; egui's own `Spinner` repaints every frame, which on software GL
+* **Spinners.** `theme::spinner` turns in 250 ms steps and asks for a repaint
+  every 250 ms; egui's own `Spinner` repaints every frame, which on software GL
   is the full frame rate for as long as an index is being read. All spinners go
   through it, and `triage/idle_tests.rs` asserts an idle view asks for no repaint
-  within a second and a waiting one within 50 ms.
+  within a second and a waiting one within 50 ms. The workers behind a wait (the
+  index thread, the detection workers, the packet-filter worker) wake the window
+  when they send, so the views poll only as a safety net, every
+  `background::WAKE_FALLBACK` (1 s); the detector's progress line, which does not
+  wake, is looked at every 250 ms while a scan runs.
+* **Kept table rows.** `triage/table_cache.rs` keeps the Files tabs' rows (time
+  written, columns cut, tags) and the Process tree's rows until the view holds
+  another index (`scan_serial`, the index's address) or the clock changes; the
+  filter, sort and selection act on them as before, and `sorting::same_rows` lets a
+  sort keep its order without a key per row per frame.
 * **Live toast.** `notify.rs`: each scan carries the HIGH rules that have a
   shown row. `HighWatch` raises one `toasts::push` per `(run, rule)` while the
   run is live and `toasts::bump` adds `×N` to the same toast afterwards (a toast

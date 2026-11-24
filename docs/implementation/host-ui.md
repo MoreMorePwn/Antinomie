@@ -285,7 +285,12 @@ No guest, image, shared-memory ABI, dependency or release-tag change is needed.
 ### Background tasks and the stat cache (0.8.2)
 
 Two small helpers keep slow disks and programs off the frame (`monitor-ui/src/background.rs`,
-`stat_cache.rs`).
+`stat_cache.rs`). The route programs (`tor`, `wireproxy`, `inetsim` on `PATH`) are looked up
+on such a worker after the first frame (`RouteSettings::pump`), and the rule engines' tool
+probes (pySigma, Suricata) run once and are asked again only when the interpreter's or
+binary's file changes, when Settings opens, or when a tool install ends
+(`ruleset::mark_tool_facts_stale`); a tool installed from outside the app is found at the
+next Settings open (or within 30 minutes).
 
 * `background::Task<T>` runs one closure on its own thread; the result sits in an
   `Arc<Mutex<Option<T>>>`, the worker asks the context for a repaint, and the view
