@@ -379,7 +379,10 @@ mod tests {
             t.elapsed().as_secs_f64()
         );
         if let Some(first) = skipped.first() {
-            eprintln!("TIMING first skipped: {}", first.chars().take(400).collect::<String>());
+            eprintln!(
+                "TIMING first skipped: {}",
+                first.chars().take(400).collect::<String>()
+            );
         }
         let t = std::time::Instant::now();
         assert!(build(&dir, &sources));
