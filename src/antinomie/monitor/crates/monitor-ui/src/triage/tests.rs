@@ -8,6 +8,7 @@ mod layout;
 mod scroll;
 mod suspicious;
 mod tab_bar;
+mod table_rows;
 mod theme_switch;
 
 #[test]

@@ -931,26 +931,33 @@ pub fn mode_obstacle(kind: Kind, mode: BuildMode) -> Option<String> {
     }
 }
 
-/// [`mode_obstacle`] for Automatic's walk: a container engine whose image
-/// could not be fetched a moment ago is skipped, with the reason.
-fn automatic_obstacle(kind: Kind, mode: BuildMode) -> Option<String> {
-    mode_obstacle(kind, mode).or_else(|| {
-        mode.engine()
-            .and(crate::container::recent_image_failure())
-            .map(|reason| format!("the builder image is not available: {reason}"))
-    })
-}
-
 /// Choose where a build runs: the requested mode, or for `Automatic` the first
 /// of Native, Podman, Docker and the QEMU builder that can run here.
 pub fn resolve_mode(kind: Kind, mode: BuildMode) -> Result<BuildMode, String> {
+    resolve_mode_with(mode, |mode| mode_obstacle(kind, mode))
+}
+
+/// [`resolve_mode`] over obstacles the caller already has: `obstacle` answers
+/// [`mode_obstacle`] for one mode. A window that asks the host on a worker
+/// keeps the answers and resolves from them every frame, without walking
+/// `PATH` again.
+pub fn resolve_mode_with(
+    mode: BuildMode,
+    obstacle: impl Fn(BuildMode) -> Option<String>,
+) -> Result<BuildMode, String> {
     resolve_with(
         mode,
-        |mode| match mode_obstacle(kind, mode) {
+        |mode| match obstacle(mode) {
             Some(obstacle) => Err(obstacle),
             None => Ok(()),
         },
-        |mode| automatic_obstacle(kind, mode),
+        |mode| {
+            obstacle(mode).or_else(|| {
+                mode.engine()
+                    .and(crate::container::recent_image_failure())
+                    .map(|reason| format!("the builder image is not available: {reason}"))
+            })
+        },
     )
 }
 
@@ -1217,6 +1224,25 @@ mod tests {
             resolve_with(Podman, |_| Ok(()), |_| Some("walk".into())),
             Ok(Podman)
         );
+    }
+
+    #[test]
+    fn resolving_from_kept_obstacles_matches_asking_the_host() {
+        use BuildMode::*;
+        // The obstacles a worker kept once; no tool is looked up again.
+        let kept = |mode: BuildMode| match mode {
+            Native => Some("missing host tools: mmdebstrap".to_string()),
+            Podman => None,
+            _ => Some("not here".to_string()),
+        };
+        assert_eq!(resolve_mode_with(Automatic, kept), Ok(Podman));
+        assert_eq!(resolve_mode_with(Podman, kept), Ok(Podman));
+        assert_eq!(
+            resolve_mode_with(Native, kept),
+            Err("missing host tools: mmdebstrap".into())
+        );
+        let all_out = resolve_mode_with(Automatic, |_| Some("no".into())).unwrap_err();
+        assert!(all_out.starts_with("no way to build here"), "{all_out}");
     }
 
     #[test]

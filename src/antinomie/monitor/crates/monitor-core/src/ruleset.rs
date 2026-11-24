@@ -49,8 +49,8 @@ use self::{
     files::*, ids::*, sigma::*, source_archive::*, source_sigma::*, source_yara::*, yara::*,
 };
 pub use engines::{
-    DEFAULT_SIGMA_PYTHON, ToolConfig, ToolFacts, ToolProbe, refresh_tool_facts, sigma_interpreter,
-    tool_facts, try_tool_facts,
+    DEFAULT_SIGMA_PYTHON, ToolConfig, ToolFacts, ToolProbe, mark_tool_facts_stale,
+    refresh_tool_facts, sigma_interpreter, tool_facts, try_tool_facts,
 };
 
 /// The catalog schema that lists hosted archives.

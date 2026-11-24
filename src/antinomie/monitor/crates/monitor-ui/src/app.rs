@@ -53,6 +53,7 @@ mod start_error;
 mod statistics_ui;
 mod stealth;
 mod trace_paging;
+mod trace_pairs;
 mod trace_view;
 mod triage_pcap;
 mod triage_ui;
@@ -539,6 +540,8 @@ pub struct MonitorApp {
     /// Download base: also list bases for earlier Antinomie versions.
     show_older_bases: bool,
     build_wizard: build_wizard::BuildWizard,
+    /// The last pairing of the live trace buffer.
+    pair_cache: trace_pairs::PairCache,
     confirm: Option<Confirm>,
     clipboard_request: Option<clipboard::Intent>,
     pending_kill: Option<u64>,

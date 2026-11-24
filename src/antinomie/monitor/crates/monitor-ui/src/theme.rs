@@ -442,11 +442,11 @@ pub fn borderless_buttons(ui: &mut egui::Ui) {
 /// on every frame it is visible, which on a window that is otherwise idle
 /// means drawing at the full frame rate (on software GL, several cores) for as
 /// long as some work is pending.
-const SPINNER_STEP: std::time::Duration = std::time::Duration::from_millis(100);
+const SPINNER_STEP: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// A spinner as tall as the body text, for rows whose work is still pending.
 /// It turns in steps of [`SPINNER_STEP`], so a screen that only waits repaints
-/// ten times a second, not once a frame. Show it only while the work runs.
+/// four times a second, not once a frame. Show it only while the work runs.
 pub fn spinner(ui: &mut egui::Ui) -> egui::Response {
     let color = ui.visuals().strong_text_color();
     spinner_colored(ui, color)

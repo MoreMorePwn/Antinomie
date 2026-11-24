@@ -94,15 +94,21 @@ impl MonitorApp {
         let live = self.invocations();
         // A loaded archive page can be from an observation capture or a query;
         // never let its process rows replace the selected run's full index.
-        let invocations: Vec<_> = live
-            .into_iter()
-            .filter(|call| {
-                crate::trace::representative(call)
-                    .is_some_and(|event| event.root_task_cookie == run.root_task_cookie)
-            })
-            .collect();
+        let of_run = |call: &antinomie_monitor_core::InvocationSummary| {
+            crate::trace::representative(call)
+                .is_some_and(|event| event.root_task_cookie == run.root_task_cookie)
+        };
+        // Usually every call is the run's: then the shared list is used as it is.
+        let kept: Vec<_>;
+        let invocations: &[antinomie_monitor_core::InvocationSummary] = if live.iter().all(&of_run)
+        {
+            &live
+        } else {
+            kept = live.iter().filter(|call| of_run(call)).cloned().collect();
+            &kept
+        };
         let input = crate::triage::TriageInput {
-            invocations: &invocations,
+            invocations,
             pcap_open: owned_pcap.as_ref().is_some_and(|owned| owned.1),
             run_finished: !self.live_history_run(&run),
             current_boot: self.snapshot.active_vm.as_deref() == Some(run.vm_id.as_str())

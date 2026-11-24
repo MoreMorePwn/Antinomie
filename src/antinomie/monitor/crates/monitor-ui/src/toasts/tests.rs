@@ -616,3 +616,75 @@ fn only_a_running_toast_asks_for_repaints() {
     }
     assert!(repaint(5.4) <= BAR_FRAME, "a running countdown does");
 }
+
+/// The shortest repaint delay a frame at `time` asked for.
+fn asked_delay(ctx: &egui::Context, time: f64) -> Duration {
+    let (output, _) = run(ctx, time, Vec::new());
+    output
+        .viewport_output
+        .values()
+        .map(|viewport| viewport.repaint_delay)
+        .min()
+        .unwrap()
+}
+
+#[test]
+fn a_countdown_repaints_at_a_few_frames_a_second_by_level() {
+    let ctx = context();
+    push(&ctx, Level::Error, "Failed", "boom", None);
+    // The first frames size the stack and ask for an immediate repaint.
+    for frame in 0..8 {
+        asked_delay(&ctx, f64::from(frame) * 0.1);
+    }
+    let error = asked_delay(&ctx, 0.9);
+    assert!(
+        error >= Duration::from_millis(200),
+        "an error's bar moves in steps of 250 ms, not 33: {error:?}"
+    );
+    with(&ctx, |toasts| toasts.items.clear());
+    push(&ctx, Level::Info, "Saved", "report.html", None);
+    for frame in 0..8 {
+        asked_delay(&ctx, 1.0 + f64::from(frame) * 0.1);
+    }
+    let info = asked_delay(&ctx, 1.9);
+    assert!(
+        info >= Duration::from_millis(60) && info <= Duration::from_millis(100),
+        "{info:?}"
+    );
+}
+
+#[test]
+fn the_slow_steps_still_run_the_timer_in_real_seconds() {
+    // Frames 250 ms apart, as the countdown asks for: an error still leaves
+    // 30 s after it was raised, not after 30 s of guessed frame times.
+    let ctx = context();
+    push(&ctx, Level::Error, "Failed", "boom", None);
+    run(&ctx, 0.0, Vec::new());
+    let mut time = 0.0;
+    while time < 29.5 {
+        time += 0.25;
+        run(&ctx, time, Vec::new());
+    }
+    assert_eq!(level_count(&ctx), 1, "still there at {time} s");
+    while time < 30.5 {
+        time += 0.25;
+        run(&ctx, time, Vec::new());
+    }
+    assert_eq!(level_count(&ctx), 0, "gone by {time} s");
+}
+
+#[test]
+fn a_toast_raised_after_a_pause_does_not_start_used() {
+    let ctx = context();
+    push(&ctx, Level::Info, "One", "", None);
+    for frame in 0..30 {
+        run(&ctx, f64::from(frame) * 0.25, Vec::new());
+    }
+    assert_eq!(level_count(&ctx), 0);
+    // The window slept for an hour with no toast on screen.
+    push(&ctx, Level::Warn, "Two", "", None);
+    run(&ctx, 3600.0, Vec::new());
+    run(&ctx, 3600.1, Vec::new());
+    let left = with(&ctx, |toasts| toasts.items()[0].left).unwrap();
+    assert!(left > WARN_SECS - 0.2, "{left}");
+}

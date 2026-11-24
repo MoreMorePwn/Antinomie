@@ -8,6 +8,11 @@
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 
+/// How soon a window looks for a result whose worker wakes it when it sends. The
+/// worker's own wake is what shows the result; this is only the safety net for
+/// a wake that could not be sent, so it is slow.
+pub(crate) const WAKE_FALLBACK: std::time::Duration = std::time::Duration::from_secs(1);
+
 pub(crate) struct Task<T>(Arc<Mutex<Option<T>>>);
 
 impl<T: Send + 'static> Task<T> {

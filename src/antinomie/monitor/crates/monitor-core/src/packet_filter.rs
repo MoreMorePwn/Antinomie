@@ -22,7 +22,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 const MAX_SNAPSHOT_SIZE: u64 = 16 * 1024 * 1024 * 1024;
@@ -82,50 +82,6 @@ pub enum FieldRegistry {
     Loading,
     Ready(Arc<Vec<PacketField>>),
     Unavailable(String),
-}
-
-struct Scratch {
-    path: PathBuf,
-}
-
-impl Scratch {
-    fn new() -> Result<Self, String> {
-        static SERIAL: AtomicU64 = AtomicU64::new(0);
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_nanos();
-        for _ in 0..32 {
-            let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "antinomie-packet-{}-{stamp}-{serial}",
-                std::process::id()
-            ));
-            match fs::DirBuilder::new().mode(0o700).create(&path) {
-                Ok(()) => return Ok(Self { path }),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(format!("packet snapshot directory: {e}")),
-            }
-        }
-        Err("could not create private packet snapshot directory".into())
-    }
-    fn file(&self, name: &str) -> Result<File, String> {
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(self.path.join(name))
-            .map_err(|e| format!("packet snapshot file: {e}"))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        // Nothing here is user evidence. On failure the OS retains only private
-        // temporary files; the original capture is never a cleanup target.
-        let _ = fs::remove_dir_all(&self.path);
-    }
 }
 
 struct Snapshot {
@@ -353,9 +309,22 @@ struct Shared {
     result: Mutex<Option<PacketFilterEvent>>,
     fields: Mutex<FieldRegistry>,
     cleanup_error: Mutex<Option<String>>,
+    /// Told when a result or the field registry arrives, so a window need not
+    /// poll for them.
+    waker: Mutex<Option<Wake>>,
 }
 
+type Wake = Arc<dyn Fn() + Send + Sync>;
+
 impl Shared {
+    /// Tell the window (if it asked to be told) that something is ready.
+    fn notify(&self) {
+        let wake = self.waker.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+
     fn new(stop: Arc<AtomicBool>) -> Self {
         Self {
             pending: Mutex::new(None),
@@ -365,6 +334,7 @@ impl Shared {
             result: Mutex::new(None),
             fields: Mutex::new(FieldRegistry::Loading),
             cleanup_error: Mutex::new(None),
+            waker: Mutex::new(None),
         }
     }
 }
@@ -420,6 +390,20 @@ impl PacketFilterWorker {
             thread: Some(thread),
             detail_thread: Some(detail_thread),
         })
+    }
+
+    /// Call `wake` from the worker threads whenever the field registry or a
+    /// result is ready (a window requests a repaint), so the caller can look
+    /// at `fields`, `poll` and `poll_detail` when told, with a slow poll as a
+    /// safety net only. Called at once if the registry is already in.
+    pub fn set_wake(&self, wake: impl Fn() + Send + Sync + 'static) {
+        let wake: Wake = Arc::new(wake);
+        for shared in [&self.shared, &self.detail] {
+            *shared.waker.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&wake));
+        }
+        if !matches!(self.fields(), FieldRegistry::Loading) {
+            wake();
+        }
     }
 
     pub fn fields(&self) -> FieldRegistry {
@@ -569,6 +553,7 @@ fn next_job(worker: &Shared) -> Option<Job> {
 fn publish(worker: &Shared, generation: u64, event: PacketFilterEvent) {
     if !cancelled(worker, generation) {
         *worker.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(event);
+        worker.notify();
     }
 }
 
@@ -601,6 +586,7 @@ fn filter_loop(program: &Path, worker: &Shared, save_cache: bool) {
         Ok(fields) => FieldRegistry::Ready(Arc::new(fields)),
         Err(error) => FieldRegistry::Unavailable(error),
     };
+    worker.notify();
     let version = parse::tshark_version(program, worker).unwrap_or_default();
     let mut snapshot: Option<Arc<Snapshot>> = None;
     let mut open: Option<OpenCapture> = None;
@@ -1158,12 +1144,14 @@ fn read_lines(
 
 mod parse;
 mod pdml;
+mod scratch;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub use pdml::parse as fuzz_pdml;
 mod process;
 mod rows;
 use process::run_process;
+use scratch::Scratch;
 
 /// Seconds TShark may spend on one capture (0 is the default, 300): set from
 /// Settings > Detection rules by the app.
@@ -1187,7 +1175,8 @@ mod tests {
     use super::process::ProcessReader;
     use super::rows::ROW_FIELDS;
     use super::*;
-    use std::os::unix::net::UnixStream;
+    use std::os::unix::{fs::DirBuilderExt, net::UnixStream};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// How long a test waits for TShark, a sandbox or a reader to do what it
     /// was asked. Every wait here ends on the event itself; the limit only
@@ -1205,6 +1194,43 @@ mod tests {
         let rows = ensure_rows(Path::new("tshark"), "test", &mut open, snapshot, true);
         wait_parsed(&rows);
         rows
+    }
+
+    #[test]
+    fn the_worker_wakes_its_window_when_the_field_registry_and_results_arrive() {
+        use std::sync::atomic::AtomicUsize;
+        // No such TShark: the registry is "unavailable", which is an answer.
+        let worker =
+            PacketFilterWorker::with_program(PathBuf::from("/nonexistent/tshark"), false).unwrap();
+        let woken = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&woken);
+        worker.set_wake(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while matches!(worker.fields(), FieldRegistry::Loading) {
+            assert!(Instant::now() < deadline, "the registry never came");
+            thread::sleep(Duration::from_millis(10));
+        }
+        // Told once the registry is in, whether before or after set_wake.
+        while woken.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "no wake for the registry");
+            thread::sleep(Duration::from_millis(10));
+        }
+        // A published result wakes too.
+        let before = woken.load(Ordering::SeqCst);
+        let generation = worker.shared.generation.load(Ordering::Acquire);
+        publish(
+            &worker.shared,
+            generation,
+            PacketFilterEvent::Detail {
+                generation,
+                number: 1,
+                result: Err("test".into()),
+            },
+        );
+        assert!(woken.load(Ordering::SeqCst) > before);
+        assert!(worker.poll().is_some());
     }
 
     fn wait_parsed(rows: &RowStore) {

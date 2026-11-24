@@ -188,3 +188,45 @@ fn a_view_waiting_for_its_index_repaints_ten_times_a_second_at_most() {
         }
     }
 }
+
+/// The index thread wakes the window when its result is in, so the view need
+/// not poll for it (its own poll is the slow safety net; the test above holds
+/// a waiting view to no more than ten frames a second).
+#[test]
+fn the_index_thread_wakes_the_window_when_its_result_is_in() {
+    use std::sync::Mutex;
+    let spool = PacketSpool::new().unwrap();
+    let mut raw = std::fs::File::create(spool.directory.join("telemetry.raw")).unwrap();
+    write_rwx_calls(&mut raw, 0..6);
+    raw.sync_all().unwrap();
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let woken_by = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = std::sync::Arc::clone(&woken_by);
+    ctx.set_request_repaint_callback(move |_| {
+        let name = std::thread::current().name().unwrap_or("").to_owned();
+        log.lock().unwrap().push(name);
+    });
+    let mut view = TriageView::default();
+    view.refresh_seconds = 3600;
+    // A view on a tab with no spinner of its own, so the delay is the view's.
+    view.section = Section::Process;
+    view.process = ProcessTab::Tree;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut time = 0.0;
+    while view.scan.is_none() || view.scan_rx.is_some() {
+        frame(&ctx, &mut view, &spool.directory, true, time);
+        time += 0.02;
+        assert!(Instant::now() < deadline, "the index never arrived");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        woken_by
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|name| name == "triage-index"),
+        "the index thread asked for the repaint: {:?}",
+        woken_by.lock().unwrap()
+    );
+}

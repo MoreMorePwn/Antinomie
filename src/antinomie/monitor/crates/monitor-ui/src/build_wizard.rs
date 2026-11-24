@@ -153,7 +153,7 @@ impl BuildWizard {
         let mut action = None;
         // Only these pages ask the host (engines, images, the chroot's size).
         let asking = matches!(page, Page::Mode | Page::Summary);
-        let host_ready = !asking || self.probe.tick(ui, data_dir);
+        let host_ready = !asking || self.probe.tick(ui, data_dir, self.kind());
         let valid = match page {
             _ if !host_ready => {
                 ui.horizontal(|ui| {
@@ -190,7 +190,7 @@ impl BuildWizard {
             }
             if page == Page::Summary {
                 let ready = valid
-                    && build::resolve_mode(self.kind(), self.mode).is_ok()
+                    && self.probe.snapshot.resolve(self.mode).is_ok()
                     && self.options[self.profile].validate(self.kind()).is_ok();
                 if ui
                     .add_enabled(
@@ -292,8 +292,8 @@ impl BuildWizard {
             ui.radio_value(&mut self.mode, mode, label);
             ui.small(format!("    {detail}"));
             if mode != BuildMode::Automatic {
-                let missing = build::missing(kind, mode).into_iter().filter(|_| mode.engine().is_none());
-                let missing: Vec<_> = missing.collect();
+                let check = self.probe.snapshot.check(mode);
+                let missing: Vec<_> = check.map(|check| check.missing.clone()).unwrap_or_default();
                 if !missing.is_empty() {
                     crate::activity::warning(
                         ui,
@@ -307,7 +307,7 @@ impl BuildWizard {
                         ),
                     );
                     ui.small(format!("    {}", build::install_hint(&missing)));
-                } else if let Some(obstacle) = build::mode_obstacle(kind, mode) {
+                } else if let Some(obstacle) = check.and_then(|check| check.obstacle.clone()) {
                     crate::activity::warning(ui, format!("    {obstacle}"));
                 } else if let Some(engine) = mode.engine() {
                     let standing = antinomie_monitor_core::container::cached_standing(engine);
@@ -328,7 +328,7 @@ impl BuildWizard {
             }
         }
         ui.add_space(6.0);
-        match build::resolve_mode(kind, self.mode) {
+        match self.probe.snapshot.resolve(self.mode) {
             Ok(BuildMode::Native) => {
                 ui.colored_label(theme::good(), "The build will run on this host.");
                 ui.small(format!(
@@ -349,7 +349,7 @@ impl BuildWizard {
                     format!("The build will run in a {} container.", mode.label()),
                 );
                 if self.mode == BuildMode::Automatic
-                    && build::resolve_mode(kind, BuildMode::Qemu).is_ok()
+                    && self.probe.snapshot.resolve(BuildMode::Qemu).is_ok()
                 {
                     ui.small("If the builder image cannot be had (offline), the QEMU builder VM is used instead and the log says why.");
                 }
@@ -644,7 +644,7 @@ impl BuildWizard {
         });
         ui.add_space(6.0);
         let options = self.options[self.profile].clone();
-        let mode = match build::resolve_mode(kind, self.mode) {
+        let mode = match self.probe.snapshot.resolve(self.mode) {
             Ok(BuildMode::Native) => match toolchain::for_kind(kind) {
                 toolchain::Toolchain::Host => "on this host".to_string(),
                 toolchain::Toolchain::Chroot => {

@@ -101,6 +101,7 @@ impl MonitorApp {
             getting_started: Default::default(),
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),
+            pair_cache: Default::default(),
             confirm: None,
             clipboard_request: None,
             pending_kill: None,

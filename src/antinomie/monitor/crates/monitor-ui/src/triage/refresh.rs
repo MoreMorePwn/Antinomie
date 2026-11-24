@@ -421,6 +421,7 @@ impl TriageView {
         self.scan_began_finished = request.run_finished;
         self.scan_generation = self.scan_generation.saturating_add(1);
         let generation = self.scan_generation;
+        let wake = self.wake.clone();
         if std::thread::Builder::new()
             .name("triage-index".into())
             .spawn(move || {
@@ -434,6 +435,10 @@ impl TriageView {
                         &request,
                     ),
                 ));
+                // The result is in: draw it now, not at the next poll.
+                if let Some(ctx) = wake {
+                    ctx.request_repaint();
+                }
             })
             .is_err()
         {
@@ -483,6 +488,7 @@ impl TriageView {
                                     .collect(),
                             );
                             self.scan = Some(scan);
+                            self.scan_serial = self.scan_serial.wrapping_add(1);
                             self.scan_error = None;
                             self.last_refresh = Some(self.clock.now());
                         }
@@ -499,7 +505,9 @@ impl TriageView {
                 }
             }
             Err(mpsc::TryRecvError::Empty) => {
-                ctx.request_repaint_after(Duration::from_millis(200));
+                // The index thread wakes the window when it ends; this is the
+                // safety net, and the spinner moves on its own.
+                ctx.request_repaint_after(crate::background::WAKE_FALLBACK);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.scan_error =
@@ -523,6 +531,8 @@ impl TriageView {
         self.scan_cancel = None;
         self.scan_rx = None;
         self.scan = None;
+        self.scan_serial = self.scan_serial.wrapping_add(1);
+        self.table_cache = Default::default();
         self.changed_paths = Arc::default();
         self.scan_error = None;
         self.last_refresh = None;

@@ -73,7 +73,7 @@ impl NetworkView {
                 .as_ref()
                 .is_some_and(|detail| matches!(detail.state, DetailState::Loading))
             {
-                ctx.request_repaint_after(Duration::from_millis(50));
+                ctx.request_repaint_after(crate::background::WAKE_FALLBACK);
             }
             return;
         }
@@ -90,7 +90,7 @@ impl NetworkView {
             state: DetailState::Loading,
         });
         self.detail_node = None;
-        ctx.request_repaint_after(Duration::from_millis(50));
+        ctx.request_repaint_after(crate::background::WAKE_FALLBACK);
     }
 
     /// Keep the last valid filter. A display expression that does not parse,
@@ -137,7 +137,13 @@ impl NetworkView {
     pub(super) fn refresh_display(&mut self, live: bool, ctx: &egui::Context) {
         if self.display_worker.is_none() && self.display_worker_error.is_none() {
             match PacketFilterWorker::new() {
-                Ok(worker) => self.display_worker = Some(worker),
+                Ok(worker) => {
+                    // Results and the field registry wake the window; the
+                    // polls below are only a safety net.
+                    let repaint = ctx.clone();
+                    worker.set_wake(move || repaint.request_repaint());
+                    self.display_worker = Some(worker);
+                }
                 Err(error) => self.display_worker_error = Some(error),
             }
         }
@@ -376,7 +382,7 @@ impl NetworkView {
             }
         }
         if self.display_pending || matches!(worker.fields(), FieldRegistry::Loading) {
-            ctx.request_repaint_after(Duration::from_millis(50));
+            ctx.request_repaint_after(crate::background::WAKE_FALLBACK);
         }
         if self
             .display_index

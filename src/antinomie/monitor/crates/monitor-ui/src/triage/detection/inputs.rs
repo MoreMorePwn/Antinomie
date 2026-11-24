@@ -167,7 +167,8 @@ impl Presence {
                 }
                 Err(mpsc::TryRecvError::Disconnected) => self.rx = None,
                 Err(mpsc::TryRecvError::Empty) => {
-                    ctx.request_repaint_after(Duration::from_millis(100));
+                    // The probe thread wakes the window when it sends.
+                    ctx.request_repaint_after(crate::background::WAKE_FALLBACK);
                     return;
                 }
             }
@@ -209,7 +210,7 @@ impl Presence {
         self.stale = false;
         if spawned {
             self.rx = Some(rx);
-            ctx.request_repaint_after(Duration::from_millis(100));
+            ctx.request_repaint_after(crate::background::WAKE_FALLBACK);
         }
     }
 }
