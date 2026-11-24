@@ -175,7 +175,7 @@ fn limit_reason(plan: &HostPlan, group: &[AnalysisKind]) -> String {
 
 /// Read the sections of a finished report: a check that ran out of time or
 /// stopped short is `soft`, and `hard` when the preset requires it.
-fn judge_report(plan: &HostPlan, report: &AnalysisReport) -> StaticOutcome {
+pub(super) fn judge_report(plan: &HostPlan, report: &AnalysisReport) -> StaticOutcome {
     let mut out = StaticOutcome::default();
     for section in &report.sections {
         let required = plan.required_checks.contains(&section.kind);

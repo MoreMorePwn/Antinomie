@@ -92,8 +92,10 @@ one for each of capa (`static:capabilities`), FLOSS, Ghidra's disassembly and
 decompilation, and unpacking, `detection` (YARA, Sigma and IDS, after `triage`), `online`
 (Check online, after `triage`, only when the preset has `[detection]
 check_online = true`), `assess` (the run's digest and the label, after
-`triage`, `detection` and `online`) and `report` (after all of them). At most `[daemon] host_workers` items run at once (2 by default),
-across every run.
+`triage`, `detection` and `online`) and `report` (after all of them). At most `[daemon] host_workers` items run at once (a quarter of the
+processors, at least 2 and at most 8, by default), across every run. The engine
+runs as many static analyses at once, so a static item meets a free analysis
+worker instead of waiting for another item's turn while holding its pool slot.
 
 The `triage` item has a time budget of its own, proportional to how long the
 run ran: `[daemon] triage_time_per_run_s` seconds for each second (6 by default,
@@ -106,6 +108,32 @@ Endpoints tab, the IOC list and the report ("scanned 16,384 addresses on ports
 23, 2323"); each address is still matched against the datasets, and one that
 matched keeps its own row.
 
+**Reused static results.** A static item whose check already has a complete
+result for the same sample (SHA-256), made with the same app version, the same
+tools (the version Antinomie installed, or the size and time of the system
+program), the same rule profile (for `rules`) and the same size and count limits,
+does not run again: the run gets a folder of its own that links the earlier
+analysis's files, and its summaries start "reused from run `r_...`, analysis
+`...`" (the item's note says the same in `auto status`, and the report's static
+analysis shows it). A timed-out, partial, refused or unavailable result, and one
+made before the key was kept, is never reused. `[static_analysis]
+reuse_results = false` (or `antinomie-cli auto submit --fresh-static`) runs every
+check fresh. The window's own "Analyse" always runs fresh.
+
+**capa that would not finish.** capa's time depends on the program's code, not
+on its size, and a capa that runs out of time leaves nothing (6,972 s of the
+evaluation's capa time gave no result). The pool keeps the sample size and time of
+its last nine capa runs (a run stopped at its limit counts as twice its limit).
+When each of the last three runs on files of this size or bigger took at least 1.5
+times this item's limit, capa is not started: the item is `skipped` with "skipped:
+predicted `<n>` s over the `<m>` s limit" and how to force it, and the run's static
+analysis shows capa as not available with the same sentence. One quick run on a file
+this size or bigger, or fewer than three runs, and capa runs as before: size says
+little about capa's time (on the evaluation a 16 MiB file took 29 s and a 535 KiB
+one ran out at 441 s), so the gate only acts on a streak. `[static_analysis] force_capa = true` (or
+`antinomie-cli auto submit --force-capa`) always runs it; a reusable capa result is
+used before the prediction.
+
 A run launches without the guest-side static analysis, so YARA does not wait for
 the specimen that analysis keeps (as the window's Detection tab does): it scans
 the sample the run ran, read from the library, with the files the run wrote and
@@ -117,7 +145,9 @@ mapping therefore applies to runs too.
   goes ahead of a heavy one. A run's items start in the order above; when the
   first one waiting depends on items still running, a later item of the same run
   whose own dependencies have ended starts in its place. While the oldest run
-  waits for a worker or for memory, nothing starts.
+  waits for a worker or for memory, nothing starts. An oldest run whose
+  remaining items all wait for items still running (it has nothing ready) holds
+  nothing back: the next run's first ready item takes the free worker.
 * **Memory.** An item starts only with at least 2048 MiB of `MemAvailable`;
   below it the head waits (`auto status` says so) and starts when there is room.
 * **Time limits.** Each item has an expected time: an estimate from the size of

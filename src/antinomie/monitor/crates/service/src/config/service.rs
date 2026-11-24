@@ -8,8 +8,16 @@ use std::path::{Path, PathBuf};
 /// The most lanes `daemon.lanes` may ask for (ANT-T0455 card C). Each lane
 /// is an engine with its own VM; one is the default.
 pub const MAX_LANES: u32 = 4;
-/// `daemon.host_workers` when it is not set.
+/// The fewest `daemon.host_workers` is when it is not set.
 pub const DEFAULT_HOST_WORKERS: u32 = 2;
+/// `daemon.host_workers` when it is not set, on a machine with `cores`
+/// processors: a quarter of them, at least [`DEFAULT_HOST_WORKERS`] and at most
+/// [`MAX_HOST_WORKERS`] (ANT-T0618, audit AN-15).
+pub fn default_host_workers_for(cores: usize) -> u32 {
+    u32::try_from(cores / 4)
+        .unwrap_or(MAX_HOST_WORKERS)
+        .clamp(DEFAULT_HOST_WORKERS, MAX_HOST_WORKERS)
+}
 /// The most `daemon.host_workers` may be: the engine keeps eight standalone
 /// static analyses in its snapshot, and every static item is one of them.
 pub const MAX_HOST_WORKERS: u32 = 8;
@@ -49,7 +57,7 @@ pub struct Daemon {
     /// lanes before it.
     pub lanes: u32,
     /// Host work items run at once, across every job and lane (the host work
-    /// pool, ANT-T0454). Default 2; 1 to [`MAX_HOST_WORKERS`].
+    /// pool, ANT-T0454). Default a quarter of the processors, 2 to 8; 1 to [`MAX_HOST_WORKERS`].
     pub host_workers: Option<u32>,
     /// A host work item's time limit is this many times its expected time;
     /// the job's host-stage deadline is this many times the expected work
@@ -522,12 +530,17 @@ impl ServiceConfig {
             .unwrap_or_else(|| data_dir.join("inbox"))
     }
 
-    /// Host work items at once: the configured number, else
-    /// [`DEFAULT_HOST_WORKERS`] (user decision 2026-11-11).
+    /// Host work items at once: the configured number, else a quarter of the
+    /// processors, 2 to 8 ([`default_host_workers_for`]). The memory floor
+    /// of the pool still holds each item back when the machine is short.
     pub fn host_workers(&self) -> u32 {
         self.daemon
             .host_workers
-            .unwrap_or(DEFAULT_HOST_WORKERS)
+            .unwrap_or_else(|| {
+                default_host_workers_for(
+                    std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+                )
+            })
             .clamp(1, MAX_HOST_WORKERS)
     }
 

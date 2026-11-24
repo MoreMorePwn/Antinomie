@@ -311,12 +311,24 @@ impl<E: Engine> LaneStages<'_, E> {
                 if let Some(reason) = super::analyse::not_applicable(group, job) {
                     return Ok(ended(HostItemState::Skipped, Some(reason)));
                 }
+                // A whole result of the same file, tools, rules and limits is
+                // not made again (audit AN-09).
+                if let Some(end) = self.reused_static(job, work, &plan, group) {
+                    return Ok(end);
+                }
                 let mut started = None;
                 let result = self.static_item(job, &plan, group, limit, until, &mut started);
                 if let Some(id) = started {
                     lock(work).static_reports.push(id);
                 }
                 let (outcome, timed_out, waited_ms) = result?;
+                if !timed_out
+                    && outcome.hard.is_empty()
+                    && outcome.soft.is_empty()
+                    && let Some(id) = lock(work).static_reports.last().cloned()
+                {
+                    self.remember_static(job, &plan, group, &id);
+                }
                 let words: Vec<String> =
                     outcome.hard.iter().chain(&outcome.soft).cloned().collect();
                 let state = if timed_out {

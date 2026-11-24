@@ -468,6 +468,8 @@ fn triage_plan() -> super::plan::HostPlan {
         static_checks: Vec::new(),
         static_limit_min: None,
         static_limits: Default::default(),
+        reuse_results: true,
+        force_capa: false,
         required_checks: Vec::new(),
         triage: true,
         engines: Vec::new(),

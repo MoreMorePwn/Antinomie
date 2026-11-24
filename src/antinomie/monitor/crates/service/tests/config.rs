@@ -811,7 +811,11 @@ fn service_toml_checks_lanes_safety_and_watch_folders() {
     assert_eq!(config.resources.min_free_disk_gib, 20);
     assert!(config.resources.require_kvm);
     assert_eq!(config.retention.jobs_days, 90);
-    assert_eq!(config.host_workers(), 2);
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    assert_eq!(
+        config.host_workers(),
+        antinomie_service::config::service::default_host_workers_for(cores)
+    );
     assert_eq!(config.host_time_factor(), 2.0);
     assert_eq!(config.min_free_ram_mib(2048), 4096);
     assert_eq!(
@@ -1122,4 +1126,13 @@ fn the_built_in_presets_take_the_nodes_lane_group_and_its_architecture() {
         ("lab", vec!["x86_64".to_owned()])
     );
     let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn t0618_the_default_host_workers_are_a_quarter_of_the_processors_two_to_eight() {
+    use antinomie_service::config::service::default_host_workers_for as workers;
+    assert_eq!(
+        [1, 4, 8, 12, 16, 24, 32, 64, 128].map(workers),
+        [2, 2, 2, 3, 4, 6, 8, 8, 8]
+    );
 }

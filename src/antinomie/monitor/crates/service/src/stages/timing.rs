@@ -156,6 +156,49 @@ impl Medians {
     }
 }
 
+/// The history of capa's runs, one value per run: the sample's KiB in the high
+/// half, the seconds in the low half (ANT-T0618, audit AN-02b).
+const CAPA_RUN: &str = "capa:run";
+/// A capa that was stopped at its limit needed at least that long; its run
+/// counts as this many times the time it was given.
+const STOPPED_COUNTS: u64 = 2;
+
+impl Medians {
+    /// Remember a capa run on a sample of `bytes` that took `seconds`, and
+    /// whether the limit stopped it.
+    pub fn record_capa(&self, bytes: u64, seconds: u64, stopped: bool) {
+        let kib = (bytes / 1024).clamp(1, u64::from(u32::MAX));
+        let seconds = if stopped {
+            seconds * STOPPED_COUNTS
+        } else {
+            seconds
+        };
+        self.record(CAPA_RUN, kib << 32 | seconds.clamp(1, u64::from(u32::MAX)));
+    }
+
+    /// The least time capa needed on each of its last [`MEDIAN_MIN`] runs on
+    /// samples of `bytes` or of at least four fifths of that size, and how
+    /// many runs that is. `None` with fewer such runs on record. A run is no
+    /// shorter than it took; one stopped at its limit counts as twice.
+    ///
+    /// The smallest, not the median: on the 2026-11 evaluation the size of a
+    /// file said little about capa's time (a 16 MiB file took 29 s, a 535 KiB
+    /// one ran out at 441 s), so a prediction that one quick run of a file of
+    /// this size or bigger contradicts is not made.
+    pub fn capa_prediction(&self, bytes: u64) -> Option<(u64, usize)> {
+        let kib = (bytes / 1024).max(1);
+        let runs = crate::store::lock(&self.runs);
+        let comparable: Vec<u64> = runs
+            .get(CAPA_RUN)?
+            .iter()
+            .filter(|run| (**run >> 32).max(1) * 5 >= kib * 4)
+            .map(|run| run & 0xffff_ffff)
+            .collect();
+        let last = comparable.get(comparable.len().checked_sub(MEDIAN_MIN)?..)?;
+        Some((*last.iter().min()?, last.len()))
+    }
+}
+
 /// The rules above, with the factor and the history.
 pub struct Timing {
     pub factor: f64,

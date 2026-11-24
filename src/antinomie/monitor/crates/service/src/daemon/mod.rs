@@ -597,6 +597,9 @@ impl<E: Engine + Send + 'static> Daemon<E> {
             .collect();
         // The graceful stop of every sandboxed host tool this daemon runs
         // (ANT-T0471): SIGTERM, this grace, then SIGKILL.
+        // The engine runs as many analyses at once as the pool has workers, so
+        // a static item does not wait for another one's turn (audit AN-01b).
+        antinomie_monitor_core::set_host_analyses(setup.config.host_workers() as usize);
         antinomie_monitor_core::set_host_stop_grace(std::time::Duration::from_secs(u64::from(
             setup
                 .config

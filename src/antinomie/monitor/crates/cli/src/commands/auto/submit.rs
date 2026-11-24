@@ -111,6 +111,14 @@ pub struct Submit {
     /// Run no static checks (the same as `--static none`).
     #[arg(long)]
     pub no_static: bool,
+    /// Run every static check again instead of reusing a complete result of
+    /// the same file made with the same tools, rules and limits.
+    #[arg(long)]
+    pub fresh_static: bool,
+    /// Run capa even when its history predicts it will not finish within 1.5
+    /// times its limit on a file like this one.
+    #[arg(long)]
+    pub force_capa: bool,
     /// Report formats: html, pdf, json, misp, stix, md (`--format` is the
     /// output format of this command).
     #[arg(long, value_name = "F,...", value_delimiter = ',')]
@@ -249,6 +257,12 @@ pub fn spec_of(arguments: &Submit) -> Result<Value, CliError> {
     }
     if let Some(route) = &arguments.route {
         set("network", "route", json!(route));
+    }
+    if arguments.fresh_static {
+        set("static_analysis", "reuse_results", json!(false));
+    }
+    if arguments.force_capa {
+        set("static_analysis", "force_capa", json!(true));
     }
     if arguments.no_static {
         set("static_analysis", "enabled", json!(false));
