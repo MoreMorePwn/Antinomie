@@ -115,8 +115,9 @@ pub struct Submit {
     /// the same file made with the same tools, rules and limits.
     #[arg(long)]
     pub fresh_static: bool,
-    /// Run capa even when its history predicts it will not finish within 1.5
-    /// times its limit on a file like this one.
+    /// Run capa even when a preset with `skip_slow_capa` would skip it
+    /// because its history predicts it will not finish within 1.5 times its
+    /// limit on a file like this one.
     #[arg(long)]
     pub force_capa: bool,
     /// Report formats: html, pdf, json, misp, stix, md (`--format` is the

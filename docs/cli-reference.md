@@ -1143,7 +1143,7 @@ Options:
 - `--static <CHECKS>`: Static checks on the host: `none`, `triage`, or names (`strings,entropy`)
 - `--no-static`: Run no static checks (the same as `--static none`)
 - `--fresh-static`: Run every static check again instead of reusing a complete result of the same file made with the same tools, rules and limits
-- `--force-capa`: Run capa even when its history predicts it will not finish within 1.5 times its limit on a file like this one
+- `--force-capa`: Run capa even when a preset with `skip_slow_capa` would skip it because its history predicts it will not finish within 1.5 times its limit on a file like this one
 - `--formats <F,...>`: Report formats: html, pdf, json, misp, stix, md (`--format` is the output format of this command)
 - `--evidence-bundle`: Also write the evidence bundle zip (`--bundle` is the boot bundle)
 - `--defang`: Defang indicators in the HTML, PDF and Markdown reports (hxxp://example\[.\]com)

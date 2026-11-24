@@ -466,7 +466,13 @@ impl HostPool {
         };
         let capa = antinomie_monitor_core::analysis::AnalysisKind::Capabilities;
         // A check the preset requires is never left out for a prediction.
-        if plan.force_capa || !group.contains(&capa) || plan.required_checks.contains(&capa) {
+        // The prediction is opt-in (`skip_slow_capa`): size says little about
+        // capa's time, so it can leave out a run that would have finished.
+        if !plan.skip_slow_capa
+            || plan.force_capa
+            || !group.contains(&capa)
+            || plan.required_checks.contains(&capa)
+        {
             return None;
         }
         let size = job.sample.as_ref()?.size;

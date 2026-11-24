@@ -432,8 +432,12 @@ pub struct StaticAnalysis {
     /// tools, rules and limits instead of running the check again (ANT-T0618).
     /// `false` runs every check fresh.
     pub reuse_results: bool,
-    /// Run capa even when its history says it will not finish within 1.5 times
-    /// its limit on a file like this one (ANT-T0618).
+    /// Skip capa when its history says it will not finish within 1.5 times
+    /// its limit on a file like this one (ANT-T0618). Off by default: on the
+    /// 0.9.1 evaluation it would have left out as many runs that finished as
+    /// runs that ran out.
+    pub skip_slow_capa: bool,
+    /// Run capa even when `skip_slow_capa` would leave it out (ANT-T0618).
     pub force_capa: bool,
     pub ghidra_disassembly: bool,
     /// Checks whose timing out or stopping short fails the `analyse` stage.
@@ -453,6 +457,7 @@ impl Default for StaticAnalysis {
             deep_checks: Vec::new(),
             time_limit_per_tool_min: 0,
             reuse_results: true,
+            skip_slow_capa: false,
             force_capa: false,
             ghidra_disassembly: false,
             required_checks: Vec::new(),

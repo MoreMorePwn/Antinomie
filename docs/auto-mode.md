@@ -124,8 +124,10 @@ check fresh. The window's own "Analyse" always runs fresh.
 on its size, and a capa that runs out of time leaves nothing (6,972 s of the
 evaluation's capa time gave no result). The pool keeps the sample size and time of
 its last nine capa runs (a run stopped at its limit counts as twice its limit).
-When each of the last three runs on files of this size or bigger took at least 1.5
-times this item's limit, capa is not started: the item is `skipped` with "skipped:
+The skip is off by default and turned on with `[static_analysis] skip_slow_capa = true`
+(on the 0.9.1 evaluation it would have left out as many runs that finished as runs
+that ran out). With it on, when each of the last three runs on files of this size or
+bigger took at least 1.5 times this item's limit, capa is not started: the item is `skipped` with "skipped:
 predicted `<n>` s over the `<m>` s limit" and how to force it, and the run's static
 analysis shows capa as not available with the same sentence. One quick run on a file
 this size or bigger, or fewer than three runs, and capa runs as before: size says

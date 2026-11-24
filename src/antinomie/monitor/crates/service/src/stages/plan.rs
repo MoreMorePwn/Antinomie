@@ -180,6 +180,8 @@ pub struct HostPlan {
     pub static_limits: AnalysisLimits,
     /// `static_analysis.reuse_results`.
     pub reuse_results: bool,
+    /// `static_analysis.skip_slow_capa`.
+    pub skip_slow_capa: bool,
     /// `static_analysis.force_capa`.
     pub force_capa: bool,
     /// Checks whose timeout fails the stage (`static_analysis.required_checks`).
@@ -245,6 +247,7 @@ pub fn hosted(preset: &Preset) -> HostPlan {
         static_limit_min: s.fixed_limit_min(),
         static_limits: s.engine_limits(),
         reuse_results: s.reuse_results,
+        skip_slow_capa: s.skip_slow_capa,
         force_capa: s.force_capa,
         required_checks: s.required_checks.iter().map(|c| kind_of(*c)).collect(),
         triage: preset.triage.enabled,
@@ -280,5 +283,24 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// The capa skip (ANT-T0618, AN-02b) is opt-in: no built-in preset turns
+    /// it on, and the plan carries the preset's choice.
+    #[test]
+    fn no_built_in_preset_skips_capa_on_a_prediction() {
+        for (name, loaded) in crate::config::validate::built_in_presets() {
+            assert!(!loaded.preset.static_analysis.skip_slow_capa, "{name}");
+            assert!(!hosted(&loaded.preset).skip_slow_capa, "{name}");
+        }
+        let mut preset = crate::config::validate::built_in_presets()
+            .into_iter()
+            .next()
+            .unwrap()
+            .1
+            .preset
+            .clone();
+        preset.static_analysis.skip_slow_capa = true;
+        assert!(hosted(&preset).skip_slow_capa);
     }
 }
