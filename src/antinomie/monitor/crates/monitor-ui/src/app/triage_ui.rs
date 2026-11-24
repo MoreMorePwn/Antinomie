@@ -100,13 +100,13 @@ impl MonitorApp {
         };
         // Usually every call is the run's: then the shared list is used as it is.
         let kept: Vec<_>;
-        let invocations: &[antinomie_monitor_core::InvocationSummary] =
-            if live.iter().all(|call| of_run(call)) {
-                &live
-            } else {
-                kept = live.iter().filter(|call| of_run(call)).cloned().collect();
-                &kept
-            };
+        let invocations: &[antinomie_monitor_core::InvocationSummary] = if live.iter().all(&of_run)
+        {
+            &live
+        } else {
+            kept = live.iter().filter(|call| of_run(call)).cloned().collect();
+            &kept
+        };
         let input = crate::triage::TriageInput {
             invocations,
             pcap_open: owned_pcap.as_ref().is_some_and(|owned| owned.1),
