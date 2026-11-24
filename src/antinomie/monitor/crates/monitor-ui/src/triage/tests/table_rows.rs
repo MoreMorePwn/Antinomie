@@ -9,7 +9,7 @@ fn path_row(path: &str, id: u64) -> Vec<Cell> {
         .iter()
         .map(|header| cell(*header, tone::text(), false))
         .collect();
-    row[0].values = vec![("event.id", RowValue::Number(id))];
+    row[0].values = vec![("event.id", RowValue::Number(i128::from(id)))];
     row[3].text = path.into();
     row
 }
