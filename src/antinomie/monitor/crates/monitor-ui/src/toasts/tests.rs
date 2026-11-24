@@ -632,18 +632,21 @@ fn asked_delay(ctx: &egui::Context, time: f64) -> Duration {
 fn a_countdown_repaints_at_a_few_frames_a_second_by_level() {
     let ctx = context();
     push(&ctx, Level::Error, "Failed", "boom", None);
-    for frame in 0..4 {
-        asked_delay(&ctx, f64::from(frame) * 0.01);
+    // The first frames size the stack and ask for an immediate repaint.
+    for frame in 0..8 {
+        asked_delay(&ctx, f64::from(frame) * 0.1);
     }
-    let error = asked_delay(&ctx, 0.5);
+    let error = asked_delay(&ctx, 0.9);
     assert!(
         error >= Duration::from_millis(200),
         "an error's bar moves in steps of 250 ms, not 33: {error:?}"
     );
     with(&ctx, |toasts| toasts.items.clear());
     push(&ctx, Level::Info, "Saved", "report.html", None);
-    asked_delay(&ctx, 1.0);
-    let info = asked_delay(&ctx, 1.1);
+    for frame in 0..8 {
+        asked_delay(&ctx, 1.0 + f64::from(frame) * 0.1);
+    }
+    let info = asked_delay(&ctx, 1.9);
     assert!(
         info >= Duration::from_millis(60) && info <= Duration::from_millis(100),
         "{info:?}"
