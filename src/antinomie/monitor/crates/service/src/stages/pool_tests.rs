@@ -194,12 +194,13 @@ fn queued_jobs_go_through_the_pool_oldest_first_and_every_item_is_shown() {
         assert!(job.host_work.iter().all(|i| i.limit_s >= i.expected_s));
         assert_eq!(job.artifacts.len(), 2);
     }
-    // Every item of the older job started before any of the newer one.
-    let last_a = a
+    // The older job starts first. Its later items wait for its `triage`, so
+    // the newer job's `triage` may take the free worker meanwhile (AN-15).
+    let first_a = a
         .host_work
         .iter()
         .filter_map(|i| i.started_ms)
-        .max()
+        .min()
         .unwrap();
     let first_b = b
         .host_work
@@ -207,7 +208,10 @@ fn queued_jobs_go_through_the_pool_oldest_first_and_every_item_is_shown() {
         .filter_map(|i| i.started_ms)
         .min()
         .unwrap();
-    assert!(last_a <= first_b, "{last_a} > {first_b}");
+    assert!(first_a <= first_b, "{first_a} > {first_b}");
+    let report_a = a.host_work.last().and_then(|i| i.started_ms).unwrap();
+    let report_b = b.host_work.last().and_then(|i| i.started_ms).unwrap();
+    assert!(report_a <= report_b, "{report_a} > {report_b}");
     // A job is terminal in the store a moment before it leaves the pool.
     rig.until("both jobs to leave the pool", |r| r.pool.status().runs == 0);
     rig.stop();

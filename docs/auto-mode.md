@@ -131,8 +131,8 @@ analysis shows capa as not available with the same sentence. One quick run on a 
 this size or bigger, or fewer than three runs, and capa runs as before: size says
 little about capa's time (on the evaluation a 16 MiB file took 29 s and a 535 KiB
 one ran out at 441 s), so the gate only acts on a streak. `[static_analysis] force_capa = true` (or
-`antinomie-cli auto submit --force-capa`) always runs it; a reusable capa result is
-used before the prediction.
+`antinomie-cli auto submit --force-capa`) always runs it, and so does a preset that lists
+capabilities in `required_checks`; a reusable capa result is used before the prediction.
 
 A run launches without the guest-side static analysis, so YARA does not wait for
 the specimen that analysis keeps (as the window's Detection tab does): it scans

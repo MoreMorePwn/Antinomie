@@ -502,4 +502,41 @@ mod tests {
         assert_eq!(read.specimen_sha256, Some("ab".repeat(32)));
         let _ = fs::remove_dir_all(root);
     }
+
+    /// By hand (ANT-T0618 measurement): `ANT_REUSE_FOLDER=<a finished analysis
+    /// folder, copied>` with its checks in `ANT_REUSE_CHECKS=a,b`.
+    #[test]
+    #[ignore = "needs ANT_REUSE_FOLDER"]
+    fn time_a_reuse_of_a_real_analysis() {
+        let Some(folder) = std::env::var_os("ANT_REUSE_FOLDER") else {
+            return;
+        };
+        let folder = PathBuf::from(folder);
+        let report = super::super::jobs::open_report(&folder).unwrap();
+        let checks: Vec<AnalysisKind> = report.sections.iter().map(|s| s.kind).collect();
+        let data = temp("data");
+        let sha = report.specimen_sha256.clone().unwrap();
+        let t = std::time::Instant::now();
+        let key = key(&data, &sha, &checks, report.limits);
+        eprintln!("TIMING key: {:.4} s", t.elapsed().as_secs_f64());
+        remember(&folder, &key);
+        let root = folder.parent().unwrap().to_owned();
+        let t = std::time::Instant::now();
+        let found = find(std::slice::from_ref(&root), &key, &checks, |_| None);
+        eprintln!(
+            "TIMING find (whole: {}): {:.4} s",
+            found.is_some(),
+            t.elapsed().as_secs_f64()
+        );
+        let Some(found) = found else {
+            return;
+        };
+        let t = std::time::Instant::now();
+        let adopted = adopt(&root, &key, &found).unwrap();
+        eprintln!(
+            "TIMING adopt into {}: {:.4} s",
+            adopted.id,
+            t.elapsed().as_secs_f64()
+        );
+    }
 }

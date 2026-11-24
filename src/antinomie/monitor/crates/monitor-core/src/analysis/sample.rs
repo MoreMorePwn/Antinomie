@@ -181,3 +181,64 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+
+    /// By hand (ANT-T0618 measurement of AN-16): the lookup of one sample's
+    /// reports among many analysis folders, each report parsed as before and
+    /// only the ones that name the hash as now.
+    #[test]
+    #[ignore = "timing"]
+    fn time_the_lookup_among_many_reports() {
+        let data = std::env::temp_dir().join(format!("ant-lookup-{}", crate::storage::unique_id()));
+        let analyses = data.join("analyses");
+        std::fs::create_dir_all(&analyses).unwrap();
+        let wanted = "ab".repeat(32);
+        for n in 0..300u32 {
+            let sha = if n % 30 == 0 {
+                wanted.clone()
+            } else {
+                format!("{n:064x}")
+            };
+            let selection = super::super::AnalysisSelection::default();
+            let mut report = super::super::jobs::new_report("sample:x", &selection);
+            report.state = super::super::AnalysisState::Complete;
+            report.specimen_sha256 = Some(sha);
+            for section in &mut report.sections {
+                section.state = super::super::AnalysisSectionState::Complete;
+                section.summary = "x".repeat(200);
+            }
+            let folder = analyses.join(&report.id);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join("report.json"),
+                serde_json::to_vec(&report).unwrap(),
+            )
+            .unwrap();
+        }
+        let t = std::time::Instant::now();
+        let mut before = 0;
+        for entry in std::fs::read_dir(&analyses).unwrap().flatten() {
+            if super::super::jobs::open_report(&entry.path())
+                .is_ok_and(|r| r.specimen_sha256.as_deref() == Some(wanted.as_str()))
+            {
+                before += 1;
+            }
+        }
+        eprintln!(
+            "TIMING parse every report (300): {:.4} s, {before} found",
+            t.elapsed().as_secs_f64()
+        );
+        let t = std::time::Instant::now();
+        let found = static_reports_for(&data, &wanted);
+        eprintln!(
+            "TIMING prefilter (300): {:.4} s, {} found",
+            t.elapsed().as_secs_f64(),
+            found.len()
+        );
+        assert_eq!(before, found.len());
+        let _ = std::fs::remove_dir_all(data);
+    }
+}

@@ -464,9 +464,9 @@ impl HostPool {
         let ItemKind::Static(group) = kind else {
             return None;
         };
-        if plan.force_capa
-            || !group.contains(&antinomie_monitor_core::analysis::AnalysisKind::Capabilities)
-        {
+        let capa = antinomie_monitor_core::analysis::AnalysisKind::Capabilities;
+        // A check the preset requires is never left out for a prediction.
+        if plan.force_capa || !group.contains(&capa) || plan.required_checks.contains(&capa) {
             return None;
         }
         let size = job.sample.as_ref()?.size;
