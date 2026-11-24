@@ -72,7 +72,24 @@ pub fn take_request(ctx: &egui::Context, table: &str) -> Option<Option<Spec>> {
 struct Order {
     spec: Spec,
     hash: u64,
+    /// The caller's word that the rows were the same ones (see [`same_rows`]).
+    stamp: Option<u64>,
     indices: Arc<Vec<usize>>,
+}
+
+/// A table whose caller keeps its rows between frames says which rows it
+/// draws, so [`order`] need not build and hash a key for every row of every
+/// frame to know the sort it kept still holds. `None` takes the word back.
+pub fn same_rows(ctx: &egui::Context, table: &str, stamp: Option<u64>) {
+    let id = egui::Id::new(("triage-rows-stamp", table));
+    ctx.data_mut(|data| match stamp {
+        Some(stamp) => {
+            data.insert_temp(id, stamp);
+        }
+        None => {
+            data.remove::<u64>(id);
+        }
+    });
 }
 
 pub fn order<'a>(
@@ -83,15 +100,34 @@ pub fn order<'a>(
 ) -> Option<Arc<Vec<usize>>> {
     let spec = ctx.data(|data| data.get_temp::<Spec>(egui::Id::new(("triage-sort", table))))?;
     let header = headers.get(spec.column)?;
+    let id = egui::Id::new(("triage-sort-order", table));
+    let stamp = ctx.data(|data| data.get_temp::<u64>(egui::Id::new(("triage-rows-stamp", table))));
+    if let Some(stamp) = stamp
+        && let Some(cached) = ctx
+            .data(|data| data.get_temp::<Order>(id))
+            .filter(|cached| cached.spec == spec && cached.stamp == Some(stamp))
+    {
+        return Some(cached.indices);
+    }
     let keys: Vec<_> = rows.map(|row| atom(header, spec.column, row)).collect();
     let mut hash = DefaultHasher::new();
     keys.hash(&mut hash);
     let hash = hash.finish();
-    let id = egui::Id::new(("triage-sort-order", table));
     if let Some(cached) = ctx
         .data(|data| data.get_temp::<Order>(id))
         .filter(|cached| cached.spec == spec && cached.hash == hash)
     {
+        if stamp.is_some() {
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    id,
+                    Order {
+                        stamp,
+                        ..cached.clone()
+                    },
+                )
+            });
+        }
         return Some(cached.indices);
     }
     let mut indices: Vec<_> = (0..keys.len()).collect();
@@ -103,6 +139,7 @@ pub fn order<'a>(
             Order {
                 spec,
                 hash,
+                stamp,
                 indices: Arc::clone(&indices),
             },
         )

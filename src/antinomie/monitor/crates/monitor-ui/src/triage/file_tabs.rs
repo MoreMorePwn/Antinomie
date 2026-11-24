@@ -218,42 +218,49 @@ impl TriageView {
             return;
         };
         let clock = scan.clock_anchor.or(input.clock_anchor);
-        let notes = file_shown::Notes {
-            start: run_start(scan),
-            flagged: &scan.flagged_paths,
+        // The rows are made once per index, tab and clock (see `table_cache`).
+        self.table_cache.bind(self.scan_serial, scan);
+        let (headers, source): (&[&str], &[Vec<Cell>]) = match tab {
+            FileTab::Read => (file_tabs::READ_HEADERS, &scan.read),
+            FileTab::Changed => (file_tabs::CHANGED_HEADERS, &scan.changed),
+            FileTab::Opened => (EVENT_HEADERS, &scan.opened),
+            _ => (EVENT_HEADERS, &scan.file_tabs[index - 8].rows),
         };
-        match tab {
-            FileTab::Read => {
-                let rows = file_category::with_time(&scan.read, clock);
-                draw(ui, tab, file_tabs::READ_HEADERS, &rows, &notes);
-            }
-            FileTab::Changed => {
-                draw(ui, tab, file_tabs::CHANGED_HEADERS, &scan.changed, &notes);
-            }
-            _ => {
-                let source = if tab == FileTab::Opened {
-                    &scan.opened
-                } else {
-                    &scan.file_tabs[index - 8].rows
-                };
-                let rows = file_category::with_time(source, clock);
-                draw(ui, tab, EVENT_HEADERS, &rows, &notes);
-            }
+        if self.table_cache.files(index, clock).is_none() {
+            let notes = file_shown::Notes {
+                start: run_start(scan),
+                flagged: &scan.flagged_paths,
+            };
+            // Changed shows the index's own rows; the others show the time
+            // from the clock.
+            let raw = (tab != FileTab::Changed)
+                .then(|| Arc::new(file_category::with_time(source, clock)));
+            let rows: &[Vec<Cell>] = raw.as_ref().map_or(source, |rows| rows.as_slice());
+            let shown = Arc::new(file_shown::shown(index, rows, &notes));
+            self.table_cache.keep_files(index, clock, raw, shown);
         }
+        let stamp = self.table_cache.stamp(tab.table_id(), clock);
+        let Some(kept) = self.table_cache.files(index, clock) else {
+            return;
+        };
+        let rows: &[Vec<Cell>] = kept.raw.as_ref().map_or(source, |rows| rows.as_slice());
+        draw(ui, tab, headers, rows, &kept.shown, stamp);
     }
 }
 
 /// `headers` and `rows` of a tab's table drawn in the columns it shows (see
-/// [`file_shown`]). Details still shows the selected row in full.
+/// [`file_shown`]); `shown` is `rows` cut to those columns. Details still
+/// shows the selected row in full.
 fn draw(
     ui: &mut egui::Ui,
     tab: FileTab,
     headers: &[&str],
     rows: &[Vec<Cell>],
-    notes: &file_shown::Notes<'_>,
+    shown: &[Vec<Cell>],
+    stamp: Option<u64>,
 ) {
     let shown_headers = file_shown::headers(tab.slot(), headers);
-    let shown = file_shown::shown(tab.slot(), rows, notes);
-    table_rows(ui, tab.table_id(), &shown_headers, &shown);
+    sorting::same_rows(ui.ctx(), tab.table_id(), stamp);
+    table_rows(ui, tab.table_id(), &shown_headers, shown);
     details::refresh(ui.ctx(), tab.table_id(), headers, rows);
 }

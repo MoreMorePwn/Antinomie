@@ -488,6 +488,7 @@ impl TriageView {
                                     .collect(),
                             );
                             self.scan = Some(scan);
+                            self.scan_serial = self.scan_serial.wrapping_add(1);
                             self.scan_error = None;
                             self.last_refresh = Some(self.clock.now());
                         }
@@ -530,6 +531,8 @@ impl TriageView {
         self.scan_cancel = None;
         self.scan_rx = None;
         self.scan = None;
+        self.scan_serial = self.scan_serial.wrapping_add(1);
+        self.table_cache = Default::default();
         self.changed_paths = Arc::default();
         self.scan_error = None;
         self.last_refresh = None;

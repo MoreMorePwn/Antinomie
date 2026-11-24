@@ -95,7 +95,12 @@ pub(super) fn select(ctx: &egui::Context, table: &str, headers: &[&str], cells: 
 pub(super) fn refresh(ctx: &egui::Context, table: &str, headers: &[&str], rows: &[Vec<Cell>]) {
     let selected_id = egui::Id::new(("triage-selected-row", table));
     let selected = ctx.data(|data| data.get_temp::<String>(selected_id));
-    if let Some(cells) = rows.iter().find(|row| Some(evidence_key(row)) == selected) {
+    // With nothing selected no row can be the selected one: no key is made
+    // for the rows.
+    let found = selected
+        .as_ref()
+        .and_then(|selected| rows.iter().find(|row| &evidence_key(row) == selected));
+    if let Some(cells) = found {
         // Do not replace another table's most recently clicked selection.
         let owns = ctx
             .data(|data| data.get_temp::<Selection>(selection_id()))
