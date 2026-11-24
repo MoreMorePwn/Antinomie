@@ -4,32 +4,51 @@ use super::*;
 use crate::scroll_contain::ScrollContained as _;
 
 impl MonitorApp {
-    pub(super) fn invocations(&self) -> Vec<InvocationSummary> {
+    /// The calls of the shown trace. The live buffer (up to 2,048 events) is
+    /// paired once for as long as it stays the same, not on every call of every
+    /// frame: [`PairCache`] says what the pairing depends on.
+    pub(super) fn invocations(&self) -> Arc<Vec<InvocationSummary>> {
         if self.trace_archive_directory().is_some() {
-            return self.archive_page.clone();
+            return Arc::new(self.archive_page.clone());
         }
         if self.selected.is_some()
             && self.snapshot.active_vm.is_some()
             && self.selected != self.snapshot.active_vm
         {
-            return Vec::new();
+            return Arc::new(Vec::new());
         }
         if let Some(id) = &self.selected_capture {
-            return self
-                .snapshot
-                .capture_events
-                .get(id)
-                .map(|events| match self.selected_process {
-                    Some(pid) => pair_events(
-                        &events
-                            .iter()
-                            .filter(|event| event.pid == pid)
-                            .cloned()
-                            .collect::<Vec<_>>(),
-                    ),
-                    None => pair_events(events),
-                })
-                .unwrap_or_default();
+            return Arc::new(
+                self.snapshot
+                    .capture_events
+                    .get(id)
+                    .map(|events| match self.selected_process {
+                        Some(pid) => pair_events(
+                            &events
+                                .iter()
+                                .filter(|event| event.pid == pid)
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                        ),
+                        None => pair_events(events),
+                    })
+                    .unwrap_or_default(),
+            );
+        }
+        let run_cookie = self.selected_run.as_ref().map(|id| {
+            self.snapshot
+                .runs
+                .iter()
+                .find(|run| &run.id == id)
+                .map(|run| run.root_task_cookie)
+        });
+        let key = PairKey {
+            events: PairKey::fingerprint(&self.snapshot.events),
+            process: self.selected_process,
+            run_cookie,
+        };
+        if let Some(pairs) = self.pair_cache.get(&key) {
+            return pairs;
         }
         let events: Vec<_> = self
             .snapshot
@@ -37,17 +56,15 @@ impl MonitorApp {
             .iter()
             .filter(|event| self.selected_process.is_none_or(|pid| event.pid == pid))
             .filter(|event| {
-                self.selected_run.as_ref().is_none_or(|id| {
-                    self.snapshot
-                        .runs
-                        .iter()
-                        .find(|run| &run.id == id)
-                        .is_some_and(|run| event.root_task_cookie == run.root_task_cookie)
+                run_cookie.is_none_or(|cookie| {
+                    cookie.is_some_and(|cookie| event.root_task_cookie == cookie)
                 })
             })
             .cloned()
             .collect();
-        pair_events(&events)
+        let pairs = Arc::new(pair_events(&events));
+        self.pair_cache.put(key, Arc::clone(&pairs));
+        pairs
     }
 
     /// A valid trace box becomes the applied filter. An invalid expression
@@ -352,7 +369,7 @@ impl MonitorApp {
         &mut self,
         ui: &mut egui::Ui,
         filter: &crate::query::Compiled,
-    ) -> (Vec<InvocationSummary>, bool) {
+    ) -> (ShownRows, bool) {
         let all = self.invocations();
         self.trace_categories(ui, &all);
         let archived = self.trace_archive_directory().is_some();
@@ -364,9 +381,12 @@ impl MonitorApp {
         }
         let total = all.len();
         let hidden = self.settings.hidden_trace_categories.clone();
-        let invocations: Vec<_> = all
-            .into_iter()
-            .filter(|invocation| {
+        // The rows are kept by index into the shared list: the calls are not
+        // copied, which at 2,048 events was most of a frame.
+        let mut order: Vec<Row<'_>> = all
+            .iter()
+            .enumerate()
+            .filter(|(_, invocation)| {
                 let Some(event) = trace::representative(invocation) else {
                     return false;
                 };
@@ -378,10 +398,10 @@ impl MonitorApp {
                 }
                 archived || filter.keep(invocation)
             })
+            .map(|(index, invocation)| Row(index, invocation))
             .collect();
-        let mut invocations = invocations;
         if let Some((column, descending)) = self.trace_sort {
-            sort_invocations(&mut invocations, column, descending);
+            sort_invocations(&mut order, column, descending);
             if archived {
                 ui.colored_label(
                     theme::muted(),
@@ -393,17 +413,15 @@ impl MonitorApp {
                 );
             }
         }
-        if invocations.len() != total {
+        if order.len() != total {
             ui.colored_label(
                 theme::muted(),
-                format!("Showing {} of {total} calls", invocations.len()),
+                format!("Showing {} of {total} calls", order.len()),
             );
         }
         // A saved recording says so only once its count is in: until then
         // the pager is still counting.
-        if invocations.is_empty()
-            && !self.archive_pending
-            && (!archived || self.archive_total == Some(0))
+        if order.is_empty() && !self.archive_pending && (!archived || self.archive_total == Some(0))
         {
             theme::empty_state(
                 ui,
@@ -414,6 +432,8 @@ impl MonitorApp {
                 },
             );
         }
+        let order = order.into_iter().map(|row| row.0).collect();
+        let invocations = ShownRows { all, order };
         (invocations, archived)
     }
 
@@ -631,42 +651,53 @@ impl MonitorApp {
             });
             ui.data_mut(|data| data.insert_temp(asked_id, asked));
         }
-        let mut runs: Vec<RunSummary> = self
-            .snapshot
-            .runs
-            .iter()
-            .chain(&self.history)
-            .filter(|run| run.vm_id == vm_id)
-            .cloned()
-            .collect();
-        let mut seen = std::collections::HashSet::new();
-        runs.retain(|run| seen.insert(run.id.clone()));
-        let mut captures: Vec<CaptureSummary> = self
-            .snapshot
-            .captures
-            .iter()
-            .chain(&self.capture_history)
-            .filter(|capture| capture.vm_id == vm_id)
-            .cloned()
-            .collect();
-        seen.clear();
-        captures.retain(|capture| seen.insert(capture.id.clone()));
-        // Newest first, by when their recordings last changed.
+        // Newest first, by when their recordings last changed. Only the six
+        // shown are copied: a VM can have a thousand runs, each with its
+        // analysis report, and this is drawn every frame.
         let times_id = ui.id().with("empty_trace_times");
-        let mut times: BTreeMap<PathBuf, Option<SystemTime>> =
-            ui.data(|data| data.get_temp(times_id)).unwrap_or_default();
-        let mut time = |directory: &PathBuf| {
-            *times.entry(directory.clone()).or_insert_with(|| {
-                std::fs::metadata(directory)
-                    .and_then(|metadata| metadata.modified())
-                    .ok()
-            })
-        };
-        runs.sort_by_cached_key(|run| std::cmp::Reverse(time(&run.directory)));
-        captures.sort_by_cached_key(|capture| std::cmp::Reverse(time(&capture.directory)));
-        ui.data_mut(|data| data.insert_temp(times_id, times));
-        runs.truncate(6);
-        captures.truncate(6);
+        let (runs, captures) = ui.data_mut(|data| {
+            let times =
+                data.get_temp_mut_or_default::<BTreeMap<PathBuf, Option<SystemTime>>>(times_id);
+            let mut time = |directory: &PathBuf| match times.get(directory) {
+                Some(known) => *known,
+                None => {
+                    let known = std::fs::metadata(directory)
+                        .and_then(|metadata| metadata.modified())
+                        .ok();
+                    times.insert(directory.clone(), known);
+                    known
+                }
+            };
+            let mut seen = std::collections::HashSet::new();
+            let mut runs: Vec<&RunSummary> = self
+                .snapshot
+                .runs
+                .iter()
+                .chain(&self.history)
+                .filter(|run| run.vm_id == vm_id)
+                .filter(|run| seen.insert(run.id.as_str()))
+                .collect();
+            seen.clear();
+            let mut captures: Vec<&CaptureSummary> = self
+                .snapshot
+                .captures
+                .iter()
+                .chain(&self.capture_history)
+                .filter(|capture| capture.vm_id == vm_id)
+                .filter(|capture| seen.insert(capture.id.as_str()))
+                .collect();
+            runs.sort_by_cached_key(|run| std::cmp::Reverse(time(&run.directory)));
+            captures.sort_by_cached_key(|capture| std::cmp::Reverse(time(&capture.directory)));
+            runs.truncate(6);
+            captures.truncate(6);
+            (
+                runs.into_iter().cloned().collect::<Vec<RunSummary>>(),
+                captures
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<CaptureSummary>>(),
+            )
+        });
 
         let mut open = None;
         ui.horizontal(|ui| self.show_trace_run_selector(ui));
@@ -939,8 +970,8 @@ fn recent_row(
 
 /// Orders the table by one column. Ties keep time, then sequence, order; a
 /// call without an exit sorts after every returned value.
-pub(super) fn sort_invocations(
-    invocations: &mut [InvocationSummary],
+pub(super) fn sort_invocations<T: std::borrow::Borrow<InvocationSummary>>(
+    invocations: &mut [T],
     column: TraceColumn,
     descending: bool,
 ) {
@@ -979,19 +1010,102 @@ pub(super) fn sort_invocations(
         // The info text is built once per row, not once per comparison.
         if descending {
             invocations.sort_by_cached_key(|invocation| {
+                let invocation: &InvocationSummary = invocation.borrow();
                 (std::cmp::Reverse(trace::info(invocation)), time(invocation))
             });
         } else {
-            invocations
-                .sort_by_cached_key(|invocation| (trace::info(invocation), time(invocation)));
+            invocations.sort_by_cached_key(|invocation| {
+                let invocation: &InvocationSummary = invocation.borrow();
+                (trace::info(invocation), time(invocation))
+            });
         }
         return;
     }
     invocations.sort_by(|a, b| {
+        let (a, b): (&InvocationSummary, &InvocationSummary) = (a.borrow(), b.borrow());
         let order = compare(a, b);
         let order = if descending { order.reverse() } else { order };
         order.then_with(|| time(a).cmp(&time(b)))
     });
+}
+
+/// The calls the table shows: the shared list of the trace and the indexes of
+/// the rows the filter, the hidden categories and the sort keep, in order.
+pub(super) struct ShownRows {
+    all: Arc<Vec<InvocationSummary>>,
+    order: Vec<usize>,
+}
+
+impl ShownRows {
+    pub(super) fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    pub(super) fn get(&self, index: usize) -> Option<&InvocationSummary> {
+        self.order.get(index).and_then(|&row| self.all.get(row))
+    }
+}
+
+/// One call of the list and where it is in it, for sorting rows in place of
+/// copies of them.
+struct Row<'a>(usize, &'a InvocationSummary);
+
+impl std::borrow::Borrow<InvocationSummary> for Row<'_> {
+    fn borrow(&self) -> &InvocationSummary {
+        self.1
+    }
+}
+
+/// What the pairing of the live buffer depends on. The events are compared by
+/// a fingerprint of the fields that make a call (its identity, sequence,
+/// phase, result and completeness), computed in a pass over the buffer that
+/// costs a few microseconds where pairing costs milliseconds.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct PairKey {
+    events: u64,
+    process: Option<u32>,
+    /// `None`: no run selected. `Some(None)`: the run is not in the list.
+    run_cookie: Option<Option<u64>>,
+}
+
+impl PairKey {
+    fn fingerprint(events: &[antinomie_monitor_core::EventSummary]) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64 ^ events.len() as u64;
+        let mut mix = |value: u64| {
+            hash = (hash ^ value).wrapping_mul(0x0000_0100_0000_01b3);
+            hash ^= hash >> 29;
+        };
+        for event in events {
+            mix(event.stream_id);
+            mix(event.task_cookie);
+            mix(event.call_id);
+            mix(event.event_seq);
+            mix(event.timestamp_ns);
+            mix(event.root_task_cookie);
+            mix(u64::from(event.pid) << 8 | u64::from(event.phase));
+            mix(event.result.map_or(u64::MAX, |result| result as u64));
+            mix(u64::from(event.complete) | (event.issues.len() as u64) << 1);
+            mix(event.fields.len() as u64);
+        }
+        hash
+    }
+}
+
+/// The last pairing of the live buffer, with the key it was made for.
+#[derive(Default)]
+pub(super) struct PairCache(std::sync::Mutex<Option<(PairKey, Arc<Vec<InvocationSummary>>)>>);
+
+impl PairCache {
+    fn get(&self, key: &PairKey) -> Option<Arc<Vec<InvocationSummary>>> {
+        let kept = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        kept.as_ref()
+            .filter(|(known, _)| known == key)
+            .map(|(_, pairs)| Arc::clone(pairs))
+    }
+
+    fn put(&self, key: PairKey, pairs: Arc<Vec<InvocationSummary>>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, pairs));
+    }
 }
 
 /// How a cell of the syscall table is painted besides its text.
