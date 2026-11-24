@@ -8,6 +8,7 @@ mod geoip_settings;
 
 use super::dialogs::form_grid;
 use super::*;
+use crate::background::Task;
 use crate::{
     tools_page::RouteProgram,
     widgets::{chip, Tone},
@@ -16,7 +17,6 @@ use antinomie_monitor_core::{
     analysis_tools::ToolStatus,
     route::{self, InetSimMode, RouteConfig, RouteKind, TelnetLogins, TorMode},
 };
-use crate::background::Task;
 use std::{
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver},
