@@ -13,7 +13,7 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     os::{
         fd::AsFd,
-        unix::fs::{MetadataExt, OpenOptionsExt},
+        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
